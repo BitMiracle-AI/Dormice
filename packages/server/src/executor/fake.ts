@@ -1,4 +1,10 @@
-import type { ContainerState, Executor } from './executor';
+import { EXEC_OUTPUT_LIMIT_BYTES } from '@dormice/shared';
+import type {
+  ContainerState,
+  ExecOptions,
+  ExecResult,
+  Executor,
+} from './executor';
 
 /**
  * In-memory stand-in for the Docker+gVisor executor. Not a throwaway: it is
@@ -103,6 +109,24 @@ export class FakeExecutor implements Executor {
     this.disks.delete(sandboxId);
   }
 
+  async exec(sandboxId: string, opts: ExecOptions): Promise<ExecResult> {
+    this.expect(sandboxId, 'running');
+    // The timeout races the command, same outcome as the real executor's
+    // in-container `timeout --signal=KILL`: exit 137, partial output dropped.
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<ExecResult>((resolve) => {
+      timer = setTimeout(
+        () => resolve(fakeResult(137)),
+        opts.timeoutSeconds * 1000,
+      );
+    });
+    try {
+      return await Promise.race([interpret(opts), deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private expect(sandboxId: string, wanted: ContainerState): void {
     const actual = this.containers.get(sandboxId);
     if (actual !== wanted) {
@@ -111,4 +135,57 @@ export class FakeExecutor implements Executor {
       );
     }
   }
+}
+
+/**
+ * Truncation lives in this single exit so every interpreted command obeys
+ * the protocol cap. The interpreter only ever emits ASCII, so string length
+ * equals byte length and slice() is an honest byte cap.
+ */
+function fakeResult(exitCode: number, stdout = '', stderr = ''): ExecResult {
+  return {
+    exitCode,
+    stdout: stdout.slice(0, EXEC_OUTPUT_LIMIT_BYTES),
+    stderr: stderr.slice(0, EXEC_OUTPUT_LIMIT_BYTES),
+    stdoutTruncated: stdout.length > EXEC_OUTPUT_LIMIT_BYTES,
+    stderrTruncated: stderr.length > EXEC_OUTPUT_LIMIT_BYTES,
+  };
+}
+
+/**
+ * A six-verb pocket bash: exactly what the contract exam and the e2e suite
+ * need to exercise exec through the same questions the real executor
+ * answers, nothing more. Not a shell — an unknown verb gets bash's honest
+ * 127. If the real bash's wording ever proves different on the test
+ * machine, this string yields: reality wins.
+ */
+async function interpret(opts: ExecOptions): Promise<ExecResult> {
+  const command = opts.command.trim();
+  const echoed = command.match(/^echo (.*)$/s)?.[1];
+  if (echoed !== undefined) return fakeResult(0, `${echoed}\n`);
+  const exitCode = command.match(/^exit (\d+)$/)?.[1];
+  if (exitCode !== undefined) return fakeResult(Number(exitCode));
+  const napSeconds = command.match(/^sleep (\d+(?:\.\d+)?)$/)?.[1];
+  if (napSeconds !== undefined) {
+    // A real timer on purpose: e2e races this against the daemon's
+    // wall-clock idle scanner to prove the exec heartbeat works.
+    await new Promise((resolve) =>
+      setTimeout(resolve, Number(napSeconds) * 1000),
+    );
+    return fakeResult(0);
+  }
+  if (command === 'pwd') return fakeResult(0, `${opts.cwd ?? '/home/user'}\n`);
+  const envKey = command.match(/^printenv (\w+)$/)?.[1];
+  if (envKey !== undefined) {
+    const value = opts.env?.[envKey];
+    return value === undefined ? fakeResult(1) : fakeResult(0, `${value}\n`);
+  }
+  const seqEnd = command.match(/^seq 1 (\d+)$/)?.[1];
+  if (seqEnd !== undefined) {
+    let out = '';
+    for (let i = 1; i <= Number(seqEnd); i++) out += `${i}\n`;
+    return fakeResult(0, out);
+  }
+  const verb = command.split(/\s/)[0];
+  return fakeResult(127, '', `bash: line 1: ${verb}: command not found\n`);
 }

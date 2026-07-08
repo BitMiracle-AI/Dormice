@@ -5,6 +5,29 @@
  */
 export type ContainerState = 'running' | 'paused' | 'stopped';
 
+export interface ExecOptions {
+  /** A shell string, executed as `bash -c <command>` inside the sandbox. */
+  command: string;
+  /**
+   * In-container deadline. Enforced inside the sandbox — a host-side
+   * disconnect cannot kill the in-container process; only an in-container
+   * SIGKILL can. On expiry the command dies with exit 137.
+   */
+  timeoutSeconds: number;
+  /** Working directory inside the sandbox; defaults to the image's /home/user. */
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
+export interface ExecResult {
+  /** Honest exit code — a nonzero exit is a result, not an error. */
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+}
+
 /**
  * The executor is where lifecycle decisions become physical reality:
  * containers created, paused, stopped. The daemon's decision logic (the
@@ -55,4 +78,12 @@ export interface Executor {
    * Never called while the container exists — destroy tears its own disk.
    */
   removeDisk(sandboxId: string): Promise<void>;
+  /**
+   * Runs a shell command inside a running container and returns the fully
+   * buffered result. Requires state `running` — a paused container cannot
+   * even receive the exec (measured 2026-07-10: Docker refuses outright).
+   * Output is capped at EXEC_OUTPUT_LIMIT_BYTES per stream; the excess is
+   * drained and dropped, and the truncation reported.
+   */
+  exec(sandboxId: string, opts: ExecOptions): Promise<ExecResult>;
 }

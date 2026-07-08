@@ -8,9 +8,16 @@ import {
   rm,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { Writable } from 'node:stream';
+import { EXEC_OUTPUT_LIMIT_BYTES } from '@dormice/shared';
 import Docker from 'dockerode';
 import { execa } from 'execa';
-import type { ContainerState, Executor } from './executor';
+import type {
+  ContainerState,
+  ExecOptions,
+  ExecResult,
+  Executor,
+} from './executor';
 
 /**
  * Label that marks a container as ours, holding the sandbox id. Listing by
@@ -55,6 +62,40 @@ export function assertInside(base: string, target: string): void {
   const rel = path.relative(path.resolve(base), path.resolve(target));
   if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error(`refusing to touch ${target}: outside ${base}`);
+  }
+}
+
+/**
+ * A Writable that keeps the first `cap` bytes and drains the rest. Draining
+ * is the point: if the sink stopped acknowledging chunks past the cap,
+ * backpressure would wedge the exec stream and the command with it.
+ */
+class CappedBuffer extends Writable {
+  private readonly chunks: Buffer[] = [];
+  private size = 0;
+  truncated = false;
+
+  constructor(private readonly cap: number) {
+    super();
+  }
+
+  override _write(
+    chunk: Buffer,
+    _encoding: BufferEncoding,
+    callback: () => void,
+  ): void {
+    const room = this.cap - this.size;
+    if (room > 0) {
+      const kept = chunk.length <= room ? chunk : chunk.subarray(0, room);
+      this.chunks.push(kept);
+      this.size += kept.length;
+    }
+    if (chunk.length > room) this.truncated = true;
+    callback();
+  }
+
+  text(): string {
+    return Buffer.concat(this.chunks).toString('utf8');
   }
 }
 
@@ -220,6 +261,62 @@ export class DockerExecutor implements Executor {
     // Idempotent by contract: teardown already treats "nothing mounted"
     // and "no such file" as the goal state.
     await this.teardownDisk(sandboxId);
+  }
+
+  async exec(sandboxId: string, opts: ExecOptions): Promise<ExecResult> {
+    const containerId = await this.expectState(sandboxId, 'running');
+    const container = this.docker.getContainer(containerId);
+    // The deadline lives in-container, via GNU timeout: closing the
+    // host-side stream cannot kill the in-container process (measured in
+    // the predecessor system); only an in-container SIGKILL can. 137 = killed.
+    const exec = await container.exec({
+      Cmd: [
+        'timeout',
+        '--signal=KILL',
+        String(opts.timeoutSeconds),
+        'bash',
+        '-c',
+        opts.command,
+      ],
+      AttachStdout: true,
+      AttachStderr: true,
+      WorkingDir: opts.cwd,
+      Env: opts.env
+        ? Object.entries(opts.env).map(([key, value]) => `${key}=${value}`)
+        : undefined,
+      User: 'user',
+    });
+    // Tty stays off: the multiplexed stream is what demuxStream can split
+    // back into distinct stdout and stderr.
+    const stream = await exec.start({});
+    const stdout = new CappedBuffer(EXEC_OUTPUT_LIMIT_BYTES);
+    const stderr = new CappedBuffer(EXEC_OUTPUT_LIMIT_BYTES);
+    this.docker.modem.demuxStream(stream, stdout, stderr);
+    await new Promise<void>((resolve, reject) => {
+      stream.on('end', resolve);
+      stream.on('close', resolve);
+      stream.on('error', reject);
+    });
+    // The engine records the exit code a beat after the stream ends — the
+    // same measured lag as kill vs exited in stop(). Poll briefly instead
+    // of reading a null.
+    let info = await exec.inspect();
+    for (let i = 0; info.Running || info.ExitCode === null; i++) {
+      if (i >= 20) {
+        throw new Error(
+          `exec on ${sandboxId} ended but no exit code was recorded`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      info = await exec.inspect();
+    }
+    return {
+      exitCode: info.ExitCode,
+      stdout: stdout.text(),
+      stderr: stderr.text(),
+      stdoutTruncated: stdout.truncated,
+      stderrTruncated: stderr.truncated,
+    };
   }
 
   private imagePath(sandboxId: string): string {
