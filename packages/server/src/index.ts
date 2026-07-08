@@ -9,7 +9,7 @@ const config = loadConfig();
 const db = openDb(config.DORMICE_DB_PATH);
 migrateDb(db, new URL('../drizzle', import.meta.url).pathname);
 
-const app = buildApp();
+const app = buildApp({ config, db });
 
 // Red line: the daemon binds to loopback only, and the host is deliberately
 // not configurable — a knob would be one typo away from 0.0.0.0. Exposing

@@ -45,6 +45,27 @@ export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
   return row;
 }
 
+/**
+ * Refreshes the idle clock. Every acquire() calls this; the idle scanner
+ * measures freeze/stop/archive thresholds from lastActiveAt.
+ */
+export function touch(db: Db, sandboxId: string): SandboxRow {
+  const now = new Date().toISOString();
+  db.update(sandboxes)
+    .set({ lastActiveAt: now })
+    .where(eq(sandboxes.sandboxId, sandboxId))
+    .run();
+  const row = db
+    .select()
+    .from(sandboxes)
+    .where(eq(sandboxes.sandboxId, sandboxId))
+    .get();
+  if (!row) {
+    throw new Error(`sandbox ${sandboxId} not found`);
+  }
+  return row;
+}
+
 export function findByUserKey(db: Db, userKey: string): SandboxRow | undefined {
   return db
     .select()
