@@ -13,6 +13,31 @@ Cloud sandbox platforms charge for every second a sandbox exists, so their sandb
 - **Deploys like a single binary.** One daemon, one SQLite ledger, one port. No Kubernetes, no external database.
 - **E2B compatibility is on the roadmap**: the goal is that the official `e2b` SDK works against Dormice by changing two URLs.
 
+## Host prerequisites (docker executor)
+
+The daemon itself runs anywhere Node 22+ runs, with an in-memory fake
+executor for development. Running **real** sandboxes needs a Linux host
+prepared ahead of time — an `install.sh` and a `dor doctor` will automate
+these checks later, but today they are the operator's job:
+
+- **Docker + gVisor (`runsc`)**, and root (loop mounts, cgroup writes).
+- **Swap, and `vm.swappiness=100`.** Freezing squeezes an idle sandbox's
+  memory out to swap; gVisor holds sandbox memory as shared memory, which
+  the kernel refuses to swap at the default swappiness — measured on real
+  hardware: 0 bytes reclaimed at the default, 99.5% reclaimed at 100. Note
+  that some cloud images (Alibaba Cloud, for one) ship `vm.swappiness=0`;
+  check the *effective* value with `sysctl vm.swappiness`, not the config
+  files.
+- **Network hardening is not optional.** Sandboxes run untrusted code:
+  block the cloud metadata service from containers
+  (`iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP`, persisted) and
+  disable inter-container traffic (`"icc": false` in `daemon.json`). The
+  daemon binds to 127.0.0.1 only, by design without a knob; exposing it is
+  a reverse proxy's job.
+- **One machine, one daemon.** The daemon enforces this with a lock next to
+  its ledger and refuses to start when its ledger and the machine's reality
+  cannot belong together.
+
 ## Repository layout
 
 pnpm monorepo:
