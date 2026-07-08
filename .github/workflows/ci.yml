@@ -11,6 +11,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege for the workflow token: these jobs only read the repo.
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -18,13 +22,16 @@ jobs:
     # stuck, so fail honestly instead of burning the 6-hour default.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      # Third-party actions are pinned to commit SHAs, not tags: a tag can
+      # be repointed at attacker code after the fact, the same reason the
+      # gitleaks binary below is pinned by checksum.
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       # Reads the pnpm version from package.json's packageManager field —
       # one place to bump, local and CI can never drift.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           # engines promises >=22, so CI runs that floor: anything needing
           # a newer Node fails here before it reaches a user.
@@ -47,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           # The whole history, not just the tip: old commits leak too.
           fetch-depth: 0
