@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import {
   acquireRequestSchema,
   acquireResponseSchema,
+  execCommandRequestSchema,
+  execCommandResponseSchema,
   type LifecyclePolicy,
   listSandboxesResponseSchema,
   releaseSandboxRequestSchema,
@@ -31,6 +33,31 @@ export interface SandboxRoutesOptions {
   db: Db;
   executor: Executor;
   locks: KeyedQueue;
+}
+
+/**
+ * Keeps a sandbox's idle clock fresh while an exec is in flight, so the
+ * scanner never freezes a container that is mid-command. Half the freeze
+ * threshold (never above 10s) lands at least one touch inside every scan
+ * window, down to the schema's minimum freezeAfterSeconds of 1. A vanished
+ * row (released mid-exec) stops the timer — the exec itself will fail with
+ * its own honest error; an unhandled throw inside setInterval would take
+ * the daemon down instead.
+ */
+function startExecHeartbeat(
+  db: Db,
+  sandboxId: string,
+  freezeAfterSeconds: number,
+): () => void {
+  const intervalMs = Math.min((freezeAfterSeconds * 1000) / 2, 10_000);
+  const timer = setInterval(() => {
+    try {
+      touch(db, sandboxId);
+    } catch {
+      clearInterval(timer);
+    }
+  }, intervalMs);
+  return () => clearInterval(timer);
 }
 
 /** Ledger row -> wire shape: nest the flat policy columns, attach the endpoint. */
@@ -161,6 +188,63 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     async () => ({
       sandboxes: listSandboxes(db).map((row) => toSandbox(row, endpoint)),
     }),
+  );
+
+  app.post(
+    '/execCommand',
+    {
+      schema: {
+        body: execCommandRequestSchema,
+        response: { 200: execCommandResponseSchema },
+      },
+    },
+    async (request) => {
+      const { userKey, command, timeoutSeconds, cwd, env } = request.body;
+
+      // Only the wake takes the key's queue slot — seconds of executor
+      // work, the same serialization story as acquire. The exec itself
+      // runs OUTSIDE the slot: a command may legally run for hours, and
+      // holding the slot would block release and every other verb for its
+      // whole duration. The heartbeat keeps the scanner away; a concurrent
+      // release mid-exec destroys the container and this exec fails with
+      // the executor's honest error — accepted, not defended against.
+      const row = await locks.run(userKey, async () => {
+        const existing = findByUserKey(db, userKey);
+        if (!existing) {
+          // exec is not a creator: an unknown key here is more likely a
+          // typo than an intent to build a sandbox as a side effect.
+          throw httpError(
+            404,
+            `no sandbox for key "${userKey}" — acquire it first`,
+          );
+        }
+        const awake = await wakeSandbox(db, executor, existing);
+        return touch(db, awake.sandboxId);
+      });
+
+      const stopHeartbeat = startExecHeartbeat(
+        db,
+        row.sandboxId,
+        row.freezeAfterSeconds,
+      );
+      try {
+        return await executor.exec(row.sandboxId, {
+          command,
+          timeoutSeconds,
+          cwd,
+          env,
+        });
+      } finally {
+        stopHeartbeat();
+        try {
+          // The command itself was the activity: the idle countdown starts
+          // when it ends, not when it started.
+          touch(db, row.sandboxId);
+        } catch {
+          // Released mid-exec; the exec's own result or error tells the story.
+        }
+      }
+    },
   );
 
   app.post(

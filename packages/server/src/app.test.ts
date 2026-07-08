@@ -407,6 +407,144 @@ describe('acquire after reality moved behind the ledger', () => {
   });
 });
 
+describe('POST /execCommand', () => {
+  it('runs a command in the sandbox and returns the buffered result', async () => {
+    const { app } = testApp();
+    await acquire(app, { userKey: 'alice' });
+    // No timeoutSeconds sent: the schema default fills it in server-side.
+    const res = await rpc(app, '/execCommand', {
+      userKey: 'alice',
+      command: 'echo hi',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      exitCode: 0,
+      stdout: 'hi\n',
+      stderr: '',
+      stdoutTruncated: false,
+      stderrTruncated: false,
+    });
+  });
+
+  it('answers an unknown key with a 404, never a silent create', async () => {
+    const res = await rpc(testApp().app, '/execCommand', {
+      userKey: 'nobody',
+      command: 'echo hi',
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toMatch(/no sandbox for key/);
+  });
+
+  it('wakes a frozen sandbox before running the command', async () => {
+    const { app, db, executor, locks } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const id = created.sandbox.sandboxId;
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(
+        created.sandbox.lastActiveAt,
+        DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+      ),
+    );
+    expect(executor.stateOf(id)).toBe('paused');
+
+    // A paused container cannot even receive an exec (Docker refuses); the
+    // route must wake it first, exactly like acquire does.
+    const res = await rpc(app, '/execCommand', {
+      userKey: 'alice',
+      command: 'echo woke',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().stdout).toBe('woke\n');
+    expect(executor.stateOf(id)).toBe('running');
+  });
+
+  it('the heartbeat keeps a long-running command out of the freezer', async () => {
+    // Reverse-verified: with startExecHeartbeat disabled this test goes
+    // red (the sweep freezes the sandbox mid-sleep).
+    const { app, db, executor, locks } = testApp();
+    const created = (
+      await acquire(app, {
+        userKey: 'alice',
+        policy: { freezeAfterSeconds: 1 },
+      })
+    ).json();
+    const id = created.sandbox.sandboxId;
+
+    // freeze:1 → heartbeat every 500ms. Sweep at real 700ms with a clock
+    // reading 1.2s past the original lastActiveAt: exec's own start-of-exec
+    // touch (~0ms) is stale against that clock — only the 500ms heartbeat
+    // touch keeps the idle under the threshold.
+    const execPromise = rpc(app, '/execCommand', {
+      userKey: 'alice',
+      command: 'sleep 1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    const sweep = await scanOnce(
+      db,
+      executor,
+      locks,
+      after(created.sandbox.lastActiveAt, 1.2),
+    );
+    expect(sweep.frozen).toBe(0);
+    expect(executor.stateOf(id)).toBe('running');
+
+    const res = await execPromise;
+    expect(res.statusCode).toBe(200);
+    expect(res.json().exitCode).toBe(0);
+  });
+
+  it('a release mid-exec settles both requests and leaves the daemon alive', async () => {
+    // Declared un-defended: the release wins, the exec answers honestly.
+    // What this pins is the daemon's survival — the heartbeat touching a
+    // deleted row must never become an unhandled throw inside setInterval.
+    // Reverse-verified: without the heartbeat's try/catch this crashes.
+    const { app } = testApp();
+    await acquire(app, {
+      userKey: 'alice',
+      policy: { freezeAfterSeconds: 1 },
+    });
+
+    const execPromise = rpc(app, '/execCommand', {
+      userKey: 'alice',
+      command: 'sleep 1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const releaseRes = await rpc(app, '/releaseSandbox', { userKey: 'alice' });
+    expect(releaseRes.json()).toEqual({ released: true });
+
+    // Both requests settle; ride out one more heartbeat interval on the
+    // deleted row before declaring the daemon healthy.
+    const execRes = await execPromise;
+    expect(execRes.statusCode).toBeGreaterThanOrEqual(200);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const list = await rpc(app, '/listSandboxes');
+    expect(list.statusCode).toBe(200);
+    expect(list.json().sandboxes).toEqual([]);
+  });
+
+  it('rejects malformed requests with the protocol {message} shape', async () => {
+    const { app } = testApp();
+    await acquire(app, { userKey: 'alice' });
+    const bad = [
+      { userKey: 'alice' }, // no command
+      { userKey: 'alice', command: '' },
+      { userKey: 'alice', command: 'echo hi', timeoutSeconds: 0 },
+      { userKey: 'alice', command: 'echo hi', timeoutSeconds: -5 },
+      { userKey: 'alice', command: 'echo hi', timeoutSeconds: 1.5 },
+      { userKey: 'alice', command: 'echo hi', timeoutSeconds: 86_401 },
+      { userKey: 'alice', command: 'echo hi', env: { PATH: 42 } },
+    ];
+    for (const payload of bad) {
+      const res = await rpc(app, '/execCommand', payload);
+      expect(res.statusCode).toBe(400);
+      expect(Object.keys(res.json())).toEqual(['message']);
+    }
+  });
+});
+
 describe('POST /listSandboxes', () => {
   it('requires a token', async () => {
     const res = await testApp().app.inject({
