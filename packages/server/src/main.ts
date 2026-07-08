@@ -56,20 +56,31 @@ app.log.info(repaired, 'startup reconcile');
 await app.listen({ host: '127.0.0.1', port: config.DORMICE_PORT });
 
 // The daemon's heartbeat: reconcile, then scan. Reconciling every tick is
-// what keeps the ledger honest while the daemon runs — a container that
-// vanished (gVisor kills a whole box on OOM) is deleted from the ledger
-// within one interval instead of at the next restart, so acquire stops
-// returning it and its user key is free again. Reconcile runs first so the
-// scanner never trips over rows whose containers are gone.
+// what keeps the ledger honest while the daemon runs — a sandbox whose
+// container died under it (a gVisor box exits whole on OOM, leaving an
+// exited container) is repaired within one interval instead of at the next
+// restart. Reconcile runs first so the scanner never trips over rows whose
+// containers moved without it.
+//
+// Ticks are chained instead of put on setInterval: a tick legitimately runs
+// long (a single freeze may spend 45s in memory.reclaim), and setInterval
+// would start the next tick on top of it — double freezes, repairs from
+// stale observations. The next tick is only scheduled when this one is done.
 //
 // Failures are logged, never fatal: the ledger is only written after
 // reality moved, so the next tick retries whatever failed.
 let suspects: ReadonlySet<string> = new Set();
-setInterval(async () => {
+async function tick() {
   try {
     const drift = await reconcile(db, executor, suspects);
     suspects = new Set(drift.suspects);
-    if (drift.repairedStates + drift.deletedRows + drift.destroyedOrphans > 0) {
+    if (
+      drift.repairedStates +
+        drift.deletedRows +
+        drift.destroyedOrphans +
+        drift.removedDisks >
+      0
+    ) {
       app.log.warn(drift, 'runtime reconcile repaired drift');
     }
     const scan = await scanOnce(db, executor, new Date());
@@ -78,5 +89,8 @@ setInterval(async () => {
     }
   } catch (error) {
     app.log.error(error, 'heartbeat tick failed');
+  } finally {
+    setTimeout(tick, config.DORMICE_SCAN_INTERVAL_SECONDS * 1000);
   }
-}, config.DORMICE_SCAN_INTERVAL_SECONDS * 1000);
+}
+setTimeout(tick, config.DORMICE_SCAN_INTERVAL_SECONDS * 1000);
