@@ -33,16 +33,28 @@ const COLUMNS: { header: string; value: (s: Sandbox) => string }[] = [
   { header: 'LAST ACTIVE', value: (s) => s.lastActiveAt },
 ];
 
+/**
+ * The protocol keeps userKey opaque, so a hostile key can carry control
+ * characters — printed raw, ESC sequences would let one sandbox's name
+ * rewrite the operator's terminal. Neutralized here, at the output layer,
+ * where the terminal risk lives.
+ */
+function printable(value: string): string {
+  return value.replace(/\p{Cc}/gu, '?');
+}
+
 /** `dor sandbox ls`: every sandbox with its lifecycle state, as plain columns. */
 export async function sandboxLs(client: Dormice): Promise<string> {
   const sandboxes = await client.listSandboxes();
   if (sandboxes.length === 0) {
     return 'No sandboxes.';
   }
+  const cell = (column: (typeof COLUMNS)[number], s: Sandbox) =>
+    printable(column.value(s));
   const widths = COLUMNS.map((column) =>
     Math.max(
       column.header.length,
-      ...sandboxes.map((s) => column.value(s).length),
+      ...sandboxes.map((s) => cell(column, s).length),
     ),
   );
   const line = (cells: string[]) =>
@@ -52,7 +64,7 @@ export async function sandboxLs(client: Dormice): Promise<string> {
       .trimEnd();
   return [
     line(COLUMNS.map((column) => column.header)),
-    ...sandboxes.map((s) => line(COLUMNS.map((column) => column.value(s)))),
+    ...sandboxes.map((s) => line(COLUMNS.map((column) => cell(column, s)))),
   ].join('\n');
 }
 
@@ -63,6 +75,6 @@ export async function sandboxRelease(
 ): Promise<string> {
   const { released } = await client.releaseSandbox(userKey);
   return released
-    ? `Released the sandbox for key "${userKey}".`
-    : `No sandbox for key "${userKey}" — nothing to release.`;
+    ? `Released the sandbox for key "${printable(userKey)}".`
+    : `No sandbox for key "${printable(userKey)}" — nothing to release.`;
 }

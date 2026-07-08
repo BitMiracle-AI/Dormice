@@ -97,6 +97,16 @@ describe('sandbox commands over real HTTP', () => {
     expect(output).toContain(alice.sandbox.sandboxId);
   });
 
+  it('neutralizes control characters a hostile user key smuggles in', async () => {
+    // The protocol keeps userKey opaque, so an ESC sequence is a legal key;
+    // printed raw it would rewrite the operator's terminal.
+    await client.acquireSandbox('evil\u001b[31mkey');
+    const output = await sandboxLs(client);
+    expect(output).not.toContain('\u001b');
+    expect(output).toContain('evil?[31mkey');
+    await client.releaseSandbox('evil\u001b[31mkey');
+  });
+
   it('release reports both outcomes of the idempotent destroy', async () => {
     await client.acquireSandbox('carol');
     expect(await sandboxRelease(client, 'carol')).toBe(
