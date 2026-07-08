@@ -1,12 +1,16 @@
-# 工作区成员：packages/ 下每个目录是一个包；e2e 独立成包（21 项 E2B 兼容套件，CI 与 WebUI 同源调用）
+# Workspace members: every directory under packages/ is a package; e2e is its
+# own package (the 21-item E2B compatibility suite, driven by both CI and the web UI)
 packages:
   - packages/*
   - e2e
 
-# 供应链防御：新发布的 npm 包须满 24 小时（1440 分钟）才可安装——
-# 恶意包投毒通常在发布后数小时内被发现下架，等一天避开绝大多数事故
+# Supply-chain defense: a newly published npm version must be at least 24 hours
+# (1440 minutes) old before it can be installed — poisoned releases are usually
+# found and unpublished within hours, so waiting a day avoids most incidents
 minimumReleaseAge: 1440
 
-# 构建脚本白名单：依赖默认禁止执行安装脚本，逐个批准（每行写明它为什么需要跑脚本）
+# Build-script allowlist: dependencies may not run install scripts by default.
+# Approve one by one, each line stating why the script is needed.
 onlyBuiltDependencies:
-  - esbuild # tsup 的底层打包器，postinstall 下载对应平台的二进制
+  - esbuild # tsup's underlying bundler; postinstall downloads the platform binary
+  - better-sqlite3 # native SQLite module; install script downloads a prebuilt binary (compiles locally if none matches)

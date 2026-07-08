@@ -1,11 +1,12 @@
-# ── 内部开发文件，不入库 ──
-# CLAUDE.md 含私有对照信息（安全铁律）；RULES/ 与 docs/ 是内部规范与决策记录，
-# 对外文档（README、SECURITY.md 等）是面向用户的独立交付物，另行编写
+# ── Internal development files, never committed ──
+# CLAUDE.md carries private cross-references; RULES/ and docs/ are internal
+# conventions and decision records. Public-facing docs (README, SECURITY.md, …)
+# are separate deliverables written on their own.
 CLAUDE.md
 RULES/
 docs/
 
-# 密钥与环境变量实体（只允许 *.example 入库）
+# Secrets and real env files (only *.example may be committed)
 .env
 .env.*
 !.env.example
@@ -17,13 +18,13 @@ node_modules/
 dist/
 *.tsbuildinfo
 
-# 测试与覆盖率
+# Tests and coverage
 coverage/
 
-# 系统与编辑器
+# System and editors
 .DS_Store
 .idea/
 .vscode/
 
-# 日志
+# Logs
 *.log
