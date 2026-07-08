@@ -2,4 +2,9 @@
 // users get Sandbox, AcquireResponse, lifecycle constants etc. from here
 // without installing @dormice/shared themselves.
 export * from '@dormice/shared';
-export { Dormice, DormiceApiError, type DormiceOptions } from './client';
+export {
+  Dormice,
+  DormiceApiError,
+  type DormiceOptions,
+  type ExecCommandOptions,
+} from './client';

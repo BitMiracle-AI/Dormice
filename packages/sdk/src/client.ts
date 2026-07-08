@@ -1,6 +1,9 @@
 import {
   type AcquireResponse,
   acquireResponseSchema,
+  DEFAULT_EXEC_TIMEOUT_SECONDS,
+  type ExecCommandResponse,
+  execCommandResponseSchema,
   type LifecyclePolicyOverride,
   listSandboxesResponseSchema,
   type ReleaseSandboxResponse,
@@ -19,6 +22,14 @@ export interface DormiceOptions {
    * sandbox takes seconds; restores return `restoring` immediately).
    */
   timeoutMs?: number;
+}
+
+export interface ExecCommandOptions {
+  /** In-container deadline; on expiry the command is SIGKILLed (exit 137). */
+  timeoutSeconds?: number;
+  /** Working directory inside the sandbox; defaults to /home/user. */
+  cwd?: string;
+  env?: Record<string, string>;
 }
 
 /** A non-2xx answer from the daemon, carrying the HTTP status and the server's message. */
@@ -75,8 +86,44 @@ export class Dormice {
     return releaseSandboxResponseSchema.parse(data);
   }
 
+  /**
+   * Runs a shell command inside the sandbox behind a user key and returns
+   * the buffered result: honest exit code (a nonzero exit is a result, not
+   * an error), stdout/stderr capped at 1 MiB per stream. Wakes a cold
+   * sandbox first, and counts as activity for the whole run — the idle
+   * scanner never freezes a sandbox mid-command.
+   */
+  async execCommand(
+    userKey: string,
+    command: string,
+    options?: ExecCommandOptions,
+  ): Promise<ExecCommandResponse> {
+    // Resolved client-side so the HTTP deadline below is always derived
+    // from the same number the container enforces — the shared default,
+    // not the client-wide timeoutMs, which would cut a long command short.
+    const timeoutSeconds =
+      options?.timeoutSeconds ?? DEFAULT_EXEC_TIMEOUT_SECONDS;
+    const data = await this.rpc(
+      'execCommand',
+      {
+        userKey,
+        command,
+        timeoutSeconds,
+        cwd: options?.cwd,
+        env: options?.env,
+      },
+      // Slack on top covers the wake (seconds) and the round-trip.
+      timeoutSeconds * 1000 + 30_000,
+    );
+    return execCommandResponseSchema.parse(data);
+  }
+
   /** Native API convention: every operation is POST /<method>, body in, body out. */
-  private async rpc(method: string, body: unknown): Promise<unknown> {
+  private async rpc(
+    method: string,
+    body: unknown,
+    timeoutMs = this.timeoutMs,
+  ): Promise<unknown> {
     const response = await fetch(`${this.endpoint}/${method}`, {
       method: 'POST',
       headers: {
@@ -86,7 +133,7 @@ export class Dormice {
       body: JSON.stringify(body),
       // Rejects with a TimeoutError — honestly not an API error, so it is
       // deliberately not wrapped in DormiceApiError.
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
       throw new DormiceApiError(response.status, await errorMessage(response));

@@ -152,6 +152,30 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
     expect(erin?.state).toBe('active');
   });
 
+  it('runs a command in the sandbox and returns the buffered result', async () => {
+    await client.acquireSandbox('grace');
+    const result = await client.execCommand('grace', 'echo hi');
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: 'hi\n',
+      stderr: '',
+      stdoutTruncated: false,
+      stderrTruncated: false,
+    });
+    // A nonzero exit is a result, not a throw.
+    expect((await client.execCommand('grace', 'exit 3')).exitCode).toBe(3);
+  });
+
+  it('surfaces the 404 for an exec against an unknown key', async () => {
+    await expect(client.execCommand('nobody', 'echo hi')).rejects.toMatchObject(
+      {
+        name: 'DormiceApiError',
+        status: 404,
+        message: expect.stringMatching(/no sandbox for key/),
+      },
+    );
+  });
+
   it('releases a sandbox and reports idempotently', async () => {
     const created = await client.acquireSandbox('frank');
     expect(await client.releaseSandbox('frank')).toEqual({ released: true });

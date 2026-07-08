@@ -96,6 +96,80 @@ describe('native API over a real daemon', () => {
     expect(again.sandbox.sandboxId).not.toBe(created.sandbox.sandboxId);
   });
 
+  it('runs a command in the sandbox and returns the buffered result', async () => {
+    await client().acquireSandbox('exec-key');
+    const result = await client().execCommand('exec-key', 'echo hi');
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: 'hi\n',
+      stderr: '',
+      stdoutTruncated: false,
+      stderrTruncated: false,
+    });
+    // A nonzero exit is a result, not an error.
+    expect((await client().execCommand('exec-key', 'exit 3')).exitCode).toBe(3);
+  });
+
+  it('answers exec on an unknown key with 404, never a silent create', async () => {
+    await expect(
+      client().execCommand('exec-nobody-key', 'echo hi'),
+    ).rejects.toMatchObject({
+      name: 'DormiceApiError',
+      status: 404,
+      message: expect.stringMatching(/no sandbox for key/),
+    });
+  });
+
+  it('a long-running command outlives the idle scanner: the heartbeat renews activity', async () => {
+    // freeze:1 against the daemon's real 1s sweep: without the exec
+    // heartbeat the scanner freezes the sandbox mid-sleep and the exec
+    // dies against a paused container. Reverse-verified with the
+    // heartbeat disabled.
+    await client().acquireSandbox('exec-busy-key', {
+      freezeAfterSeconds: 1,
+      stopAfterSeconds: null,
+      archiveAfterSeconds: null,
+    });
+    const result = await client().execCommand('exec-busy-key', 'sleep 3');
+    expect(result.exitCode).toBe(0);
+    const observed = (await client().listSandboxes()).find(
+      (s) => s.userKey === 'exec-busy-key',
+    );
+    expect(observed?.state).toBe('active');
+  });
+
+  it('exec wakes a frozen sandbox before running the command', async () => {
+    await client().acquireSandbox('exec-wake-key', {
+      freezeAfterSeconds: 1,
+      stopAfterSeconds: null,
+      archiveAfterSeconds: null,
+    });
+    // Watch it actually freeze from outside, on real wall-clock time.
+    const deadline = Date.now() + 15_000;
+    for (;;) {
+      const cold = (await client().listSandboxes()).find(
+        (s) => s.userKey === 'exec-wake-key',
+      );
+      if (cold?.state === 'frozen') break;
+      if (Date.now() > deadline) {
+        throw new Error(
+          `sandbox never reached frozen; last observed: ${cold?.state}`,
+        );
+      }
+      await sleep(0.25);
+    }
+
+    // A paused container cannot even receive an exec — the route must
+    // wake it first, exactly like acquire does.
+    const result = await client().execCommand('exec-wake-key', 'echo woke');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('woke\n');
+    const observed = (await client().listSandboxes()).find(
+      (s) => s.userKey === 'exec-wake-key',
+    );
+    expect(observed?.state).toBe('active');
+  });
+
   it('survives the cold cycle: idle -> frozen -> stopped -> re-acquire wakes it', async () => {
     const created = await client().acquireSandbox('sleeper-key', {
       freezeAfterSeconds: 1,
