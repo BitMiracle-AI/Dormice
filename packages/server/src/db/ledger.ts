@@ -1,6 +1,5 @@
 import type { LifecyclePolicy, SandboxState } from '@dormice/shared';
 import { eq } from 'drizzle-orm';
-import { nanoid } from 'nanoid';
 import type { Db } from './db';
 import { type SandboxRow, sandboxes } from './schema';
 
@@ -22,6 +21,11 @@ export const ALLOWED_TRANSITIONS: Record<
 };
 
 export interface CreateSandboxInput {
+  /**
+   * Supplied by the caller, not generated here: reality moves first (the
+   * container is created under this id), then the ledger records it.
+   */
+  sandboxId: string;
   userKey: string;
   nodeId: string;
   policy: LifecyclePolicy;
@@ -31,7 +35,7 @@ export interface CreateSandboxInput {
 export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
   const now = new Date().toISOString();
   const row: SandboxRow = {
-    sandboxId: nanoid(),
+    sandboxId: input.sandboxId,
     userKey: input.userKey,
     state: 'active',
     nodeId: input.nodeId,
@@ -64,6 +68,11 @@ export function touch(db: Db, sandboxId: string): SandboxRow {
     throw new Error(`sandbox ${sandboxId} not found`);
   }
   return row;
+}
+
+/** Full table scan — the idle scanner's sweep. Fine at single-machine scale. */
+export function listSandboxes(db: Db): SandboxRow[] {
+  return db.select().from(sandboxes).all();
 }
 
 export function findByUserKey(db: Db, userKey: string): SandboxRow | undefined {

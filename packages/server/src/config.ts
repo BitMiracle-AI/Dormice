@@ -14,6 +14,8 @@ const envSchema = z.object({
   DORMICE_DB_PATH: z.string().default('data/dormice.db'),
   /** Identifies this machine in the ledger. Single-machine today; the field keeps the ledger shardable. */
   DORMICE_NODE_ID: z.string().default('node-1'),
+  /** How often the idle scanner sweeps the ledger. */
+  DORMICE_SCAN_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
   /**
    * Required, no default: loopback-only is not authentication — any local
    * process could otherwise drive the daemon.

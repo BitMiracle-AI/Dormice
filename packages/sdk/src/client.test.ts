@@ -1,4 +1,12 @@
-import { buildApp, type Config, migrateDb, openDb } from '@dormice/server';
+import {
+  buildApp,
+  type Config,
+  type Db,
+  FakeExecutor,
+  migrateDb,
+  openDb,
+  scanOnce,
+} from '@dormice/server';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Dormice } from './client';
@@ -11,17 +19,21 @@ const MIGRATIONS = new URL('../../server/drizzle', import.meta.url).pathname;
 let app: ReturnType<typeof buildApp>;
 let client: Dormice;
 let endpoint: string;
+let db: Db;
+let executor: FakeExecutor;
 
 beforeAll(async () => {
-  const db = openDb(':memory:');
+  db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
+  executor = new FakeExecutor();
   const config: Config = {
     DORMICE_PORT: 3676,
     DORMICE_DB_PATH: ':memory:',
     DORMICE_NODE_ID: 'node-test',
+    DORMICE_SCAN_INTERVAL_SECONDS: 60,
     DORMICE_API_TOKEN: TOKEN,
   };
-  app = buildApp({ config, db, logger: false });
+  app = buildApp({ config, db, executor, logger: false });
   // Port 0: the OS hands out a free ephemeral port, so tests never collide
   // with a locally running daemon.
   await app.listen({ host: '127.0.0.1', port: 0 });
@@ -84,5 +96,21 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
     const slashed = new Dormice({ endpoint: `${endpoint}/`, token: TOKEN });
     const res = await slashed.acquireSandbox('alice');
     expect(res.status).toBe('ready');
+  });
+
+  it('wakes a frozen sandbox on re-acquire — the full story over the wire', async () => {
+    const created = await client.acquireSandbox('dave');
+    const frozenAt = new Date(
+      Date.parse(created.sandbox.lastActiveAt) +
+        DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds * 1000,
+    );
+    await scanOnce(db, executor, frozenAt);
+    expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
+
+    const woken = await client.acquireSandbox('dave');
+    expect(woken.status).toBe('ready');
+    expect(woken.sandbox.sandboxId).toBe(created.sandbox.sandboxId);
+    expect(woken.sandbox.state).toBe('active');
+    expect(executor.stateOf(created.sandbox.sandboxId)).toBe('running');
   });
 });

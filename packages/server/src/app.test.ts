@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { buildApp } from './app';
 import type { Config } from './config';
 import { migrateDb, openDb } from './db/db';
+import { FakeExecutor } from './executor/fake';
+import { scanOnce } from './scanner';
 
 const MIGRATIONS = new URL('../drizzle', import.meta.url).pathname;
 const TOKEN = 'test-token-test-token-test-token';
@@ -10,19 +12,22 @@ const TOKEN = 'test-token-test-token-test-token';
 function testApp() {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
+  const executor = new FakeExecutor();
   const config: Config = {
     DORMICE_PORT: 3676,
     DORMICE_DB_PATH: ':memory:',
     DORMICE_NODE_ID: 'node-test',
+    DORMICE_SCAN_INTERVAL_SECONDS: 60,
     DORMICE_API_TOKEN: TOKEN,
   };
-  return buildApp({ config, db, logger: false });
+  const app = buildApp({ config, db, executor, logger: false });
+  return { app, db, executor };
 }
 
 const authed = { authorization: `Bearer ${TOKEN}` };
 
 function acquire(
-  app: ReturnType<typeof testApp>,
+  app: ReturnType<typeof testApp>['app'],
   payload: Record<string, unknown>,
   headers: Record<string, string> = authed,
 ) {
@@ -34,20 +39,25 @@ function acquire(
   });
 }
 
+/** Time travel for the scanner: the instant `seconds` after an ISO timestamp. */
+function after(iso: string, seconds: number): Date {
+  return new Date(Date.parse(iso) + seconds * 1000);
+}
+
 describe('auth', () => {
   it('leaves /healthz open', async () => {
-    const res = await testApp().inject({ method: 'GET', url: '/healthz' });
+    const res = await testApp().app.inject({ method: 'GET', url: '/healthz' });
     expect(res.statusCode).toBe(200);
   });
 
   it('rejects API calls without a token', async () => {
-    const res = await acquire(testApp(), { userKey: 'u' }, {});
+    const res = await acquire(testApp().app, { userKey: 'u' }, {});
     expect(res.statusCode).toBe(401);
   });
 
   it('rejects API calls with a wrong token', async () => {
     const res = await acquire(
-      testApp(),
+      testApp().app,
       { userKey: 'u' },
       { authorization: 'Bearer wrong-token-wrong-token-wrong-token' },
     );
@@ -57,7 +67,8 @@ describe('auth', () => {
 
 describe('POST /acquireSandbox', () => {
   it('creates a sandbox on first acquire, with default policy', async () => {
-    const res = await acquire(testApp(), { userKey: 'alice' });
+    const { app, executor } = testApp();
+    const res = await acquire(app, { userKey: 'alice' });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.status).toBe('ready');
@@ -65,24 +76,26 @@ describe('POST /acquireSandbox', () => {
     expect(body.sandbox.userKey).toBe('alice');
     expect(body.sandbox.policy).toEqual(DEFAULT_LIFECYCLE_POLICY);
     expect(body.sandbox.endpoint).toBe('http://127.0.0.1:3676');
+    // The ledger and reality agree: the container is actually running.
+    expect(executor.stateOf(body.sandbox.sandboxId)).toBe('running');
   });
 
   it('is idempotent: same user key returns the same sandbox', async () => {
-    const app = testApp();
+    const { app } = testApp();
     const first = (await acquire(app, { userKey: 'alice' })).json();
     const second = (await acquire(app, { userKey: 'alice' })).json();
     expect(second.sandbox.sandboxId).toBe(first.sandbox.sandboxId);
   });
 
   it('gives different user keys different sandboxes', async () => {
-    const app = testApp();
+    const { app } = testApp();
     const alice = (await acquire(app, { userKey: 'alice' })).json();
     const bob = (await acquire(app, { userKey: 'bob' })).json();
     expect(bob.sandbox.sandboxId).not.toBe(alice.sandbox.sandboxId);
   });
 
   it('stores a policy override, including explicit null for archive', async () => {
-    const res = await acquire(testApp(), {
+    const res = await acquire(testApp().app, {
       userKey: 'alice',
       policy: { freezeAfterSeconds: 60, archiveAfterSeconds: null },
     });
@@ -94,7 +107,7 @@ describe('POST /acquireSandbox', () => {
   });
 
   it('rejects an override whose merged result breaks the ordering rule', async () => {
-    const res = await acquire(testApp(), {
+    const res = await acquire(testApp().app, {
       userKey: 'alice',
       policy: { archiveAfterSeconds: 1 },
     });
@@ -103,7 +116,74 @@ describe('POST /acquireSandbox', () => {
   });
 
   it('rejects a malformed body', async () => {
-    const res = await acquire(testApp(), { policy: {} });
+    const res = await acquire(testApp().app, { policy: {} });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('acquire wakes cold sandboxes', () => {
+  it('unfreezes a frozen sandbox back to active', async () => {
+    const { app, db, executor } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const id = created.sandbox.sandboxId;
+
+    await scanOnce(
+      db,
+      executor,
+      after(
+        created.sandbox.lastActiveAt,
+        DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+      ),
+    );
+    expect(executor.stateOf(id)).toBe('paused');
+
+    const woken = (await acquire(app, { userKey: 'alice' })).json();
+    expect(woken.sandbox.sandboxId).toBe(id);
+    expect(woken.sandbox.state).toBe('active');
+    expect(executor.stateOf(id)).toBe('running');
+  });
+
+  it('starts a stopped sandbox back to active', async () => {
+    const { app, db, executor } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const id = created.sandbox.sandboxId;
+
+    const lastActiveAt = created.sandbox.lastActiveAt;
+    await scanOnce(
+      db,
+      executor,
+      after(lastActiveAt, DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds),
+    );
+    await scanOnce(
+      db,
+      executor,
+      after(lastActiveAt, DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds),
+    );
+    expect(executor.stateOf(id)).toBe('stopped');
+
+    const woken = (await acquire(app, { userKey: 'alice' })).json();
+    expect(woken.sandbox.sandboxId).toBe(id);
+    expect(woken.sandbox.state).toBe('active');
+    expect(executor.stateOf(id)).toBe('running');
+  });
+
+  it('waking refreshes the idle clock', async () => {
+    const { app, db, executor } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+
+    await scanOnce(
+      db,
+      executor,
+      after(
+        created.sandbox.lastActiveAt,
+        DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+      ),
+    );
+    // touch() stamps real wall-clock time, so give it a distinct millisecond.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const woken = (await acquire(app, { userKey: 'alice' })).json();
+    expect(Date.parse(woken.sandbox.lastActiveAt)).toBeGreaterThan(
+      Date.parse(created.sandbox.lastActiveAt),
+    );
   });
 });

@@ -8,11 +8,13 @@ import { z } from 'zod';
 import { requireApiToken } from './auth';
 import type { Config } from './config';
 import type { Db } from './db/db';
+import type { Executor } from './executor/executor';
 import { sandboxRoutes } from './routes/sandboxes';
 
 export interface AppDeps {
   config: Config;
   db: Db;
+  executor: Executor;
   /** Tests turn logging off; the daemon leaves it on. */
   logger?: boolean;
 }
@@ -26,7 +28,7 @@ export interface AppDeps {
  * Building the app is separate from listening so tests can inject requests
  * without opening a port.
  */
-export function buildApp({ config, db, logger = true }: AppDeps) {
+export function buildApp({ config, db, executor, logger = true }: AppDeps) {
   const app = fastify({ logger }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -47,7 +49,7 @@ export function buildApp({ config, db, logger = true }: AppDeps) {
 
   app.register(async (api) => {
     api.addHook('onRequest', requireApiToken(config.DORMICE_API_TOKEN));
-    await api.register(sandboxRoutes, { config, db });
+    await api.register(sandboxRoutes, { config, db, executor });
   });
 
   return app;

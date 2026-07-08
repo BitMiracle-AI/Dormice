@@ -1,4 +1,5 @@
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
+import { nanoid } from 'nanoid';
 import { describe, expect, it } from 'vitest';
 import { type Db, migrateDb, openDb } from './db';
 import { createSandbox, findByUserKey, transition } from './ledger';
@@ -13,6 +14,7 @@ function testDb(): Db {
 
 function create(db: Db, userKey = 'user-1') {
   return createSandbox(db, {
+    sandboxId: nanoid(),
     userKey,
     nodeId: 'node-1',
     policy: DEFAULT_LIFECYCLE_POLICY,
