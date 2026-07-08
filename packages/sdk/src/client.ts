@@ -2,6 +2,10 @@ import {
   type AcquireResponse,
   acquireResponseSchema,
   type LifecyclePolicyOverride,
+  listSandboxesResponseSchema,
+  type ReleaseSandboxResponse,
+  releaseSandboxResponseSchema,
+  type Sandbox,
 } from '@dormice/shared';
 
 export interface DormiceOptions {
@@ -45,6 +49,22 @@ export class Dormice {
     // Never trust the wire blindly: parsing against the shared schema makes
     // a version-skewed or misbehaving server fail loudly right here.
     return acquireResponseSchema.parse(data);
+  }
+
+  /** Every sandbox on the daemon with its current lifecycle state. */
+  async listSandboxes(): Promise<Sandbox[]> {
+    const data = await this.rpc('listSandboxes', {});
+    return listSandboxesResponseSchema.parse(data).sandboxes;
+  }
+
+  /**
+   * Destroys the sandbox behind a user key — container and disk are gone
+   * for good. Idempotent like acquire: a key that has no sandbox is not an
+   * error, the response just says `released: false`.
+   */
+  async releaseSandbox(userKey: string): Promise<ReleaseSandboxResponse> {
+    const data = await this.rpc('releaseSandbox', { userKey });
+    return releaseSandboxResponseSchema.parse(data);
   }
 
   /** Native API convention: every operation is POST /<method>, body in, body out. */

@@ -75,6 +75,15 @@ export function listSandboxes(db: Db): SandboxRow[] {
   return db.select().from(sandboxes).all();
 }
 
+/**
+ * Removes the row entirely. Release is legal from any state, so deletion
+ * does not go through ALLOWED_TRANSITIONS — that table governs moves between
+ * states, not the end of the record.
+ */
+export function deleteSandbox(db: Db, sandboxId: string): void {
+  db.delete(sandboxes).where(eq(sandboxes.sandboxId, sandboxId)).run();
+}
+
 export function findByUserKey(db: Db, userKey: string): SandboxRow | undefined {
   return db
     .select()

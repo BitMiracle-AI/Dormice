@@ -1,5 +1,5 @@
 import type { Db } from './db/db';
-import { transition } from './db/ledger';
+import { deleteSandbox, transition } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import type { Executor } from './executor/executor';
 
@@ -30,6 +30,21 @@ export async function stopSandbox(
 ): Promise<SandboxRow> {
   await executor.stop(sandboxId);
   return transition(db, sandboxId, 'stopped');
+}
+
+/**
+ * The end of a sandbox's life: container and disk destroyed, row removed.
+ * Same order as everything else — reality first, ledger second; a crash in
+ * between leaves a row pointing at nothing, which is the reconciler's kind
+ * of drift, not this caller's.
+ */
+export async function releaseSandbox(
+  db: Db,
+  executor: Executor,
+  sandboxId: string,
+): Promise<void> {
+  await executor.destroy(sandboxId);
+  deleteSandbox(db, sandboxId);
 }
 
 /** Brings a sandbox in any cold state back to active. No-op when already active. */

@@ -17,4 +17,6 @@ export interface Executor {
   stop(sandboxId: string): Promise<void>;
   /** Stopped -> running again, from the kept disk. */
   start(sandboxId: string): Promise<void>;
+  /** Removes the container and its disk for good, whatever state it is in. */
+  destroy(sandboxId: string): Promise<void>;
 }

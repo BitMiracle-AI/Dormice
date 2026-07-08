@@ -35,4 +35,22 @@ describe('FakeExecutor', () => {
     const executor = new FakeExecutor();
     await expect(executor.freeze('ghost')).rejects.toThrow(/absent/);
   });
+
+  it('destroys a container from any state', async () => {
+    const executor = new FakeExecutor();
+    await executor.create('a');
+    await executor.destroy('a');
+    expect(executor.stateOf('a')).toBeUndefined();
+
+    await executor.create('b');
+    await executor.freeze('b');
+    await executor.stop('b');
+    await executor.destroy('b');
+    expect(executor.stateOf('b')).toBeUndefined();
+  });
+
+  it('rejects destroying an absent container', async () => {
+    const executor = new FakeExecutor();
+    await expect(executor.destroy('ghost')).rejects.toThrow(/absent/);
+  });
 });

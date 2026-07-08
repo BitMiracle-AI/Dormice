@@ -77,6 +77,25 @@ describe('native API over a real daemon', () => {
     ).resolves.toBe(400);
   });
 
+  it('releases a sandbox: destroyed, forgotten, idempotent', async () => {
+    const created = await client().acquireSandbox('release-key');
+
+    expect(await client().releaseSandbox('release-key')).toEqual({
+      released: true,
+    });
+    const listed = await client().listSandboxes();
+    expect(listed.some((s) => s.sandboxId === created.sandbox.sandboxId)).toBe(
+      false,
+    );
+    expect(await client().releaseSandbox('release-key')).toEqual({
+      released: false,
+    });
+
+    // The key is free again: the next acquire builds a brand-new sandbox.
+    const again = await client().acquireSandbox('release-key');
+    expect(again.sandbox.sandboxId).not.toBe(created.sandbox.sandboxId);
+  });
+
   it('survives the cold cycle: idle -> frozen -> stopped -> re-acquire wakes it', async () => {
     const created = await client().acquireSandbox('sleeper-key', {
       freezeAfterSeconds: 1,
@@ -87,10 +106,14 @@ describe('native API over a real daemon', () => {
 
     // The daemon sweeps every second: after ~1s idle the sandbox freezes,
     // after ~2s it stops. 3.5s of real time covers both plus scanner jitter.
-    // The intermediate states are not observable from outside yet (that
-    // needs a listSandboxes endpoint), but if freezing or waking is broken,
-    // the re-acquire below fails loudly.
     await sleep(3.5);
+
+    // Observe the cold state from outside before waking it: the sandbox
+    // went cold on its own, in a separate process, on real wall-clock time.
+    const asleep = (await client().listSandboxes()).find(
+      (s) => s.userKey === 'sleeper-key',
+    );
+    expect(asleep?.state).toBe('stopped');
 
     const woken = await client().acquireSandbox('sleeper-key');
     expect(woken.status).toBe('ready');

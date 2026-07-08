@@ -39,6 +39,14 @@ function acquire(
   });
 }
 
+function rpc(
+  app: ReturnType<typeof testApp>['app'],
+  url: string,
+  payload: Record<string, unknown> = {},
+) {
+  return app.inject({ method: 'POST', url, headers: authed, payload });
+}
+
 /** Time travel for the scanner: the instant `seconds` after an ISO timestamp. */
 function after(iso: string, seconds: number): Date {
   return new Date(Date.parse(iso) + seconds * 1000);
@@ -185,5 +193,83 @@ describe('acquire wakes cold sandboxes', () => {
     expect(Date.parse(woken.sandbox.lastActiveAt)).toBeGreaterThan(
       Date.parse(created.sandbox.lastActiveAt),
     );
+  });
+});
+
+describe('POST /listSandboxes', () => {
+  it('requires a token', async () => {
+    const res = await testApp().app.inject({
+      method: 'POST',
+      url: '/listSandboxes',
+      payload: {},
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('reports every sandbox with its current lifecycle state', async () => {
+    const { app, db, executor } = testApp();
+    // Give alice a shorter freeze threshold so one sweep freezes only her.
+    const alice = (
+      await acquire(app, {
+        userKey: 'alice',
+        policy: { freezeAfterSeconds: 60 },
+      })
+    ).json();
+    await acquire(app, { userKey: 'bob' });
+    await scanOnce(db, executor, after(alice.sandbox.lastActiveAt, 60));
+
+    const res = await rpc(app, '/listSandboxes');
+    expect(res.statusCode).toBe(200);
+    const states = Object.fromEntries(
+      res
+        .json()
+        .sandboxes.map((s: { userKey: string; state: string }) => [
+          s.userKey,
+          s.state,
+        ]),
+    );
+    expect(states).toEqual({ alice: 'frozen', bob: 'active' });
+  });
+});
+
+describe('POST /releaseSandbox', () => {
+  it('destroys the container and forgets the key', async () => {
+    const { app, executor } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const id = created.sandbox.sandboxId;
+
+    const res = await rpc(app, '/releaseSandbox', { userKey: 'alice' });
+    expect(res.json()).toEqual({ released: true });
+    // Reality and ledger agree: container gone, key free again — the next
+    // acquire builds a brand-new sandbox.
+    expect(executor.stateOf(id)).toBeUndefined();
+    const again = (await acquire(app, { userKey: 'alice' })).json();
+    expect(again.sandbox.sandboxId).not.toBe(id);
+  });
+
+  it('releases a cold sandbox too', async () => {
+    const { app, db, executor } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+    await scanOnce(
+      db,
+      executor,
+      after(
+        created.sandbox.lastActiveAt,
+        DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+      ),
+    );
+    expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
+
+    const res = await rpc(app, '/releaseSandbox', { userKey: 'alice' });
+    expect(res.json()).toEqual({ released: true });
+    expect(executor.stateOf(created.sandbox.sandboxId)).toBeUndefined();
+  });
+
+  it('is idempotent: a key with no sandbox reports released false', async () => {
+    const res = await rpc(testApp().app, '/releaseSandbox', {
+      userKey: 'nobody',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ released: false });
   });
 });

@@ -3,16 +3,24 @@ import {
   acquireRequestSchema,
   acquireResponseSchema,
   type LifecyclePolicy,
+  listSandboxesResponseSchema,
+  releaseSandboxRequestSchema,
+  releaseSandboxResponseSchema,
   type Sandbox,
 } from '@dormice/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { ZodError, z } from 'zod';
 import type { Config } from '../config';
 import type { Db } from '../db/db';
-import { createSandbox, findByUserKey, touch } from '../db/ledger';
+import {
+  createSandbox,
+  findByUserKey,
+  listSandboxes,
+  touch,
+} from '../db/ledger';
 import type { SandboxRow } from '../db/schema';
 import type { Executor } from '../executor/executor';
-import { wakeSandbox } from '../lifecycle';
+import { releaseSandbox, wakeSandbox } from '../lifecycle';
 import { resolvePolicy } from '../policy';
 
 export interface SandboxRoutesOptions {
@@ -105,6 +113,40 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         policy,
       });
       return { status: 'ready' as const, sandbox: toSandbox(row, endpoint) };
+    },
+  );
+
+  // The observation window: every sandbox with its current lifecycle state.
+  // No input; the caller filters.
+  app.post(
+    '/listSandboxes',
+    {
+      schema: {
+        response: { 200: listSandboxesResponseSchema },
+      },
+    },
+    async () => ({
+      sandboxes: listSandboxes(db).map((row) => toSandbox(row, endpoint)),
+    }),
+  );
+
+  app.post(
+    '/releaseSandbox',
+    {
+      schema: {
+        body: releaseSandboxRequestSchema,
+        response: { 200: releaseSandboxResponseSchema },
+      },
+    },
+    async (request) => {
+      const existing = findByUserKey(db, request.body.userKey);
+      if (!existing) {
+        // Idempotent like acquire: the desired end state — no sandbox under
+        // this key — already holds.
+        return { released: false };
+      }
+      await releaseSandbox(db, executor, existing.sandboxId);
+      return { released: true };
     },
   );
 };

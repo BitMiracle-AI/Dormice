@@ -113,4 +113,21 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
     expect(woken.sandbox.state).toBe('active');
     expect(executor.stateOf(created.sandbox.sandboxId)).toBe('running');
   });
+
+  it('lists sandboxes with their lifecycle states', async () => {
+    await client.acquireSandbox('erin');
+    const sandboxes = await client.listSandboxes();
+    const erin = sandboxes.find((s) => s.userKey === 'erin');
+    expect(erin?.state).toBe('active');
+  });
+
+  it('releases a sandbox and reports idempotently', async () => {
+    const created = await client.acquireSandbox('frank');
+    expect(await client.releaseSandbox('frank')).toEqual({ released: true });
+    expect(executor.stateOf(created.sandbox.sandboxId)).toBeUndefined();
+    expect(await client.releaseSandbox('frank')).toEqual({ released: false });
+
+    const again = await client.acquireSandbox('frank');
+    expect(again.sandbox.sandboxId).not.toBe(created.sandbox.sandboxId);
+  });
 });
