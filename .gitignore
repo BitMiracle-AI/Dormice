@@ -1,0 +1,29 @@
+# ── 内部开发文件，不入库 ──
+# CLAUDE.md 含私有对照信息（安全铁律）；RULES/ 与 docs/ 是内部规范与决策记录，
+# 对外文档（README、SECURITY.md 等）是面向用户的独立交付物，另行编写
+CLAUDE.md
+RULES/
+docs/
+
+# 密钥与环境变量实体（只允许 *.example 入库）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Node / pnpm
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 测试与覆盖率
+coverage/
+
+# 系统与编辑器
+.DS_Store
+.idea/
+.vscode/
+
+# 日志
+*.log
