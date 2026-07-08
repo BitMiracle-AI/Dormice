@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 
 /**
@@ -46,14 +47,38 @@ const envSchema = z.object({
     .default(45),
 });
 
-const checkedSchema = envSchema.refine(
-  (cfg) => cfg.DORMICE_EXECUTOR !== 'docker' || !!cfg.DORMICE_BASE_IMAGE,
-  {
-    message:
-      'DORMICE_BASE_IMAGE is required when DORMICE_EXECUTOR=docker — build one from images/Dockerfile',
-    path: ['DORMICE_BASE_IMAGE'],
-  },
-);
+const checkedSchema = envSchema
+  .refine(
+    (cfg) => cfg.DORMICE_EXECUTOR !== 'docker' || !!cfg.DORMICE_BASE_IMAGE,
+    {
+      message:
+        'DORMICE_BASE_IMAGE is required when DORMICE_EXECUTOR=docker — build one from images/Dockerfile',
+      path: ['DORMICE_BASE_IMAGE'],
+    },
+  )
+  // Production discipline for real sandboxes: a relative ledger path
+  // silently depends on the start directory, and a wrong start directory
+  // means an empty ledger facing real sandboxes — the exact catastrophe
+  // the startup guard exists to refuse. The fake executor keeps the
+  // dev-friendly relative default; docker mode must not gamble.
+  .refine(
+    (cfg) =>
+      cfg.DORMICE_EXECUTOR !== 'docker' || isAbsolute(cfg.DORMICE_DB_PATH),
+    {
+      message:
+        'DORMICE_DB_PATH must be an absolute path when DORMICE_EXECUTOR=docker, e.g. /var/lib/dormice/dormice.db — a relative path depends on the start directory, and starting in the wrong directory opens a brand-new empty ledger next to real sandboxes',
+      path: ['DORMICE_DB_PATH'],
+    },
+  )
+  .refine(
+    (cfg) =>
+      cfg.DORMICE_EXECUTOR !== 'docker' || isAbsolute(cfg.DORMICE_DATA_DIR),
+    {
+      message:
+        'DORMICE_DATA_DIR must be an absolute path when DORMICE_EXECUTOR=docker — sandbox disks must not move when the start directory does',
+      path: ['DORMICE_DATA_DIR'],
+    },
+  );
 
 export type Config = z.infer<typeof envSchema>;
 

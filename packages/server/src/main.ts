@@ -3,14 +3,38 @@ import { pino } from 'pino';
 import { buildApp } from './app';
 import { type Config, loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
+import { listSandboxes } from './db/ledger';
+import { acquireSingleWriterLock } from './db/lock';
 import { DockerExecutor } from './executor/docker';
 import type { Executor } from './executor/executor';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
+import { startupGuard } from './startup-guard';
+
+// One logger, created before everything that needs it: the executor logs
+// through it directly and Fastify adopts it as its own.
+const log = pino();
+
+/** An operator mistake, not a bug: one honest line, no stack trace. */
+function fatal(message: string): never {
+  log.fatal(message);
+  process.exit(1);
+}
 
 const config = loadConfig();
+
+// One ledger, one daemon — enforced, not assumed. A second instance would
+// run its own destructive reconcile against sandboxes this one is still
+// operating, well before it ever loses the race for the port.
+if (config.DORMICE_DB_PATH !== ':memory:') {
+  try {
+    acquireSingleWriterLock(config.DORMICE_DB_PATH);
+  } catch (error) {
+    fatal(error instanceof Error ? error.message : String(error));
+  }
+}
 
 // Migrate on every boot: the daemon never runs against a schema it does not
 // expect, and a fresh install needs no separate setup step.
@@ -36,10 +60,6 @@ function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
   });
 }
 
-// One logger, created before everything that needs it: the executor logs
-// through it directly and Fastify adopts it as its own.
-const log = pino();
-
 const executor = buildExecutor(config, (msg) => log.info(msg));
 
 // One queue for the whole daemon: HTTP verbs and the heartbeat's actors
@@ -47,6 +67,20 @@ const executor = buildExecutor(config, (msg) => log.info(msg));
 const locks = new KeyedQueue();
 
 const app = buildApp({ config, db, executor, locks, logger: log });
+
+// Before trusting the pairing of this ledger and this reality, check it:
+// reconciliation destroys whatever the ledger disowns, so a daemon booted
+// against the wrong ledger, executor or data dir must refuse to start
+// instead of erasing sandboxes it merely cannot see.
+const refusal = startupGuard({
+  ledgerCount: listSandboxes(db).length,
+  containers: await executor.listContainers(),
+  disks: await executor.listDisks(),
+  executor: config.DORMICE_EXECUTOR,
+});
+if (refusal !== null) {
+  fatal(refusal);
+}
 
 // Repair ledger/reality drift left by a crash — before serving traffic, so
 // every request runs against a ledger that reflects what actually exists.
