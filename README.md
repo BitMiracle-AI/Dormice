@@ -2,7 +2,7 @@
 
 **The SQLite of agent sandboxes** — a self-hosted sandbox platform for AI agents. One machine, sandboxes that live forever, idle costs nothing.
 
-> **Status: early development.** The daemon, its lifecycle engine, and the SDK work end to end against an in-memory fake executor; the real Docker + gVisor executor is the next milestone. Nothing here is ready for production yet.
+> **Status: early development.** The daemon, its lifecycle engine, the SDK, and the real Docker + gVisor executor work end to end — the full create → freeze → stop → wake cycle passes on real infrastructure. Running code inside a sandbox and the E2B-compatible API are the next milestones. Nothing here is ready for production yet.
 
 ## The idea
 

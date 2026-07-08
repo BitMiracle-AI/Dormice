@@ -1,5 +1,6 @@
 # Workspace members: every directory under packages/ is a package; e2e is its
-# own package (the 21-item E2B compatibility suite, driven by both CI and the web UI)
+# own package — the black-box suite that boots the built daemon and drives it
+# over the wire (the E2B compatibility suite will join it when that layer lands)
 packages:
   - packages/*
   - e2e
