@@ -95,38 +95,7 @@ export class DockerExecutor implements Executor {
       throw new Error(`container ${sandboxId} already exists`);
     }
     await this.provisionDisk(sandboxId);
-    let container: Docker.Container;
-    try {
-      container = await this.docker.createContainer({
-        name: containerName(sandboxId),
-        Image: this.opts.baseImage,
-        Cmd: ['sleep', 'infinity'],
-        Labels: { [SANDBOX_LABEL]: sandboxId },
-        HostConfig: {
-          // The security set, none optional: gVisor keeps sandbox code off
-          // the real kernel, Init reaps zombies, no-new-privileges blocks
-          // setuid escalation, PidsLimit stops fork bombs. The image itself
-          // runs as uid 1000 (user), never root.
-          Runtime: 'runsc',
-          Init: true,
-          SecurityOpt: ['no-new-privileges'],
-          NanoCpus: Math.round(this.opts.cpus * 1e9),
-          Memory: Math.round(this.opts.memoryGb * 1024 ** 3),
-          PidsLimit: this.opts.pidsLimit,
-          Binds: [`${this.mountDir(sandboxId)}:/home/user`],
-          // Life and death belong to the daemon's state machine; Docker
-          // must not resurrect anything on its own.
-          RestartPolicy: { Name: 'no' },
-        },
-      });
-    } catch (err) {
-      // Name collision race between our inspect and createContainer.
-      if (isDockerApiError(err) && err.statusCode === 409) {
-        throw new Error(`container ${sandboxId} already exists`);
-      }
-      throw err;
-    }
-    await container.start();
+    await this.launchContainer(sandboxId);
   }
 
   async freeze(sandboxId: string): Promise<void> {
@@ -144,7 +113,10 @@ export class DockerExecutor implements Executor {
   async stop(sandboxId: string): Promise<void> {
     const containerId = await this.expectState(sandboxId, 'paused');
     const container = this.docker.getContainer(containerId);
-    // Docker refuses to stop or kill a paused container, so unpause first.
+    // Unpause first: a signal cannot be delivered into a paused gVisor
+    // sandbox — its guest kernel is stopped along with everything else
+    // (measured 2026-07-09; dockerd itself burns a hard-coded 10s wait on
+    // exactly this before escalating).
     await container.unpause();
     // SIGKILL, no grace period: the sandbox has nothing to shut down
     // cleanly (crash-only — code must survive the container vanishing
@@ -157,20 +129,41 @@ export class DockerExecutor implements Executor {
   }
 
   async start(sandboxId: string): Promise<void> {
-    const containerId = await this.expectState(sandboxId, 'stopped');
+    const found = await this.inspect(sandboxId);
+    if (found === null) {
+      // The container object is gone — a routine `docker container prune`
+      // eats exited containers — but the disk survives, and the disk is the
+      // sandbox's data. Rebuild the replaceable shell around it.
+      if (!(await this.diskExists(sandboxId))) {
+        throw new Error(`disk ${sandboxId} is absent, cannot start`);
+      }
+      await this.ensureMounted(sandboxId);
+      await this.launchContainer(sandboxId);
+      return;
+    }
+    const actual = containerStateFromDocker(found.status);
+    if (actual !== 'stopped') {
+      throw new Error(`container ${sandboxId} is ${actual}, expected stopped`);
+    }
     // Loop mounts live in kernel memory and are gone after a host reboot,
     // while the image file and the stopped container survive on disk.
     await this.ensureMounted(sandboxId);
-    await this.docker.getContainer(containerId).start();
+    await this.docker.getContainer(found.id).start();
   }
 
   async destroy(sandboxId: string): Promise<void> {
     const found = await this.inspect(sandboxId);
     if (found === null) {
-      // The ledger says this exists and reality disagrees — a bug worth
-      // hearing, same contract as the fake. Vanished containers are the
-      // reconciler's case, not a silent success here.
-      throw new Error(`container ${sandboxId} is absent, cannot destroy`);
+      // Half-gone still needs the other half: a pruned container leaves its
+      // disk behind, and destroy promises "container and disk gone". Both
+      // already absent means the ledger and reality disagree — a bug worth
+      // hearing, same contract as the fake. Vanished-with-disk sandboxes
+      // are otherwise the reconciler's case, not a silent success here.
+      if (!(await this.diskExists(sandboxId))) {
+        throw new Error(`container ${sandboxId} is absent, cannot destroy`);
+      }
+      await this.teardownDisk(sandboxId);
+      return;
     }
     const container = this.docker.getContainer(found.id);
     // Walk the container down ourselves instead of leaning on remove's
@@ -235,6 +228,55 @@ export class DockerExecutor implements Executor {
 
   private mountDir(sandboxId: string): string {
     return path.join(this.opts.dataDir, 'mnt', sandboxId);
+  }
+
+  private async diskExists(sandboxId: string): Promise<boolean> {
+    try {
+      await access(this.imagePath(sandboxId));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Creates and starts the sandbox's container around its already-mounted
+   * disk — the shell half of a sandbox, shared by create() (first birth)
+   * and start() (rebuild after the container object was lost).
+   */
+  private async launchContainer(sandboxId: string): Promise<void> {
+    let container: Docker.Container;
+    try {
+      container = await this.docker.createContainer({
+        name: containerName(sandboxId),
+        Image: this.opts.baseImage,
+        Cmd: ['sleep', 'infinity'],
+        Labels: { [SANDBOX_LABEL]: sandboxId },
+        HostConfig: {
+          // The security set, none optional: gVisor keeps sandbox code off
+          // the real kernel, Init reaps zombies, no-new-privileges blocks
+          // setuid escalation, PidsLimit stops fork bombs. The image itself
+          // runs as uid 1000 (user), never root.
+          Runtime: 'runsc',
+          Init: true,
+          SecurityOpt: ['no-new-privileges'],
+          NanoCpus: Math.round(this.opts.cpus * 1e9),
+          Memory: Math.round(this.opts.memoryGb * 1024 ** 3),
+          PidsLimit: this.opts.pidsLimit,
+          Binds: [`${this.mountDir(sandboxId)}:/home/user`],
+          // Life and death belong to the daemon's state machine; Docker
+          // must not resurrect anything on its own.
+          RestartPolicy: { Name: 'no' },
+        },
+      });
+    } catch (err) {
+      // Name collision race between our inspect and createContainer.
+      if (isDockerApiError(err) && err.statusCode === 409) {
+        throw new Error(`container ${sandboxId} already exists`);
+      }
+      throw err;
+    }
+    await container.start();
   }
 
   /**

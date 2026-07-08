@@ -3,26 +3,45 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ContainerState, Executor } from './executor';
 
 /**
+ * What a contract run needs beyond the executor itself: a way to stage the
+ * one drift an executor cannot produce through its own verbs.
+ */
+export interface ContractSubject {
+  executor: Executor;
+  /**
+   * Removes the container object while the disk stays — the drift a
+   * `docker container prune` (or any removal behind the daemon's back)
+   * leaves. The fake flips its map; the docker subject asks the engine
+   * directly. Part of the contract because "start rebuilds from the disk"
+   * and "destroy takes the leftover disk" must hold on both implementations.
+   */
+  vanishContainer(sandboxId: string): Promise<void>;
+}
+
+/**
  * The executor contract: one test suite both implementations must pass,
  * down to the error messages. Unit tests run it against FakeExecutor
  * everywhere; on a Linux docker host the same suite runs against
  * DockerExecutor — that is what makes the fake a trustworthy stand-in.
  *
- * Observations go through listContainers() only, because that is the whole
- * public window into reality; sandbox ids are random so runs never collide
- * on a real machine, and everything created is destroyed afterwards.
+ * Observations go through listContainers() and listDisks() only, because
+ * together they are the whole public window into reality; sandbox ids are
+ * random so runs never collide on a real machine, and everything created
+ * is destroyed afterwards.
  */
 export function describeExecutorContract(
   name: string,
-  makeExecutor: () => Executor | Promise<Executor>,
+  makeSubject: () => ContractSubject | Promise<ContractSubject>,
   { timeoutMs = 5_000 }: { timeoutMs?: number } = {},
 ) {
   describe(`executor contract: ${name}`, () => {
     let executor: Executor;
+    let subject: ContractSubject;
     let created: string[] = [];
 
     beforeEach(async () => {
-      executor = await makeExecutor();
+      subject = await makeSubject();
+      executor = subject.executor;
       created = [];
     });
 
@@ -40,6 +59,14 @@ export function describeExecutorContract(
       const sandboxId = randomUUID();
       created.push(sandboxId);
       await executor.create(sandboxId);
+      return sandboxId;
+    }
+
+    /** Walks a fresh sandbox down to stopped: exited container plus disk. */
+    async function freshStopped(): Promise<string> {
+      const sandboxId = await fresh();
+      await executor.freeze(sandboxId);
+      await executor.stop(sandboxId);
       return sandboxId;
     }
 
@@ -122,6 +149,47 @@ export function describeExecutorContract(
         // The ledger says it exists, reality disagrees: worth hearing, not
         // a silent success — vanished containers are the reconciler's case.
         await expect(executor.destroy(randomUUID())).rejects.toThrow(/absent/);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'start rebuilds the container from a surviving disk',
+      async () => {
+        const id = await freshStopped();
+        // The exited container object is removed behind the daemon's back —
+        // exactly what a routine `docker container prune` does. The disk,
+        // which is the sandbox's actual data, stays.
+        await subject.vanishContainer(id);
+        expect(await stateOf(id)).toBeUndefined();
+        expect(await executor.listDisks()).toContain(id);
+
+        await executor.start(id);
+        expect(await stateOf(id)).toBe('running');
+        expect(await executor.listDisks()).toContain(id);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'destroy of a vanished container still takes the leftover disk',
+      async () => {
+        const id = await freshStopped();
+        await subject.vanishContainer(id);
+
+        await executor.destroy(id);
+        expect(await executor.listDisks()).not.toContain(id);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'rejects starting a sandbox that has no disk',
+      async () => {
+        // No container AND no disk: there is nothing to rebuild from.
+        await expect(executor.start(randomUUID())).rejects.toThrow(
+          /disk .+ is absent, cannot start/,
+        );
       },
       timeoutMs,
     );

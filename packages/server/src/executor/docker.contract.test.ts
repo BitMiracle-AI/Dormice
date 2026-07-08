@@ -1,9 +1,10 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import Docker from 'dockerode';
 import { describe } from 'vitest';
 import { describeExecutorContract } from './contract';
-import { DockerExecutor } from './docker';
+import { containerName, DockerExecutor } from './docker';
 
 /**
  * The real-machine half of the executor contract. Needs a Linux host with
@@ -23,7 +24,7 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
     'DockerExecutor',
     async () => {
       const dataDir = await mkdtemp(path.join(tmpdir(), 'dormice-contract-'));
-      return new DockerExecutor({
+      const executor = new DockerExecutor({
         baseImage: image,
         dataDir,
         // Small and fast: the contract exercises lifecycle, not capacity.
@@ -33,6 +34,16 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
         pidsLimit: 256,
         reclaimTimeoutSeconds: 45,
       });
+      return {
+        executor,
+        // The prune analog: remove the container object straight through
+        // the engine, leaving the disk behind.
+        vanishContainer: async (sandboxId: string) => {
+          await new Docker()
+            .getContainer(containerName(sandboxId))
+            .remove({ force: true });
+        },
+      };
     },
     // Real containers under gVisor take seconds per operation.
     { timeoutMs: 120_000 },

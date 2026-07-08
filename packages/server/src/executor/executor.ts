@@ -22,9 +22,18 @@ export interface Executor {
   unfreeze(sandboxId: string): Promise<void>;
   /** Paused -> stopped: the processes die, the disk stays. */
   stop(sandboxId: string): Promise<void>;
-  /** Stopped -> running again, from the kept disk. */
+  /**
+   * Stopped -> running again, from the kept disk. The disk is required; the
+   * container object is not — if it was removed behind the daemon's back
+   * (a `docker container prune` eats exited containers), a fresh container
+   * is rebuilt around the surviving disk.
+   */
   start(sandboxId: string): Promise<void>;
-  /** Removes the container and its disk for good, whatever state it is in. */
+  /**
+   * Removes the container and its disk for good, whatever state — or
+   * whichever half of the pair — still exists. Throws only when both are
+   * already gone: that means the ledger and reality disagree.
+   */
   destroy(sandboxId: string): Promise<void>;
   /**
    * Every container this executor knows about, with its observed state.

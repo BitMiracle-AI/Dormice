@@ -61,18 +61,32 @@ export class FakeExecutor implements Executor {
   }
 
   async start(sandboxId: string): Promise<void> {
+    const actual = this.containers.get(sandboxId);
+    if (actual === undefined) {
+      // The container object is gone (pruned, removed behind the daemon's
+      // back) but the disk survives — and the disk is the sandbox's data,
+      // the container just a replaceable shell. Rebuild around the disk.
+      if (!this.disks.has(sandboxId)) {
+        throw new Error(`disk ${sandboxId} is absent, cannot start`);
+      }
+      this.containers.set(sandboxId, 'running');
+      return;
+    }
     this.expect(sandboxId, 'stopped');
     this.containers.set(sandboxId, 'running');
   }
 
   async destroy(sandboxId: string): Promise<void> {
-    // Any state is fine, but the container must exist: destroying something
-    // absent means the ledger and reality disagree — a bug worth hearing.
-    if (!this.containers.has(sandboxId)) {
+    // Any state is fine, and so is a container that is already gone as long
+    // as the disk remains (a pruned stopped sandbox): destroy promises
+    // "container and disk gone", and half-gone still needs the other half.
+    // Both absent means the ledger and reality disagree — a bug worth
+    // hearing.
+    const hadContainer = this.containers.delete(sandboxId);
+    const hadDisk = this.disks.delete(sandboxId);
+    if (!hadContainer && !hadDisk) {
       throw new Error(`container ${sandboxId} is absent, cannot destroy`);
     }
-    this.containers.delete(sandboxId);
-    this.disks.delete(sandboxId);
   }
 
   async listContainers(): Promise<Map<string, ContainerState>> {
