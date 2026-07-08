@@ -6,6 +6,10 @@
 export { type AppDeps, buildApp } from './app';
 export { type Config, loadConfig } from './config';
 export { type Db, migrateDb, openDb } from './db/db';
+export {
+  DockerExecutor,
+  type DockerExecutorOptions,
+} from './executor/docker';
 export type { ContainerState, Executor } from './executor/executor';
 export { FakeExecutor } from './executor/fake';
 export { type ReconcileResult, reconcile } from './reconciler';

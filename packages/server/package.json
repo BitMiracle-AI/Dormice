@@ -22,13 +22,16 @@
   "dependencies": {
     "@dormice/shared": "workspace:*",
     "better-sqlite3": "^12.11.1",
+    "dockerode": "^5.0.1",
     "drizzle-orm": "^0.45.2",
+    "execa": "^9.6.1",
     "fastify": "^5.10.0",
     "fastify-type-provider-zod": "^7.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/dockerode": "^4.0.1",
     "drizzle-kit": "^0.31.10"
   }
 }
