@@ -127,6 +127,31 @@ export function describeExecutorContract(
     );
 
     it(
+      'the disk lives with the container: born on create, kept through stop, gone on destroy',
+      async () => {
+        const id = await fresh();
+        expect(await executor.listDisks()).toContain(id);
+        await executor.freeze(id);
+        await executor.stop(id);
+        // "The processes die, the disk stays."
+        expect(await executor.listDisks()).toContain(id);
+        await executor.destroy(id);
+        expect(await executor.listDisks()).not.toContain(id);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'removeDisk is idempotent: an absent disk already is the goal state',
+      async () => {
+        await expect(
+          executor.removeDisk(randomUUID()),
+        ).resolves.toBeUndefined();
+      },
+      timeoutMs,
+    );
+
+    it(
       'lists every container as an observation, not a live reference',
       async () => {
         const a = await fresh();

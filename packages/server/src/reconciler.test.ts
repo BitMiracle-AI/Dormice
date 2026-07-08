@@ -13,6 +13,7 @@ const NONE = {
   repairedStates: 0,
   deletedRows: 0,
   destroyedOrphans: 0,
+  removedDisks: 0,
   suspects: [],
 };
 
@@ -78,12 +79,14 @@ describe('startup reconcile', () => {
   it('deletes the row of a vanished container, freeing the user key', async () => {
     const { db, executor } = setup();
     const row = await seed(db, executor, 'alice');
-    // gVisor kills the whole box on OOM; to the daemon it simply vanished.
-    await executor.destroy(row.sandboxId);
+    // Removed behind the daemon's back — the container is gone, the disk
+    // stays behind. The disk follows its row into the void.
+    executor.vanishContainer(row.sandboxId);
 
     const result = await reconcile(db, executor);
-    expect(result).toEqual({ ...NONE, deletedRows: 1 });
+    expect(result).toEqual({ ...NONE, deletedRows: 1, removedDisks: 1 });
     expect(findByUserKey(db, 'alice')).toBeUndefined();
+    expect(await executor.listDisks()).not.toContain(row.sandboxId);
   });
 
   it('destroys a container no row points at', async () => {
@@ -119,13 +122,15 @@ describe('startup reconcile', () => {
     const drifted = await seed(db, executor, 'drifted');
     const vanished = await seed(db, executor, 'vanished');
     await executor.freeze(drifted.sandboxId);
-    await executor.destroy(vanished.sandboxId);
+    executor.vanishContainer(vanished.sandboxId);
     await executor.create('orphan');
 
     expect(await reconcile(db, executor)).toEqual({
       repairedStates: 1,
       deletedRows: 1,
       destroyedOrphans: 1,
+      // The vanished sandbox's disk: its row is gone, nothing owns it.
+      removedDisks: 1,
       suspects: [],
     });
     expect(findByUserKey(db, 'healthy')?.state).toBe('active');
@@ -177,10 +182,69 @@ describe('runtime reconcile (two-strike orphans)', () => {
   it('still repairs rows and deletes the dead on every runtime pass', async () => {
     const { db, executor } = setup();
     const row = await seed(db, executor, 'alice');
-    await executor.destroy(row.sandboxId);
+    executor.vanishContainer(row.sandboxId);
 
     const result = await reconcile(db, executor, new Set());
-    expect(result).toEqual({ ...NONE, deletedRows: 1 });
+    // The row goes at once; the left-behind disk is a fresh suspect and
+    // falls on the next pass.
+    expect(result).toEqual({
+      ...NONE,
+      deletedRows: 1,
+      suspects: [row.sandboxId],
+    });
     expect(findByUserKey(db, 'alice')).toBeUndefined();
+
+    const second = await reconcile(db, executor, new Set(result.suspects));
+    expect(second).toEqual({ ...NONE, removedDisks: 1 });
+    expect(await executor.listDisks()).not.toContain(row.sandboxId);
+  });
+});
+
+describe('disk reconcile', () => {
+  it('leaves the disks of living sandboxes alone', async () => {
+    const { db, executor } = setup();
+    const row = await seed(db, executor, 'alice');
+    expect(await reconcile(db, executor, new Set())).toEqual(NONE);
+    expect(await executor.listDisks()).toContain(row.sandboxId);
+  });
+
+  it('removes a disk nothing owns on two strikes at runtime', async () => {
+    const { db, executor } = setup();
+    // Crash between provisioning the disk and creating the container.
+    executor.plantDiskResidue('half-created');
+
+    const first = await reconcile(db, executor, new Set());
+    expect(first).toEqual({ ...NONE, suspects: ['half-created'] });
+    expect(await executor.listDisks()).toContain('half-created');
+
+    const second = await reconcile(db, executor, new Set(first.suspects));
+    expect(second).toEqual({ ...NONE, removedDisks: 1 });
+    expect(await executor.listDisks()).not.toContain('half-created');
+  });
+
+  it('removes unowned disks immediately at startup', async () => {
+    const { db, executor } = setup();
+    executor.plantDiskResidue('leftover');
+    expect(await reconcile(db, executor)).toEqual({
+      ...NONE,
+      removedDisks: 1,
+    });
+    expect(await executor.listDisks()).not.toContain('leftover');
+  });
+
+  it('protects the disk of a suspected orphan container', async () => {
+    const { db, executor } = setup();
+    // An acquire possibly still in flight: container and disk, no row yet.
+    await executor.create('maybe-in-flight');
+
+    const first = await reconcile(db, executor, new Set());
+    // Suspected once, as a container — not doubly as its disk.
+    expect(first.suspects).toEqual(['maybe-in-flight']);
+    expect(await executor.listDisks()).toContain('maybe-in-flight');
+
+    // Second strike: destroy takes container and disk down together.
+    const second = await reconcile(db, executor, new Set(first.suspects));
+    expect(second).toEqual({ ...NONE, destroyedOrphans: 1 });
+    expect(await executor.listDisks()).not.toContain('maybe-in-flight');
   });
 });

@@ -10,9 +10,12 @@ export interface ReconcileResult {
   deletedRows: number;
   /** Containers destroyed because no row points at them. */
   destroyedOrphans: number;
+  /** Disks removed because neither a row nor a container owns them. */
+  removedDisks: number;
   /**
-   * Containers with no row, seen for the first time — not destroyed yet.
-   * The caller passes them back as `priorSuspects` on the next run.
+   * Containers and disks with no row, seen for the first time — not
+   * destroyed yet. The caller passes them back as `priorSuspects` on the
+   * next run.
    */
   suspects: string[];
 }
@@ -32,16 +35,19 @@ const LEDGER_STATE: Record<ContainerState, SandboxState> = {
  * leave acquire returning corpses and stall the idle scanner until the next
  * restart.
  *
- * Reality wins every case:
+ * Reality is container plus disk, and reality wins every case:
  * - state differs   -> the row is overwritten with the observed state
  * - container gone  -> the row is deleted; the user key is free again, and
  *                      the next acquire honestly builds a fresh sandbox
  * - row gone        -> the container is destroyed; without a row it has no
  *                      user key, so nothing could ever reach it again
+ * - disk owned by nothing -> removed; leaked disks would silently eat the
+ *                      host (a crash between create's steps, a destroy that
+ *                      removed the container but failed the disk teardown)
  *
- * Orphan containers are destroyed on two strikes: at runtime a container
+ * Orphan destruction takes two strikes at runtime: a container or disk
  * whose acquire is still in flight has no row yet, and killing it would
- * sabotage the very request creating it. A container with no row on two
+ * sabotage the very request creating it. Whatever is still unowned on two
  * consecutive passes (a scan interval apart) is genuinely unreachable.
  * `priorSuspects` carries the first strikes between runs; omitting it (at
  * startup, when nothing can be in flight) destroys orphans immediately.
@@ -55,33 +61,56 @@ export async function reconcile(
   priorSuspects?: ReadonlySet<string>,
 ): Promise<ReconcileResult> {
   const containers = await executor.listContainers();
+  const disks = await executor.listDisks();
   const result: ReconcileResult = {
     repairedStates: 0,
     deletedRows: 0,
     destroyedOrphans: 0,
+    removedDisks: 0,
     suspects: [],
   };
+  // Everything a disk may legitimately belong to: rows that survive this
+  // pass, and containers that still exist afterwards (destroy tears its
+  // own disk, so a container's disk is never removed out from under it).
+  const owners = new Set<string>();
 
   for (const row of listSandboxes(db)) {
     const observed = containers.get(row.sandboxId);
     containers.delete(row.sandboxId);
     if (row.state === 'archived' || row.state === 'restoring') {
+      owners.add(row.sandboxId);
       continue;
     }
     if (observed === undefined) {
       deleteSandbox(db, row.sandboxId);
       result.deletedRows += 1;
-    } else if (LEDGER_STATE[observed] !== row.state) {
-      overwriteState(db, row.sandboxId, LEDGER_STATE[observed]);
-      result.repairedStates += 1;
+    } else {
+      owners.add(row.sandboxId);
+      if (LEDGER_STATE[observed] !== row.state) {
+        overwriteState(db, row.sandboxId, LEDGER_STATE[observed]);
+        result.repairedStates += 1;
+      }
     }
   }
 
-  // Everything still in the map has no ledger row.
+  // Everything still in the map has no ledger row. Either way the disk is
+  // accounted for — destroy tears its own, a suspect keeps its — so the
+  // disk pass below must not touch these ids.
   for (const sandboxId of containers.keys()) {
     if (priorSuspects === undefined || priorSuspects.has(sandboxId)) {
       await executor.destroy(sandboxId);
       result.destroyedOrphans += 1;
+    } else {
+      result.suspects.push(sandboxId);
+    }
+    owners.add(sandboxId);
+  }
+
+  for (const sandboxId of disks) {
+    if (owners.has(sandboxId)) continue;
+    if (priorSuspects === undefined || priorSuspects.has(sandboxId)) {
+      await executor.removeDisk(sandboxId);
+      result.removedDisks += 1;
     } else {
       result.suspects.push(sandboxId);
     }

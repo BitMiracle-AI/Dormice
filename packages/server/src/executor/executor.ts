@@ -28,8 +28,22 @@ export interface Executor {
   destroy(sandboxId: string): Promise<void>;
   /**
    * Every container this executor knows about, with its observed state.
-   * The reconciler's window into reality — the one read the ledger is
-   * checked against at startup.
+   * The reconciler's window into reality — the read the ledger is checked
+   * against at startup and on every heartbeat tick.
    */
   listContainers(): Promise<Map<string, ContainerState>>;
+  /**
+   * Every sandbox id that has a disk on this host, with or without a
+   * container. A sandbox's reality is container plus disk; containers can
+   * vanish while their disks stay behind (a crash between create's steps,
+   * a removal behind the daemon's back), and disks that nothing owns would
+   * silently eat the host — so the reconciler observes them too.
+   */
+  listDisks(): Promise<string[]>;
+  /**
+   * Removes a sandbox's disk. Reconciliation's cleanup verb, so unlike
+   * destroy it is idempotent: an absent disk already is the goal state.
+   * Never called while the container exists — destroy tears its own disk.
+   */
+  removeDisk(sandboxId: string): Promise<void>;
 }

@@ -11,16 +11,37 @@ import type { ContainerState, Executor } from './executor';
  */
 export class FakeExecutor implements Executor {
   private readonly containers = new Map<string, ContainerState>();
+  private readonly disks = new Set<string>();
 
   /** Test hook: what does "reality" say about this sandbox? */
   stateOf(sandboxId: string): ContainerState | undefined {
     return this.containers.get(sandboxId);
   }
 
+  /**
+   * Test hook: the container disappears, the disk stays — a removal behind
+   * the daemon's back, or a crash in the middle of destroy. The one-sided
+   * drift the fake cannot produce by crashing for real.
+   */
+  vanishContainer(sandboxId: string): void {
+    if (!this.containers.delete(sandboxId)) {
+      throw new Error(`container ${sandboxId} is absent, cannot vanish`);
+    }
+  }
+
+  /**
+   * Test hook: a disk with no container and no row — a crash between
+   * provisioning the disk and creating the container.
+   */
+  plantDiskResidue(sandboxId: string): void {
+    this.disks.add(sandboxId);
+  }
+
   async create(sandboxId: string): Promise<void> {
     if (this.containers.has(sandboxId)) {
       throw new Error(`container ${sandboxId} already exists`);
     }
+    this.disks.add(sandboxId);
     this.containers.set(sandboxId, 'running');
   }
 
@@ -51,11 +72,21 @@ export class FakeExecutor implements Executor {
       throw new Error(`container ${sandboxId} is absent, cannot destroy`);
     }
     this.containers.delete(sandboxId);
+    this.disks.delete(sandboxId);
   }
 
   async listContainers(): Promise<Map<string, ContainerState>> {
     // A copy: reality is observed, not handed out by reference.
     return new Map(this.containers);
+  }
+
+  async listDisks(): Promise<string[]> {
+    return [...this.disks];
+  }
+
+  async removeDisk(sandboxId: string): Promise<void> {
+    // Idempotent by contract: an absent disk already is the goal state.
+    this.disks.delete(sandboxId);
   }
 
   private expect(sandboxId: string, wanted: ContainerState): void {

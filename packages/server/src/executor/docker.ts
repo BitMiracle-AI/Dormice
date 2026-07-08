@@ -1,4 +1,12 @@
-import { access, chown, mkdir, open, readFile, rm } from 'node:fs/promises';
+import {
+  access,
+  chown,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rm,
+} from 'node:fs/promises';
 import path from 'node:path';
 import Docker from 'dockerode';
 import { execa } from 'execa';
@@ -199,6 +207,26 @@ export class DockerExecutor implements Executor {
       }
     }
     return observed;
+  }
+
+  async listDisks(): Promise<string[]> {
+    let entries: string[];
+    try {
+      entries = await readdir(path.join(this.opts.dataDir, 'disks'));
+    } catch (err) {
+      // No disks directory yet — no sandbox has ever been created here.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+    return entries
+      .filter((name) => name.endsWith('.img'))
+      .map((name) => name.slice(0, -'.img'.length));
+  }
+
+  async removeDisk(sandboxId: string): Promise<void> {
+    // Idempotent by contract: teardown already treats "nothing mounted"
+    // and "no such file" as the goal state.
+    await this.teardownDisk(sandboxId);
   }
 
   private imagePath(sandboxId: string): string {
