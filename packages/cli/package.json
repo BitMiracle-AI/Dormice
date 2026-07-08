@@ -1,0 +1,17 @@
+{
+  "name": "@dormice/cli",
+  "version": "0.0.0",
+  "description": "Dormice command line tool (dor)",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "dor": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --clean",
+    "typecheck": "tsc --noEmit"
+  }
+}

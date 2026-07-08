@@ -1,0 +1,11 @@
+{
+  "name": "@dormice/web",
+  "version": "0.0.0",
+  "description": "Dormice web console: static SPA served by the daemon at /ui",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

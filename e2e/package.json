@@ -1,0 +1,11 @@
+{
+  "name": "@dormice/e2e",
+  "version": "0.0.0",
+  "description": "End-to-end compatibility test suite (21-item E2B compatibility checks)",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

@@ -15,7 +15,17 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  e2e: {}
+
+  packages/cli: {}
+
+  packages/sdk: {}
+
+  packages/server: {}
+
   packages/shared: {}
+
+  packages/web: {}
 
 packages:
 
