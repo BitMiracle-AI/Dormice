@@ -28,7 +28,7 @@ function acquire(
 ) {
   return app.inject({
     method: 'POST',
-    url: '/sandboxes/acquire',
+    url: '/acquireSandbox',
     headers,
     payload,
   });
@@ -55,7 +55,7 @@ describe('auth', () => {
   });
 });
 
-describe('POST /sandboxes/acquire', () => {
+describe('POST /acquireSandbox', () => {
   it('creates a sandbox on first acquire, with default policy', async () => {
     const res = await acquire(testApp(), { userKey: 'alice' });
     expect(res.statusCode).toBe(200);

@@ -42,8 +42,12 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   // address; with sharding it may point at another node.
   const endpoint = `http://127.0.0.1:${config.DORMICE_PORT}`;
 
+  // Native API convention: RPC style — every operation is a POST to a
+  // camelCase verb route, input and output entirely in the body, route name
+  // identical to the SDK method name. By construction this can never collide
+  // with the E2B compatibility surface (/sandboxes/:id, /filesystem.*, ...).
   app.post(
-    '/sandboxes/acquire',
+    '/acquireSandbox',
     {
       schema: {
         body: acquireRequestSchema,
