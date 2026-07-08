@@ -36,9 +36,27 @@ export default async function setup(project: TestProject) {
   const port = 20000 + Math.floor(Math.random() * 20000);
   const endpoint = `http://127.0.0.1:${port}`;
 
+  // An explicit allowlist instead of inheriting the whole environment:
+  // whatever DORMICE_* knobs happen to be exported in the developer's shell
+  // must not silently reconfigure the daemon under test. The three docker
+  // variables pass through on purpose — the documented real-machine e2e run
+  // works by exporting exactly those (the daemon's own startup guard is
+  // what protects that machine's real sandboxes, not this list).
+  const inherited: Record<string, string> = {};
+  for (const name of [
+    'PATH',
+    'DORMICE_EXECUTOR',
+    'DORMICE_BASE_IMAGE',
+    'DORMICE_DATA_DIR',
+  ]) {
+    const value = process.env[name];
+    if (value !== undefined) {
+      inherited[name] = value;
+    }
+  }
   const child = spawn('node', [MAIN], {
     env: {
-      ...process.env,
+      ...inherited,
       DORMICE_PORT: String(port),
       DORMICE_DB_PATH: join(dataDir, 'dormice.db'),
       DORMICE_API_TOKEN: token,

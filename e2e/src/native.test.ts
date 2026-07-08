@@ -104,16 +104,25 @@ describe('native API over a real daemon', () => {
     });
     expect(created.sandbox.state).toBe('active');
 
-    // The daemon sweeps every second: after ~1s idle the sandbox freezes,
-    // after ~2s it stops. 3.5s of real time covers both plus scanner jitter.
-    await sleep(3.5);
-
-    // Observe the cold state from outside before waking it: the sandbox
-    // went cold on its own, in a separate process, on real wall-clock time.
-    const asleep = (await client().listSandboxes()).find(
-      (s) => s.userKey === 'sleeper-key',
-    );
-    expect(asleep?.state).toBe('stopped');
+    // The daemon sweeps every second and cools one rung per sweep, so
+    // stopped shows up in ~3s on an unloaded machine. Poll with a deadline
+    // instead of napping a fixed time: a slow CI runner stretches the
+    // schedule, and a fixed nap was half a second of margin from a flaky
+    // red. Observed from outside throughout — the sandbox goes cold on its
+    // own, in a separate process, on real wall-clock time.
+    const deadline = Date.now() + 15_000;
+    for (;;) {
+      const asleep = (await client().listSandboxes()).find(
+        (s) => s.userKey === 'sleeper-key',
+      );
+      if (asleep?.state === 'stopped') break;
+      if (Date.now() > deadline) {
+        throw new Error(
+          `sandbox never reached stopped; last observed: ${asleep?.state}`,
+        );
+      }
+      await sleep(0.25);
+    }
 
     const woken = await client().acquireSandbox('sleeper-key');
     expect(woken.status).toBe('ready');
