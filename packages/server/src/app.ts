@@ -10,12 +10,19 @@ import { requireApiToken } from './auth';
 import type { Config } from './config';
 import type { Db } from './db/db';
 import type { Executor } from './executor/executor';
+import type { KeyedQueue } from './keyed-queue';
 import { sandboxRoutes } from './routes/sandboxes';
 
 export interface AppDeps {
   config: Config;
   db: Db;
   executor: Executor;
+  /**
+   * The per-sandbox serialization point, shared with the heartbeat's
+   * scanner and reconciler — one instance for the whole daemon, or the
+   * serialization silently splits into parallel universes.
+   */
+  locks: KeyedQueue;
   /**
    * Tests turn logging off with `false`; the daemon passes its own pino
    * instance, which it also hands to the executor — one logger, created
@@ -33,7 +40,13 @@ export interface AppDeps {
  * Building the app is separate from listening so tests can inject requests
  * without opening a port.
  */
-export function buildApp({ config, db, executor, logger = true }: AppDeps) {
+export function buildApp({
+  config,
+  db,
+  executor,
+  locks,
+  logger = true,
+}: AppDeps) {
   // Always a pino instance (booleans are normalized into one): two fastify()
   // call shapes would give the instance two different types.
   const loggerInstance =
@@ -58,7 +71,7 @@ export function buildApp({ config, db, executor, logger = true }: AppDeps) {
 
   app.register(async (api) => {
     api.addHook('onRequest', requireApiToken(config.DORMICE_API_TOKEN));
-    await api.register(sandboxRoutes, { config, db, executor });
+    await api.register(sandboxRoutes, { config, db, executor, locks });
   });
 
   return app;

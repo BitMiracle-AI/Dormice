@@ -3,6 +3,7 @@ import { Dormice } from '@dormice/sdk';
 import {
   buildApp,
   FakeExecutor,
+  KeyedQueue,
   loadConfig,
   migrateDb,
   openDb,
@@ -30,7 +31,13 @@ beforeAll(async () => {
     DORMICE_NODE_ID: 'node-test',
     DORMICE_API_TOKEN: TOKEN,
   });
-  app = buildApp({ config, db, executor: new FakeExecutor(), logger: false });
+  app = buildApp({
+    config,
+    db,
+    executor: new FakeExecutor(),
+    locks: new KeyedQueue(),
+    logger: false,
+  });
   // Port 0: the OS hands out a free ephemeral port, so tests never collide
   // with a locally running daemon.
   await app.listen({ host: '127.0.0.1', port: 0 });

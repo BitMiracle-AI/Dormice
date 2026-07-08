@@ -6,6 +6,7 @@ import { migrateDb, openDb } from './db/db';
 import { DockerExecutor } from './executor/docker';
 import type { Executor } from './executor/executor';
 import { FakeExecutor } from './executor/fake';
+import { KeyedQueue } from './keyed-queue';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
 
@@ -41,13 +42,17 @@ const log = pino();
 
 const executor = buildExecutor(config, (msg) => log.info(msg));
 
-const app = buildApp({ config, db, executor, logger: log });
+// One queue for the whole daemon: HTTP verbs and the heartbeat's actors
+// must share the same per-sandbox slots or the serialization means nothing.
+const locks = new KeyedQueue();
+
+const app = buildApp({ config, db, executor, locks, logger: log });
 
 // Repair ledger/reality drift left by a crash — before serving traffic, so
 // every request runs against a ledger that reflects what actually exists.
 // A failure here is fatal on purpose: a daemon that cannot read reality
 // should not pretend to manage it.
-const repaired = await reconcile(db, executor);
+const repaired = await reconcile(db, executor, locks);
 app.log.info(repaired, 'startup reconcile');
 
 // Red line: the daemon binds to loopback only, and the host is deliberately
@@ -72,7 +77,7 @@ await app.listen({ host: '127.0.0.1', port: config.DORMICE_PORT });
 let suspects: ReadonlySet<string> = new Set();
 async function tick() {
   try {
-    const drift = await reconcile(db, executor, suspects);
+    const drift = await reconcile(db, executor, locks, suspects);
     suspects = new Set(drift.suspects);
     if (
       drift.repairedStates +
@@ -83,7 +88,7 @@ async function tick() {
     ) {
       app.log.warn(drift, 'runtime reconcile repaired drift');
     }
-    const scan = await scanOnce(db, executor, new Date());
+    const scan = await scanOnce(db, executor, locks, new Date());
     for (const failure of scan.failures) {
       app.log.error(failure, 'idle scan: sandbox transition failed');
     }

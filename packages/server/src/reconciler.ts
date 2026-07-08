@@ -1,12 +1,19 @@
 import type { SandboxState } from '@dormice/shared';
 import type { Db } from './db/db';
-import { deleteSandbox, listSandboxes, overwriteState } from './db/ledger';
+import {
+  deleteSandbox,
+  findBySandboxId,
+  listSandboxes,
+  overwriteState,
+} from './db/ledger';
+import type { SandboxRow } from './db/schema';
 import type { ContainerState, Executor } from './executor/executor';
+import type { KeyedQueue } from './keyed-queue';
 
 export interface ReconcileResult {
-  /** Rows whose state was corrected to what the container actually is. */
+  /** Rows whose state was corrected to what reality actually shows. */
   repairedStates: number;
-  /** Rows deleted because their container no longer exists. */
+  /** Rows deleted because both the container and the disk are gone. */
   deletedRows: number;
   /** Containers destroyed because no row points at them. */
   destroyedOrphans: number;
@@ -28,22 +35,40 @@ const LEDGER_STATE: Record<ContainerState, SandboxState> = {
 };
 
 /**
- * Reads all of reality in one call and repairs every disagreement with the
- * ledger. Runs once at startup, before the daemon serves traffic, and then
- * on every scanner tick: containers vanish while the daemon runs (gVisor
- * kills a whole box on OOM), and drift that is only repaired at boot would
- * leave acquire returning corpses and stall the idle scanner until the next
- * restart.
+ * Reads the ledger, then all of reality, and repairs every disagreement.
+ * Runs once at startup, before the daemon serves traffic, and then on every
+ * heartbeat tick: reality moves while the daemon runs (a gVisor box exits
+ * whole on OOM), and drift only repaired at boot would leave acquire
+ * returning corpses and stall the idle scanner until the next restart.
  *
- * Reality is container plus disk, and reality wins every case:
- * - state differs   -> the row is overwritten with the observed state
- * - container gone  -> the row is deleted; the user key is free again, and
- *                      the next acquire honestly builds a fresh sandbox
- * - row gone        -> the container is destroyed; without a row it has no
- *                      user key, so nothing could ever reach it again
- * - disk owned by nothing -> removed; leaked disks would silently eat the
- *                      host (a crash between create's steps, a destroy that
- *                      removed the container but failed the disk teardown)
+ * The ledger snapshot is deliberately taken before the reality snapshots.
+ * acquire brings reality up first and inserts the row second, so any row in
+ * this snapshot had its container (and disk, made even earlier) up before
+ * the listings below were taken — a row without a container here really
+ * lost it. The other order judged rows inserted mid-pass against container
+ * listings from before their containers existed, and deleted live sandboxes.
+ *
+ * Reality wins every disagreement, but reality is container AND disk, and
+ * the disk is the sandbox's durable data:
+ * - state differs             -> the row records what the container is
+ * - container gone, disk kept -> the sandbox is stopped, not dead: the row
+ *                                stays and the next acquire rebuilds the
+ *                                container from the disk. This is what makes
+ *                                a routine `docker container prune`
+ *                                survivable instead of silent data loss.
+ * - container and disk gone   -> the sandbox truly is gone (an interrupted
+ *                                release, a wiped data dir): the row is
+ *                                deleted and the user key is free again
+ * - container without a row   -> destroyed; without a row it has no user
+ *                                key, so nothing could ever reach it
+ * - disk owned by nothing     -> removed; leaked disks silently eat the host
+ *
+ * Every rowed repair happens inside the sandbox's per-key queue slot, and
+ * only if the row still shows the state the snapshot decided on: an acquire
+ * or release that moved the sandbox in between makes the observation stale,
+ * and writing a stale repair would manufacture the very drift this function
+ * exists to remove. A busy key is skipped outright — whatever holds it has
+ * fresher knowledge — and the next tick sees the settled picture.
  *
  * Orphan destruction takes two strikes at runtime: a container or disk
  * whose acquire is still in flight has no row yet, and killing it would
@@ -58,10 +83,12 @@ const LEDGER_STATE: Record<ContainerState, SandboxState> = {
 export async function reconcile(
   db: Db,
   executor: Executor,
+  locks: KeyedQueue,
   priorSuspects?: ReadonlySet<string>,
 ): Promise<ReconcileResult> {
+  const rows = listSandboxes(db);
   const containers = await executor.listContainers();
-  const disks = await executor.listDisks();
+  const disks = new Set(await executor.listDisks());
   const result: ReconcileResult = {
     repairedStates: 0,
     deletedRows: 0,
@@ -74,22 +101,45 @@ export async function reconcile(
   // own disk, so a container's disk is never removed out from under it).
   const owners = new Set<string>();
 
-  for (const row of listSandboxes(db)) {
+  // Re-reads the row inside its queue slot and applies the repair only if
+  // the state this pass decided on still holds; ledger writes are
+  // synchronous, so nothing interleaves between the re-read and the write.
+  const repairUnderLock = (row: SandboxRow, apply: () => void) =>
+    locks.tryRun(row.userKey, async () => {
+      const fresh = findBySandboxId(db, row.sandboxId);
+      if (fresh && fresh.state === row.state) {
+        apply();
+      }
+    });
+
+  for (const row of rows) {
     const observed = containers.get(row.sandboxId);
     containers.delete(row.sandboxId);
     if (row.state === 'archived' || row.state === 'restoring') {
       owners.add(row.sandboxId);
       continue;
     }
-    if (observed === undefined) {
-      deleteSandbox(db, row.sandboxId);
-      result.deletedRows += 1;
-    } else {
+    if (observed !== undefined) {
       owners.add(row.sandboxId);
       if (LEDGER_STATE[observed] !== row.state) {
-        overwriteState(db, row.sandboxId, LEDGER_STATE[observed]);
-        result.repairedStates += 1;
+        await repairUnderLock(row, () => {
+          overwriteState(db, row.sandboxId, LEDGER_STATE[observed]);
+          result.repairedStates += 1;
+        });
       }
+    } else if (disks.has(row.sandboxId)) {
+      owners.add(row.sandboxId);
+      if (row.state !== 'stopped') {
+        await repairUnderLock(row, () => {
+          overwriteState(db, row.sandboxId, 'stopped');
+          result.repairedStates += 1;
+        });
+      }
+    } else {
+      await repairUnderLock(row, () => {
+        deleteSandbox(db, row.sandboxId);
+        result.deletedRows += 1;
+      });
     }
   }
 

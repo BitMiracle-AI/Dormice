@@ -4,6 +4,7 @@ import {
   buildApp,
   type Db,
   FakeExecutor,
+  KeyedQueue,
   loadConfig,
   migrateDb,
   openDb,
@@ -25,11 +26,13 @@ let client: Dormice;
 let endpoint: string;
 let db: Db;
 let executor: FakeExecutor;
+let locks: KeyedQueue;
 
 beforeAll(async () => {
   db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
   executor = new FakeExecutor();
+  locks = new KeyedQueue();
   // Through loadConfig on purpose: defaults are adjudicated once, in the
   // schema — a hand-written literal here would drift as knobs are added.
   const config = loadConfig({
@@ -37,7 +40,7 @@ beforeAll(async () => {
     DORMICE_NODE_ID: 'node-test',
     DORMICE_API_TOKEN: TOKEN,
   });
-  app = buildApp({ config, db, executor, logger: false });
+  app = buildApp({ config, db, executor, locks, logger: false });
   // Port 0: the OS hands out a free ephemeral port, so tests never collide
   // with a locally running daemon.
   await app.listen({ host: '127.0.0.1', port: 0 });
@@ -132,7 +135,7 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
       Date.parse(created.sandbox.lastActiveAt) +
         DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds * 1000,
     );
-    await scanOnce(db, executor, frozenAt);
+    await scanOnce(db, executor, locks, frozenAt);
     expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
 
     const woken = await client.acquireSandbox('dave');

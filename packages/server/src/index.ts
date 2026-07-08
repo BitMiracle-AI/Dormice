@@ -12,5 +12,6 @@ export {
 } from './executor/docker';
 export type { ContainerState, Executor } from './executor/executor';
 export { FakeExecutor } from './executor/fake';
+export { KeyedQueue, SKIPPED } from './keyed-queue';
 export { type ReconcileResult, reconcile } from './reconciler';
 export { type ScanResult, scanOnce } from './scanner';

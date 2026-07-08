@@ -5,6 +5,7 @@ import { buildApp } from './app';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
 import { FakeExecutor } from './executor/fake';
+import { KeyedQueue } from './keyed-queue';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
 
@@ -21,8 +22,9 @@ function testApp(executor: FakeExecutor = new FakeExecutor()) {
     DORMICE_NODE_ID: 'node-test',
     DORMICE_API_TOKEN: TOKEN,
   });
-  const app = buildApp({ config, db, executor, logger: false });
-  return { app, db, executor };
+  const locks = new KeyedQueue();
+  const app = buildApp({ config, db, executor, locks, logger: false });
+  return { app, db, executor, locks };
 }
 
 const authed = { authorization: `Bearer ${TOKEN}` };
@@ -164,8 +166,8 @@ describe('concurrent acquires', () => {
     expect(second.json().sandbox.sandboxId).toBe(
       first.json().sandbox.sandboxId,
     );
-    // Exactly one container: the second request joined the first's work
-    // instead of racing it and leaking an orphan.
+    // Exactly one container: the second request queued behind the first's
+    // slot and found its row instead of racing it and leaking an orphan.
     expect((await executor.listContainers()).size).toBe(1);
   });
 
@@ -185,13 +187,14 @@ describe('concurrent acquires', () => {
 
 describe('acquire wakes cold sandboxes', () => {
   it('unfreezes a frozen sandbox back to active', async () => {
-    const { app, db, executor } = testApp();
+    const { app, db, executor, locks } = testApp();
     const created = (await acquire(app, { userKey: 'alice' })).json();
     const id = created.sandbox.sandboxId;
 
     await scanOnce(
       db,
       executor,
+      locks,
       after(
         created.sandbox.lastActiveAt,
         DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
@@ -206,7 +209,7 @@ describe('acquire wakes cold sandboxes', () => {
   });
 
   it('starts a stopped sandbox back to active', async () => {
-    const { app, db, executor } = testApp();
+    const { app, db, executor, locks } = testApp();
     const created = (await acquire(app, { userKey: 'alice' })).json();
     const id = created.sandbox.sandboxId;
 
@@ -214,11 +217,13 @@ describe('acquire wakes cold sandboxes', () => {
     await scanOnce(
       db,
       executor,
+      locks,
       after(lastActiveAt, DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds),
     );
     await scanOnce(
       db,
       executor,
+      locks,
       after(lastActiveAt, DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds),
     );
     expect(executor.stateOf(id)).toBe('stopped');
@@ -230,12 +235,13 @@ describe('acquire wakes cold sandboxes', () => {
   });
 
   it('waking refreshes the idle clock', async () => {
-    const { app, db, executor } = testApp();
+    const { app, db, executor, locks } = testApp();
     const created = (await acquire(app, { userKey: 'alice' })).json();
 
     await scanOnce(
       db,
       executor,
+      locks,
       after(
         created.sandbox.lastActiveAt,
         DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
@@ -250,22 +256,118 @@ describe('acquire wakes cold sandboxes', () => {
   });
 });
 
-describe('acquire after a container vanishes', () => {
-  it('returns a fresh sandbox once reconcile has run, not the corpse', async () => {
-    const { app, db, executor } = testApp();
+describe('scanner vs acquire on the same key', () => {
+  /** memory.reclaim can hold a real freeze open for tens of seconds. */
+  class SlowFreezeExecutor extends FakeExecutor {
+    async freeze(sandboxId: string): Promise<void> {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await super.freeze(sandboxId);
+    }
+  }
+
+  it('an acquire during a freeze waits its turn and gets a running sandbox', async () => {
+    const executor = new SlowFreezeExecutor();
+    const { app, db, locks } = testApp(executor);
     const created = (await acquire(app, { userKey: 'alice' })).json();
-    // gVisor kills the whole box on OOM; the ledger still says active.
+    const id = created.sandbox.sandboxId;
+
+    // The scanner decides to freeze; the acquire lands mid-freeze.
+    // Unserialized, the acquire read `active` from the ledger, answered
+    // "ready", and the caller ended up holding a paused sandbox that the
+    // reconciler would never repair (ledger and reality agreed on frozen).
+    const sweep = scanOnce(
+      db,
+      executor,
+      locks,
+      after(
+        created.sandbox.lastActiveAt,
+        DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+      ),
+    );
+    const woken = acquire(app, { userKey: 'alice' });
+    const [sweepResult, res] = await Promise.all([sweep, woken]);
+
+    expect(sweepResult.frozen).toBe(1);
+    expect(res.json().sandbox.state).toBe('active');
+    // The answer told the truth: the container really is running.
+    expect(executor.stateOf(id)).toBe('running');
+  });
+});
+
+describe('concurrent releases of the same key', () => {
+  /** destroy() takes seconds under real Docker (unpause, kill, wait, rm). */
+  class SlowDestroyExecutor extends FakeExecutor {
+    async destroy(sandboxId: string): Promise<void> {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await super.destroy(sandboxId);
+    }
+  }
+
+  it('one reports released, the other reports the goal state — no 500', async () => {
+    const executor = new SlowDestroyExecutor();
+    const { app } = testApp(executor);
+    await acquire(app, { userKey: 'alice' });
+
+    const [a, b] = await Promise.all([
+      rpc(app, '/releaseSandbox', { userKey: 'alice' }),
+      rpc(app, '/releaseSandbox', { userKey: 'alice' }),
+    ]);
+    expect(a.statusCode).toBe(200);
+    expect(b.statusCode).toBe(200);
+    const released = [a.json().released, b.json().released];
+    expect(released.filter(Boolean)).toHaveLength(1);
+  });
+});
+
+describe('acquire after reality moved behind the ledger', () => {
+  it('returns a fresh sandbox when container and disk are truly gone', async () => {
+    const { app, db, executor, locks } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+    // Container and disk wiped behind the daemon's back — the end state of
+    // a release that crashed after the executor's work, before the ledger's.
     await executor.destroy(created.sandbox.sandboxId);
 
     // The heartbeat reconciles before every scan; the dead row is deleted
     // within one interval, freeing the key.
-    await reconcile(db, executor, new Set());
+    await reconcile(db, executor, locks, new Set());
 
     const again = (await acquire(app, { userKey: 'alice' })).json();
     expect(again.status).toBe('ready');
     expect(again.sandbox.sandboxId).not.toBe(created.sandbox.sandboxId);
     // This time the sandbox is real.
     expect(executor.stateOf(again.sandbox.sandboxId)).toBe('running');
+  });
+
+  it('returns the same sandbox after its exited container was pruned', async () => {
+    // A stopped sandbox is an exited container plus a disk, and a routine
+    // `docker container prune` eats the container object. The disk — the
+    // sandbox's actual data — survives, so the sandbox must survive too:
+    // same key, same sandboxId, rebuilt from the disk. Never a silent
+    // fresh empty box.
+    const { app, db, executor, locks } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const id = created.sandbox.sandboxId;
+    const lastActiveAt = created.sandbox.lastActiveAt;
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(lastActiveAt, DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds),
+    );
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(lastActiveAt, DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds),
+    );
+    executor.vanishContainer(id);
+
+    await reconcile(db, executor, locks, new Set());
+
+    const again = (await acquire(app, { userKey: 'alice' })).json();
+    expect(again.sandbox.sandboxId).toBe(id);
+    expect(again.sandbox.state).toBe('active');
+    expect(executor.stateOf(id)).toBe('running');
   });
 });
 
@@ -280,7 +382,7 @@ describe('POST /listSandboxes', () => {
   });
 
   it('reports every sandbox with its current lifecycle state', async () => {
-    const { app, db, executor } = testApp();
+    const { app, db, executor, locks } = testApp();
     // Give alice a shorter freeze threshold so one sweep freezes only her.
     const alice = (
       await acquire(app, {
@@ -289,7 +391,7 @@ describe('POST /listSandboxes', () => {
       })
     ).json();
     await acquire(app, { userKey: 'bob' });
-    await scanOnce(db, executor, after(alice.sandbox.lastActiveAt, 60));
+    await scanOnce(db, executor, locks, after(alice.sandbox.lastActiveAt, 60));
 
     const res = await rpc(app, '/listSandboxes');
     expect(res.statusCode).toBe(200);
@@ -321,11 +423,12 @@ describe('POST /releaseSandbox', () => {
   });
 
   it('releases a cold sandbox too', async () => {
-    const { app, db, executor } = testApp();
+    const { app, db, executor, locks } = testApp();
     const created = (await acquire(app, { userKey: 'alice' })).json();
     await scanOnce(
       db,
       executor,
+      locks,
       after(
         created.sandbox.lastActiveAt,
         DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,

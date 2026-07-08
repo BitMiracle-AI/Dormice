@@ -6,6 +6,7 @@ import { type Db, migrateDb, openDb } from './db/db';
 import { createSandbox, findByUserKey, transition } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import { FakeExecutor } from './executor/fake';
+import { KeyedQueue } from './keyed-queue';
 import { reconcile } from './reconciler';
 
 const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
@@ -21,7 +22,7 @@ const NONE = {
 function setup() {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
-  return { db, executor: new FakeExecutor() };
+  return { db, executor: new FakeExecutor(), locks: new KeyedQueue() };
 }
 
 /**
@@ -46,63 +47,79 @@ async function seed(
 
 describe('startup reconcile', () => {
   it('touches nothing when ledger and reality agree', async () => {
-    const { db, executor } = setup();
+    const { db, executor, locks } = setup();
     const row = await seed(db, executor, 'alice');
-    expect(await reconcile(db, executor)).toEqual(NONE);
+    expect(await reconcile(db, executor, locks)).toEqual(NONE);
     expect(findByUserKey(db, 'alice')?.state).toBe('active');
     expect(executor.stateOf(row.sandboxId)).toBe('running');
   });
 
   it('records a freeze the ledger missed', async () => {
-    const { db, executor } = setup();
+    const { db, executor, locks } = setup();
     // Crash between executor.freeze() and transition(): reality moved alone.
     const row = await seed(db, executor, 'alice');
     await executor.freeze(row.sandboxId);
 
-    const result = await reconcile(db, executor);
+    const result = await reconcile(db, executor, locks);
     expect(result).toEqual({ ...NONE, repairedStates: 1 });
     expect(findByUserKey(db, 'alice')?.state).toBe('frozen');
   });
 
   it('repairs across rungs the transition table would forbid', async () => {
-    const { db, executor } = setup();
+    const { db, executor, locks } = setup();
     // Ledger says active, container is fully stopped — a two-rung gap that
     // transition() would reject. The reconciler records facts, not moves.
     const row = await seed(db, executor, 'alice');
     await executor.freeze(row.sandboxId);
     await executor.stop(row.sandboxId);
 
-    const result = await reconcile(db, executor);
+    const result = await reconcile(db, executor, locks);
     expect(result).toEqual({ ...NONE, repairedStates: 1 });
     expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
   });
 
-  it('deletes the row of a vanished container, freeing the user key', async () => {
-    const { db, executor } = setup();
+  it('keeps the row of a pruned container: the disk is the sandbox', async () => {
+    const { db, executor, locks } = setup();
     const row = await seed(db, executor, 'alice');
-    // Removed behind the daemon's back — the container is gone, the disk
-    // stays behind. The disk follows its row into the void.
+    // The container object is removed behind the daemon's back (a routine
+    // `docker container prune` does this to every exited container) while
+    // the disk — the sandbox's actual data — stays.
     executor.vanishContainer(row.sandboxId);
 
-    const result = await reconcile(db, executor);
-    expect(result).toEqual({ ...NONE, deletedRows: 1, removedDisks: 1 });
+    const result = await reconcile(db, executor, locks);
+    // Not a death: the sandbox is recorded as stopped, its row keeps the
+    // user key, and the next acquire rebuilds the container from the disk.
+    expect(result).toEqual({ ...NONE, repairedStates: 1 });
+    expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
+    expect(await executor.listDisks()).toContain(row.sandboxId);
+  });
+
+  it('deletes the row only when container and disk are both gone', async () => {
+    const { db, executor, locks } = setup();
+    const row = await seed(db, executor, 'alice');
+    // The end state of a release that crashed after the executor's work but
+    // before the ledger's delete: nothing of the sandbox physically remains.
+    executor.vanishContainer(row.sandboxId);
+    await executor.removeDisk(row.sandboxId);
+
+    const result = await reconcile(db, executor, locks);
+    expect(result).toEqual({ ...NONE, deletedRows: 1 });
     expect(findByUserKey(db, 'alice')).toBeUndefined();
-    expect(await executor.listDisks()).not.toContain(row.sandboxId);
   });
 
   it('destroys a container no row points at', async () => {
-    const { db, executor } = setup();
+    const { db, executor, locks } = setup();
     // Crash between executor.create() and createSandbox(): a container was
     // born but never entered the ledger, so no user key can ever reach it.
     await executor.create('orphan');
 
-    const result = await reconcile(db, executor);
+    const result = await reconcile(db, executor, locks);
     expect(result).toEqual({ ...NONE, destroyedOrphans: 1 });
     expect(executor.stateOf('orphan')).toBeUndefined();
   });
 
   it('leaves archived rows to the future archiver', async () => {
-    const { db, executor } = setup();
+    const { db, executor, locks } = setup();
     const row = await seed(db, executor, 'alice');
     // Walk the legal path to archived; the container is still around, but
     // judging that is the archiver's reconciliation, not this one's.
@@ -112,31 +129,35 @@ describe('startup reconcile', () => {
     transition(db, row.sandboxId, 'stopped');
     transition(db, row.sandboxId, 'archived');
 
-    expect(await reconcile(db, executor)).toEqual(NONE);
+    expect(await reconcile(db, executor, locks)).toEqual(NONE);
     expect(findByUserKey(db, 'alice')?.state).toBe('archived');
     expect(executor.stateOf(row.sandboxId)).toBe('stopped');
   });
 
   it('repairs every sandbox in one pass', async () => {
-    const { db, executor } = setup();
+    const { db, executor, locks } = setup();
     const healthy = await seed(db, executor, 'healthy');
     const drifted = await seed(db, executor, 'drifted');
-    const vanished = await seed(db, executor, 'vanished');
+    const pruned = await seed(db, executor, 'pruned');
+    const dead = await seed(db, executor, 'dead');
     await executor.freeze(drifted.sandboxId);
-    executor.vanishContainer(vanished.sandboxId);
+    executor.vanishContainer(pruned.sandboxId);
+    executor.vanishContainer(dead.sandboxId);
+    await executor.removeDisk(dead.sandboxId);
     await executor.create('orphan');
 
-    expect(await reconcile(db, executor)).toEqual({
-      repairedStates: 1,
+    expect(await reconcile(db, executor, locks)).toEqual({
+      // drifted -> frozen, pruned -> stopped (its disk keeps it alive).
+      repairedStates: 2,
       deletedRows: 1,
       destroyedOrphans: 1,
-      // The vanished sandbox's disk: its row is gone, nothing owns it.
-      removedDisks: 1,
+      removedDisks: 0,
       suspects: [],
     });
     expect(findByUserKey(db, 'healthy')?.state).toBe('active');
     expect(findByUserKey(db, 'drifted')?.state).toBe('frozen');
-    expect(findByUserKey(db, 'vanished')).toBeUndefined();
+    expect(findByUserKey(db, 'pruned')?.state).toBe('stopped');
+    expect(findByUserKey(db, 'dead')).toBeUndefined();
     expect(executor.stateOf(healthy.sandboxId)).toBe('running');
     expect(executor.stateOf('orphan')).toBeUndefined();
   });
@@ -144,26 +165,31 @@ describe('startup reconcile', () => {
 
 describe('runtime reconcile (two-strike orphans)', () => {
   it('only suspects a first-time orphan, destroys it on the second pass', async () => {
-    const { db, executor } = setup();
+    const { db, executor, locks } = setup();
     // At runtime this container could be an acquire still in flight — its
     // row lands right after create returns. Killing it on sight would
     // sabotage the very request creating it.
     await executor.create('maybe-in-flight');
 
-    const first = await reconcile(db, executor, new Set());
+    const first = await reconcile(db, executor, locks, new Set());
     expect(first).toEqual({ ...NONE, suspects: ['maybe-in-flight'] });
     expect(executor.stateOf('maybe-in-flight')).toBe('running');
 
     // Still no row one interval later: genuinely unreachable, put it down.
-    const second = await reconcile(db, executor, new Set(first.suspects));
+    const second = await reconcile(
+      db,
+      executor,
+      locks,
+      new Set(first.suspects),
+    );
     expect(second).toEqual({ ...NONE, destroyedOrphans: 1 });
     expect(executor.stateOf('maybe-in-flight')).toBeUndefined();
   });
 
   it('clears a suspect whose row landed in the meantime', async () => {
-    const { db, executor } = setup();
+    const { db, executor, locks } = setup();
     await executor.create('in-flight');
-    const first = await reconcile(db, executor, new Set());
+    const first = await reconcile(db, executor, locks, new Set());
     expect(first.suspects).toEqual(['in-flight']);
 
     // The acquire finished: the row is in the ledger now.
@@ -174,59 +200,88 @@ describe('runtime reconcile (two-strike orphans)', () => {
       policy: DEFAULT_LIFECYCLE_POLICY,
     });
 
-    const second = await reconcile(db, executor, new Set(first.suspects));
+    const second = await reconcile(
+      db,
+      executor,
+      locks,
+      new Set(first.suspects),
+    );
     expect(second).toEqual(NONE);
     expect(executor.stateOf('in-flight')).toBe('running');
     expect(findByUserKey(db, 'alice')?.state).toBe('active');
   });
 
-  it('still repairs rows and deletes the dead on every runtime pass', async () => {
-    const { db, executor } = setup();
+  it('still repairs and buries on every runtime pass, not only at boot', async () => {
+    const { db, executor, locks } = setup();
     const row = await seed(db, executor, 'alice');
     executor.vanishContainer(row.sandboxId);
+    await executor.removeDisk(row.sandboxId);
 
-    const result = await reconcile(db, executor, new Set());
-    // The row goes at once; the left-behind disk is a fresh suspect and
-    // falls on the next pass.
-    expect(result).toEqual({
-      ...NONE,
-      deletedRows: 1,
-      suspects: [row.sandboxId],
-    });
+    const result = await reconcile(db, executor, locks, new Set());
+    expect(result).toEqual({ ...NONE, deletedRows: 1 });
     expect(findByUserKey(db, 'alice')).toBeUndefined();
+  });
 
-    const second = await reconcile(db, executor, new Set(result.suspects));
-    expect(second).toEqual({ ...NONE, removedDisks: 1 });
-    expect(await executor.listDisks()).not.toContain(row.sandboxId);
+  it('skips a row whose key is busy instead of repairing from a stale view', async () => {
+    const { db, executor, locks } = setup();
+    const row = await seed(db, executor, 'alice');
+    // Reality drifted (paused, ledger says active)...
+    await executor.freeze(row.sandboxId);
+    // ...but alice's slot is held — an acquire or release is mid-operation
+    // and knows more about this sandbox than our snapshot does.
+    let release!: () => void;
+    const holder = locks.run(
+      'alice',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    const result = await reconcile(db, executor, locks, new Set());
+    expect(result.repairedStates).toBe(0);
+    expect(findByUserKey(db, 'alice')?.state).toBe('active');
+
+    release();
+    await holder;
+    // Next tick, with the key free, the repair lands.
+    const next = await reconcile(db, executor, locks, new Set());
+    expect(next).toEqual({ ...NONE, repairedStates: 1 });
+    expect(findByUserKey(db, 'alice')?.state).toBe('frozen');
   });
 });
 
 describe('disk reconcile', () => {
   it('leaves the disks of living sandboxes alone', async () => {
-    const { db, executor } = setup();
+    const { db, executor, locks } = setup();
     const row = await seed(db, executor, 'alice');
-    expect(await reconcile(db, executor, new Set())).toEqual(NONE);
+    expect(await reconcile(db, executor, locks, new Set())).toEqual(NONE);
     expect(await executor.listDisks()).toContain(row.sandboxId);
   });
 
   it('removes a disk nothing owns on two strikes at runtime', async () => {
-    const { db, executor } = setup();
+    const { db, executor, locks } = setup();
     // Crash between provisioning the disk and creating the container.
     executor.plantDiskResidue('half-created');
 
-    const first = await reconcile(db, executor, new Set());
+    const first = await reconcile(db, executor, locks, new Set());
     expect(first).toEqual({ ...NONE, suspects: ['half-created'] });
     expect(await executor.listDisks()).toContain('half-created');
 
-    const second = await reconcile(db, executor, new Set(first.suspects));
+    const second = await reconcile(
+      db,
+      executor,
+      locks,
+      new Set(first.suspects),
+    );
     expect(second).toEqual({ ...NONE, removedDisks: 1 });
     expect(await executor.listDisks()).not.toContain('half-created');
   });
 
   it('removes unowned disks immediately at startup', async () => {
-    const { db, executor } = setup();
+    const { db, executor, locks } = setup();
     executor.plantDiskResidue('leftover');
-    expect(await reconcile(db, executor)).toEqual({
+    expect(await reconcile(db, executor, locks)).toEqual({
       ...NONE,
       removedDisks: 1,
     });
@@ -234,17 +289,22 @@ describe('disk reconcile', () => {
   });
 
   it('protects the disk of a suspected orphan container', async () => {
-    const { db, executor } = setup();
+    const { db, executor, locks } = setup();
     // An acquire possibly still in flight: container and disk, no row yet.
     await executor.create('maybe-in-flight');
 
-    const first = await reconcile(db, executor, new Set());
+    const first = await reconcile(db, executor, locks, new Set());
     // Suspected once, as a container — not doubly as its disk.
     expect(first.suspects).toEqual(['maybe-in-flight']);
     expect(await executor.listDisks()).toContain('maybe-in-flight');
 
     // Second strike: destroy takes container and disk down together.
-    const second = await reconcile(db, executor, new Set(first.suspects));
+    const second = await reconcile(
+      db,
+      executor,
+      locks,
+      new Set(first.suspects),
+    );
     expect(second).toEqual({ ...NONE, destroyedOrphans: 1 });
     expect(await executor.listDisks()).not.toContain('maybe-in-flight');
   });

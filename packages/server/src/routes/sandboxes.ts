@@ -20,6 +20,7 @@ import {
 } from '../db/ledger';
 import type { SandboxRow } from '../db/schema';
 import type { Executor } from '../executor/executor';
+import type { KeyedQueue } from '../keyed-queue';
 import { releaseSandbox, wakeSandbox } from '../lifecycle';
 import { resolvePolicy } from '../policy';
 
@@ -27,6 +28,7 @@ export interface SandboxRoutesOptions {
   config: Config;
   db: Db;
   executor: Executor;
+  locks: KeyedQueue;
 }
 
 /** Ledger row -> wire shape: nest the flat policy columns, attach the endpoint. */
@@ -49,21 +51,18 @@ function toSandbox(row: SandboxRow, endpoint: string): Sandbox {
 
 export const sandboxRoutes: FastifyPluginAsyncZod<
   SandboxRoutesOptions
-> = async (app, { config, db, executor }) => {
+> = async (app, { config, db, executor, locks }) => {
   // Every sandbox lives on this daemon today, so the endpoint is our own
   // address; with sharding it may point at another node.
   const endpoint = `http://127.0.0.1:${config.DORMICE_PORT}`;
 
-  // Concurrent acquires for the same key share one in-flight operation.
-  // The check (findByUserKey) and the act (createSandbox) are separated by
-  // executor.create — seconds under real Docker — so two parallel requests
-  // would otherwise both pass the check, build two containers, and the
-  // loser's insert would 500 on the UNIQUE key, leaking its container.
-  // Agent frameworks retry the same key in parallel as a matter of course;
-  // idempotency has to hold under concurrency, not just in sequence.
-  // A single map suffices: the daemon is single-process by design.
-  const inflightAcquires = new Map<string, Promise<SandboxRow>>();
-
+  // Both verbs run inside the key's queue slot (see KeyedQueue): each is a
+  // check followed by an act with seconds of executor work in between, and
+  // the scanner's cooling moves share the same slots. Serialization is also
+  // what makes acquire idempotent under parallel retries — agent frameworks
+  // retry the same key concurrently as a matter of course: the second
+  // request queues, finds the row the first one wrote, and comes back with
+  // the same sandbox instead of racing a duplicate create.
   async function findOrCreate(
     userKey: string,
     policy: LifecyclePolicy,
@@ -111,11 +110,11 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     async (request, reply) => {
       const { userKey, policy: override } = request.body;
 
-      // Validate the policy before joining the shared flight, so a joined
-      // rejection can only come from the shared work itself, never from
-      // another request's bad input. Also validates on the wake path: an
-      // invalid override is the caller's mistake even when it would not
-      // apply, and deserves a 400, not a silent ignore.
+      // Validate the policy before taking the key's slot, so a queued
+      // rejection can only come from the work itself, never from another
+      // request's bad input. Also validates on the wake path: an invalid
+      // override is the caller's mistake even when it would not apply, and
+      // deserves a 400, not a silent ignore.
       let policy: LifecyclePolicy;
       try {
         policy = resolvePolicy(override);
@@ -132,14 +131,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         throw error;
       }
 
-      let flight = inflightAcquires.get(userKey);
-      if (!flight) {
-        flight = findOrCreate(userKey, policy).finally(() => {
-          inflightAcquires.delete(userKey);
-        });
-        inflightAcquires.set(userKey, flight);
-      }
-      const row = await flight;
+      const row = await locks.run(userKey, () => findOrCreate(userKey, policy));
       return { status: 'ready' as const, sandbox: toSandbox(row, endpoint) };
     },
   );
@@ -167,14 +159,21 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const existing = findByUserKey(db, request.body.userKey);
-      if (!existing) {
-        // Idempotent like acquire: the desired end state — no sandbox under
-        // this key — already holds.
-        return { released: false };
-      }
-      await releaseSandbox(db, executor, existing.sandboxId);
-      return { released: true };
+      const { userKey } = request.body;
+      // Same slot as acquire and the scanner: two parallel releases of one
+      // key queue up — the first destroys, the second re-checks and reports
+      // the goal state honestly instead of tripping over a half-destroyed
+      // sandbox.
+      return locks.run(userKey, async () => {
+        const existing = findByUserKey(db, userKey);
+        if (!existing) {
+          // Idempotent like acquire: the desired end state — no sandbox
+          // under this key — already holds.
+          return { released: false };
+        }
+        await releaseSandbox(db, executor, existing.sandboxId);
+        return { released: true };
+      });
     },
   );
 };

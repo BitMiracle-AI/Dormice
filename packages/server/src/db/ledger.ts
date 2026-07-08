@@ -109,6 +109,17 @@ export function findByUserKey(db: Db, userKey: string): SandboxRow | undefined {
     .get();
 }
 
+export function findBySandboxId(
+  db: Db,
+  sandboxId: string,
+): SandboxRow | undefined {
+  return db
+    .select()
+    .from(sandboxes)
+    .where(eq(sandboxes.sandboxId, sandboxId))
+    .get();
+}
+
 /**
  * Moves a sandbox to a new state, enforcing ALLOWED_TRANSITIONS. An illegal
  * transition is a bug in the caller, so it throws instead of self-healing.
