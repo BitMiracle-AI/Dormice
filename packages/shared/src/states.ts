@@ -11,11 +11,11 @@
  * progress instead of blocking — slow wake-ups must be honest.
  */
 export const SANDBOX_STATES = [
-  "active",
-  "frozen",
-  "stopped",
-  "archived",
-  "restoring",
+  'active',
+  'frozen',
+  'stopped',
+  'archived',
+  'restoring',
 ] as const;
 
 export type SandboxState = (typeof SANDBOX_STATES)[number];

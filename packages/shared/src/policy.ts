@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from 'zod';
 
 /**
  * Lifecycle policy: how long a sandbox may sit idle before the daemon moves
@@ -23,13 +23,13 @@ const lifecyclePolicyFields = z.object({
 
 export const lifecyclePolicySchema = lifecyclePolicyFields
   .refine((p) => p.freezeAfterSeconds <= p.stopAfterSeconds, {
-    message: "freezeAfterSeconds must be <= stopAfterSeconds",
+    message: 'freezeAfterSeconds must be <= stopAfterSeconds',
   })
   .refine(
     (p) =>
       p.archiveAfterSeconds === null ||
       p.stopAfterSeconds <= p.archiveAfterSeconds,
-    { message: "stopAfterSeconds must be <= archiveAfterSeconds" },
+    { message: 'stopAfterSeconds must be <= archiveAfterSeconds' },
   );
 
 export type LifecyclePolicy = z.infer<typeof lifecyclePolicySchema>;

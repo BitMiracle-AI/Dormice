@@ -1,6 +1,6 @@
-import { z } from "zod";
-import { lifecyclePolicyOverrideSchema } from "./policy";
-import { sandboxSchema, userKeySchema } from "./sandbox";
+import { z } from 'zod';
+import { lifecyclePolicyOverrideSchema } from './policy';
+import { sandboxSchema, userKeySchema } from './sandbox';
 
 /**
  * acquire(userKey) — the platform's single entry point. Idempotent:
@@ -20,17 +20,17 @@ export type AcquireRequest = z.infer<typeof acquireRequestSchema>;
  * with progress immediately, and the caller polls acquire() until it flips
  * to `ready`.
  */
-export const acquireResponseSchema = z.discriminatedUnion("status", [
+export const acquireResponseSchema = z.discriminatedUnion('status', [
   z.object({
-    status: z.literal("ready"),
+    status: z.literal('ready'),
     sandbox: sandboxSchema,
   }),
   z.object({
-    status: z.literal("restoring"),
+    status: z.literal('restoring'),
     sandbox: sandboxSchema,
     progress: z.object({
       /** downloading — pulling the archive from S3; extracting — decompressing onto local disk. */
-      phase: z.enum(["downloading", "extracting"]),
+      phase: z.enum(['downloading', 'extracting']),
       percent: z.number().int().min(0).max(100),
     }),
   }),
