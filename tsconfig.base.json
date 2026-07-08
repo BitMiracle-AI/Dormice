@@ -4,13 +4,14 @@
     "lib": ["ES2023"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "types": ["node"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "noEmit": true,
-    // tsup 的 dts 构建会注入 TS6 已废弃的 baseUrl，触发 TS5101；
-    // 官方过渡开关，等 tsup 适配 TS6 后移除
+    // tsup's dts build injects baseUrl, which TS6 deprecates (TS5101);
+    // official transitional flag, remove once tsup catches up with TS6
     "ignoreDeprecations": "6.0"
   }
 }

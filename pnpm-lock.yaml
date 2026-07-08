@@ -28,7 +28,15 @@ importers:
 
   packages/cli: {}
 
-  packages/sdk: {}
+  packages/sdk:
+    dependencies:
+      '@dormice/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@dormice/server':
+        specifier: workspace:*
+        version: link:../server
 
   packages/server:
     dependencies:

@@ -15,6 +15,13 @@
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dormice/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@dormice/server": "workspace:*"
   }
 }
