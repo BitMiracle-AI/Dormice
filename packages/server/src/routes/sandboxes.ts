@@ -54,6 +54,45 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   // address; with sharding it may point at another node.
   const endpoint = `http://127.0.0.1:${config.DORMICE_PORT}`;
 
+  // Concurrent acquires for the same key share one in-flight operation.
+  // The check (findByUserKey) and the act (createSandbox) are separated by
+  // executor.create — seconds under real Docker — so two parallel requests
+  // would otherwise both pass the check, build two containers, and the
+  // loser's insert would 500 on the UNIQUE key, leaking its container.
+  // Agent frameworks retry the same key in parallel as a matter of course;
+  // idempotency has to hold under concurrency, not just in sequence.
+  // A single map suffices: the daemon is single-process by design.
+  const inflightAcquires = new Map<string, Promise<SandboxRow>>();
+
+  async function findOrCreate(
+    userKey: string,
+    policy: LifecyclePolicy,
+  ): Promise<SandboxRow> {
+    const existing = findByUserKey(db, userKey);
+    if (existing) {
+      // Wake whatever cold state it is in (a single jump back to active),
+      // then refresh the idle clock — an acquire is what "activity" means.
+      const awake = await wakeSandbox(db, executor, existing);
+      return touch(db, awake.sandboxId);
+    }
+
+    // Reality first, ledger second: bring the container up, then record
+    // it. If create fails, no row was written — the next acquire retries
+    // from a clean slate.
+    //
+    // UUID, never an autoincrement (ids must survive sharding); its
+    // alphabet is safe everywhere an id will land — Docker names, file
+    // names, DNS labels.
+    const sandboxId = randomUUID();
+    await executor.create(sandboxId);
+    return createSandbox(db, {
+      sandboxId,
+      userKey,
+      nodeId: config.DORMICE_NODE_ID,
+      policy,
+    });
+  }
+
   // Native API convention: RPC style — every operation is a POST to a
   // camelCase verb route, input and output entirely in the body, route name
   // identical to the SDK method name. By construction this can never collide
@@ -72,15 +111,11 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     async (request, reply) => {
       const { userKey, policy: override } = request.body;
 
-      const existing = findByUserKey(db, userKey);
-      if (existing) {
-        // Wake whatever cold state it is in (a single jump back to active),
-        // then refresh the idle clock — an acquire is what "activity" means.
-        const awake = await wakeSandbox(db, executor, existing);
-        const row = touch(db, awake.sandboxId);
-        return { status: 'ready' as const, sandbox: toSandbox(row, endpoint) };
-      }
-
+      // Validate the policy before joining the shared flight, so a joined
+      // rejection can only come from the shared work itself, never from
+      // another request's bad input. Also validates on the wake path: an
+      // invalid override is the caller's mistake even when it would not
+      // apply, and deserves a 400, not a silent ignore.
       let policy: LifecyclePolicy;
       try {
         policy = resolvePolicy(override);
@@ -97,21 +132,14 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         throw error;
       }
 
-      // Reality first, ledger second: bring the container up, then record
-      // it. If create fails, no row was written — the next acquire retries
-      // from a clean slate.
-      //
-      // UUID, never an autoincrement (ids must survive sharding); its
-      // alphabet is safe everywhere an id will land — Docker names, file
-      // names, DNS labels.
-      const sandboxId = randomUUID();
-      await executor.create(sandboxId);
-      const row = createSandbox(db, {
-        sandboxId,
-        userKey,
-        nodeId: config.DORMICE_NODE_ID,
-        policy,
-      });
+      let flight = inflightAcquires.get(userKey);
+      if (!flight) {
+        flight = findOrCreate(userKey, policy).finally(() => {
+          inflightAcquires.delete(userKey);
+        });
+        inflightAcquires.set(userKey, flight);
+      }
+      const row = await flight;
       return { status: 'ready' as const, sandbox: toSandbox(row, endpoint) };
     },
   );

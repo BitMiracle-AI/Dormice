@@ -9,10 +9,9 @@ import { scanOnce } from './scanner';
 const MIGRATIONS = new URL('../drizzle', import.meta.url).pathname;
 const TOKEN = 'test-token-test-token-test-token';
 
-function testApp() {
+function testApp(executor: FakeExecutor = new FakeExecutor()) {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
-  const executor = new FakeExecutor();
   // Through loadConfig on purpose: defaults are adjudicated once, in the
   // schema — a hand-written literal here would drift as knobs are added.
   const config = loadConfig({
@@ -126,6 +125,59 @@ describe('POST /acquireSandbox', () => {
   it('rejects a malformed body', async () => {
     const res = await acquire(testApp().app, { policy: {} });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects an invalid override even when the sandbox already exists', async () => {
+    const { app } = testApp();
+    await acquire(app, { userKey: 'alice' });
+    // The override would not apply (the sandbox exists), but it is still
+    // the caller's mistake — a 400, never a silent ignore.
+    const res = await acquire(app, {
+      userKey: 'alice',
+      policy: { archiveAfterSeconds: 1 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('concurrent acquires', () => {
+  /** create() takes seconds under real Docker; 20ms makes two in-flight
+   *  requests overlap deterministically. */
+  class SlowCreateExecutor extends FakeExecutor {
+    async create(sandboxId: string): Promise<void> {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await super.create(sandboxId);
+    }
+  }
+
+  it('same key in parallel shares one sandbox, builds one container', async () => {
+    const executor = new SlowCreateExecutor();
+    const { app } = testApp(executor);
+    const [first, second] = await Promise.all([
+      acquire(app, { userKey: 'alice' }),
+      acquire(app, { userKey: 'alice' }),
+    ]);
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().sandbox.sandboxId).toBe(
+      first.json().sandbox.sandboxId,
+    );
+    // Exactly one container: the second request joined the first's work
+    // instead of racing it and leaking an orphan.
+    expect((await executor.listContainers()).size).toBe(1);
+  });
+
+  it('different keys in parallel still get different sandboxes', async () => {
+    const executor = new SlowCreateExecutor();
+    const { app } = testApp(executor);
+    const [alice, bob] = await Promise.all([
+      acquire(app, { userKey: 'alice' }),
+      acquire(app, { userKey: 'bob' }),
+    ]);
+    expect(bob.json().sandbox.sandboxId).not.toBe(
+      alice.json().sandbox.sandboxId,
+    );
+    expect((await executor.listContainers()).size).toBe(2);
   });
 });
 
