@@ -1,7 +1,7 @@
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app';
-import type { Config } from './config';
+import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
 import { FakeExecutor } from './executor/fake';
 import { scanOnce } from './scanner';
@@ -13,13 +13,13 @@ function testApp() {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
   const executor = new FakeExecutor();
-  const config: Config = {
-    DORMICE_PORT: 3676,
+  // Through loadConfig on purpose: defaults are adjudicated once, in the
+  // schema — a hand-written literal here would drift as knobs are added.
+  const config = loadConfig({
     DORMICE_DB_PATH: ':memory:',
     DORMICE_NODE_ID: 'node-test',
-    DORMICE_SCAN_INTERVAL_SECONDS: 60,
     DORMICE_API_TOKEN: TOKEN,
-  };
+  });
   const app = buildApp({ config, db, executor, logger: false });
   return { app, db, executor };
 }

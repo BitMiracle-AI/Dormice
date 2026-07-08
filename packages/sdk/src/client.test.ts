@@ -1,8 +1,8 @@
 import {
   buildApp,
-  type Config,
   type Db,
   FakeExecutor,
+  loadConfig,
   migrateDb,
   openDb,
   scanOnce,
@@ -26,13 +26,13 @@ beforeAll(async () => {
   db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
   executor = new FakeExecutor();
-  const config: Config = {
-    DORMICE_PORT: 3676,
+  // Through loadConfig on purpose: defaults are adjudicated once, in the
+  // schema — a hand-written literal here would drift as knobs are added.
+  const config = loadConfig({
     DORMICE_DB_PATH: ':memory:',
     DORMICE_NODE_ID: 'node-test',
-    DORMICE_SCAN_INTERVAL_SECONDS: 60,
     DORMICE_API_TOKEN: TOKEN,
-  };
+  });
   app = buildApp({ config, db, executor, logger: false });
   // Port 0: the OS hands out a free ephemeral port, so tests never collide
   // with a locally running daemon.

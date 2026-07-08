@@ -1,6 +1,8 @@
 import { buildApp } from './app';
-import { loadConfig } from './config';
+import { type Config, loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
+import { DockerExecutor } from './executor/docker';
+import type { Executor } from './executor/executor';
 import { FakeExecutor } from './executor/fake';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
@@ -12,10 +14,29 @@ const config = loadConfig();
 const db = openDb(config.DORMICE_DB_PATH);
 migrateDb(db, new URL('../drizzle', import.meta.url).pathname);
 
-// The real Docker+gVisor executor needs a Linux machine and lands later.
-// Until then the daemon runs on the in-memory fake: the full lifecycle
-// works, but sandboxes cannot execute user code yet.
-const executor = new FakeExecutor();
+function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
+  if (cfg.DORMICE_EXECUTOR === 'fake') return new FakeExecutor();
+  if (!cfg.DORMICE_BASE_IMAGE) {
+    // loadConfig already rejected this combination; the check only narrows
+    // the type here.
+    throw new Error('DORMICE_BASE_IMAGE is required for the docker executor');
+  }
+  return new DockerExecutor({
+    baseImage: cfg.DORMICE_BASE_IMAGE,
+    dataDir: cfg.DORMICE_DATA_DIR,
+    diskSizeGb: cfg.DORMICE_SANDBOX_DISK_GB,
+    cpus: cfg.DORMICE_SANDBOX_CPUS,
+    memoryGb: cfg.DORMICE_SANDBOX_MEMORY_GB,
+    pidsLimit: cfg.DORMICE_SANDBOX_PIDS_LIMIT,
+    reclaimTimeoutSeconds: cfg.DORMICE_RECLAIM_TIMEOUT_SECONDS,
+    log,
+  });
+}
+
+// The log closure reaches `app` before it is declared below; that is safe
+// because the executor only logs during freezes, which happen long after
+// the app exists.
+const executor = buildExecutor(config, (msg) => app.log.info(msg));
 
 const app = buildApp({ config, db, executor });
 
