@@ -39,7 +39,7 @@ describe('idle scanner', () => {
     const { db, executor } = setup();
     const row = await seed(db, executor, 'alice');
     const result = await scanOnce(db, executor, after(row, 1));
-    expect(result).toEqual({ frozen: 0, stopped: 0 });
+    expect(result).toEqual({ frozen: 0, stopped: 0, failures: [] });
     expect(findByUserKey(db, 'alice')?.state).toBe('active');
     expect(executor.stateOf(row.sandboxId)).toBe('running');
   });
@@ -52,7 +52,7 @@ describe('idle scanner', () => {
       executor,
       after(row, row.freezeAfterSeconds),
     );
-    expect(result).toEqual({ frozen: 1, stopped: 0 });
+    expect(result).toEqual({ frozen: 1, stopped: 0, failures: [] });
     expect(findByUserKey(db, 'alice')?.state).toBe('frozen');
     expect(executor.stateOf(row.sandboxId)).toBe('paused');
   });
@@ -66,7 +66,7 @@ describe('idle scanner', () => {
       executor,
       after(row, row.stopAfterSeconds),
     );
-    expect(result).toEqual({ frozen: 0, stopped: 1 });
+    expect(result).toEqual({ frozen: 0, stopped: 1, failures: [] });
     expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
     expect(executor.stateOf(row.sandboxId)).toBe('stopped');
   });
@@ -78,11 +78,13 @@ describe('idle scanner', () => {
     expect(await scanOnce(db, executor, yearLater)).toEqual({
       frozen: 1,
       stopped: 0,
+      failures: [],
     });
     expect(findByUserKey(db, 'alice')?.state).toBe('frozen');
     expect(await scanOnce(db, executor, yearLater)).toEqual({
       frozen: 0,
       stopped: 1,
+      failures: [],
     });
     expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
   });
@@ -95,9 +97,37 @@ describe('idle scanner', () => {
     });
     const slow = await seed(db, executor, 'slow');
     const result = await scanOnce(db, executor, after(quick, 100));
-    expect(result).toEqual({ frozen: 1, stopped: 0 });
+    expect(result).toEqual({ frozen: 1, stopped: 0, failures: [] });
     expect(findByUserKey(db, 'quick')?.state).toBe('frozen');
     expect(findByUserKey(db, 'slow')?.state).toBe('active');
     expect(executor.stateOf(slow.sandboxId)).toBe('running');
+  });
+
+  it('keeps sweeping past a sandbox whose container has vanished', async () => {
+    const { db, executor } = setup();
+    const dead = await seed(db, executor, 'dead');
+    const alive = await seed(db, executor, 'alive');
+    // The container vanishes behind the ledger's back — a gVisor OOM kills
+    // the whole box. The row still says active.
+    await executor.destroy(dead.sandboxId);
+
+    const result = await scanOnce(
+      db,
+      executor,
+      after(alive, alive.freezeAfterSeconds),
+    );
+    // The dead row is reported, the row behind it still cools down.
+    expect(result.failures).toEqual([
+      {
+        sandboxId: dead.sandboxId,
+        message: expect.stringContaining('absent'),
+      },
+    ]);
+    expect(result.frozen).toBe(1);
+    expect(findByUserKey(db, 'alive')?.state).toBe('frozen');
+    expect(executor.stateOf(alive.sandboxId)).toBe('paused');
+    // The dead row was not written: reality never moved. Repairing it is
+    // reconciliation's job, not the scanner's.
+    expect(findByUserKey(db, 'dead')?.state).toBe('active');
   });
 });

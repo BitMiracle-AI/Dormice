@@ -52,11 +52,17 @@ app.log.info(repaired, 'startup reconcile');
 // the daemon to the outside world is a reverse proxy's job.
 await app.listen({ host: '127.0.0.1', port: config.DORMICE_PORT });
 
-// The idle scanner's heartbeat. A failed sweep is logged, never fatal: the
+// The idle scanner's heartbeat. Failures are logged, never fatal: the
 // ledger is only written after reality moved, so the next tick retries
-// whatever the failure interrupted.
+// whatever failed — and a failed row never blocks the rows behind it.
 setInterval(() => {
-  scanOnce(db, executor, new Date()).catch((error) => {
-    app.log.error(error, 'idle scan failed');
-  });
+  scanOnce(db, executor, new Date())
+    .then((result) => {
+      for (const failure of result.failures) {
+        app.log.error(failure, 'idle scan: sandbox transition failed');
+      }
+    })
+    .catch((error) => {
+      app.log.error(error, 'idle scan failed');
+    });
 }, config.DORMICE_SCAN_INTERVAL_SECONDS * 1000);
