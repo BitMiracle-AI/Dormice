@@ -4,7 +4,12 @@
 // commander to the functions in commands.ts and prints their output —
 // everything testable lives there.
 import { Command } from 'commander';
-import { clientFromEnv, sandboxLs, sandboxRelease } from './commands';
+import {
+  clientFromEnv,
+  sandboxExec,
+  sandboxLs,
+  sandboxRelease,
+} from './commands';
 
 const program = new Command('dor').description(
   'Command-line tool for a Dormice daemon (also installed as `dormice`)',
@@ -20,6 +25,35 @@ sandbox
   .action(async () => {
     console.log(await sandboxLs(clientFromEnv(process.env)));
   });
+
+sandbox
+  .command('exec')
+  .description(
+    'Run a shell command inside the sandbox behind a key (wakes it first)',
+  )
+  .argument('<userKey>', 'the user key whose sandbox runs the command')
+  .argument(
+    '<command>',
+    'shell command, quoted as one argument (runs as bash -c)',
+  )
+  .option(
+    '-t, --timeout <seconds>',
+    'kill the command after this many seconds',
+    (value: string) => Number(value),
+  )
+  .action(
+    async (userKey: string, command: string, opts: { timeout?: number }) => {
+      const result = await sandboxExec(
+        clientFromEnv(process.env),
+        userKey,
+        command,
+        opts.timeout,
+      );
+      process.stdout.write(result.stdout);
+      process.stderr.write(result.stderr);
+      process.exitCode = result.exitCode;
+    },
+  );
 
 sandbox
   .command('release')

@@ -9,7 +9,12 @@ import {
   openDb,
 } from '@dormice/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { clientFromEnv, sandboxLs, sandboxRelease } from './commands';
+import {
+  clientFromEnv,
+  sandboxExec,
+  sandboxLs,
+  sandboxRelease,
+} from './commands';
 
 const TOKEN = 'test-token-test-token-test-token';
 // Tests live inside the monorepo, so the server's migrations are reachable
@@ -105,6 +110,19 @@ describe('sandbox commands over real HTTP', () => {
     expect(output).not.toContain('\u001b');
     expect(output).toContain('evil?[31mkey');
     await client.releaseSandbox('evil\u001b[31mkey');
+  });
+
+  it('exec hands back the three channels untouched', async () => {
+    await client.acquireSandbox('dave');
+    expect(await sandboxExec(client, 'dave', 'echo hi')).toEqual({
+      stdout: 'hi\n',
+      stderr: '',
+      exitCode: 0,
+    });
+    // The exit code passes through as data; main.ts turns it into the
+    // process's own.
+    expect((await sandboxExec(client, 'dave', 'exit 3')).exitCode).toBe(3);
+    await client.releaseSandbox('dave');
   });
 
   it('release reports both outcomes of the idempotent destroy', async () => {

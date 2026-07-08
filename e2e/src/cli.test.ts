@@ -54,6 +54,23 @@ describe('dor CLI against a real daemon', () => {
     expect(second.stdout).toContain('nothing to release');
   });
 
+  it('sandbox exec prints the output and passes the exit code through', async () => {
+    const sdk = new Dormice({
+      endpoint: inject('dormiceEndpoint'),
+      token: inject('dormiceToken'),
+    });
+    await sdk.acquireSandbox('cli-exec-key');
+
+    const ok = await cli('sandbox', 'exec', 'cli-exec-key', 'echo hi');
+    expect(ok.stdout).toBe('hi\n');
+
+    // execFile rejects on a nonzero child exit — which is exactly the
+    // passthrough working: the sandbox command's code became dor's own.
+    await expect(
+      cli('sandbox', 'exec', 'cli-exec-key', 'exit 3'),
+    ).rejects.toMatchObject({ code: 3 });
+  });
+
   it('fails honestly when the environment is missing', async () => {
     await expect(
       run('node', [CLI, 'sandbox', 'ls'], {

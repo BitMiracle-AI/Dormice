@@ -68,6 +68,35 @@ export async function sandboxLs(client: Dormice): Promise<string> {
   ].join('\n');
 }
 
+export interface ExecOutput {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+/**
+ * `dor sandbox exec <userKey> <command>`: run a shell command in the
+ * sandbox, buffered. Three channels instead of one string: the command's
+ * stdout and stderr must reach the operator's matching streams untouched
+ * (this is their own command's output, like ssh — unlike the ls table,
+ * where a hostile key could rewrite the terminal), and the exit code must
+ * come back as the process's own.
+ */
+export async function sandboxExec(
+  client: Dormice,
+  userKey: string,
+  command: string,
+  timeoutSeconds?: number,
+): Promise<ExecOutput> {
+  const result = await client.execCommand(userKey, command, {
+    timeoutSeconds,
+  });
+  let stderr = result.stderr;
+  if (result.stdoutTruncated) stderr += 'dor: stdout truncated at 1 MiB\n';
+  if (result.stderrTruncated) stderr += 'dor: stderr truncated at 1 MiB\n';
+  return { stdout: result.stdout, stderr, exitCode: result.exitCode };
+}
+
 /** `dor sandbox release <userKey>`: destroy the sandbox behind a key, idempotently. */
 export async function sandboxRelease(
   client: Dormice,
