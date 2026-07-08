@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A superseded run on the same branch is dead weight — cancel it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    # The whole chain takes ~2 minutes; hanging longer means something is
+    # stuck, so fail honestly instead of burning the 6-hour default.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      # Reads the pnpm version from package.json's packageManager field —
+      # one place to bump, local and CI can never drift.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          # engines promises >=22, so CI runs that floor: anything needing
+          # a newer Node fails here before it reaches a user.
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The same acceptance chain as local development, in the same order.
+      # Build comes first: the e2e suite boots the built daemon.
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
