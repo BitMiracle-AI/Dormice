@@ -10,7 +10,7 @@ import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
  * logs), and lexicographic order equals chronological order.
  */
 export const sandboxes = sqliteTable('sandboxes', {
-  /** nanoid, never an autoincrement — ids must stay unique across machines. */
+  /** UUID, never an autoincrement — ids must stay unique across machines. */
   sandboxId: text('sandbox_id').primaryKey(),
   /** The key acquire() is idempotent on: one sandbox per user key. */
   userKey: text('user_key').notNull().unique(),

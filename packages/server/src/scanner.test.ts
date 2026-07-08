@@ -1,8 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_LIFECYCLE_POLICY,
   type LifecyclePolicy,
 } from '@dormice/shared';
-import { nanoid } from 'nanoid';
 import { describe, expect, it } from 'vitest';
 import { type Db, migrateDb, openDb } from './db/db';
 import { createSandbox, findByUserKey } from './db/ledger';
@@ -24,7 +24,7 @@ async function seed(
   userKey: string,
   policy: LifecyclePolicy = DEFAULT_LIFECYCLE_POLICY,
 ): Promise<SandboxRow> {
-  const sandboxId = nanoid();
+  const sandboxId = randomUUID();
   await executor.create(sandboxId);
   return createSandbox(db, { sandboxId, userKey, nodeId: 'node-test', policy });
 }

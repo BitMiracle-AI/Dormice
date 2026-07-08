@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   acquireRequestSchema,
   acquireResponseSchema,
@@ -5,7 +6,6 @@ import {
   type Sandbox,
 } from '@dormice/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
-import { nanoid } from 'nanoid';
 import { ZodError, z } from 'zod';
 import type { Config } from '../config';
 import type { Db } from '../db/db';
@@ -92,7 +92,11 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       // Reality first, ledger second: bring the container up, then record
       // it. If create fails, no row was written — the next acquire retries
       // from a clean slate.
-      const sandboxId = nanoid();
+      //
+      // UUID, never an autoincrement (ids must survive sharding); its
+      // alphabet is safe everywhere an id will land — Docker names, file
+      // names, DNS labels.
+      const sandboxId = randomUUID();
       await executor.create(sandboxId);
       const row = createSandbox(db, {
         sandboxId,
