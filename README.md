@@ -22,7 +22,7 @@ pnpm monorepo:
 | `packages/shared` | Protocol schemas (zod) — the single source of truth for wire types |
 | `packages/server` | The daemon: Fastify + SQLite ledger + lifecycle engine |
 | `packages/sdk` | `@dormice/sdk` — TypeScript client for the native API |
-| `packages/cli` | `dor` command (skeleton) |
+| `packages/cli` | `dormice` command-line tool (`dor` for short) |
 | `packages/web` | Web console (skeleton) |
 | `e2e` | Black-box suite: boots the built daemon, drives it over the wire |
 

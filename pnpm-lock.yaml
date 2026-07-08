@@ -30,7 +30,18 @@ importers:
         specifier: workspace:*
         version: link:../packages/sdk
 
-  packages/cli: {}
+  packages/cli:
+    dependencies:
+      '@dormice/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      commander:
+        specifier: ^14.0.0
+        version: 14.0.3
+    devDependencies:
+      '@dormice/server':
+        specifier: workspace:*
+        version: link:../server
 
   packages/sdk:
     dependencies:
@@ -1161,6 +1172,10 @@ packages:
 
   chownr@1.1.4:
     resolution: {integrity: sha512-jJ0bqzaylmJtVnNgzTeSOs8DPavpbYgEr/b0YL8/2GO3xJEhInFmhKMUnEJQjZumK7KXGFhUy89PrsJWlakBVg==}
+
+  commander@14.0.3:
+    resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==}
+    engines: {node: '>=20'}
 
   commander@4.1.1:
     resolution: {integrity: sha512-NOKm8xhkzAjzFx8B2v5OAHT+u5pRQc2UCa2Vq9jYL/31o2wi9mxBA7LIFs3sV5VSC49z6pEhfbMULvShKj26WA==}
@@ -2628,6 +2643,8 @@ snapshots:
       readdirp: 4.1.2
 
   chownr@1.1.4: {}
+
+  commander@14.0.3: {}
 
   commander@4.1.1: {}
 

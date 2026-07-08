@@ -1,17 +1,26 @@
 {
   "name": "@dormice/cli",
   "version": "0.0.0",
-  "description": "Dormice command line tool (dor)",
+  "description": "Dormice command-line tool (dormice, or dor for short)",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "dor": "./dist/index.js"
+    "dormice": "./dist/main.js",
+    "dor": "./dist/main.js"
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format esm --clean",
-    "typecheck": "tsc --noEmit"
+    "build": "tsup src/main.ts --format esm --clean",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dormice/sdk": "workspace:*",
+    "commander": "^14.0.0"
+  },
+  "devDependencies": {
+    "@dormice/server": "workspace:*"
   }
 }
