@@ -4,6 +4,7 @@ import {
   validatorCompiler,
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
+import { type Logger, pino } from 'pino';
 import { z } from 'zod';
 import { requireApiToken } from './auth';
 import type { Config } from './config';
@@ -15,8 +16,12 @@ export interface AppDeps {
   config: Config;
   db: Db;
   executor: Executor;
-  /** Tests turn logging off; the daemon leaves it on. */
-  logger?: boolean;
+  /**
+   * Tests turn logging off with `false`; the daemon passes its own pino
+   * instance, which it also hands to the executor — one logger, created
+   * before anything that needs it.
+   */
+  logger?: boolean | Logger;
 }
 
 /**
@@ -29,7 +34,11 @@ export interface AppDeps {
  * without opening a port.
  */
 export function buildApp({ config, db, executor, logger = true }: AppDeps) {
-  const app = fastify({ logger }).withTypeProvider<ZodTypeProvider>();
+  // Always a pino instance (booleans are normalized into one): two fastify()
+  // call shapes would give the instance two different types.
+  const loggerInstance =
+    typeof logger === 'boolean' ? pino({ enabled: logger }) : logger;
+  const app = fastify({ loggerInstance }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 

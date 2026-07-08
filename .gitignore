@@ -6,6 +6,11 @@ CLAUDE.md
 RULES/
 docs/
 
+# Scratch code for verification and research (see RULES/临时代码.md):
+# deleted when done, and a public repo's history is append-only — one
+# accidental commit would be permanent
+temp/
+
 # Secrets and real env files (only *.example may be committed)
 .env
 .env.*

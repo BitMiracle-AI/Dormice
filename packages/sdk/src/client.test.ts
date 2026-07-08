@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import {
   buildApp,
   type Db,
@@ -96,6 +97,30 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
     const slashed = new Dormice({ endpoint: `${endpoint}/`, token: TOKEN });
     const res = await slashed.acquireSandbox('alice');
     expect(res.status).toBe('ready');
+  });
+
+  it('times out instead of hanging forever on a wedged daemon', async () => {
+    // A server that accepts the connection and then never answers.
+    const wedged = createServer(() => {});
+    await new Promise<void>((resolve) =>
+      wedged.listen(0, '127.0.0.1', resolve),
+    );
+    const address = wedged.address();
+    if (typeof address !== 'object' || address === null) {
+      throw new Error('expected a TCP address');
+    }
+    try {
+      const impatient = new Dormice({
+        endpoint: `http://127.0.0.1:${address.port}`,
+        token: TOKEN,
+        timeoutMs: 100,
+      });
+      await expect(impatient.acquireSandbox('alice')).rejects.toMatchObject({
+        name: 'TimeoutError',
+      });
+    } finally {
+      wedged.close();
+    }
   });
 
   it('wakes a frozen sandbox on re-acquire — the full story over the wire', async () => {

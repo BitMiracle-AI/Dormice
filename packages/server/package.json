@@ -1,7 +1,7 @@
 {
   "name": "@dormice/server",
   "version": "0.0.0",
-  "description": "Dormice daemon: sandbox lifecycle, E2B-compatible API, embedded web UI",
+  "description": "Dormice daemon: sandbox lifecycle over Docker + gVisor, SQLite ledger",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
@@ -27,6 +27,7 @@
     "execa": "^9.6.1",
     "fastify": "^5.10.0",
     "fastify-type-provider-zod": "^7.0.0",
+    "pino": "^10.3.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {

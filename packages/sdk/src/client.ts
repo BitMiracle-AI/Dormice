@@ -13,6 +13,12 @@ export interface DormiceOptions {
   endpoint: string;
   /** The daemon's DORMICE_API_TOKEN. */
   token: string;
+  /**
+   * Per-request timeout. Without one, a wedged daemon would hang the
+   * caller forever. 30s covers the slowest honest answer (waking a stopped
+   * sandbox takes seconds; restores return `restoring` immediately).
+   */
+  timeoutMs?: number;
 }
 
 /** A non-2xx answer from the daemon, carrying the HTTP status and the server's message. */
@@ -29,10 +35,12 @@ export class DormiceApiError extends Error {
 export class Dormice {
   private readonly endpoint: string;
   private readonly token: string;
+  private readonly timeoutMs: number;
 
   constructor(options: DormiceOptions) {
     this.endpoint = options.endpoint.replace(/\/+$/, '');
     this.token = options.token;
+    this.timeoutMs = options.timeoutMs ?? 30_000;
   }
 
   /**
@@ -76,6 +84,9 @@ export class Dormice {
         'content-type': 'application/json',
       },
       body: JSON.stringify(body),
+      // Rejects with a TimeoutError — honestly not an API error, so it is
+      // deliberately not wrapped in DormiceApiError.
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!response.ok) {
       throw new DormiceApiError(response.status, await errorMessage(response));

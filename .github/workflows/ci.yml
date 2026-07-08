@@ -52,7 +52,11 @@ jobs:
           # The whole history, not just the tip: old commits leak too.
           fetch-depth: 0
       # The plain binary instead of gitleaks-action: same scan, no
-      # organization license key required.
+      # organization license key required. The checksum is pinned like every
+      # other downloaded binary in this repo — a poisoned release fails the
+      # job instead of scanning our history with attacker code.
       - run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
+          curl -sSfL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
           ./gitleaks git --no-banner --redact .

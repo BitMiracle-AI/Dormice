@@ -1,3 +1,4 @@
+import { pino } from 'pino';
 import { buildApp } from './app';
 import { type Config, loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
@@ -33,12 +34,13 @@ function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
   });
 }
 
-// The log closure reaches `app` before it is declared below; that is safe
-// because the executor only logs during freezes, which happen long after
-// the app exists.
-const executor = buildExecutor(config, (msg) => app.log.info(msg));
+// One logger, created before everything that needs it: the executor logs
+// through it directly and Fastify adopts it as its own.
+const log = pino();
 
-const app = buildApp({ config, db, executor });
+const executor = buildExecutor(config, (msg) => log.info(msg));
+
+const app = buildApp({ config, db, executor, logger: log });
 
 // Repair ledger/reality drift left by a crash — before serving traffic, so
 // every request runs against a ledger that reflects what actually exists.
