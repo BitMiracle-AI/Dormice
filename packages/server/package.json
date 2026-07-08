@@ -16,5 +16,10 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fastify": "^5.10.0",
+    "fastify-type-provider-zod": "^7.0.0",
+    "zod": "^4.4.3"
   }
 }
