@@ -142,6 +142,10 @@ export class DockerExecutor implements Executor {
     // cleanly (crash-only — code must survive the container vanishing
     // anyway), and the disk's consistency is the ext4 journal's job.
     await container.kill();
+    // kill only delivers the signal; Docker marks the container exited a
+    // beat later. Wait for that, so the caller observes 'stopped' the
+    // moment stop() resolves — the same synchronous promise the fake makes.
+    await container.wait({ condition: 'not-running' });
   }
 
   async start(sandboxId: string): Promise<void> {
@@ -153,14 +157,32 @@ export class DockerExecutor implements Executor {
   }
 
   async destroy(sandboxId: string): Promise<void> {
-    const containerId = await this.inspect(sandboxId);
-    if (containerId === null) {
+    const found = await this.inspect(sandboxId);
+    if (found === null) {
       // The ledger says this exists and reality disagrees — a bug worth
       // hearing, same contract as the fake. Vanished containers are the
       // reconciler's case, not a silent success here.
       throw new Error(`container ${sandboxId} is absent, cannot destroy`);
     }
-    await this.docker.getContainer(containerId).remove({ force: true });
+    const container = this.docker.getContainer(found.id);
+    // Walk the container down ourselves instead of leaning on remove's
+    // force-kill: dockerd cannot deliver a signal into a paused gVisor
+    // sandbox and burns a hard-coded 10s wait before escalating (measured
+    // 2026-07-09, sometimes erroring "PID is zombie"). Unpause so the kill
+    // lands, then wait for the actual exit before removing.
+    if (found.status === 'paused') {
+      await container.unpause();
+    }
+    if (found.status === 'paused' || found.status === 'running') {
+      try {
+        await container.kill();
+      } catch (err) {
+        // Died between inspect and kill — the goal state, not a failure.
+        if (!isDockerApiError(err) || err.statusCode !== 409) throw err;
+      }
+      await container.wait({ condition: 'not-running' });
+    }
+    await container.remove({ force: true });
     await this.teardownDisk(sandboxId);
   }
 
@@ -240,15 +262,17 @@ export class DockerExecutor implements Executor {
 
   /**
    * Looks the sandbox's container up by name. Returns the container id
-   * (needed for cgroup paths, which want the full id, not the name) or
-   * null if no such container exists.
+   * (needed for cgroup paths, which want the full id, not the name) and
+   * Docker's raw status, or null if no such container exists.
    */
-  private async inspect(sandboxId: string): Promise<string | null> {
+  private async inspect(
+    sandboxId: string,
+  ): Promise<{ id: string; status: string } | null> {
     try {
       const info = await this.docker
         .getContainer(containerName(sandboxId))
         .inspect();
-      return info.Id;
+      return { id: info.Id, status: info.State.Status };
     } catch (err) {
       if (isDockerApiError(err) && err.statusCode === 404) return null;
       throw err;
