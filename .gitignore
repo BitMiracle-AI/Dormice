@@ -18,6 +18,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Runtime data (SQLite ledger, sandbox volumes)
+data/
+
 # Tests and coverage
 coverage/
 

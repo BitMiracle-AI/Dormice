@@ -1,5 +1,8 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.2/schema.json",
+  "files": {
+    "includes": ["**", "!packages/*/drizzle"]
+  },
   "vcs": {
     "enabled": true,
     "clientKind": "git",

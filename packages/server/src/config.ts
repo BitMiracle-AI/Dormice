@@ -12,6 +12,9 @@ import { z } from 'zod';
  */
 const envSchema = z.object({
   DORMICE_PORT: z.coerce.number().int().min(1).max(65535).default(3676),
+  DORMICE_DB_PATH: z.string().default('data/dormice.db'),
+  /** Identifies this machine in the ledger. Single-machine today; the field keeps the ledger shardable. */
+  DORMICE_NODE_ID: z.string().default('node-1'),
 });
 
 export type Config = z.infer<typeof envSchema>;

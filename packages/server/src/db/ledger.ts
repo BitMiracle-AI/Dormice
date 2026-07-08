@@ -1,0 +1,86 @@
+import type { LifecyclePolicy, SandboxState } from '@dormice/shared';
+import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
+import type { Db } from './db';
+import { type SandboxRow, sandboxes } from './schema';
+
+/**
+ * The lifecycle state machine. A sandbox only ever moves one rung colder at
+ * a time; waking up is a single jump back to active. Everything the idle
+ * scanner and acquire() are allowed to do is this table — it is the single
+ * arbiter for state changes, enforced in transition().
+ */
+export const ALLOWED_TRANSITIONS: Record<
+  SandboxState,
+  readonly SandboxState[]
+> = {
+  active: ['frozen'],
+  frozen: ['active', 'stopped'],
+  stopped: ['active', 'archived'],
+  archived: ['restoring'],
+  restoring: ['active'],
+};
+
+export interface CreateSandboxInput {
+  userKey: string;
+  nodeId: string;
+  policy: LifecyclePolicy;
+}
+
+/** Inserts a new sandbox row in `active` state. Throws if the user key is taken. */
+export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
+  const now = new Date().toISOString();
+  const row: SandboxRow = {
+    sandboxId: nanoid(),
+    userKey: input.userKey,
+    state: 'active',
+    nodeId: input.nodeId,
+    freezeAfterSeconds: input.policy.freezeAfterSeconds,
+    stopAfterSeconds: input.policy.stopAfterSeconds,
+    archiveAfterSeconds: input.policy.archiveAfterSeconds,
+    createdAt: now,
+    lastActiveAt: now,
+  };
+  db.insert(sandboxes).values(row).run();
+  return row;
+}
+
+export function findByUserKey(db: Db, userKey: string): SandboxRow | undefined {
+  return db
+    .select()
+    .from(sandboxes)
+    .where(eq(sandboxes.userKey, userKey))
+    .get();
+}
+
+/**
+ * Moves a sandbox to a new state, enforcing ALLOWED_TRANSITIONS. An illegal
+ * transition is a bug in the caller, so it throws instead of self-healing.
+ *
+ * No lock needed: better-sqlite3 is synchronous and the daemon is a single
+ * process, so there is no await point between the read and the write.
+ */
+export function transition(
+  db: Db,
+  sandboxId: string,
+  to: SandboxState,
+): SandboxRow {
+  const row = db
+    .select()
+    .from(sandboxes)
+    .where(eq(sandboxes.sandboxId, sandboxId))
+    .get();
+  if (!row) {
+    throw new Error(`sandbox ${sandboxId} not found`);
+  }
+  if (!ALLOWED_TRANSITIONS[row.state].includes(to)) {
+    throw new Error(
+      `illegal transition ${row.state} -> ${to} (sandbox ${sandboxId})`,
+    );
+  }
+  db.update(sandboxes)
+    .set({ state: to })
+    .where(eq(sandboxes.sandboxId, sandboxId))
+    .run();
+  return { ...row, state: to };
+}
