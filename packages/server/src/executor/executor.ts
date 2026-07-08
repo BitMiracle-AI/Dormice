@@ -1,4 +1,11 @@
 /**
+ * What a container runtime can observe about a container. Coarser than the
+ * ledger's five lifecycle states on purpose: reality knows nothing about
+ * `archived` or `restoring` — those live in the ledger and S3.
+ */
+export type ContainerState = 'running' | 'paused' | 'stopped';
+
+/**
  * The executor is where lifecycle decisions become physical reality:
  * containers created, paused, stopped. The daemon's decision logic (the
  * idle scanner, acquire's wake-ups) only ever talks to this interface, so
@@ -19,4 +26,10 @@ export interface Executor {
   start(sandboxId: string): Promise<void>;
   /** Removes the container and its disk for good, whatever state it is in. */
   destroy(sandboxId: string): Promise<void>;
+  /**
+   * Every container this executor knows about, with its observed state.
+   * The reconciler's window into reality — the one read the ledger is
+   * checked against at startup.
+   */
+  listContainers(): Promise<Map<string, ContainerState>>;
 }

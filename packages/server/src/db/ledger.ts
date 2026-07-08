@@ -84,6 +84,23 @@ export function deleteSandbox(db: Db, sandboxId: string): void {
   db.delete(sandboxes).where(eq(sandboxes.sandboxId, sandboxId)).run();
 }
 
+/**
+ * Overwrites the state with an observed fact, bypassing ALLOWED_TRANSITIONS:
+ * that table governs the moves the daemon plans; the reconciler records what
+ * reality already did while nobody was watching. Only the reconciler calls
+ * this — everything else goes through transition().
+ */
+export function overwriteState(
+  db: Db,
+  sandboxId: string,
+  state: SandboxState,
+): void {
+  db.update(sandboxes)
+    .set({ state })
+    .where(eq(sandboxes.sandboxId, sandboxId))
+    .run();
+}
+
 export function findByUserKey(db: Db, userKey: string): SandboxRow | undefined {
   return db
     .select()

@@ -53,4 +53,22 @@ describe('FakeExecutor', () => {
     const executor = new FakeExecutor();
     await expect(executor.destroy('ghost')).rejects.toThrow(/absent/);
   });
+
+  it('lists every container as an observation, not a live reference', async () => {
+    const executor = new FakeExecutor();
+    await executor.create('a');
+    await executor.create('b');
+    await executor.freeze('b');
+
+    const observed = await executor.listContainers();
+    expect(observed).toEqual(
+      new Map([
+        ['a', 'running'],
+        ['b', 'paused'],
+      ]),
+    );
+    // Mutating the observation must not mutate reality.
+    observed.delete('a');
+    expect(executor.stateOf('a')).toBe('running');
+  });
 });

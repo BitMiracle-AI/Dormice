@@ -6,6 +6,7 @@
 export { type AppDeps, buildApp } from './app';
 export { type Config, loadConfig } from './config';
 export { type Db, migrateDb, openDb } from './db/db';
-export type { Executor } from './executor/executor';
-export { type FakeContainerState, FakeExecutor } from './executor/fake';
+export type { ContainerState, Executor } from './executor/executor';
+export { FakeExecutor } from './executor/fake';
+export { type ReconcileResult, reconcile } from './reconciler';
 export { type ScanResult, scanOnce } from './scanner';

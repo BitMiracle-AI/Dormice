@@ -1,6 +1,4 @@
-import type { Executor } from './executor';
-
-export type FakeContainerState = 'running' | 'paused' | 'stopped';
+import type { ContainerState, Executor } from './executor';
 
 /**
  * In-memory stand-in for the Docker+gVisor executor. Not a throwaway: it is
@@ -12,10 +10,10 @@ export type FakeContainerState = 'running' | 'paused' | 'stopped';
  * the fake too.
  */
 export class FakeExecutor implements Executor {
-  private readonly containers = new Map<string, FakeContainerState>();
+  private readonly containers = new Map<string, ContainerState>();
 
   /** Test hook: what does "reality" say about this sandbox? */
-  stateOf(sandboxId: string): FakeContainerState | undefined {
+  stateOf(sandboxId: string): ContainerState | undefined {
     return this.containers.get(sandboxId);
   }
 
@@ -55,7 +53,12 @@ export class FakeExecutor implements Executor {
     this.containers.delete(sandboxId);
   }
 
-  private expect(sandboxId: string, wanted: FakeContainerState): void {
+  async listContainers(): Promise<Map<string, ContainerState>> {
+    // A copy: reality is observed, not handed out by reference.
+    return new Map(this.containers);
+  }
+
+  private expect(sandboxId: string, wanted: ContainerState): void {
     const actual = this.containers.get(sandboxId);
     if (actual !== wanted) {
       throw new Error(

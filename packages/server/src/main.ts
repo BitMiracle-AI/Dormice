@@ -2,6 +2,7 @@ import { buildApp } from './app';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
 import { FakeExecutor } from './executor/fake';
+import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
 
 const config = loadConfig();
@@ -17,6 +18,13 @@ migrateDb(db, new URL('../drizzle', import.meta.url).pathname);
 const executor = new FakeExecutor();
 
 const app = buildApp({ config, db, executor });
+
+// Repair ledger/reality drift left by a crash — before serving traffic, so
+// every request runs against a ledger that reflects what actually exists.
+// A failure here is fatal on purpose: a daemon that cannot read reality
+// should not pretend to manage it.
+const repaired = await reconcile(db, executor);
+app.log.info(repaired, 'startup reconcile');
 
 // Red line: the daemon binds to loopback only, and the host is deliberately
 // not configurable — a knob would be one typo away from 0.0.0.0. Exposing
