@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_LIFECYCLE_POLICY,
   type LifecyclePolicy,
@@ -10,7 +11,7 @@ import type { SandboxRow } from './db/schema';
 import { FakeExecutor } from './executor/fake';
 import { scanOnce } from './scanner';
 
-const MIGRATIONS = new URL('../drizzle', import.meta.url).pathname;
+const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
 
 function setup() {
   const db = openDb(':memory:');

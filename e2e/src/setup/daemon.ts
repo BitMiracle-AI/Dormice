@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { TestProject } from 'vitest/node';
 
 declare module 'vitest' {
@@ -18,8 +19,9 @@ declare module 'vitest' {
 // over the wire. Nothing here imports server internals — that is the point;
 // this is the safety net that must keep passing while the internals are
 // rewritten freely.
-const MAIN = new URL('../../../packages/server/dist/main.js', import.meta.url)
-  .pathname;
+const MAIN = fileURLToPath(
+  new URL('../../../packages/server/dist/main.js', import.meta.url),
+);
 
 export default async function setup(project: TestProject) {
   if (!existsSync(MAIN)) {

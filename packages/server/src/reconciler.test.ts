@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { type Db, migrateDb, openDb } from './db/db';
@@ -7,7 +8,7 @@ import type { SandboxRow } from './db/schema';
 import { FakeExecutor } from './executor/fake';
 import { reconcile } from './reconciler';
 
-const MIGRATIONS = new URL('../drizzle', import.meta.url).pathname;
+const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
 
 const NONE = {
   repairedStates: 0,

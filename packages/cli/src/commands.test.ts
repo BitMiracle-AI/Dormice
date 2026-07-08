@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { Dormice } from '@dormice/sdk';
 import {
   buildApp,
@@ -12,7 +13,9 @@ import { clientFromEnv, sandboxLs, sandboxRelease } from './commands';
 const TOKEN = 'test-token-test-token-test-token';
 // Tests live inside the monorepo, so the server's migrations are reachable
 // as a sibling package. Not part of the published CLI.
-const MIGRATIONS = new URL('../../server/drizzle', import.meta.url).pathname;
+const MIGRATIONS = fileURLToPath(
+  new URL('../../server/drizzle', import.meta.url),
+);
 
 let app: ReturnType<typeof buildApp>;
 let client: Dormice;

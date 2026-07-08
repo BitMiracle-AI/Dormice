@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Dormice } from '@dormice/sdk';
 import { describe, expect, inject, it } from 'vitest';
@@ -8,8 +9,9 @@ const run = promisify(execFile);
 
 // The CLI exactly the way a user runs it: the built binary in a child
 // process, configured only through environment variables.
-const CLI = new URL('../../packages/cli/dist/main.js', import.meta.url)
-  .pathname;
+const CLI = fileURLToPath(
+  new URL('../../packages/cli/dist/main.js', import.meta.url),
+);
 
 if (!existsSync(CLI)) {
   throw new Error(`CLI build not found at ${CLI} — run \`pnpm build\` first`);

@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app';
@@ -7,7 +8,7 @@ import { FakeExecutor } from './executor/fake';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
 
-const MIGRATIONS = new URL('../drizzle', import.meta.url).pathname;
+const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
 
 function testApp(executor: FakeExecutor = new FakeExecutor()) {

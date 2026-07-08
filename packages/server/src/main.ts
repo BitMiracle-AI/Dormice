@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { pino } from 'pino';
 import { buildApp } from './app';
 import { type Config, loadConfig } from './config';
@@ -13,7 +14,7 @@ const config = loadConfig();
 // Migrate on every boot: the daemon never runs against a schema it does not
 // expect, and a fresh install needs no separate setup step.
 const db = openDb(config.DORMICE_DB_PATH);
-migrateDb(db, new URL('../drizzle', import.meta.url).pathname);
+migrateDb(db, fileURLToPath(new URL('../drizzle', import.meta.url)));
 
 function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
   if (cfg.DORMICE_EXECUTOR === 'fake') return new FakeExecutor();

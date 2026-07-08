@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
 import {
   buildApp,
   type Db,
@@ -15,7 +16,9 @@ import { Dormice } from './client';
 const TOKEN = 'test-token-test-token-test-token';
 // Tests live inside the monorepo, so the server's migrations are reachable
 // as a sibling package. Not part of the published SDK.
-const MIGRATIONS = new URL('../../server/drizzle', import.meta.url).pathname;
+const MIGRATIONS = fileURLToPath(
+  new URL('../../server/drizzle', import.meta.url),
+);
 
 let app: ReturnType<typeof buildApp>;
 let client: Dormice;

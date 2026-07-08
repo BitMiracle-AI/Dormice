@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { type Db, migrateDb, openDb } from './db';
 import { createSandbox, findByUserKey, transition } from './ledger';
 
-const MIGRATIONS = new URL('../../drizzle', import.meta.url).pathname;
+const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 
 function testDb(): Db {
   const db = openDb(':memory:');
