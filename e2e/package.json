@@ -1,11 +1,15 @@
 {
   "name": "@dormice/e2e",
   "version": "0.0.0",
-  "description": "End-to-end compatibility test suite (21-item E2B compatibility checks)",
+  "description": "Black-box end-to-end suite: boots the built daemon and drives it over the wire via the SDK",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dormice/sdk": "workspace:*"
   }
 }
