@@ -9,7 +9,12 @@ import { reconcile } from './reconciler';
 
 const MIGRATIONS = new URL('../drizzle', import.meta.url).pathname;
 
-const NONE = { repairedStates: 0, deletedRows: 0, destroyedOrphans: 0 };
+const NONE = {
+  repairedStates: 0,
+  deletedRows: 0,
+  destroyedOrphans: 0,
+  suspects: [],
+};
 
 function setup() {
   const db = openDb(':memory:');
@@ -121,11 +126,61 @@ describe('startup reconcile', () => {
       repairedStates: 1,
       deletedRows: 1,
       destroyedOrphans: 1,
+      suspects: [],
     });
     expect(findByUserKey(db, 'healthy')?.state).toBe('active');
     expect(findByUserKey(db, 'drifted')?.state).toBe('frozen');
     expect(findByUserKey(db, 'vanished')).toBeUndefined();
     expect(executor.stateOf(healthy.sandboxId)).toBe('running');
     expect(executor.stateOf('orphan')).toBeUndefined();
+  });
+});
+
+describe('runtime reconcile (two-strike orphans)', () => {
+  it('only suspects a first-time orphan, destroys it on the second pass', async () => {
+    const { db, executor } = setup();
+    // At runtime this container could be an acquire still in flight — its
+    // row lands right after create returns. Killing it on sight would
+    // sabotage the very request creating it.
+    await executor.create('maybe-in-flight');
+
+    const first = await reconcile(db, executor, new Set());
+    expect(first).toEqual({ ...NONE, suspects: ['maybe-in-flight'] });
+    expect(executor.stateOf('maybe-in-flight')).toBe('running');
+
+    // Still no row one interval later: genuinely unreachable, put it down.
+    const second = await reconcile(db, executor, new Set(first.suspects));
+    expect(second).toEqual({ ...NONE, destroyedOrphans: 1 });
+    expect(executor.stateOf('maybe-in-flight')).toBeUndefined();
+  });
+
+  it('clears a suspect whose row landed in the meantime', async () => {
+    const { db, executor } = setup();
+    await executor.create('in-flight');
+    const first = await reconcile(db, executor, new Set());
+    expect(first.suspects).toEqual(['in-flight']);
+
+    // The acquire finished: the row is in the ledger now.
+    createSandbox(db, {
+      sandboxId: 'in-flight',
+      userKey: 'alice',
+      nodeId: 'node-test',
+      policy: DEFAULT_LIFECYCLE_POLICY,
+    });
+
+    const second = await reconcile(db, executor, new Set(first.suspects));
+    expect(second).toEqual(NONE);
+    expect(executor.stateOf('in-flight')).toBe('running');
+    expect(findByUserKey(db, 'alice')?.state).toBe('active');
+  });
+
+  it('still repairs rows and deletes the dead on every runtime pass', async () => {
+    const { db, executor } = setup();
+    const row = await seed(db, executor, 'alice');
+    await executor.destroy(row.sandboxId);
+
+    const result = await reconcile(db, executor, new Set());
+    expect(result).toEqual({ ...NONE, deletedRows: 1 });
+    expect(findByUserKey(db, 'alice')).toBeUndefined();
   });
 });

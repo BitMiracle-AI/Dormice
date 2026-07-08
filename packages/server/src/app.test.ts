@@ -4,6 +4,7 @@ import { buildApp } from './app';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
 import { FakeExecutor } from './executor/fake';
+import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
 
 const MIGRATIONS = new URL('../drizzle', import.meta.url).pathname;
@@ -245,6 +246,25 @@ describe('acquire wakes cold sandboxes', () => {
     expect(Date.parse(woken.sandbox.lastActiveAt)).toBeGreaterThan(
       Date.parse(created.sandbox.lastActiveAt),
     );
+  });
+});
+
+describe('acquire after a container vanishes', () => {
+  it('returns a fresh sandbox once reconcile has run, not the corpse', async () => {
+    const { app, db, executor } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+    // gVisor kills the whole box on OOM; the ledger still says active.
+    await executor.destroy(created.sandbox.sandboxId);
+
+    // The heartbeat reconciles before every scan; the dead row is deleted
+    // within one interval, freeing the key.
+    await reconcile(db, executor, new Set());
+
+    const again = (await acquire(app, { userKey: 'alice' })).json();
+    expect(again.status).toBe('ready');
+    expect(again.sandbox.sandboxId).not.toBe(created.sandbox.sandboxId);
+    // This time the sandbox is real.
+    expect(executor.stateOf(again.sandbox.sandboxId)).toBe('running');
   });
 });
 

@@ -52,17 +52,28 @@ app.log.info(repaired, 'startup reconcile');
 // the daemon to the outside world is a reverse proxy's job.
 await app.listen({ host: '127.0.0.1', port: config.DORMICE_PORT });
 
-// The idle scanner's heartbeat. Failures are logged, never fatal: the
-// ledger is only written after reality moved, so the next tick retries
-// whatever failed — and a failed row never blocks the rows behind it.
-setInterval(() => {
-  scanOnce(db, executor, new Date())
-    .then((result) => {
-      for (const failure of result.failures) {
-        app.log.error(failure, 'idle scan: sandbox transition failed');
-      }
-    })
-    .catch((error) => {
-      app.log.error(error, 'idle scan failed');
-    });
+// The daemon's heartbeat: reconcile, then scan. Reconciling every tick is
+// what keeps the ledger honest while the daemon runs — a container that
+// vanished (gVisor kills a whole box on OOM) is deleted from the ledger
+// within one interval instead of at the next restart, so acquire stops
+// returning it and its user key is free again. Reconcile runs first so the
+// scanner never trips over rows whose containers are gone.
+//
+// Failures are logged, never fatal: the ledger is only written after
+// reality moved, so the next tick retries whatever failed.
+let suspects: ReadonlySet<string> = new Set();
+setInterval(async () => {
+  try {
+    const drift = await reconcile(db, executor, suspects);
+    suspects = new Set(drift.suspects);
+    if (drift.repairedStates + drift.deletedRows + drift.destroyedOrphans > 0) {
+      app.log.warn(drift, 'runtime reconcile repaired drift');
+    }
+    const scan = await scanOnce(db, executor, new Date());
+    for (const failure of scan.failures) {
+      app.log.error(failure, 'idle scan: sandbox transition failed');
+    }
+  } catch (error) {
+    app.log.error(error, 'heartbeat tick failed');
+  }
 }, config.DORMICE_SCAN_INTERVAL_SECONDS * 1000);
