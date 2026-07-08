@@ -12,7 +12,10 @@ import { scanOnce } from './scanner';
 const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
 
-function testApp(executor: FakeExecutor = new FakeExecutor()) {
+function testApp(
+  executor: FakeExecutor = new FakeExecutor(),
+  env: Record<string, string> = {},
+) {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
   // Through loadConfig on purpose: defaults are adjudicated once, in the
@@ -21,6 +24,7 @@ function testApp(executor: FakeExecutor = new FakeExecutor()) {
     DORMICE_DB_PATH: ':memory:',
     DORMICE_NODE_ID: 'node-test',
     DORMICE_API_TOKEN: TOKEN,
+    ...env,
   });
   const locks = new KeyedQueue();
   const app = buildApp({ config, db, executor, locks, logger: false });
@@ -131,6 +135,15 @@ describe('POST /acquireSandbox', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('stores stopAfterSeconds: null — the never-stop resident policy', async () => {
+    const res = await acquire(testApp().app, {
+      userKey: 'resident',
+      policy: { stopAfterSeconds: null },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sandbox.policy.stopAfterSeconds).toBeNull();
+  });
+
   it('rejects an invalid override even when the sandbox already exists', async () => {
     const { app } = testApp();
     await acquire(app, { userKey: 'alice' });
@@ -141,6 +154,39 @@ describe('POST /acquireSandbox', () => {
       policy: { archiveAfterSeconds: 1 },
     });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('error shape', () => {
+  it('answers validation failures with the protocol {message} body on every route', async () => {
+    // releaseSandbox declares no error schema; without the global error
+    // handler Fastify's native multi-field shape leaked here.
+    const res = await rpc(testApp().app, '/releaseSandbox', {});
+    expect(res.statusCode).toBe(400);
+    expect(Object.keys(res.json())).toEqual(['message']);
+  });
+
+  it('answers unknown routes with the same {message} shape', async () => {
+    const res = await rpc(testApp().app, '/noSuchVerb');
+    expect(res.statusCode).toBe(404);
+    expect(Object.keys(res.json())).toEqual(['message']);
+  });
+});
+
+describe('sandbox capacity', () => {
+  it('caps creation at DORMICE_MAX_SANDBOXES with an honest 429', async () => {
+    const { app } = testApp(undefined, { DORMICE_MAX_SANDBOXES: '1' });
+    expect((await acquire(app, { userKey: 'alice' })).statusCode).toBe(200);
+
+    const capped = await acquire(app, { userKey: 'bob' });
+    expect(capped.statusCode).toBe(429);
+    expect(capped.json().message).toMatch(/DORMICE_MAX_SANDBOXES/);
+
+    // Existing sandboxes always wake — the cap only guards creation.
+    expect((await acquire(app, { userKey: 'alice' })).statusCode).toBe(200);
+    // Releasing frees the slot.
+    await rpc(app, '/releaseSandbox', { userKey: 'alice' });
+    expect((await acquire(app, { userKey: 'bob' })).statusCode).toBe(200);
   });
 });
 
@@ -210,22 +256,17 @@ describe('acquire wakes cold sandboxes', () => {
 
   it('starts a stopped sandbox back to active', async () => {
     const { app, db, executor, locks } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (
+      await acquire(app, {
+        userKey: 'alice',
+        policy: { freezeAfterSeconds: 60, stopAfterSeconds: 120 },
+      })
+    ).json();
     const id = created.sandbox.sandboxId;
 
     const lastActiveAt = created.sandbox.lastActiveAt;
-    await scanOnce(
-      db,
-      executor,
-      locks,
-      after(lastActiveAt, DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds),
-    );
-    await scanOnce(
-      db,
-      executor,
-      locks,
-      after(lastActiveAt, DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds),
-    );
+    await scanOnce(db, executor, locks, after(lastActiveAt, 60));
+    await scanOnce(db, executor, locks, after(lastActiveAt, 120));
     expect(executor.stateOf(id)).toBe('stopped');
 
     const woken = (await acquire(app, { userKey: 'alice' })).json();
@@ -345,21 +386,16 @@ describe('acquire after reality moved behind the ledger', () => {
     // same key, same sandboxId, rebuilt from the disk. Never a silent
     // fresh empty box.
     const { app, db, executor, locks } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (
+      await acquire(app, {
+        userKey: 'alice',
+        policy: { freezeAfterSeconds: 60, stopAfterSeconds: 120 },
+      })
+    ).json();
     const id = created.sandbox.sandboxId;
     const lastActiveAt = created.sandbox.lastActiveAt;
-    await scanOnce(
-      db,
-      executor,
-      locks,
-      after(lastActiveAt, DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds),
-    );
-    await scanOnce(
-      db,
-      executor,
-      locks,
-      after(lastActiveAt, DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds),
-    );
+    await scanOnce(db, executor, locks, after(lastActiveAt, 60));
+    await scanOnce(db, executor, locks, after(lastActiveAt, 120));
     executor.vanishContainer(id);
 
     await reconcile(db, executor, locks, new Set());

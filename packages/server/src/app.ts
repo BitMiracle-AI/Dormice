@@ -1,4 +1,4 @@
-import fastify from 'fastify';
+import fastify, { type FastifyError } from 'fastify';
 import {
   serializerCompiler,
   validatorCompiler,
@@ -54,6 +54,24 @@ export function buildApp({
   const app = fastify({ loggerInstance }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
+
+  // The single arbiter for the wire's error shape: every non-2xx body is
+  // { message }, whoever produced the error. Without this, Fastify's own
+  // validation failures leak its native multi-field shape on routes that
+  // declare no error schema — two error dialects on one API.
+  app.setErrorHandler((error: FastifyError, request, reply) => {
+    const status = error.statusCode ?? 500;
+    if (status >= 500) {
+      // 4xx name the caller's mistake and are expected traffic; 5xx are ours.
+      request.log.error(error, 'request failed');
+    }
+    reply.code(status).send({ message: error.message });
+  });
+  app.setNotFoundHandler((request, reply) => {
+    reply
+      .code(404)
+      .send({ message: `route ${request.method} ${request.url} not found` });
+  });
 
   // Liveness probe: open by design (probes have no secrets), everything
   // else lives behind the token.

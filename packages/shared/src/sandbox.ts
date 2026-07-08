@@ -20,7 +20,13 @@ export const sandboxSchema = z.object({
   state: z.enum(SANDBOX_STATES),
   /** Machine that owns this sandbox. Single-machine today; the field keeps the ledger shardable. */
   nodeId: z.string(),
-  /** Base URL callers use to reach this sandbox. Today always the local daemon; with sharding it may point elsewhere. */
+  /**
+   * Base URL of the daemon that owns this sandbox. Honest limits today: it
+   * is the daemon's loopback address, meaningful only on the daemon's own
+   * machine — a remote caller keeps using whatever reverse-proxy address it
+   * already reached the daemon through. A public-endpoint knob can land
+   * when this field gains real consumers (sharding, in-sandbox exec).
+   */
   endpoint: z.string(),
   policy: lifecyclePolicySchema,
   createdAt: z.iso.datetime(),

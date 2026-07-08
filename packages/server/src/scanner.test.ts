@@ -63,14 +63,14 @@ describe('idle scanner', () => {
 
   it('stops a frozen sandbox idle past stopAfterSeconds', async () => {
     const { db, executor, locks } = setup();
-    const row = await seed(db, executor, 'alice');
-    await scanOnce(db, executor, locks, after(row, row.freezeAfterSeconds));
-    const result = await scanOnce(
-      db,
-      executor,
-      locks,
-      after(row, row.stopAfterSeconds),
-    );
+    // Explicit thresholds: the type of stopAfterSeconds is nullable now.
+    const row = await seed(db, executor, 'alice', {
+      ...DEFAULT_LIFECYCLE_POLICY,
+      freezeAfterSeconds: 60,
+      stopAfterSeconds: 120,
+    });
+    await scanOnce(db, executor, locks, after(row, 60));
+    const result = await scanOnce(db, executor, locks, after(row, 120));
     expect(result).toEqual({ frozen: 0, stopped: 1, failures: [] });
     expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
     expect(executor.stateOf(row.sandboxId)).toBe('stopped');
@@ -106,6 +106,27 @@ describe('idle scanner', () => {
     expect(findByUserKey(db, 'quick')?.state).toBe('frozen');
     expect(findByUserKey(db, 'slow')?.state).toBe('active');
     expect(executor.stateOf(slow.sandboxId)).toBe('running');
+  });
+
+  it('never stops a frozen sandbox whose policy says stop: null', async () => {
+    const { db, executor, locks } = setup();
+    // The resident-agent policy: freeze normally, then park frozen forever.
+    const row = await seed(db, executor, 'resident', {
+      ...DEFAULT_LIFECYCLE_POLICY,
+      stopAfterSeconds: null,
+      archiveAfterSeconds: null,
+    });
+    await scanOnce(db, executor, locks, after(row, row.freezeAfterSeconds));
+    expect(findByUserKey(db, 'resident')?.state).toBe('frozen');
+
+    const yearLater = await scanOnce(
+      db,
+      executor,
+      locks,
+      after(row, 365 * 24 * 60 * 60),
+    );
+    expect(yearLater).toEqual({ frozen: 0, stopped: 0, failures: [] });
+    expect(findByUserKey(db, 'resident')?.state).toBe('frozen');
   });
 
   it('keeps sweeping past a sandbox whose container has vanished', async () => {

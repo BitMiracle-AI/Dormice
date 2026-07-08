@@ -13,6 +13,7 @@ import { ZodError, z } from 'zod';
 import type { Config } from '../config';
 import type { Db } from '../db/db';
 import {
+  countSandboxes,
   createSandbox,
   findByUserKey,
   listSandboxes,
@@ -20,6 +21,7 @@ import {
 } from '../db/ledger';
 import type { SandboxRow } from '../db/schema';
 import type { Executor } from '../executor/executor';
+import { httpError } from '../http-error';
 import type { KeyedQueue } from '../keyed-queue';
 import { releaseSandbox, wakeSandbox } from '../lifecycle';
 import { resolvePolicy } from '../policy';
@@ -73,6 +75,17 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       // then refresh the idle clock — an acquire is what "activity" means.
       const awake = await wakeSandbox(db, executor, existing);
       return touch(db, awake.sandboxId);
+    }
+
+    // The capacity check lives at the only verb that creates — wakes of
+    // existing sandboxes are never blocked. Disk is the real ceiling: every
+    // sandbox holds a disk image, and unbounded creation fills the host
+    // until the ledger itself can no longer write.
+    if (countSandboxes(db) >= config.DORMICE_MAX_SANDBOXES) {
+      throw httpError(
+        429,
+        `sandbox limit reached (DORMICE_MAX_SANDBOXES=${config.DORMICE_MAX_SANDBOXES}) — release a sandbox or raise the limit`,
+      );
     }
 
     // Reality first, ledger second: bring the container up, then record

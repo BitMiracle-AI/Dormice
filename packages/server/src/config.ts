@@ -19,6 +19,14 @@ const envSchema = z.object({
   /** How often the idle scanner sweeps the ledger. */
   DORMICE_SCAN_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
   /**
+   * How many sandboxes may exist at once. The binding resource is disk:
+   * every sandbox holds a disk image, and an unbounded acquire loop fills
+   * the host until the ledger itself can no longer write — the daemon dying
+   * of its own success. Past the cap, acquire answers an honest 429; wakes
+   * of existing sandboxes are never blocked.
+   */
+  DORMICE_MAX_SANDBOXES: z.coerce.number().int().positive().default(100),
+  /**
    * Required, no default: loopback-only is not authentication — any local
    * process could otherwise drive the daemon.
    */

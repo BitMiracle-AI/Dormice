@@ -10,8 +10,8 @@ import {
  * merged result. This is the single arbiter for the freeze <= stop <= archive
  * rule — the override schema itself deliberately carries no ordering check.
  *
- * `archiveAfterSeconds: null` is meaningful (never archive), so only
- * `undefined` falls back to the default.
+ * `null` is meaningful for stop and archive ("never take that step"), so
+ * only `undefined` falls back to the default.
  */
 export function resolvePolicy(
   override?: LifecyclePolicyOverride,
@@ -21,7 +21,9 @@ export function resolvePolicy(
       override?.freezeAfterSeconds ??
       DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
     stopAfterSeconds:
-      override?.stopAfterSeconds ?? DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds,
+      override?.stopAfterSeconds !== undefined
+        ? override.stopAfterSeconds
+        : DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds,
     archiveAfterSeconds:
       override?.archiveAfterSeconds !== undefined
         ? override.archiveAfterSeconds

@@ -1,5 +1,5 @@
 import type { LifecyclePolicy, SandboxState } from '@dormice/shared';
-import { eq } from 'drizzle-orm';
+import { count, eq } from 'drizzle-orm';
 import type { Db } from './db';
 import { type SandboxRow, sandboxes } from './schema';
 
@@ -51,10 +51,14 @@ export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
 
 /**
  * Refreshes the idle clock. Every acquire() calls this; the idle scanner
- * measures freeze/stop/archive thresholds from lastActiveAt.
+ * measures freeze/stop/archive thresholds from lastActiveAt. `now` is
+ * injectable so tests can travel in time instead of sleeping.
  */
-export function touch(db: Db, sandboxId: string): SandboxRow {
-  const now = new Date().toISOString();
+export function touch(
+  db: Db,
+  sandboxId: string,
+  now: string = new Date().toISOString(),
+): SandboxRow {
   db.update(sandboxes)
     .set({ lastActiveAt: now })
     .where(eq(sandboxes.sandboxId, sandboxId))
@@ -73,6 +77,11 @@ export function touch(db: Db, sandboxId: string): SandboxRow {
 /** Full table scan — the idle scanner's sweep. Fine at single-machine scale. */
 export function listSandboxes(db: Db): SandboxRow[] {
   return db.select().from(sandboxes).all();
+}
+
+/** How many sandboxes exist, for the capacity check at acquire. */
+export function countSandboxes(db: Db): number {
+  return db.select({ n: count() }).from(sandboxes).get()?.n ?? 0;
 }
 
 /**

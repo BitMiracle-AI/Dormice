@@ -8,6 +8,13 @@
       "when": 1783511377893,
       "tag": "0000_natural_starbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1783538558684,
+      "tag": "0001_stop-after-nullable",
+      "breakpoints": true
     }
   ]
 }

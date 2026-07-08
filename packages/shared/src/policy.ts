@@ -12,22 +12,37 @@ import { z } from 'zod';
 const lifecyclePolicyFields = z.object({
   /** Idle seconds until active → frozen. */
   freezeAfterSeconds: z.number().int().positive(),
-  /** Idle seconds until frozen → stopped. */
-  stopAfterSeconds: z.number().int().positive(),
+  /**
+   * Idle seconds until frozen → stopped. `null` means never stop: a
+   * resident agent's sandbox parks frozen forever — memory in swap, ~50ms
+   * from a wake — instead of decaying to a seconds-long cold boot.
+   */
+  stopAfterSeconds: z.number().int().positive().nullable(),
   /**
    * Idle seconds until stopped → archived. `null` means never archive —
-   * the only valid value when the daemon has no S3 configured.
+   * the only valid value until the S3 archiver lands, and after that,
+   * whenever the daemon has no S3 configured.
    */
   archiveAfterSeconds: z.number().int().positive().nullable(),
 });
 
 export const lifecyclePolicySchema = lifecyclePolicyFields
-  .refine((p) => p.freezeAfterSeconds <= p.stopAfterSeconds, {
-    message: 'freezeAfterSeconds must be <= stopAfterSeconds',
-  })
+  .refine(
+    (p) =>
+      p.stopAfterSeconds === null || p.freezeAfterSeconds <= p.stopAfterSeconds,
+    { message: 'freezeAfterSeconds must be <= stopAfterSeconds' },
+  )
+  .refine(
+    (p) => p.archiveAfterSeconds === null || p.stopAfterSeconds !== null,
+    {
+      message:
+        'archiveAfterSeconds requires a stopAfterSeconds — only a stopped sandbox can archive',
+    },
+  )
   .refine(
     (p) =>
       p.archiveAfterSeconds === null ||
+      p.stopAfterSeconds === null ||
       p.stopAfterSeconds <= p.archiveAfterSeconds,
     { message: 'stopAfterSeconds must be <= archiveAfterSeconds' },
   );
@@ -46,9 +61,15 @@ export type LifecyclePolicyOverride = z.infer<
   typeof lifecyclePolicyOverrideSchema
 >;
 
-/** Zero-config experience: freeze fast, stop after a long weekend, archive after a week. */
+/**
+ * Zero-config experience: freeze fast, stop after a long weekend. Archiving
+ * defaults to never — there is no archiver yet, and a default the daemon
+ * cannot honor would be a standing lie in every response. When the S3
+ * archiver lands, the default is adjudicated there, by whether S3 is
+ * actually configured.
+ */
 export const DEFAULT_LIFECYCLE_POLICY: LifecyclePolicy = {
   freezeAfterSeconds: 10 * 60,
   stopAfterSeconds: 3 * 24 * 60 * 60,
-  archiveAfterSeconds: 7 * 24 * 60 * 60,
+  archiveAfterSeconds: null,
 };

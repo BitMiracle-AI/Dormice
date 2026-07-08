@@ -22,7 +22,13 @@ function dueTransition(row: SandboxRow, now: Date): 'freeze' | 'stop' | null {
   if (row.state === 'active' && idleSeconds >= row.freezeAfterSeconds) {
     return 'freeze';
   }
-  if (row.state === 'frozen' && idleSeconds >= row.stopAfterSeconds) {
+  if (
+    row.state === 'frozen' &&
+    row.stopAfterSeconds !== null &&
+    idleSeconds >= row.stopAfterSeconds
+  ) {
+    // The null check is load-bearing: in JS, `idle >= null` reads null as 0
+    // and would stop every never-stop sandbox on its first frozen sweep.
     return 'stop';
   }
   // stopped -> archived lands with the S3 archiver. The archiveAfterSeconds

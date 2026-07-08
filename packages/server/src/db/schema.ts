@@ -17,7 +17,8 @@ export const sandboxes = sqliteTable('sandboxes', {
   state: text('state', { enum: SANDBOX_STATES }).notNull(),
   nodeId: text('node_id').notNull(),
   freezeAfterSeconds: integer('freeze_after_seconds').notNull(),
-  stopAfterSeconds: integer('stop_after_seconds').notNull(),
+  /** NULL means never stop: the sandbox parks frozen forever. */
+  stopAfterSeconds: integer('stop_after_seconds'),
   /** NULL means never archive. */
   archiveAfterSeconds: integer('archive_after_seconds'),
   createdAt: text('created_at').notNull(),

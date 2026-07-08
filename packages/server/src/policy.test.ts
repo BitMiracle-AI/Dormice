@@ -22,17 +22,29 @@ describe('resolvePolicy', () => {
   });
 
   it('rejects a merged result that violates freeze <= stop', () => {
-    // Default stopAfterSeconds is 3 days; a freeze threshold beyond it must fail.
     expect(() =>
-      resolvePolicy({
-        freezeAfterSeconds: DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds + 1,
-      }),
+      resolvePolicy({ freezeAfterSeconds: 61, stopAfterSeconds: 60 }),
     ).toThrow(/freezeAfterSeconds/);
   });
 
   it('rejects a merged result that violates stop <= archive', () => {
+    // Default stopAfterSeconds is 3 days; archiving after 1s must fail.
     expect(() => resolvePolicy({ archiveAfterSeconds: 1 })).toThrow(
       /stopAfterSeconds/,
     );
+  });
+
+  it('keeps an explicit null for stopAfterSeconds (never stop)', () => {
+    // The resident-agent policy: park frozen forever, wake in ~50ms, never
+    // decay to a cold boot.
+    expect(
+      resolvePolicy({ stopAfterSeconds: null }).stopAfterSeconds,
+    ).toBeNull();
+  });
+
+  it('rejects archiving a sandbox that never stops', () => {
+    expect(() =>
+      resolvePolicy({ stopAfterSeconds: null, archiveAfterSeconds: 60 }),
+    ).toThrow(/archiveAfterSeconds requires a stopAfterSeconds/);
   });
 });

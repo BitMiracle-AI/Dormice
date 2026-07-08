@@ -8,7 +8,13 @@ import { sandboxSchema, userKeySchema } from './sandbox';
  */
 export const acquireRequestSchema = z.object({
   userKey: userKeySchema,
-  /** Lifecycle override for this sandbox; omitted fields fall back to the daemon's global defaults. */
+  /**
+   * Lifecycle override applied when this acquire creates the sandbox;
+   * omitted fields fall back to the daemon's global defaults. When the key
+   * already has a sandbox, the stored policy stays — acquire is not an
+   * update verb — but an invalid override is still answered with a 400,
+   * never silently ignored.
+   */
   policy: lifecyclePolicyOverrideSchema.optional(),
 });
 

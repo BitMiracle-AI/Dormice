@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { type Db, migrateDb, openDb } from './db';
-import { createSandbox, findByUserKey, transition } from './ledger';
+import { createSandbox, findByUserKey, touch, transition } from './ledger';
 
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 
@@ -84,5 +84,12 @@ describe('ledger', () => {
   it('rejects transitions on unknown sandboxes', () => {
     const db = testDb();
     expect(() => transition(db, 'no-such-id', 'frozen')).toThrow(/not found/);
+  });
+
+  it('touch refreshes the idle clock to the injected instant', () => {
+    const db = testDb();
+    const { sandboxId, lastActiveAt } = create(db);
+    const future = new Date(Date.parse(lastActiveAt) + 60_000).toISOString();
+    expect(touch(db, sandboxId, future).lastActiveAt).toBe(future);
   });
 });
