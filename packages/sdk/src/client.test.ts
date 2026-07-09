@@ -212,6 +212,40 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
     );
   });
 
+  it('writes files — string and bytes — and reads them back exact', async () => {
+    await client.acquireSandbox('files-key');
+    const bytes = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) bytes[i] = i;
+
+    const written = await client.writeFiles('files-key', [
+      // Multi-byte text: proves strings go through as UTF-8, not mangled.
+      { path: 'notes.txt', content: 'hello 文件\n' },
+      { path: '/home/user/blob.bin', content: bytes },
+    ]);
+    expect(written.files).toEqual([
+      { path: '/home/user/notes.txt' },
+      { path: '/home/user/blob.bin' },
+    ]);
+
+    const text = await client.readFile('files-key', 'notes.txt');
+    expect(text.path).toBe('/home/user/notes.txt');
+    expect(new TextDecoder().decode(text.content)).toBe('hello 文件\n');
+
+    const blob = await client.readFile('files-key', 'blob.bin');
+    expect(blob.content).toEqual(bytes);
+  });
+
+  it('surfaces the 404 for a missing file', async () => {
+    await client.acquireSandbox('files-key');
+    await expect(
+      client.readFile('files-key', 'no-such.txt'),
+    ).rejects.toMatchObject({
+      name: 'DormiceApiError',
+      status: 404,
+      message: 'no such file: /home/user/no-such.txt',
+    });
+  });
+
   it('releases a sandbox and reports idempotently', async () => {
     const created = await client.acquireSandbox('frank');
     expect(await client.releaseSandbox('frank')).toEqual({ released: true });

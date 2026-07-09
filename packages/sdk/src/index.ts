@@ -7,4 +7,6 @@ export {
   DormiceApiError,
   type DormiceOptions,
   type ExecCommandOptions,
+  type FileToWrite,
+  type ReadFileResult,
 } from './client';

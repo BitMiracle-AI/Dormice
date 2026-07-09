@@ -203,4 +203,73 @@ describe('native API over a real daemon', () => {
     expect(woken.sandbox.sandboxId).toBe(created.sandbox.sandboxId);
     expect(woken.sandbox.state).toBe('active');
   });
+
+  it('writes files in and reads them back byte-exact', async () => {
+    await client().acquireSandbox('files-key');
+    const bytes = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) bytes[i] = i;
+
+    const written = await client().writeFiles('files-key', [
+      { path: 'hello.txt', content: 'hello from e2e\n' },
+      // A nested relative path: parents are created, /home/user is the base.
+      { path: 'nested/dir/blob.bin', content: bytes },
+    ]);
+    expect(written.files).toEqual([
+      { path: '/home/user/hello.txt' },
+      { path: '/home/user/nested/dir/blob.bin' },
+    ]);
+
+    const text = await client().readFile('files-key', '/home/user/hello.txt');
+    expect(new TextDecoder().decode(text.content)).toBe('hello from e2e\n');
+    const blob = await client().readFile('files-key', 'nested/dir/blob.bin');
+    expect(blob.content).toEqual(bytes);
+  });
+
+  it('surfaces the honest errors: missing file 404, directory 400', async () => {
+    await client().acquireSandbox('files-err-key');
+    await expect(
+      client().readFile('files-err-key', 'absent.txt'),
+    ).rejects.toMatchObject({
+      status: 404,
+      message: 'no such file: /home/user/absent.txt',
+    });
+    await expect(
+      client().readFile('files-err-key', '/home/user'),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: 'not a regular file: /home/user',
+    });
+  });
+
+  it('reading a file wakes a frozen sandbox, and the file survived the cold', async () => {
+    await client().acquireSandbox('files-wake-key', {
+      freezeAfterSeconds: 1,
+      stopAfterSeconds: null,
+      archiveAfterSeconds: null,
+    });
+    await client().writeFiles('files-wake-key', [
+      { path: 'keep.txt', content: 'still here' },
+    ]);
+    // Watch it actually freeze from outside, on real wall-clock time.
+    const deadline = Date.now() + 15_000;
+    for (;;) {
+      const cold = (await client().listSandboxes()).find(
+        (s) => s.userKey === 'files-wake-key',
+      );
+      if (cold?.state === 'frozen') break;
+      if (Date.now() > deadline) {
+        throw new Error(
+          `sandbox never reached frozen; last observed: ${cold?.state}`,
+        );
+      }
+      await sleep(0.25);
+    }
+
+    const read = await client().readFile('files-wake-key', 'keep.txt');
+    expect(new TextDecoder().decode(read.content)).toBe('still here');
+    const observed = (await client().listSandboxes()).find(
+      (s) => s.userKey === 'files-wake-key',
+    );
+    expect(observed?.state).toBe('active');
+  });
 });
