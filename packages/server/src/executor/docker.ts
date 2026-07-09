@@ -31,6 +31,7 @@ import {
   type FileToWrite,
   NotADirectoryError,
   NotAFileError,
+  type PtySize,
   type SandboxEntry,
 } from './executor';
 
@@ -182,6 +183,17 @@ const SIGNAL_SCRIPT = [
   '[ -n "$p" ] || exit 1',
   'kill -s "$2" -- "-$p" 2>/dev/null || exec kill -s "$2" "$p"',
 ].join('\n');
+
+/**
+ * $1 = pidfile. The PTY session: an interactive login shell, nothing else.
+ * Deliberately no timeout wrapper (GNU timeout puts the child in its own
+ * process group, which wrecks interactive job control with SIGTTIN) and no
+ * setsid (a Tty exec is born session leader holding the controlling
+ * terminal; setsid would take the terminal away). The shell's own group is
+ * what the pidfile kill reaps; foreground jobs follow the closing pty
+ * master via SIGHUP. Lifetime is bounded by the sandbox's own.
+ */
+const PTY_WRAPPER = ['echo "$$" > "$1"', 'exec bash -i -l'].join('\n');
 
 /** One `find -printf` record (see LIST_DIR_SCRIPT) -> entry. */
 function entryFromFindRecord(record: string): SandboxEntry {
@@ -511,6 +523,18 @@ export class DockerExecutor implements Executor {
     // is deliberately not removed on kill, or a TERM that the process
     // survives would strand the follow-up KILL.
     const pidfile = `/tmp/.dormice-exec-${randomUUID()}.pid`;
+    if (opts.pty) {
+      return this.startPtySession(
+        container,
+        sandboxId,
+        pidfile,
+        opts,
+        opts.pty,
+      );
+    }
+    if (opts.command === undefined) {
+      throw new Error('execStream needs a command unless pty is set');
+    }
     const started = await this.startInContainer(container, sandboxId, {
       cmd: [
         'setsid',
@@ -590,6 +614,102 @@ export class DockerExecutor implements Executor {
         `signaling process in ${sandboxId} failed (exit ${run.exitCode}): ${run.stderr.text().trim()}`,
       );
     }
+  }
+
+  /**
+   * The PTY path: `docker exec` with Tty on — one merged raw byte stream
+   * (nothing to demux; stdout and stderr are the same terminal), resize via
+   * the engine's own exec resize, input over the same hijacked duplex.
+   */
+  private async startPtySession(
+    container: Docker.Container,
+    sandboxId: string,
+    pidfile: string,
+    opts: ExecStreamOptions,
+    size: PtySize,
+  ): Promise<ExecStreamHandle> {
+    const exec = await container.exec({
+      Cmd: ['bash', '-c', PTY_WRAPPER, 'bash', pidfile],
+      AttachStdin: true,
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: true,
+      WorkingDir: opts.cwd,
+      Env: opts.env
+        ? Object.entries(opts.env).map(([key, value]) => `${key}=${value}`)
+        : undefined,
+      User: 'user',
+    });
+    const stream = await exec.start({ hijack: true, stdin: true, Tty: true });
+    stream.pipe(new CallbackSink(opts.onStdout));
+    // The engine takes the size only after start — the terminal is born
+    // 0x0 otherwise, and a shell that stats it misbehaves.
+    await exec.resize({ h: size.rows, w: size.cols });
+    const finished = this.awaitExitCode(exec, stream, sandboxId);
+    let finishedFlag = false;
+    const done = finished.then((exitCode) => {
+      finishedFlag = true;
+      return { exitCode };
+    });
+    done.catch(() => {
+      finishedFlag = true;
+    });
+    return {
+      wait: () => done,
+      sendStdin: async (data) => {
+        if (stream.writableEnded) {
+          throw new Error('stdin is closed');
+        }
+        await new Promise<void>((resolve, reject) => {
+          stream.write(data, (err) => (err ? reject(err) : resolve()));
+        });
+      },
+      closeStdin: async () => {
+        if (stream.writableEnded) {
+          throw new Error('stdin is closed');
+        }
+        await new Promise<void>((resolve) => {
+          stream.end(resolve);
+        });
+      },
+      signal: async (sig) => {
+        if (finishedFlag) {
+          throw new Error('process already exited');
+        }
+        await this.signalProcess(container, sandboxId, pidfile, sig);
+      },
+      resizePty: async (next) => {
+        await exec.resize({ h: next.rows, w: next.cols });
+      },
+    };
+  }
+
+  /**
+   * Stream over, exit code out: the engine records the code a beat after
+   * the stream ends — the same measured lag as kill vs exited in stop().
+   * Never rejects into the void: callers hold the promise through wait().
+   */
+  private async awaitExitCode(
+    exec: Docker.Exec,
+    stream: NodeJS.ReadableStream,
+    sandboxId: string,
+  ): Promise<number> {
+    await new Promise<void>((resolve, reject) => {
+      stream.on('end', resolve);
+      stream.on('close', resolve);
+      stream.on('error', reject);
+    });
+    let info = await exec.inspect();
+    for (let i = 0; info.Running || info.ExitCode === null; i++) {
+      if (i >= 20) {
+        throw new Error(
+          `exec on ${sandboxId} ended but no exit code was recorded`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      info = await exec.inspect();
+    }
+    return info.ExitCode;
   }
 
   async writeFiles(sandboxId: string, files: FileToWrite[]): Promise<void> {
@@ -987,24 +1107,7 @@ export class DockerExecutor implements Executor {
         spec.stdin.pipe(stream);
       }
     }
-    const finished = (async () => {
-      await new Promise<void>((resolve, reject) => {
-        stream.on('end', resolve);
-        stream.on('close', resolve);
-        stream.on('error', reject);
-      });
-      let info = await exec.inspect();
-      for (let i = 0; info.Running || info.ExitCode === null; i++) {
-        if (i >= 20) {
-          throw new Error(
-            `exec on ${sandboxId} ended but no exit code was recorded`,
-          );
-        }
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        info = await exec.inspect();
-      }
-      return info.ExitCode;
-    })();
+    const finished = this.awaitExitCode(exec, stream, sandboxId);
     // A failure before anyone calls wait must not crash the daemon as an
     // unhandled rejection; wait() still observes it through the same promise.
     finished.catch(() => {});

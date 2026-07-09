@@ -131,6 +131,26 @@ function startCommand(
   });
 }
 
+/** What pty.create sends: bash -i -l plus a pty block, no -c command. */
+function startPty(t: TestApp, sandboxID: string) {
+  return t.app.inject({
+    method: 'POST',
+    url: '/e2b/envd/process.Process/Start',
+    headers: {
+      ...envdHeaders(sandboxID),
+      'content-type': 'application/connect+json',
+    },
+    payload: enveloped({
+      process: {
+        cmd: '/bin/bash',
+        args: ['-i', '-l'],
+        envs: { TERM: 'xterm-256color' },
+      },
+      pty: { size: { cols: 80, rows: 24 } },
+    }),
+  });
+}
+
 function connectProcess(t: TestApp, sandboxID: string, pid: number) {
   return t.app.inject({
     method: 'POST',
@@ -790,6 +810,92 @@ describe('E2B envd surface', () => {
       signal: 'SIGNAL_SIGKILL',
     });
     await startRes;
+  });
+
+  it('PTY on the wire: output rides data.pty, input rides input.pty, Update resizes', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const startRes = startPty(t, sandboxID);
+    const pid = await waitForPid(t, sandboxID);
+
+    const typed = (text: string) =>
+      envdRpc(t, sandboxID, '/process.Process/SendInput', {
+        process: { pid },
+        input: { pty: Buffer.from(text).toString('base64') },
+      });
+    expect((await typed('echo over-the-pty\r')).statusCode).toBe(200);
+    const resized = await envdRpc(t, sandboxID, '/process.Process/Update', {
+      process: { pid },
+      pty: { size: { cols: 100, rows: 30 } },
+    });
+    expect(resized.statusCode).toBe(200);
+    await typed('stty size\r');
+    await typed('exit\r');
+
+    const events = parseEnvelopes((await startRes).rawPayload)
+      .filter((f) => f.flags === 0)
+      .map((f) => f.json.event as Record<string, unknown>);
+    const dataFrames = events.filter((e) => 'data' in e) as Array<{
+      data: { pty?: string; stdout?: string };
+    }>;
+    // A terminal is one merged stream: every data frame rides the pty field.
+    expect(dataFrames.every((e) => e.data.pty !== undefined)).toBe(true);
+    const terminal = dataFrames
+      .map((e) => Buffer.from(e.data.pty ?? '', 'base64').toString('utf8'))
+      .join('');
+    expect(terminal).toContain('over-the-pty');
+    expect(terminal).toContain('30 100');
+    expect((events.at(-1) as { end: { exitCode: number } }).end.exitCode).toBe(
+      0,
+    );
+  });
+
+  it('input channel and start promise must match', async () => {
+    const t = testApp();
+
+    // stdin bytes into a PTY session: the terminal is not a stdin pipe.
+    const ptyBox = await createSandbox(t);
+    const ptyRes = startPty(t, ptyBox.sandboxID);
+    const ptyPid = await waitForPid(t, ptyBox.sandboxID);
+    const wrongStdin = await envdRpc(
+      t,
+      ptyBox.sandboxID,
+      '/process.Process/SendInput',
+      {
+        process: { pid: ptyPid },
+        input: { stdin: Buffer.from('x').toString('base64') },
+      },
+    );
+    expect(wrongStdin.statusCode).toBe(400);
+    expect(wrongStdin.json().message).toBe('process was started without stdin');
+
+    // pty bytes into a plain command: there is no terminal to type at.
+    const plainBox = await createSandbox(t);
+    const plainRes = startCommand(t, plainBox.sandboxID, 'sleep 30');
+    const plainPid = await waitForPid(t, plainBox.sandboxID);
+    const wrongPty = await envdRpc(
+      t,
+      plainBox.sandboxID,
+      '/process.Process/SendInput',
+      {
+        process: { pid: plainPid },
+        input: { pty: Buffer.from('x').toString('base64') },
+      },
+    );
+    expect(wrongPty.statusCode).toBe(400);
+    expect(wrongPty.json().message).toBe('process has no PTY');
+
+    // Reap both, or their day-long wire deadlines outlive the test run.
+    for (const [box, pid] of [
+      [ptyBox.sandboxID, ptyPid],
+      [plainBox.sandboxID, plainPid],
+    ] as const) {
+      await envdRpc(t, box, '/process.Process/SendSignal', {
+        process: { pid },
+        signal: 'SIGNAL_SIGKILL',
+      });
+    }
+    await Promise.all([ptyRes, plainRes]);
   });
 
   it('a detached background process does not keep the sandbox warm', async () => {

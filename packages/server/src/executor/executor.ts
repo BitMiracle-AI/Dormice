@@ -35,9 +35,17 @@ export interface PtySize {
 }
 
 export interface ExecStreamOptions {
-  /** A shell string, executed as `bash -c <command>` inside the sandbox. */
-  command: string;
-  /** Same in-container deadline as ExecOptions; on expiry exit 137. */
+  /**
+   * A shell string, executed as `bash -c <command>` inside the sandbox.
+   * Required unless `pty` is set — a PTY session is an interactive shell,
+   * not a one-shot command.
+   */
+  command?: string;
+  /**
+   * Same in-container deadline as ExecOptions; on expiry exit 137. A PTY
+   * session ignores it (GNU timeout's process-group games break interactive
+   * job control); its lifetime is bounded by the sandbox's own.
+   */
   timeoutSeconds: number;
   cwd?: string;
   env?: Record<string, string>;
@@ -50,9 +58,17 @@ export interface ExecStreamOptions {
   /**
    * Keep stdin open for the handle's sendStdin/closeStdin. Absent means the
    * command starts with stdin already at EOF (the old behavior); the handle
-   * verbs then refuse honestly instead of writing into nothing.
+   * verbs then refuse honestly instead of writing into nothing. A PTY
+   * implies an open stdin — the terminal IS an input channel.
    */
   stdin?: boolean;
+  /**
+   * Start an interactive login shell (`bash -i -l`) on a pseudo-terminal of
+   * this size instead of running `command`. Output is one merged raw tty
+   * byte stream through onStdout; onStderr never fires. Input goes through
+   * sendStdin, the size through resizePty.
+   */
+  pty?: PtySize;
   /**
    * Called with each output chunk as it arrives. No cap: nothing accumulates
    * server-side. A returned promise MAY be awaited before the next chunk
