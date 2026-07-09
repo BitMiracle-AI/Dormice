@@ -15,6 +15,17 @@ function sleep(seconds: number) {
   return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 }
 
+/** Polls until the observation holds — terminal output has no fixed schedule. */
+async function until(check: () => boolean, timeoutMs = 8_000) {
+  const before = Date.now();
+  while (!check()) {
+    if (Date.now() - before > timeoutMs) {
+      throw new Error('condition never became true');
+    }
+    await sleep(0.05);
+  }
+}
+
 describe('official e2b SDK against the daemon', () => {
   it('creates a sandbox and runs a command', async () => {
     const sbx = await Sandbox.create(connection());
@@ -301,6 +312,39 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
+  it('pty.create: a live terminal — typed input runs, resize lands, kill ends it', async () => {
+    const sbx = await Sandbox.create(connection());
+    try {
+      const seen: string[] = [];
+      const term = await sbx.pty.create({
+        cols: 80,
+        rows: 24,
+        onData: (data) => {
+          seen.push(Buffer.from(data).toString('utf8'));
+        },
+      });
+      expect(term.pid).toBeGreaterThan(0);
+
+      await sbx.pty.sendInput(
+        term.pid,
+        new TextEncoder().encode('echo from-the-pty\r'),
+      );
+      await until(() => seen.join('').includes('from-the-pty'));
+
+      await sbx.pty.resize(term.pid, { cols: 120, rows: 40 });
+      await sbx.pty.sendInput(
+        term.pid,
+        new TextEncoder().encode('stty size\r'),
+      );
+      await until(() => seen.join('').includes('40 120'));
+
+      expect(await sbx.pty.kill(term.pid)).toBe(true);
+      expect(await sbx.pty.kill(term.pid)).toBe(false);
+    } finally {
+      await sbx.kill();
+    }
+  });
+
   it('the Dormice extension: metadata.userKey makes create idempotent, data persists', async () => {
     const first = await Sandbox.create({
       ...connection(),
@@ -344,6 +388,30 @@ describe.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
         // `bash -l -c` sources the profile; $HOME comes from the user entry.
         const result = await sbx.commands.run('echo $HOME');
         expect(result.stdout).toBe('/home/user\n');
+      } finally {
+        await sbx.kill();
+      }
+    });
+
+    it('the PTY runs a real interactive bash on the sandbox disk', async () => {
+      const sbx = await Sandbox.create(connection());
+      try {
+        const seen: string[] = [];
+        const term = await sbx.pty.create({
+          cols: 80,
+          rows: 24,
+          onData: (data) => {
+            seen.push(Buffer.from(data).toString('utf8'));
+          },
+        });
+        // ls of the disk root: only a real shell on the real disk shows
+        // mkfs's lost+found.
+        await sbx.pty.sendInput(
+          term.pid,
+          new TextEncoder().encode('ls /home/user\r'),
+        );
+        await until(() => seen.join('').includes('lost+found'));
+        await sbx.pty.kill(term.pid);
       } finally {
         await sbx.kill();
       }

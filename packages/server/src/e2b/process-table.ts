@@ -89,7 +89,6 @@ export class ProcessTable {
     sandboxId: string;
     options: Omit<ExecStreamOptions, 'onStdout' | 'onStderr'>;
     config: WireProcessConfig;
-    pty?: PtySize;
     subscriber?: ProcessSubscriber;
   }): Promise<ProcessRecord> {
     const pid = this.nextPid++;
@@ -104,7 +103,7 @@ export class ProcessTable {
     const handle = await args.executor.execStream(args.sandboxId, {
       ...args.options,
       // A PTY is one merged byte stream; a plain command keeps its two.
-      onStdout: broadcast(args.pty ? 'pty' : 'stdout'),
+      onStdout: broadcast(args.options.pty ? 'pty' : 'stdout'),
       onStderr: broadcast('stderr'),
     });
     const record: InternalRecord = {
@@ -112,7 +111,7 @@ export class ProcessTable {
       sandboxId: args.sandboxId,
       config: args.config,
       stdin: args.options.stdin ?? false,
-      pty: args.pty,
+      pty: args.options.pty,
       handle,
       subscribers,
     };

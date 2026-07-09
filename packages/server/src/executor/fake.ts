@@ -15,6 +15,7 @@ import {
   type FileToWrite,
   NotADirectoryError,
   NotAFileError,
+  type PtySize,
   type SandboxEntry,
 } from './executor';
 
@@ -87,6 +88,8 @@ class FakeProcessIO {
   private stdinClosed = false;
   private wakeups: Array<() => void> = [];
   killSignal: 'SIGTERM' | 'SIGKILL' | undefined;
+  /** Present in PTY mode; resizePty rewrites it, `stty size` reads it. */
+  ptySize?: PtySize;
   private killResolve!: (exitCode: number) => void;
   /** Settles with the signal's exit code (KILL 137, TERM 143) when killed. */
   readonly killed = new Promise<number>((resolve) => {
@@ -289,7 +292,12 @@ export class FakeExecutor implements Executor {
     opts: ExecStreamOptions,
   ): Promise<ExecStreamHandle> {
     this.expect(sandboxId, 'running');
+    const command = opts.command;
+    if (opts.pty === undefined && command === undefined) {
+      throw new Error('execStream needs a command unless pty is set');
+    }
     const io = new FakeProcessIO();
+    if (opts.pty) io.ptySize = { ...opts.pty };
     this.trackProcess(sandboxId, io);
     // The timeout and the kill switch race the interpreter, same outcomes
     // as the real executor's in-container `timeout --signal=KILL` and the
@@ -324,12 +332,11 @@ export class FakeExecutor implements Executor {
         return exitCode;
       });
       try {
+        const run = opts.pty
+          ? ptySession(opts, emit, io)
+          : interpret({ ...opts, command: command as string }, emit, io);
         return {
-          exitCode: await Promise.race([
-            interpret(opts, emit, io),
-            deadline,
-            killed,
-          ]),
+          exitCode: await Promise.race([run, deadline, killed]),
         };
       } finally {
         clearTimeout(timer);
@@ -343,19 +350,25 @@ export class FakeExecutor implements Executor {
     return {
       wait: () => done,
       sendStdin: async (data) => {
-        if (!opts.stdin) throw new Error('process was started without stdin');
+        // A PTY implies an open stdin: the terminal IS an input channel.
+        if (!opts.stdin && !opts.pty) {
+          throw new Error('process was started without stdin');
+        }
         io.pushStdin(data);
       },
       closeStdin: async () => {
-        if (!opts.stdin) throw new Error('process was started without stdin');
+        if (!opts.stdin && !opts.pty) {
+          throw new Error('process was started without stdin');
+        }
         io.closeStdin();
       },
       signal: async (sig) => {
         if (finished) throw new Error('process already exited');
         io.kill(sig);
       },
-      resizePty: async () => {
-        throw new Error('process has no PTY');
+      resizePty: async (size) => {
+        if (!opts.pty) throw new Error('process has no PTY');
+        io.ptySize = { ...size };
       },
     };
   }
@@ -617,6 +630,48 @@ class CappedText {
 interface Emit {
   stdout: (text: string) => void;
   stderr: (text: string) => void;
+}
+
+/**
+ * The fake terminal: echoes input raw (a real tty with echo on does), cuts
+ * lines on \r or \n, feeds each line to the pocket interpreter with stderr
+ * merged into stdout (a terminal is one stream). `exit` ends the session;
+ * `stty size` reads the size resizePty last wrote — the resize contract's
+ * observation window. No fabricated prompt: real bash brings PS1 and
+ * escape sequences, so the contract asserts with contains, never equals.
+ */
+async function ptySession(
+  opts: { cwd?: string; env?: Record<string, string> },
+  emit: Emit,
+  io: FakeProcessIO,
+): Promise<number> {
+  const merged: Emit = { stdout: emit.stdout, stderr: emit.stdout };
+  let line = '';
+  while (true) {
+    const chunk = await io.nextStdin();
+    if (chunk === null) return 0;
+    const text = chunk.toString('utf8');
+    emit.stdout(text);
+    line += text;
+    while (true) {
+      const cut = line.search(/[\r\n]/);
+      if (cut === -1) break;
+      const commandLine = line.slice(0, cut).trim();
+      line = line.slice(cut + 1);
+      if (commandLine === '') continue;
+      if (commandLine === 'exit') return 0;
+      if (commandLine === 'stty size') {
+        const size = io.ptySize ?? { cols: 80, rows: 24 };
+        emit.stdout(`${size.rows} ${size.cols}\n`);
+        continue;
+      }
+      await interpret(
+        { command: commandLine, cwd: opts.cwd, env: opts.env },
+        merged,
+        io,
+      );
+    }
+  }
 }
 
 /**

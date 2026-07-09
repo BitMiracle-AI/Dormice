@@ -624,6 +624,93 @@ export function describeExecutorContract(
       timeoutMs,
     );
 
+    /** Polls until the observation holds — PTY output has no fixed schedule. */
+    async function until(check: () => boolean): Promise<void> {
+      const before = Date.now();
+      while (!check()) {
+        if (Date.now() - before > timeoutMs - 1_000) {
+          throw new Error('condition never became true');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+
+    it(
+      'a PTY session echoes input and runs what is typed',
+      async () => {
+        const id = await fresh();
+        const seen: string[] = [];
+        const handle = await executor.execStream(id, {
+          timeoutSeconds: 60,
+          pty: { cols: 80, rows: 24 },
+          env: { TERM: 'xterm-256color', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' },
+          onStdout: (c) => {
+            seen.push(c.toString('utf8'));
+          },
+          onStderr: () => {},
+        });
+        await handle.sendStdin(Buffer.from('echo pty-marker\r'));
+        // contains, never equals: a real bash brings PS1 and escape codes.
+        await until(() => seen.join('').includes('pty-marker'));
+        await handle.sendStdin(Buffer.from('exit\r'));
+        const { exitCode } = await handle.wait();
+        expect(exitCode).toBe(0);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'resizePty changes what stty size reports',
+      async () => {
+        const id = await fresh();
+        const seen: string[] = [];
+        const handle = await executor.execStream(id, {
+          timeoutSeconds: 60,
+          pty: { cols: 80, rows: 24 },
+          env: { TERM: 'xterm-256color', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' },
+          onStdout: (c) => {
+            seen.push(c.toString('utf8'));
+          },
+          onStderr: () => {},
+        });
+        await handle.resizePty({ cols: 123, rows: 45 });
+        await handle.sendStdin(Buffer.from('stty size\r'));
+        await until(() => seen.join('').includes('45 123'));
+        await handle.sendStdin(Buffer.from('exit\r'));
+        await handle.wait();
+      },
+      timeoutMs,
+    );
+
+    it(
+      'a PTY dies to SIGKILL as 137; a plain command has no PTY to resize',
+      async () => {
+        const id = await fresh();
+        const pty = await executor.execStream(id, {
+          timeoutSeconds: 60,
+          pty: { cols: 80, rows: 24 },
+          env: { TERM: 'xterm-256color' },
+          onStdout: () => {},
+          onStderr: () => {},
+        });
+        await pty.signal('SIGKILL');
+        expect((await pty.wait()).exitCode).toBe(137);
+
+        const plain = await executor.execStream(id, {
+          command: 'sleep 5',
+          timeoutSeconds: 30,
+          onStdout: () => {},
+          onStderr: () => {},
+        });
+        await expect(plain.resizePty({ cols: 1, rows: 1 })).rejects.toThrow(
+          'process has no PTY',
+        );
+        await plain.signal('SIGKILL');
+        await plain.wait();
+      },
+      timeoutMs,
+    );
+
     it(
       'stopping the sandbox settles a running command in bounded time',
       async () => {

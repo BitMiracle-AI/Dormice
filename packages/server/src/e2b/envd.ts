@@ -58,7 +58,7 @@ interface StartRequest {
     cwd?: string;
   };
   stdin?: boolean;
-  pty?: unknown;
+  pty?: { size?: { cols?: number; rows?: number } };
 }
 
 /** SandboxEntry -> proto3-JSON EntryInfo (int64 size travels as a string). */
@@ -656,17 +656,19 @@ export const e2bEnvdRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
 
   app.post('/process.Process/Start', async (request, reply) => {
     const message = readFirstMessage(request.body as Buffer) as StartRequest;
-    if (message.pty) {
-      return streamError(
-        reply,
-        'unimplemented',
-        'PTY is not supported yet — run plain commands via commands.run',
-      );
-    }
     const proc = message.process ?? {};
     const args = proc.args ?? [];
-    // The SDK always sends /bin/bash [-l] -c <command>; anything else is a
-    // shape this layer does not speak yet.
+    // A pty block makes this a terminal session (the SDK sends
+    // /bin/bash -i -l; the executor hardcodes that shape anyway). Sizes
+    // default defensively — a 0x0 terminal misbehaves quietly.
+    const ptySize = message.pty
+      ? {
+          cols: message.pty.size?.cols || 80,
+          rows: message.pty.size?.rows || 24,
+        }
+      : undefined;
+    // Without a pty, the SDK always sends /bin/bash [-l] -c <command>;
+    // anything else is a shape this layer does not speak yet.
     let command: string | undefined;
     let loginShell = false;
     if (args.length === 3 && args[0] === '-l' && args[1] === '-c') {
@@ -675,11 +677,13 @@ export const e2bEnvdRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     } else if (args.length === 2 && args[0] === '-c') {
       command = args[1];
     }
-    if (!proc.cmd?.endsWith('bash') || command === undefined) {
+    if (!proc.cmd?.endsWith('bash') || (!ptySize && command === undefined)) {
       return streamError(
         reply,
         'invalid_argument',
-        'only shell commands are supported: expected /bin/bash [-l] -c <command>',
+        ptySize
+          ? 'only bash PTY sessions are supported'
+          : 'only shell commands are supported: expected /bin/bash [-l] -c <command>',
       );
     }
     const row = await wakeForStream(request, reply);
@@ -698,6 +702,7 @@ export const e2bEnvdRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         options: {
           command,
           loginShell,
+          pty: ptySize,
           // The in-container timeout is a pathological-cleanup backstop
           // only; the wire deadline lives in pumpProcessStream and never
           // kills the process — E2B's semantics, adopted deliberately.
