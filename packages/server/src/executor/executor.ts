@@ -118,6 +118,36 @@ export interface FileToWrite {
   content: Buffer;
 }
 
+/**
+ * One filesystem change under a watched directory — fsnotify's vocabulary,
+ * because that is what the E2B wire speaks. A move fires 'rename' on the
+ * old path and 'create' on the new one; 'name' is relative to the watched
+ * directory ('sub/x.txt' under a recursive watch).
+ */
+export interface WatchEvent {
+  name: string;
+  type: 'create' | 'write' | 'remove' | 'rename' | 'chmod';
+}
+
+export interface WatchDirOptions {
+  /** Absolute, or relative to /home/user — resolveSandboxPath's rules. */
+  path: string;
+  /** Watch the whole subtree; directories created later are picked up too. */
+  recursive: boolean;
+  /** A returned promise is awaited before the next event: backpressure. */
+  onEvent: (event: WatchEvent) => void | Promise<void>;
+  /**
+   * The watcher died without stop() being called — its container stopped,
+   * or the watching process failed. Never fires after stop().
+   */
+  onEnd: (error?: Error) => void;
+}
+
+export interface WatchDirHandle {
+  /** Stops watching; no events or onEnd are delivered after this resolves. */
+  stop(): Promise<void>;
+}
+
 /** What the filesystem says about one path — the shape stat and listDir speak. */
 export interface SandboxEntry {
   /** Basename; '/' for the root itself. */
@@ -304,4 +334,15 @@ export interface Executor {
    * state (unlike removeDisk, whose caller is reconciliation).
    */
   remove(sandboxId: string, path: string): Promise<void>;
+  /**
+   * Starts watching a directory for filesystem events. The path must exist
+   * (FileNotFoundError) and be a directory (NotADirectoryError) — checked
+   * before the returned promise resolves; resolution means the watch is
+   * established, so a change made right after is seen. Requires state
+   * `running`; a freeze suspends the watcher with everything else, and
+   * events cannot be missed while frozen — the disk only changes from
+   * inside, and anything that reaches inside wakes the sandbox first.
+   * Lifetime is bounded by the sandbox's own 24h exec backstop.
+   */
+  watchDir(sandboxId: string, opts: WatchDirOptions): Promise<WatchDirHandle>;
 }

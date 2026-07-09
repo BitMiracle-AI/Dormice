@@ -1,4 +1,6 @@
+import { createHmac } from 'node:crypto';
 import http from 'node:http';
+import { Dormice } from '@dormice/sdk';
 import { CommandExitError, Sandbox } from 'e2b';
 import { describe, expect, inject, it } from 'vitest';
 
@@ -388,6 +390,143 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
+  it('watchDir streams filesystem events for changes made through the SDK', async () => {
+    const sbx = await Sandbox.create(connection());
+    try {
+      const events: Array<{ name: string; type: string }> = [];
+      const handle = await sbx.files.watchDir(
+        '/home/user',
+        (event) => {
+          events.push({ name: event.name, type: event.type });
+        },
+        { recursive: true, timeoutMs: 30_000 },
+      );
+      await sbx.files.write('watched.txt', 'hello');
+      await until(() =>
+        events.some((e) => e.name === 'watched.txt' && e.type === 'create'),
+      );
+      // Recursive: a change deep in the tree arrives with its relative path.
+      await sbx.files.makeDir('nested');
+      await sbx.files.write('nested/deep.txt', 'deeper');
+      await until(() =>
+        events.some((e) => e.name === 'nested/deep.txt' && e.type === 'create'),
+      );
+      await handle.stop();
+    } finally {
+      await sbx.kill();
+    }
+  });
+
+  it('an attached watch does not keep the sandbox warm; waking it resumes events', async () => {
+    // The product thesis applied to watch: watching is passive, so the idle
+    // scanner freezes a watched sandbox — and no event is lost, because the
+    // disk only changes from inside, and reaching inside wakes it first.
+    // Reverse-proven: with an exec heartbeat attached to the watch stream,
+    // the freeze below never happens and this test times out.
+    const dormice = new Dormice({
+      endpoint: inject('dormiceEndpoint'),
+      token: inject('dormiceToken'),
+    });
+    const userKey = `watch-freeze-${Date.now()}`;
+    // Native acquire sets the second-scale policy; the e2b face then joins
+    // the same sandbox through the userKey extension.
+    await dormice.acquireSandbox(userKey, {
+      freezeAfterSeconds: 1,
+      stopAfterSeconds: null,
+    });
+    const sbx = await Sandbox.create({
+      ...connection(),
+      metadata: { userKey },
+    });
+    try {
+      const events: Array<{ name: string; type: string }> = [];
+      const handle = await sbx.files.watchDir(
+        '/home/user',
+        (event) => {
+          events.push({ name: event.name, type: event.type });
+        },
+        { timeoutMs: 60_000 },
+      );
+      // The real wall-clock scanner freezes the sandbox under the open watch.
+      const frozen = async () => {
+        const sandboxes = await dormice.listSandboxes();
+        return sandboxes.find((s) => s.userKey === userKey)?.state;
+      };
+      const deadline = Date.now() + 15_000;
+      while ((await frozen()) !== 'frozen') {
+        if (Date.now() > deadline) throw new Error('sandbox never froze');
+        await sleep(0.2);
+      }
+      // Any touch from outside wakes it; the watcher resumes and reports.
+      await sbx.files.write('woke-up.txt', 'events survive the ice age');
+      await until(
+        () =>
+          events.some((e) => e.name === 'woke-up.txt' && e.type === 'create'),
+        10_000,
+      );
+      await handle.stop();
+    } finally {
+      await dormice.releaseSandbox(userKey);
+    }
+  });
+
+  it('the polling watcher trio works over the wire — what the sync SDKs use', async () => {
+    const sbx = await Sandbox.create(connection());
+    try {
+      // The JS SDK never calls these three; drive them as raw Connect unary
+      // posts, the way a sync SDK would. The access token is the documented
+      // envd HMAC — this stays a black-box network test.
+      const rpc = async (method: string, body: Record<string, unknown>) => {
+        const res = await fetch(
+          `${inject('dormiceEndpoint')}/e2b/envd/filesystem.Filesystem/${method}`,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'e2b-sandbox-id': sbx.sandboxId,
+              'x-access-token': createHmac('sha256', inject('dormiceToken'))
+                .update(`envd:${sbx.sandboxId}`)
+                .digest('hex'),
+            },
+            body: JSON.stringify(body),
+          },
+        );
+        return {
+          status: res.status,
+          json: (await res.json()) as Record<string, unknown>,
+        };
+      };
+      const created = await rpc('CreateWatcher', { path: '/home/user' });
+      expect(created.status).toBe(200);
+      const watcherId = created.json.watcherId as string;
+
+      await sbx.files.write('polled.txt', 'x');
+      // Poll like a sync SDK: drain until the event shows up.
+      let drained: Array<{ name: string; type: string }> = [];
+      const deadline = Date.now() + 8_000;
+      while (
+        !drained.some(
+          (e) => e.name === 'polled.txt' && e.type === 'EVENT_TYPE_CREATE',
+        )
+      ) {
+        if (Date.now() > deadline) throw new Error('event never arrived');
+        const got = await rpc('GetWatcherEvents', { watcherId });
+        drained = drained.concat(
+          (got.json.events ?? []) as Array<{ name: string; type: string }>,
+        );
+        await sleep(0.1);
+      }
+
+      const removed = await rpc('RemoveWatcher', { watcherId });
+      expect(removed.status).toBe(200);
+      const gone = await rpc('GetWatcherEvents', { watcherId });
+      expect(gone.status).toBe(404);
+      expect(gone.json.code).toBe('not_found');
+    } finally {
+      await sbx.kill();
+    }
+  });
+
   it('the Dormice extension: metadata.userKey makes create idempotent, data persists', async () => {
     const first = await Sandbox.create({
       ...connection(),
@@ -485,6 +624,28 @@ describe.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
         const res = await throughProxy(sbx.getHost(9999), '/');
         expect(res.status).toBe(502);
         expect(JSON.parse(res.body).message).toContain('not listening');
+      } finally {
+        await sbx.kill();
+      }
+    });
+
+    it('a real chmod arrives as a chmod event — only a real kernel emits ATTRIB', async () => {
+      const sbx = await Sandbox.create(connection());
+      try {
+        await sbx.files.write('mode-me.txt', 'x');
+        const events: Array<{ name: string; type: string }> = [];
+        const handle = await sbx.files.watchDir(
+          '/home/user',
+          (event) => {
+            events.push({ name: event.name, type: event.type });
+          },
+          { timeoutMs: 30_000 },
+        );
+        await sbx.commands.run('chmod 600 /home/user/mode-me.txt');
+        await until(() =>
+          events.some((e) => e.name === 'mode-me.txt' && e.type === 'chmod'),
+        );
+        await handle.stop();
       } finally {
         await sbx.kill();
       }

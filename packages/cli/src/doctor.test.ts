@@ -66,6 +66,8 @@ function fakeHost(
     [`docker run --rm --runtime=runsc ${IMAGE} bash -c timeout 3 bash -c "</dev/tcp/100.100.100.200/80" && echo LEAK || echo BLOCKED`]:
       ok('BLOCKED\n'),
     [`docker run --rm --runtime=runsc ${IMAGE} id -u`]: ok('1000\n'),
+    [`docker run --rm --runtime=runsc ${IMAGE} bash -c command -v inotifywait || echo MISSING`]:
+      ok('/usr/bin/inotifywait\n'),
     ...overrides.commands,
   };
   const calls: string[] = [];
@@ -111,7 +113,23 @@ describe('runDoctor on a healthy host', () => {
     expect(statusOf(results, 'probe-gvisor')).toBe('skip');
     expect(statusOf(results, 'probe-metadata')).toBe('skip');
     expect(statusOf(results, 'probe-image-user')).toBe('skip');
+    expect(statusOf(results, 'probe-image-inotify')).toBe('skip');
     expect(ctx.calls.filter((call) => call.includes('docker run'))).toEqual([]);
+  });
+
+  it('a pre-watch image without inotifywait warns and points at the rebuild', async () => {
+    const { results, failed } = await runDoctor(
+      fakeHost({
+        commands: {
+          [`docker run --rm --runtime=runsc ${IMAGE} bash -c command -v inotifywait || echo MISSING`]:
+            ok('MISSING\n'),
+        },
+      }),
+    );
+    // A warn: everything except E2B watch still works on the old image.
+    expect(failed).toBe(false);
+    expect(statusOf(results, 'probe-image-inotify')).toBe('warn');
+    expect(results['probe-image-inotify']?.fix).toContain('images/Dockerfile');
   });
 });
 

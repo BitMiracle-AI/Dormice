@@ -506,6 +506,37 @@ const CHECKS: DoctorCheck[] = [
           );
     },
   },
+  {
+    id: 'probe-image-inotify',
+    title: 'probe: image has inotify-tools',
+    needs: ['gvisor-runtime', 'base-image'],
+    probe: true,
+    run: async (ctx) => {
+      const res = await ctx.run(
+        'docker',
+        [
+          'run',
+          '--rm',
+          '--runtime=runsc',
+          baseImage(ctx) as string,
+          'bash',
+          '-c',
+          'command -v inotifywait || echo MISSING',
+        ],
+        { timeoutMs: 60_000 },
+      );
+      if (!res.ok)
+        return fail(`the probe container failed: ${res.stderr.trim()}`);
+      // A warn, not a fail: everything except E2B watch works without it,
+      // and images built before 2026-07-10 honestly refuse watch at runtime.
+      return res.stdout.includes('MISSING')
+        ? warn(
+            'inotifywait is missing — E2B directory watching will refuse to start',
+            'rebuild the sandbox image from images/Dockerfile (it installs inotify-tools) and point DORMICE_BASE_IMAGE at the new tag',
+          )
+        : pass('inotifywait present — directory watching works');
+    },
+  },
 ];
 
 const ICONS: Record<CheckStatus, string> = {
