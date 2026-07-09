@@ -288,8 +288,12 @@ else
     docker rmi -f docker.m.daocloud.io/library/ubuntu:24.04 >/dev/null
   fi
   if [ "$MIRROR" = cn ]; then
+    # http on purpose: the base image has no CA certificates until this very
+    # layer installs them, so an https mirror cannot even handshake. apt's
+    # integrity comes from GPG signatures, not TLS (the default
+    # archive.ubuntu.com is http too).
     docker build -t "$base_image" \
-      --build-arg UBUNTU_MIRROR=https://mirrors.aliyun.com/ubuntu/ \
+      --build-arg UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu/ \
       --build-arg NODE_DIST=https://npmmirror.com/mirrors/node \
       --build-arg PIP_INDEX=https://mirrors.aliyun.com/pypi/simple/ \
       --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
