@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { requireApiToken } from './auth';
 import type { Config } from './config';
 import type { Db } from './db/db';
+import { registerE2bCompat } from './e2b';
 import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
 import { sandboxRoutes } from './routes/sandboxes';
@@ -90,6 +91,12 @@ export function buildApp({
   app.register(async (api) => {
     api.addHook('onRequest', requireApiToken(config.DORMICE_API_TOKEN));
     await api.register(sandboxRoutes, { config, db, executor, locks });
+  });
+
+  // The E2B compatibility surface lives beside the native API with its own
+  // auth (X-API-KEY / X-Access-Token) and its own error dialect.
+  app.register(async (compat) => {
+    await registerE2bCompat(compat, { config, db, executor, locks });
   });
 
   return app;
