@@ -45,6 +45,9 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm lint
+      # The installer is the one shell script users pipe into bash — it gets
+      # the same static gate the TypeScript gets from Biome.
+      - run: shellcheck deploy/install.sh
       - run: pnpm test
 
   # This is a public repository: a leaked credential anywhere in git history

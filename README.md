@@ -2,7 +2,7 @@
 
 **The SQLite of agent sandboxes** — a self-hosted sandbox platform for AI agents. One machine, sandboxes that live forever, idle costs nothing.
 
-> **Status: early development.** The daemon, its lifecycle engine, the SDK, and the real Docker + gVisor executor work end to end — the full create → freeze → stop → wake cycle passes on real infrastructure. Running code inside a sandbox and the E2B-compatible API are the next milestones. Nothing here is ready for production yet.
+> **Status: early development.** The daemon, its lifecycle engine, the SDK, the CLI, the real Docker + gVisor executor, and the E2B-compatible API work end to end — the full create → freeze → stop → wake cycle, command execution, file I/O, and the official `e2b` SDK against real infrastructure. Nothing here is ready for production yet.
 
 ## The idea
 
@@ -11,14 +11,29 @@ Cloud sandbox platforms charge for every second a sandbox exists, so their sandb
 - **`acquireSandbox(userKey)` is the entire mental model.** Idempotent: the same key always comes back to the same sandbox, whatever state it was in. No sandbox → create; frozen → wake; stopped → start; archived → restore.
 - **Idle is free.** Sandboxes cool down on their own — `active → frozen → stopped → archived` — one rung at a time, and any acquire brings them back.
 - **Deploys like a single binary.** One daemon, one SQLite ledger, one port. No Kubernetes, no external database.
-- **E2B compatibility is on the roadmap**: the goal is that the official `e2b` SDK works against Dormice by changing two URLs.
+- **E2B compatible**: the official `e2b` SDK works against Dormice by changing two URLs (`apiUrl`, `sandboxUrl`).
+
+## Install
+
+One command on a bare Ubuntu/Debian x86_64 host (as root):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/BitMiracle-AI/Dormice/main/deploy/install.sh | bash
+```
+
+Behind a slow connection to the usual sources, add `-s -- --mirror cn`.
+The installer is idempotent — re-running it upgrades the code and repairs
+drift, and never rotates your API token. It ends by running `dor doctor`,
+19 read-only checks (including three that boot a real gVisor container)
+that decide whether the install actually succeeded; `dor doctor` can be
+re-run on its own at any time.
 
 ## Host prerequisites (docker executor)
 
 The daemon itself runs anywhere Node 22+ runs, with an in-memory fake
 executor for development. Running **real** sandboxes needs a Linux host
-prepared ahead of time — an `install.sh` and a `dor doctor` will automate
-these checks later, but today they are the operator's job:
+prepared as above — `install.sh` automates all of it and `dor doctor`
+verifies it, but these are the facts underneath:
 
 - **Docker + gVisor (`runsc`)**, and root (loop mounts, cgroup writes).
 - **Swap, and `vm.swappiness=100`.** Freezing squeezes an idle sandbox's

@@ -1,0 +1,21 @@
+# Dormice daemon. Installed by deploy/install.sh; configuration lives in
+# /etc/dormice/env (full-line comments only there — systemd's EnvironmentFile
+# treats an inline comment as part of the value).
+[Unit]
+Description=Dormice daemon (agent sandbox control plane)
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+ExecStart=/usr/local/bin/node /opt/dormice/packages/server/dist/main.js
+EnvironmentFile=/etc/dormice/env
+# Crash-only: the daemon reconciles its ledger against Docker on every start,
+# so restarting it is always safe — and always the right move.
+Restart=always
+RestartSec=3
+# One process, one writer. The SQLite ledger's exclusive lock enforces this;
+# never wrap the daemon in a process manager that forks workers.
+
+[Install]
+WantedBy=multi-user.target
