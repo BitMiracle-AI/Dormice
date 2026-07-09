@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   access,
   chown,
@@ -8,6 +9,7 @@ import {
   rm,
 } from 'node:fs/promises';
 import path from 'node:path';
+import type { Duplex } from 'node:stream';
 import { Writable } from 'node:stream';
 import {
   EXEC_OUTPUT_LIMIT_BYTES,
@@ -149,6 +151,36 @@ const MOVE_SCRIPT = [
 const REMOVE_SCRIPT = [
   `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
   'exec rm -rf -- "$1"',
+].join('\n');
+
+/**
+ * Wrapper every execStream command runs under, so the handle can signal it
+ * later. $1 = pidfile, $2 = timeout seconds, $3 = the user's command.
+ * The exec chain keeps the pid stable: the recorded $$ is the bash that
+ * becomes `timeout`, and `setsid --wait` outside made that pid a fresh
+ * process-group leader — one `kill -- -pid` reaps the command and all its
+ * descendants (GNU timeout's own group-kill relies on the same pgid).
+ * setsid needs --wait or the exec would observe the fork's instant exit 0.
+ */
+function execStreamWrapper(loginShell: boolean): string {
+  const shell = loginShell ? 'bash -l -c' : 'bash -c';
+  return [
+    'echo "$$" > "$1"',
+    `exec timeout --signal=KILL "$2" ${shell} "$3"`,
+  ].join('\n');
+}
+
+/**
+ * $1 = pidfile, $2 = signal name (SIGKILL/SIGTERM). The brief wait covers
+ * the honest race of a signal arriving before the wrapper's first line has
+ * written the pidfile. Group kill first; a leader that already died with
+ * children lingering still gets the single-pid fallback.
+ */
+const SIGNAL_SCRIPT = [
+  'for _ in $(seq 1 40); do [ -s "$1" ] && break; sleep 0.05; done',
+  'p=$(cat "$1") || exit 1',
+  '[ -n "$p" ] || exit 1',
+  'kill -s "$2" -- "-$p" 2>/dev/null || exec kill -s "$2" "$p"',
 ].join('\n');
 
 /** One `find -printf` record (see LIST_DIR_SCRIPT) -> entry. */
@@ -474,21 +506,90 @@ export class DockerExecutor implements Executor {
   ): Promise<ExecStreamHandle> {
     const containerId = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
-    const shell = opts.loginShell ? ['bash', '-l', '-c'] : ['bash', '-c'];
-    const wait = await this.startInContainer(container, sandboxId, {
+    // The pidfile is the handle's way back to the process: /tmp is the
+    // sandbox's own, so a leftover file is the sandbox's own garbage — it
+    // is deliberately not removed on kill, or a TERM that the process
+    // survives would strand the follow-up KILL.
+    const pidfile = `/tmp/.dormice-exec-${randomUUID()}.pid`;
+    const started = await this.startInContainer(container, sandboxId, {
       cmd: [
-        'timeout',
-        '--signal=KILL',
+        'setsid',
+        '--wait',
+        'bash',
+        '-c',
+        execStreamWrapper(opts.loginShell ?? false),
+        'bash',
+        pidfile,
         String(opts.timeoutSeconds),
-        ...shell,
         opts.command,
       ],
       stdout: new CallbackSink(opts.onStdout),
       stderr: new CallbackSink(opts.onStderr),
+      stdin: opts.stdin ? 'open' : undefined,
       workingDir: opts.cwd,
       env: opts.env,
     });
-    return { wait: async () => ({ exitCode: await wait() }) };
+    let finished = false;
+    const done = started.wait().then((exitCode) => {
+      finished = true;
+      return { exitCode };
+    });
+    done.catch(() => {
+      finished = true;
+    });
+    const stdinStream = started.stdinStream;
+    return {
+      wait: () => done,
+      sendStdin: async (data) => {
+        if (!stdinStream) {
+          throw new Error('process was started without stdin');
+        }
+        if (stdinStream.writableEnded) {
+          throw new Error('stdin is closed');
+        }
+        await new Promise<void>((resolve, reject) => {
+          stdinStream.write(data, (err) => (err ? reject(err) : resolve()));
+        });
+      },
+      closeStdin: async () => {
+        if (!stdinStream) {
+          throw new Error('process was started without stdin');
+        }
+        if (stdinStream.writableEnded) {
+          throw new Error('stdin is closed');
+        }
+        await new Promise<void>((resolve) => {
+          stdinStream.end(resolve);
+        });
+      },
+      signal: async (sig) => {
+        if (finished) {
+          throw new Error('process already exited');
+        }
+        await this.signalProcess(container, sandboxId, pidfile, sig);
+      },
+      resizePty: async () => {
+        throw new Error('process has no PTY');
+      },
+    };
+  }
+
+  /** Delivers a signal to an execStream'd process group via its pidfile. */
+  private async signalProcess(
+    container: Docker.Container,
+    sandboxId: string,
+    pidfile: string,
+    sig: 'SIGTERM' | 'SIGKILL',
+  ): Promise<void> {
+    const run = await this.runInContainer(container, sandboxId, {
+      cmd: ['bash', '-c', SIGNAL_SCRIPT, 'bash', pidfile, sig],
+      outputCap: EXEC_OUTPUT_LIMIT_BYTES,
+    });
+    if (run.exitCode !== 0) {
+      throw new Error(
+        `signaling process in ${sandboxId} failed (exit ${run.exitCode}): ${run.stderr.text().trim()}`,
+      );
+    }
   }
 
   async writeFiles(sandboxId: string, files: FileToWrite[]): Promise<void> {
@@ -577,7 +678,7 @@ export class DockerExecutor implements Executor {
     const containerId = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
     const stderr = new CappedBuffer(EXEC_OUTPUT_LIMIT_BYTES);
-    const wait = await this.startInContainer(container, sandboxId, {
+    const started = await this.startInContainer(container, sandboxId, {
       cmd: [
         'timeout',
         '--signal=KILL',
@@ -591,7 +692,7 @@ export class DockerExecutor implements Executor {
       stdout: new CallbackSink(onChunk),
       stderr,
     });
-    const exitCode = await wait();
+    const exitCode = await started.wait();
     if (exitCode === NO_SUCH_FILE_EXIT) {
       throw new FileNotFoundError(`no such file: ${resolved}`);
     }
@@ -820,7 +921,7 @@ export class DockerExecutor implements Executor {
   ): Promise<{ exitCode: number; stdout: CappedBuffer; stderr: CappedBuffer }> {
     const stdout = new CappedBuffer(spec.outputCap);
     const stderr = new CappedBuffer(spec.outputCap);
-    const wait = await this.startInContainer(container, sandboxId, {
+    const started = await this.startInContainer(container, sandboxId, {
       cmd: spec.cmd,
       stdout,
       stderr,
@@ -828,7 +929,7 @@ export class DockerExecutor implements Executor {
       workingDir: spec.workingDir,
       env: spec.env,
     });
-    return { exitCode: await wait(), stdout, stderr };
+    return { exitCode: await started.wait(), stdout, stderr };
   }
 
   /**
@@ -840,6 +941,12 @@ export class DockerExecutor implements Executor {
    * multiplexed stream is what demuxStream can split back into distinct
    * stdout and stderr. Resolving means the command has started; everything
    * after start is the wait's business.
+   *
+   * stdin comes in three shapes: bytes (written and ended — EOF now), a
+   * source stream (piped, its end is the EOF), or 'open' — the hijacked
+   * duplex is handed back as stdinStream for the caller to write and
+   * half-close at will (measured with writeFiles: output keeps flowing
+   * after the write side ends).
    */
   private async startInContainer(
     container: Docker.Container,
@@ -848,11 +955,11 @@ export class DockerExecutor implements Executor {
       cmd: string[];
       stdout: Writable;
       stderr: Writable;
-      stdin?: Buffer | NodeJS.ReadableStream;
+      stdin?: Buffer | NodeJS.ReadableStream | 'open';
       workingDir?: string;
       env?: Record<string, string>;
     },
-  ): Promise<() => Promise<number>> {
+  ): Promise<{ wait: () => Promise<number>; stdinStream?: Duplex }> {
     const exec = await container.exec({
       Cmd: spec.cmd,
       AttachStdin: spec.stdin !== undefined,
@@ -868,7 +975,7 @@ export class DockerExecutor implements Executor {
       spec.stdin !== undefined ? { hijack: true, stdin: true } : {},
     );
     this.docker.modem.demuxStream(stream, spec.stdout, spec.stderr);
-    if (spec.stdin !== undefined) {
+    if (spec.stdin !== undefined && spec.stdin !== 'open') {
       if (Buffer.isBuffer(spec.stdin)) {
         stream.end(spec.stdin);
       } else {
@@ -901,7 +1008,10 @@ export class DockerExecutor implements Executor {
     // A failure before anyone calls wait must not crash the daemon as an
     // unhandled rejection; wait() still observes it through the same promise.
     finished.catch(() => {});
-    return () => finished;
+    return {
+      wait: () => finished,
+      stdinStream: spec.stdin === 'open' ? stream : undefined,
+    };
   }
 
   private imagePath(sandboxId: string): string {

@@ -77,6 +77,71 @@ function entryFor(path: string, node: FakeNode): SandboxEntry {
 }
 
 /**
+ * The live half of a fake process: a stdin mailbox and a kill switch. The
+ * interpreter reads the mailbox (cat), sleeps interruptibly against the
+ * kill promise, and the handle's verbs write into it — the same decoupling
+ * of process from stream the real executor gets from the hijacked duplex.
+ */
+class FakeProcessIO {
+  private queue: Buffer[] = [];
+  private stdinClosed = false;
+  private wakeups: Array<() => void> = [];
+  killSignal: 'SIGTERM' | 'SIGKILL' | undefined;
+  private killResolve!: (exitCode: number) => void;
+  /** Settles with the signal's exit code (KILL 137, TERM 143) when killed. */
+  readonly killed = new Promise<number>((resolve) => {
+    this.killResolve = resolve;
+  });
+
+  pushStdin(data: Buffer): void {
+    if (this.stdinClosed) throw new Error('stdin is closed');
+    this.queue.push(data);
+    this.wake();
+  }
+
+  closeStdin(): void {
+    if (this.stdinClosed) throw new Error('stdin is closed');
+    this.stdinClosed = true;
+    this.wake();
+  }
+
+  kill(sig: 'SIGTERM' | 'SIGKILL'): void {
+    if (this.killSignal) return;
+    this.killSignal = sig;
+    this.killResolve(sig === 'SIGKILL' ? 137 : 143);
+    this.wake();
+  }
+
+  /** Next stdin chunk; null is EOF — closeStdin's or the kill's. */
+  async nextStdin(): Promise<Buffer | null> {
+    while (true) {
+      const chunk = this.queue.shift();
+      if (chunk) return chunk;
+      if (this.stdinClosed || this.killSignal) return null;
+      await new Promise<void>((resolve) => this.wakeups.push(resolve));
+    }
+  }
+
+  /** Sleeps, but a kill cuts it short — a real sleep dies to SIGKILL too. */
+  async sleep(ms: number): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+      }),
+      this.killed,
+    ]);
+    clearTimeout(timer);
+  }
+
+  private wake(): void {
+    const pending = this.wakeups;
+    this.wakeups = [];
+    for (const resolve of pending) resolve();
+  }
+}
+
+/**
  * In-memory stand-in for the Docker+gVisor executor. Not a throwaway: it is
  * the permanent test double — unit tests and local development run on it;
  * only the e2e suite on a Linux machine exercises the real one.
@@ -88,6 +153,12 @@ function entryFor(path: string, node: FakeNode): SandboxEntry {
 export class FakeExecutor implements Executor {
   private readonly containers = new Map<string, ContainerState>();
   private readonly disks = new Set<string>();
+  /**
+   * Live processes per sandbox. stop/destroy/vanish kill them — on the real
+   * executor the container's death takes every exec with it, and the fake
+   * must conduct the same physics or the process table above it would leak.
+   */
+  private readonly procs = new Map<string, Set<FakeProcessIO>>();
   /**
    * Keyed like disks, not containers: files are the disk's content, so they
    * survive stop, start, and a vanished container object, and die only when
@@ -110,6 +181,7 @@ export class FakeExecutor implements Executor {
     if (!this.containers.delete(sandboxId)) {
       throw new Error(`container ${sandboxId} is absent, cannot vanish`);
     }
+    this.killProcesses(sandboxId);
   }
 
   /**
@@ -142,6 +214,7 @@ export class FakeExecutor implements Executor {
   async stop(sandboxId: string): Promise<void> {
     this.expect(sandboxId, 'paused');
     this.containers.set(sandboxId, 'stopped');
+    this.killProcesses(sandboxId);
   }
 
   async start(sandboxId: string): Promise<void> {
@@ -169,6 +242,7 @@ export class FakeExecutor implements Executor {
     const hadContainer = this.containers.delete(sandboxId);
     const hadDisk = this.disks.delete(sandboxId);
     this.fs.delete(sandboxId);
+    this.killProcesses(sandboxId);
     if (!hadContainer && !hadDisk) {
       throw new Error(`container ${sandboxId} is absent, cannot destroy`);
     }
@@ -215,39 +289,91 @@ export class FakeExecutor implements Executor {
     opts: ExecStreamOptions,
   ): Promise<ExecStreamHandle> {
     this.expect(sandboxId, 'running');
-    // The timeout races the interpreter, same outcome as the real executor's
-    // in-container `timeout --signal=KILL`: exit 137. Chunks delivered before
-    // the kill stay delivered — an emitted chunk cannot be unsent — and the
-    // flag silences anything the losing interpreter emits afterwards.
-    let timedOut = false;
+    const io = new FakeProcessIO();
+    this.trackProcess(sandboxId, io);
+    // The timeout and the kill switch race the interpreter, same outcomes
+    // as the real executor's in-container `timeout --signal=KILL` and the
+    // handle's signal(): 137/143. Chunks delivered before the kill stay
+    // delivered — an emitted chunk cannot be unsent — and the flag silences
+    // anything the losing interpreter emits afterwards.
+    let silenced = false;
     const emit = {
       stdout: (text: string) => {
-        if (!timedOut) opts.onStdout(Buffer.from(text, 'utf8'));
+        if (!silenced) opts.onStdout(Buffer.from(text, 'utf8'));
       },
       stderr: (text: string) => {
-        if (!timedOut) opts.onStderr(Buffer.from(text, 'utf8'));
+        if (!silenced) opts.onStderr(Buffer.from(text, 'utf8'));
       },
     };
+    let finished = false;
     const done = (async () => {
+      // One macrotask of quiet: no output before execStream itself resolves
+      // — the interface's promise to callers, which the real executor keeps
+      // physically (I/O events cannot preempt the awaiting caller) and the
+      // interpreter's synchronous first verb would otherwise break.
+      await new Promise((resolve) => setImmediate(resolve));
       let timer: NodeJS.Timeout | undefined;
       const deadline = new Promise<number>((resolve) => {
         timer = setTimeout(() => {
-          timedOut = true;
+          silenced = true;
           resolve(137);
         }, opts.timeoutSeconds * 1000);
       });
+      const killed = io.killed.then((exitCode) => {
+        silenced = true;
+        return exitCode;
+      });
       try {
         return {
-          exitCode: await Promise.race([interpret(opts, emit), deadline]),
+          exitCode: await Promise.race([
+            interpret(opts, emit, io),
+            deadline,
+            killed,
+          ]),
         };
       } finally {
         clearTimeout(timer);
+        this.untrackProcess(sandboxId, io);
+        finished = true;
       }
     })();
     // A failure before anyone calls wait must not become an unhandled
     // rejection; wait() still observes it through the same promise.
     done.catch(() => {});
-    return { wait: () => done };
+    return {
+      wait: () => done,
+      sendStdin: async (data) => {
+        if (!opts.stdin) throw new Error('process was started without stdin');
+        io.pushStdin(data);
+      },
+      closeStdin: async () => {
+        if (!opts.stdin) throw new Error('process was started without stdin');
+        io.closeStdin();
+      },
+      signal: async (sig) => {
+        if (finished) throw new Error('process already exited');
+        io.kill(sig);
+      },
+      resizePty: async () => {
+        throw new Error('process has no PTY');
+      },
+    };
+  }
+
+  private trackProcess(sandboxId: string, io: FakeProcessIO): void {
+    const set = this.procs.get(sandboxId) ?? new Set();
+    set.add(io);
+    this.procs.set(sandboxId, set);
+  }
+
+  private untrackProcess(sandboxId: string, io: FakeProcessIO): void {
+    this.procs.get(sandboxId)?.delete(io);
+  }
+
+  private killProcesses(sandboxId: string): void {
+    const set = this.procs.get(sandboxId);
+    if (!set) return;
+    for (const io of set) io.kill('SIGKILL');
   }
 
   async writeFiles(sandboxId: string, files: FileToWrite[]): Promise<void> {
@@ -494,7 +620,7 @@ interface Emit {
 }
 
 /**
- * A pocket bash: the six verbs plus `;` sequencing — exactly what the
+ * A pocket bash: the seven verbs plus `;` sequencing — exactly what the
  * contract exam and the e2e suite need to exercise exec through the same
  * questions the real executor answers, nothing more. Each verb's output is
  * its own live chunk (the contract's streaming questions time the gaps).
@@ -505,6 +631,7 @@ interface Emit {
 async function interpret(
   opts: { command: string; cwd?: string; env?: Record<string, string> },
   emit: Emit,
+  io: FakeProcessIO,
 ): Promise<number> {
   let exitCode = 0;
   for (const segment of opts.command.split(';')) {
@@ -512,7 +639,7 @@ async function interpret(
     if (command === '') continue;
     const exited = command.match(/^exit (\d+)$/)?.[1];
     if (exited !== undefined) return Number(exited);
-    exitCode = await interpretVerb(command, opts, emit);
+    exitCode = await interpretVerb(command, opts, emit, io);
   }
   return exitCode;
 }
@@ -521,6 +648,7 @@ async function interpretVerb(
   command: string,
   opts: { cwd?: string; env?: Record<string, string> },
   emit: Emit,
+  io: FakeProcessIO,
 ): Promise<number> {
   const echoed = command.match(/^echo (.*)$/s)?.[1];
   if (echoed !== undefined) {
@@ -532,10 +660,18 @@ async function interpretVerb(
     // A real timer on purpose: e2e races this against the daemon's
     // wall-clock idle scanner to prove the exec heartbeat works, and the
     // contract's streaming questions time the chunk gap it creates.
-    await new Promise((resolve) =>
-      setTimeout(resolve, Number(napSeconds) * 1000),
-    );
+    // Interruptible, because a real sleep dies to the handle's SIGKILL.
+    await io.sleep(Number(napSeconds) * 1000);
     return 0;
+  }
+  if (command === 'cat') {
+    // The stdin verb: echoes the mailbox chunk by chunk until EOF — the
+    // whole sendStdin/closeStdin contract observable through one command.
+    while (true) {
+      const chunk = await io.nextStdin();
+      if (chunk === null) return 0;
+      emit.stdout(chunk.toString('utf8'));
+    }
   }
   if (command === 'pwd') {
     emit.stdout(`${opts.cwd ?? '/home/user'}\n`);

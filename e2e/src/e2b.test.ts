@@ -226,6 +226,81 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
+  it('background commands: run detached, kill through the handle', async () => {
+    const sbx = await Sandbox.create(connection());
+    try {
+      const handle = await sbx.commands.run('sleep 30', { background: true });
+      expect(handle.pid).toBeGreaterThan(0);
+      expect(await handle.kill()).toBe(true);
+      const error = await handle.wait().catch((e) => e);
+      expect(error).toBeInstanceOf(CommandExitError);
+      expect(error.exitCode).toBe(137);
+    } finally {
+      await sbx.kill();
+    }
+  });
+
+  it('disconnect does not kill: commands.connect reattaches and sees the ending', async () => {
+    const sbx = await Sandbox.create(connection());
+    try {
+      const handle = await sbx.commands.run('sleep 1; echo late-news', {
+        background: true,
+      });
+      await handle.disconnect();
+
+      const seen: string[] = [];
+      const reattached = await sbx.commands.connect(handle.pid, {
+        onStdout: (text) => {
+          seen.push(text);
+        },
+      });
+      const result = await reattached.wait();
+      expect(result.exitCode).toBe(0);
+      expect(seen.join('')).toBe('late-news\n');
+    } finally {
+      await sbx.kill();
+    }
+  });
+
+  it('commands.list shows the living and empties after they exit', async () => {
+    const sbx = await Sandbox.create(connection());
+    try {
+      const handle = await sbx.commands.run('sleep 30', { background: true });
+      const listed = await sbx.commands.list();
+      expect(listed.map((p) => p.pid)).toContain(handle.pid);
+      expect(listed[0]?.cmd).toBe('/bin/bash');
+
+      await handle.kill();
+      await handle.wait().catch(() => {});
+      expect(await sbx.commands.list()).toEqual([]);
+    } finally {
+      await sbx.kill();
+    }
+  });
+
+  it('stdin: sendStdin feeds the command, closeStdin is EOF', async () => {
+    const sbx = await Sandbox.create(connection());
+    try {
+      const seen: string[] = [];
+      const handle = await sbx.commands.run('cat', {
+        background: true,
+        stdin: true,
+        onStdout: (text) => {
+          seen.push(text);
+        },
+      });
+      await handle.sendStdin('hello ');
+      await handle.sendStdin('dormice');
+      await handle.closeStdin();
+      const result = await handle.wait();
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('hello dormice');
+      expect(seen.join('')).toBe('hello dormice');
+    } finally {
+      await sbx.kill();
+    }
+  });
+
   it('the Dormice extension: metadata.userKey makes create idempotent, data persists', async () => {
     const first = await Sandbox.create({
       ...connection(),

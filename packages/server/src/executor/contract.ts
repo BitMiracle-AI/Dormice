@@ -451,6 +451,209 @@ export function describeExecutorContract(
     );
 
     it(
+      'execStream stdin round-trips: sendStdin chunks echo back, closeStdin is EOF',
+      async () => {
+        const id = await fresh();
+        const seen: string[] = [];
+        const handle = await executor.execStream(id, {
+          command: 'cat',
+          timeoutSeconds: 30,
+          stdin: true,
+          onStdout: (c) => {
+            seen.push(c.toString('utf8'));
+          },
+          onStderr: () => {},
+        });
+        await handle.sendStdin(Buffer.from('hello '));
+        await handle.sendStdin(Buffer.from('world'));
+        await handle.closeStdin();
+        const { exitCode } = await handle.wait();
+        expect(exitCode).toBe(0);
+        expect(seen.join('')).toBe('hello world');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'execStream closeStdin with nothing written ends the command cleanly',
+      async () => {
+        const id = await fresh();
+        const seen: string[] = [];
+        const handle = await executor.execStream(id, {
+          command: 'cat',
+          timeoutSeconds: 30,
+          stdin: true,
+          onStdout: (c) => {
+            seen.push(c.toString('utf8'));
+          },
+          onStderr: () => {},
+        });
+        await handle.closeStdin();
+        const { exitCode } = await handle.wait();
+        expect(exitCode).toBe(0);
+        expect(seen.join('')).toBe('');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'sendStdin on a command started without stdin refuses honestly',
+      async () => {
+        const id = await fresh();
+        const handle = await executor.execStream(id, {
+          command: 'sleep 5',
+          timeoutSeconds: 30,
+          onStdout: () => {},
+          onStderr: () => {},
+        });
+        await expect(handle.sendStdin(Buffer.from('x'))).rejects.toThrow(
+          'process was started without stdin',
+        );
+        await expect(handle.closeStdin()).rejects.toThrow(
+          'process was started without stdin',
+        );
+        await handle.signal('SIGKILL');
+        await handle.wait();
+      },
+      timeoutMs,
+    );
+
+    it(
+      'sendStdin after closeStdin refuses: stdin is closed',
+      async () => {
+        const id = await fresh();
+        const handle = await executor.execStream(id, {
+          command: 'cat',
+          timeoutSeconds: 30,
+          stdin: true,
+          onStdout: () => {},
+          onStderr: () => {},
+        });
+        await handle.closeStdin();
+        await expect(handle.sendStdin(Buffer.from('late'))).rejects.toThrow(
+          'stdin is closed',
+        );
+        await handle.wait();
+      },
+      timeoutMs,
+    );
+
+    it(
+      'signal SIGKILL lands as exit 137; delivered chunks stay delivered',
+      async () => {
+        const id = await fresh();
+        const seen: string[] = [];
+        const handle = await executor.execStream(id, {
+          command: 'echo early; sleep 30',
+          timeoutSeconds: 60,
+          onStdout: (c) => {
+            seen.push(c.toString('utf8'));
+          },
+          onStderr: () => {},
+        });
+        // Wait for the first chunk so the kill provably interrupts, not races.
+        const before = Date.now();
+        while (seen.length === 0 && Date.now() - before < 5_000) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        await handle.signal('SIGKILL');
+        const { exitCode } = await handle.wait();
+        expect(exitCode).toBe(137);
+        expect(seen.join('')).toBe('early\n');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'signal SIGTERM lands as exit 143',
+      async () => {
+        const id = await fresh();
+        const handle = await executor.execStream(id, {
+          command: 'sleep 30',
+          timeoutSeconds: 60,
+          onStdout: () => {},
+          onStderr: () => {},
+        });
+        await handle.signal('SIGTERM');
+        const { exitCode } = await handle.wait();
+        expect(exitCode).toBe(143);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'execStream emits nothing before it resolves',
+      async () => {
+        const id = await fresh();
+        let resolved = false;
+        let leaked = false;
+        const handle = await executor.execStream(id, {
+          command: 'echo eager',
+          timeoutSeconds: 30,
+          onStdout: () => {
+            if (!resolved) leaked = true;
+          },
+          onStderr: () => {},
+        });
+        resolved = true;
+        await handle.wait();
+        expect(leaked).toBe(false);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'a command survives freeze/unfreeze and completes afterwards',
+      async () => {
+        const id = await fresh();
+        const seen: string[] = [];
+        const handle = await executor.execStream(id, {
+          command: 'sleep 1; echo woke',
+          timeoutSeconds: 30,
+          onStdout: (c) => {
+            seen.push(c.toString('utf8'));
+          },
+          onStderr: () => {},
+        });
+        await executor.freeze(id);
+        await executor.unfreeze(id);
+        const { exitCode } = await handle.wait();
+        expect(exitCode).toBe(0);
+        expect(seen.join('')).toContain('woke');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'stopping the sandbox settles a running command in bounded time',
+      async () => {
+        // The shape of the ending is not pinned — the real engine may report
+        // 137 or lose the exit code entirely; settling at all is the contract
+        // (a dangling wait would strand every process-table subscriber).
+        const id = await fresh();
+        const handle = await executor.execStream(id, {
+          command: 'sleep 30',
+          timeoutSeconds: 60,
+          onStdout: () => {},
+          onStderr: () => {},
+        });
+        await executor.freeze(id);
+        await executor.stop(id);
+        const outcome = await Promise.race([
+          handle.wait().then(
+            () => 'settled',
+            () => 'settled',
+          ),
+          new Promise((resolve) =>
+            setTimeout(() => resolve('hung'), timeoutMs - 1_000),
+          ),
+        ]);
+        expect(outcome).toBe('settled');
+      },
+      timeoutMs,
+    );
+
+    it(
       'writeFiles then readFile round-trips text',
       async () => {
         const id = await fresh();

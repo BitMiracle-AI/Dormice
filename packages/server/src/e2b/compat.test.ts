@@ -92,6 +92,15 @@ function parseEnvelopes(
   return frames;
 }
 
+/** One enveloped Connect request frame — what a streaming RPC's body looks like. */
+function enveloped(message: Record<string, unknown>): Buffer {
+  const json = Buffer.from(JSON.stringify(message), 'utf8');
+  const head = Buffer.alloc(5);
+  head.writeUInt8(0, 0);
+  head.writeUInt32BE(json.length, 1);
+  return Buffer.concat([head, json]);
+}
+
 function startCommand(
   t: TestApp,
   sandboxID: string,
@@ -99,6 +108,7 @@ function startCommand(
   opts: {
     envs?: Record<string, string>;
     headers?: Record<string, string>;
+    stdin?: boolean;
   } = {},
 ) {
   const message = {
@@ -107,11 +117,8 @@ function startCommand(
       args: ['-l', '-c', command],
       envs: opts.envs ?? {},
     },
+    ...(opts.stdin ? { stdin: true } : {}),
   };
-  const json = Buffer.from(JSON.stringify(message), 'utf8');
-  const head = Buffer.alloc(5);
-  head.writeUInt8(0, 0);
-  head.writeUInt32BE(json.length, 1);
   return t.app.inject({
     method: 'POST',
     url: '/e2b/envd/process.Process/Start',
@@ -120,8 +127,31 @@ function startCommand(
       'content-type': 'application/connect+json',
       ...opts.headers,
     },
-    payload: Buffer.concat([head, json]),
+    payload: enveloped(message),
   });
+}
+
+function connectProcess(t: TestApp, sandboxID: string, pid: number) {
+  return t.app.inject({
+    method: 'POST',
+    url: '/e2b/envd/process.Process/Connect',
+    headers: {
+      ...envdHeaders(sandboxID),
+      'content-type': 'application/connect+json',
+    },
+    payload: enveloped({ process: { pid } }),
+  });
+}
+
+/** Polls List until the sandbox shows a live process — Start's response is still in flight. */
+async function waitForPid(t: TestApp, sandboxID: string): Promise<number> {
+  for (let i = 0; i < 200; i++) {
+    const res = await envdRpc(t, sandboxID, '/process.Process/List', {});
+    const procs = res.json().processes as Array<{ pid: number }>;
+    if (procs.length > 0 && procs[0]) return procs[0].pid;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('process never appeared in List');
 }
 
 describe('E2B control plane', () => {
@@ -593,10 +623,197 @@ describe('E2B envd surface', () => {
   it('names what it does not support yet: unimplemented, with a hint', async () => {
     const t = testApp();
     const { sandboxID } = await createSandbox(t);
-    const res = await envdRpc(t, sandboxID, '/process.Process/SendInput', {});
+    const res = await envdRpc(t, sandboxID, '/process.Process/StreamInput', {});
     expect(res.statusCode).toBe(501);
     expect(res.json().code).toBe('unimplemented');
     expect(res.json().message).toContain('stdin');
+  });
+
+  it('stdin round-trips: Start with stdin, SendInput chunks, CloseStdin ends it', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const startRes = startCommand(t, sandboxID, 'cat', { stdin: true });
+    const pid = await waitForPid(t, sandboxID);
+
+    const sent = await envdRpc(t, sandboxID, '/process.Process/SendInput', {
+      process: { pid },
+      input: { stdin: Buffer.from('hello ').toString('base64') },
+    });
+    expect(sent.statusCode).toBe(200);
+    await envdRpc(t, sandboxID, '/process.Process/SendInput', {
+      process: { pid },
+      input: { stdin: Buffer.from('world').toString('base64') },
+    });
+    const closed = await envdRpc(t, sandboxID, '/process.Process/CloseStdin', {
+      process: { pid },
+    });
+    expect(closed.statusCode).toBe(200);
+
+    const events = parseEnvelopes((await startRes).rawPayload)
+      .filter((f) => f.flags === 0)
+      .map((f) => f.json.event as Record<string, unknown>);
+    expect(events[0]).toHaveProperty('start');
+    const echoed = events
+      .filter((e) => 'data' in e)
+      .map((e) =>
+        Buffer.from(
+          (e as { data: { stdout: string } }).data.stdout,
+          'base64',
+        ).toString('utf8'),
+      )
+      .join('');
+    expect(echoed).toBe('hello world');
+    const end = events.at(-1) as { end: { exitCode: number } };
+    expect(end.end.exitCode).toBe(0);
+  });
+
+  it('a blown deadline only detaches the stream: the process lives, Connect picks it back up', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const startRes = await startCommand(t, sandboxID, 'sleep 1; echo late', {
+      headers: { 'connect-timeout-ms': '200' },
+    });
+    const startFrames = parseEnvelopes(startRes.rawPayload);
+    expect((startFrames.at(-1)?.json.error as { code: string }).code).toBe(
+      'deadline_exceeded',
+    );
+    const pid = (startFrames[0]?.json.event as { start: { pid: number } }).start
+      .pid;
+
+    // Still alive after the wire gave up — E2B's semantics, adopted on purpose.
+    const list = await envdRpc(t, sandboxID, '/process.Process/List', {});
+    expect(
+      (list.json().processes as Array<{ pid: number }>).map((p) => p.pid),
+    ).toContain(pid);
+
+    // Connect must open with a start frame, then deliver the rest.
+    const events = parseEnvelopes(
+      (await connectProcess(t, sandboxID, pid)).rawPayload,
+    )
+      .filter((f) => f.flags === 0)
+      .map((f) => f.json.event as Record<string, unknown>);
+    expect(events[0]).toEqual({ start: { pid } });
+    const late = events.find((e) => 'data' in e) as {
+      data: { stdout: string };
+    };
+    expect(Buffer.from(late.data.stdout, 'base64').toString('utf8')).toBe(
+      'late\n',
+    );
+    expect((events.at(-1) as { end: { exitCode: number } }).end.exitCode).toBe(
+      0,
+    );
+  });
+
+  it('Connect to an unknown pid answers not_found inside the stream', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const frames = parseEnvelopes(
+      (await connectProcess(t, sandboxID, 424242)).rawPayload,
+    );
+    expect(frames).toHaveLength(1);
+    expect(frames[0]?.flags).toBe(2);
+    expect((frames[0]?.json.error as { code: string }).code).toBe('not_found');
+  });
+
+  it('List echoes a complete config and empties once the process exits', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const startRes = startCommand(t, sandboxID, 'sleep 30', {
+      envs: { MARKER: 'yes' },
+    });
+    const pid = await waitForPid(t, sandboxID);
+
+    const list = await envdRpc(t, sandboxID, '/process.Process/List', {});
+    const procs = list.json().processes as Array<{
+      pid: number;
+      config: { cmd: string; args: string[]; envs: Record<string, string> };
+    }>;
+    expect(procs).toHaveLength(1);
+    // The SDK dereferences config.cmd and config.args unconditionally.
+    expect(procs[0]?.config.cmd).toBe('/bin/bash');
+    expect(procs[0]?.config.args).toEqual(['-l', '-c', 'sleep 30']);
+    expect(procs[0]?.config.envs).toEqual({ MARKER: 'yes' });
+
+    await envdRpc(t, sandboxID, '/process.Process/SendSignal', {
+      process: { pid },
+      signal: 'SIGNAL_SIGKILL',
+    });
+    await startRes;
+    const after = await envdRpc(t, sandboxID, '/process.Process/List', {});
+    expect(after.json().processes).toEqual([]);
+  });
+
+  it('SendSignal kills: the stream ends 137/killed; a dead pid answers not_found', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const startRes = startCommand(t, sandboxID, 'sleep 30');
+    const pid = await waitForPid(t, sandboxID);
+
+    const killed = await envdRpc(t, sandboxID, '/process.Process/SendSignal', {
+      process: { pid },
+      signal: 'SIGNAL_SIGKILL',
+    });
+    expect(killed.statusCode).toBe(200);
+    const events = parseEnvelopes((await startRes).rawPayload)
+      .filter((f) => f.flags === 0)
+      .map((f) => f.json.event as Record<string, unknown>);
+    const end = events.at(-1) as {
+      end: { exitCode: number; status: string };
+    };
+    expect(end.end).toMatchObject({ exitCode: 137, status: 'killed' });
+
+    // The SDK turns not_found into kill() === false.
+    const again = await envdRpc(t, sandboxID, '/process.Process/SendSignal', {
+      process: { pid },
+      signal: 'SIGNAL_SIGKILL',
+    });
+    expect(again.statusCode).toBe(404);
+    expect(again.json().code).toBe('not_found');
+  });
+
+  it("SendInput to a process started without stdin is the caller's confusion", async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const startRes = startCommand(t, sandboxID, 'sleep 30');
+    const pid = await waitForPid(t, sandboxID);
+
+    const res = await envdRpc(t, sandboxID, '/process.Process/SendInput', {
+      process: { pid },
+      input: { stdin: Buffer.from('x').toString('base64') },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('invalid_argument');
+    expect(res.json().message).toBe('process was started without stdin');
+
+    await envdRpc(t, sandboxID, '/process.Process/SendSignal', {
+      process: { pid },
+      signal: 'SIGNAL_SIGKILL',
+    });
+    await startRes;
+  });
+
+  it('a detached background process does not keep the sandbox warm', async () => {
+    const t = testApp();
+    // A day-long TTL so the idle scanner speaks first — at the default 300s
+    // the kill-deadline would destroy the sandbox before freeze gets a turn.
+    const { sandboxID } = await createSandbox(t, { timeout: 86400 });
+    // Detach via the wire deadline: the process sleeps on, unwatched.
+    await startCommand(t, sandboxID, 'sleep 600', {
+      headers: { 'connect-timeout-ms': '100' },
+    });
+    expect(
+      (await envdRpc(t, sandboxID, '/process.Process/List', {})).json()
+        .processes,
+    ).toHaveLength(1);
+
+    // The idle scanner, told it is an hour later, freezes the sandbox —
+    // no heartbeat outlives its stream; only attached streams keep warmth.
+    const row = findBySandboxId(t.db, sandboxID);
+    const later = new Date(
+      Date.now() + ((row?.freezeAfterSeconds ?? 0) + 60) * 1000,
+    );
+    await scanOnce(t.db, t.executor, t.locks, later);
+    expect(t.executor.stateOf(sandboxID)).toBe('paused');
   });
 
   it('exec on a paused sandbox answers unavailable inside the stream — like a dead E2B box', async () => {
