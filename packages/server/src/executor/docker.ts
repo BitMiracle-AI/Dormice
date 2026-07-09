@@ -981,8 +981,13 @@ export class DockerExecutor implements Executor {
     // interactive "proceed anyway?" prompt no one is there to answer.
     await execa('mkfs.ext4', ['-q', '-F', img]);
     await execa('mount', ['-o', 'loop,discard', img, mnt]);
-    // The mounted fs root must belong to the in-container user (uid 1000).
+    // Born fully owned by the in-container user (uid 1000): the fs root and
+    // mkfs's lost+found — root:0700 otherwise, which uid-1000 file plumbing
+    // cannot descend into (find at depth ≥ 2 exits 1). Only safe at birth;
+    // once a sandbox has run, disk content is sandbox-controlled and the
+    // host must not touch it (ensureMounted deliberately never chowns).
     await chown(mnt, 1000, 1000);
+    await chown(path.join(mnt, 'lost+found'), 1000, 1000);
   }
 
   /** Idempotent: mounts the sandbox disk unless it already is mounted. */
