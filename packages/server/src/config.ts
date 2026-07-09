@@ -53,6 +53,26 @@ const envSchema = z.object({
     .int()
     .positive()
     .default(45),
+  /**
+   * The sandbox wildcard domain behind getHost(): with it set, create and
+   * connect responses carry `domain`, the SDK builds
+   * `<port>-<sandboxId>.<domain>` hosts, and requests arriving with such a
+   * Host header are proxied into that sandbox's port (frozen sandboxes wake
+   * on traffic). The operator points `*.<domain>` DNS plus a TLS-terminating
+   * reverse proxy at the daemon. Unset, responses carry no domain and the
+   * proxy never engages — the feature is honestly absent, not half-present.
+   * A bare hostname: no scheme, no port, no leading or trailing dot.
+   */
+  DORMICE_SANDBOX_DOMAIN: z
+    .string()
+    .regex(
+      /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i,
+      {
+        error:
+          'DORMICE_SANDBOX_DOMAIN must be a bare hostname like sbx.example.com — no scheme, no port, no leading/trailing dots',
+      },
+    )
+    .optional(),
 });
 
 const checkedSchema = envSchema

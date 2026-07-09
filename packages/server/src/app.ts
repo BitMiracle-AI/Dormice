@@ -1,5 +1,6 @@
+import http from 'node:http';
 import fastifyCookie from '@fastify/cookie';
-import fastify, { type FastifyError } from 'fastify';
+import fastify, { type FastifyError, type FastifyServerFactory } from 'fastify';
 import {
   serializerCompiler,
   validatorCompiler,
@@ -16,6 +17,7 @@ import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
 import { sandboxRoutes } from './routes/sandboxes';
 import { uiRoutes } from './routes/ui';
+import { createSandboxProxy } from './sandbox-proxy';
 
 export interface AppDeps {
   config: Config;
@@ -61,7 +63,32 @@ export function buildApp({
   // call shapes would give the instance two different types.
   const loggerInstance =
     typeof logger === 'boolean' ? pino({ enabled: logger }) : logger;
-  const app = fastify({ loggerInstance }).withTypeProvider<ZodTypeProvider>();
+  // The sandbox port proxy sits in front of routing — it triages by Host
+  // header, so it must see the request before Fastify's router 404s a
+  // wildcard host's arbitrary path. Only with the domain knob set; without
+  // it the server is stock Fastify, byte for byte. app.inject() bypasses
+  // the factory, so the proxy is exercised over real sockets only.
+  let serverFactory: FastifyServerFactory | undefined;
+  if (config.DORMICE_SANDBOX_DOMAIN) {
+    const proxy = createSandboxProxy({ config, db, executor, locks });
+    serverFactory = (handler) => {
+      const server = http.createServer((req, res) => {
+        if (proxy.matches(req)) proxy.handleRequest(req, res);
+        else handler(req, res);
+      });
+      // Fastify itself never handles upgrades; sandbox WebSockets (dev
+      // servers' HMR, notebooks) are the proxy's, everything else is cut.
+      server.on('upgrade', (req, socket, head) => {
+        if (proxy.matches(req)) proxy.handleUpgrade(req, socket, head);
+        else socket.destroy();
+      });
+      return server;
+    };
+  }
+  const app = fastify({
+    loggerInstance,
+    ...(serverFactory ? { serverFactory } : {}),
+  }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 

@@ -378,6 +378,21 @@ describe('E2B control plane', () => {
     expect(pageTwo.headers['x-next-token']).toBeUndefined();
   });
 
+  it('carries no domain field when the sandbox domain is not configured', async () => {
+    // getHost's raw material must be honestly absent, not guessed at — the
+    // SDK would otherwise build hosts that resolve nowhere. The configured
+    // side is pinned by sandbox-proxy.test.ts over a real socket.
+    const t = testApp();
+    const created = await control(t, 'POST', '/sandboxes', {});
+    expect(created.json()).not.toHaveProperty('domain');
+    const info = await control(
+      t,
+      'GET',
+      `/sandboxes/${created.json().sandboxID}`,
+    );
+    expect(info.json()).not.toHaveProperty('domain');
+  });
+
   it('never imposes a deadline on a natively-acquired sandbox', async () => {
     const t = testApp();
     const native = await t.app.inject({

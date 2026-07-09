@@ -1,3 +1,5 @@
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import {
   EXEC_OUTPUT_LIMIT_BYTES,
   FILE_SIZE_LIMIT_BYTES,
@@ -163,6 +165,13 @@ export class FakeExecutor implements Executor {
    */
   private readonly procs = new Map<string, Set<FakeProcessIO>>();
   /**
+   * Lazy per-sandbox upstream servers behind resolvePortTarget — the fake's
+   * only real socket, and the price of exercising the sandbox proxy end to
+   * end without Docker. Each echoes what it received as JSON; upgrades get
+   * a bare 101 and their bytes echoed back.
+   */
+  private readonly upstreams = new Map<string, http.Server>();
+  /**
    * Keyed like disks, not containers: files are the disk's content, so they
    * survive stop, start, and a vanished container object, and die only when
    * the disk does. That is the "the disk is the sandbox's body" invariant,
@@ -246,6 +255,7 @@ export class FakeExecutor implements Executor {
     const hadDisk = this.disks.delete(sandboxId);
     this.fs.delete(sandboxId);
     this.killProcesses(sandboxId);
+    this.closeUpstream(sandboxId);
     if (!hadContainer && !hadDisk) {
       throw new Error(`container ${sandboxId} is absent, cannot destroy`);
     }
@@ -264,6 +274,48 @@ export class FakeExecutor implements Executor {
     // Idempotent by contract: an absent disk already is the goal state.
     this.disks.delete(sandboxId);
     this.fs.delete(sandboxId);
+    this.closeUpstream(sandboxId);
+  }
+
+  async resolvePortTarget(
+    sandboxId: string,
+    port: number,
+  ): Promise<{ host: string; port: number }> {
+    this.expect(sandboxId, 'running');
+    let server = this.upstreams.get(sandboxId);
+    if (!server) {
+      const upstream = http.createServer((req, res) => {
+        res.setHeader('content-type', 'application/json');
+        res.end(
+          JSON.stringify({
+            sandboxId,
+            method: req.method,
+            path: req.url,
+            host: req.headers.host ?? null,
+          }),
+        );
+      });
+      upstream.on('upgrade', (_req, socket) => {
+        socket.write(
+          'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n',
+        );
+        socket.pipe(socket);
+      });
+      await new Promise<void>((resolve) =>
+        upstream.listen(0, '127.0.0.1', resolve),
+      );
+      this.upstreams.set(sandboxId, upstream);
+      server = upstream;
+    }
+    // One echo server stands in for every in-sandbox port: which port was
+    // asked for still travels in the Host header the proxy preserves.
+    void port;
+    return { host: '127.0.0.1', port: (server.address() as AddressInfo).port };
+  }
+
+  private closeUpstream(sandboxId: string): void {
+    this.upstreams.get(sandboxId)?.close();
+    this.upstreams.delete(sandboxId);
   }
 
   async exec(sandboxId: string, opts: ExecOptions): Promise<ExecResult> {

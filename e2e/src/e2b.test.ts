@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { CommandExitError, Sandbox } from 'e2b';
 import { describe, expect, inject, it } from 'vitest';
 
@@ -24,6 +25,37 @@ async function until(check: () => boolean, timeoutMs = 8_000) {
     }
     await sleep(0.05);
   }
+}
+
+/**
+ * A GET at the daemon with a spoofed Host header — exactly what traffic
+ * from a wildcard-DNS reverse proxy looks like, no DNS needed (fetch
+ * refuses to set Host, so this speaks node:http directly).
+ */
+function throughProxy(
+  host: string,
+  path = '/',
+): Promise<{ status: number; body: string }> {
+  const endpoint = new URL(inject('dormiceEndpoint'));
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: endpoint.hostname,
+        port: endpoint.port,
+        path,
+        headers: { host },
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 describe('official e2b SDK against the daemon', () => {
@@ -345,6 +377,17 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
+  it('getHost builds the wildcard host from the served domain', async () => {
+    const sbx = await Sandbox.create(connection());
+    try {
+      // Pure client-side string assembly — but from OUR domain field, which
+      // is the whole point: the daemon told the SDK where sandboxes live.
+      expect(sbx.getHost(8000)).toBe(`8000-${sbx.sandboxId}.sbx.dormice.test`);
+    } finally {
+      await sbx.kill();
+    }
+  });
+
   it('the Dormice extension: metadata.userKey makes create idempotent, data persists', async () => {
     const first = await Sandbox.create({
       ...connection(),
@@ -365,6 +408,28 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 });
+
+// The proxy's end-to-end round trip against the fake executor's echo
+// upstream; docker mode reaches a real in-sandbox server instead (below).
+describe.runIf(process.env.DORMICE_EXECUTOR !== 'docker')(
+  'sandbox port proxy, fake executor',
+  () => {
+    it('a Host-routed request lands inside the sandbox and echoes back', async () => {
+      const sbx = await Sandbox.create(connection());
+      try {
+        const host = sbx.getHost(8000);
+        const res = await throughProxy(host, '/hello?from=e2e');
+        expect(res.status).toBe(200);
+        const echo = JSON.parse(res.body);
+        expect(echo.sandboxId).toBe(sbx.sandboxId);
+        expect(echo.path).toBe('/hello?from=e2e');
+        expect(echo.host).toBe(host);
+      } finally {
+        await sbx.kill();
+      }
+    });
+  },
+);
 
 // Identity and real-shell behavior only a real container can answer; the
 // pocket interpreter has no users or profiles. The docker-mode e2e run on
@@ -388,6 +453,38 @@ describe.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
         // `bash -l -c` sources the profile; $HOME comes from the user entry.
         const result = await sbx.commands.run('echo $HOME');
         expect(result.stdout).toBe('/home/user\n');
+      } finally {
+        await sbx.kill();
+      }
+    });
+
+    it('getHost reaches a real server started in the sandbox', async () => {
+      const sbx = await Sandbox.create(connection());
+      try {
+        await sbx.commands.run('python3 -m http.server 8000 --directory /tmp', {
+          background: true,
+        });
+        const host = sbx.getHost(8000);
+        // The server takes a beat to bind; poll through the proxy.
+        let last = { status: 0, body: '' };
+        await until(() => {
+          void throughProxy(host, '/').then((res) => {
+            last = res;
+          });
+          return last.status === 200;
+        });
+        expect(last.body.length).toBeGreaterThan(0);
+      } finally {
+        await sbx.kill();
+      }
+    });
+
+    it('a port nobody listens on answers 502, honestly', async () => {
+      const sbx = await Sandbox.create(connection());
+      try {
+        const res = await throughProxy(sbx.getHost(9999), '/');
+        expect(res.status).toBe(502);
+        expect(JSON.parse(res.body).message).toContain('not listening');
       } finally {
         await sbx.kill();
       }
