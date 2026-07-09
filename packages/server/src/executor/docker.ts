@@ -484,6 +484,24 @@ export class DockerExecutor implements Executor {
     await this.teardownDisk(sandboxId);
   }
 
+  async resolvePortTarget(
+    sandboxId: string,
+    port: number,
+  ): Promise<{ host: string; port: number }> {
+    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.docker.getContainer(containerId).inspect();
+    // The bridge address: icc:false only blocks container-to-container
+    // traffic, host-to-container stays open (measured on the test machine).
+    const networks = info.NetworkSettings?.Networks ?? {};
+    const ip = Object.values(networks)
+      .map((n) => n?.IPAddress)
+      .find((addr) => !!addr);
+    if (!ip) {
+      throw new Error(`container ${sandboxId} has no network address`);
+    }
+    return { host: ip, port };
+  }
+
   async exec(sandboxId: string, opts: ExecOptions): Promise<ExecResult> {
     const containerId = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);

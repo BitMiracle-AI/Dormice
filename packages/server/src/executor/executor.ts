@@ -204,6 +204,16 @@ export interface Executor {
    */
   removeDisk(sandboxId: string): Promise<void>;
   /**
+   * Where the host can reach a TCP port of this sandbox — what the sandbox
+   * proxy dials to serve `<port>-<sandboxId>.<domain>` traffic. Requires
+   * state `running` (same message as every exec verb); whether anything
+   * actually listens on the port is discovered at connect time, honestly.
+   */
+  resolvePortTarget(
+    sandboxId: string,
+    port: number,
+  ): Promise<{ host: string; port: number }>;
+  /**
    * Runs a shell command inside a running container and returns the fully
    * buffered result. Requires state `running` — a paused container cannot
    * even receive the exec (measured 2026-07-10: Docker refuses outright).

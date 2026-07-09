@@ -712,6 +712,21 @@ export function describeExecutorContract(
     );
 
     it(
+      'resolvePortTarget answers for a running sandbox and refuses the wrong state',
+      async () => {
+        const id = await fresh();
+        const target = await executor.resolvePortTarget(id, 8000);
+        expect(target.host).not.toBe('');
+        expect(target.port).toBeGreaterThan(0);
+        await executor.freeze(id);
+        await expect(executor.resolvePortTarget(id, 8000)).rejects.toThrow(
+          `container ${id} is paused, expected running`,
+        );
+      },
+      timeoutMs,
+    );
+
+    it(
       'stopping the sandbox settles a running command in bounded time',
       async () => {
         // The shape of the ending is not pinned — the real engine may report

@@ -118,6 +118,13 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     });
   });
 
+  // getHost()'s raw material: the SDK builds <port>-<sandboxId>.<domain>
+  // from this field. Present only when the operator configured the wildcard
+  // domain — an unconfigured feature is honestly absent, never guessed at.
+  const domainField = config.DORMICE_SANDBOX_DOMAIN
+    ? { domain: config.DORMICE_SANDBOX_DOMAIN }
+    : {};
+
   /** What create and connect answer with. */
   function sessionView(row: SandboxRow) {
     return {
@@ -126,6 +133,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       alias: row.userKey,
       envdVersion: ENVD_VERSION,
       envdAccessToken: mintEnvdToken(config.DORMICE_API_TOKEN, row.sandboxId),
+      ...domainField,
     };
   }
 
@@ -146,6 +154,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       cpuCount: config.DORMICE_SANDBOX_CPUS,
       memoryMB: Math.round(config.DORMICE_SANDBOX_MEMORY_GB * 1024),
       envdVersion: ENVD_VERSION,
+      ...domainField,
     };
   }
 
