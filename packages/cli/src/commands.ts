@@ -1,4 +1,4 @@
-import { Dormice, type Sandbox } from '@dormice/sdk';
+import { Dormice, type ReadFileResult, type Sandbox } from '@dormice/sdk';
 
 /**
  * Builds the API client from the environment. The daemon's address and
@@ -95,6 +95,46 @@ export async function sandboxExec(
   if (result.stdoutTruncated) stderr += 'dor: stdout truncated at 1 MiB\n';
   if (result.stderrTruncated) stderr += 'dor: stderr truncated at 1 MiB\n';
   return { stdout: result.stdout, stderr, exitCode: result.exitCode };
+}
+
+/**
+ * `dor sandbox push <userKey> <localPath> [remotePath]`: one local file into
+ * the sandbox. The bytes arrive here already read — main.ts owns the
+ * filesystem, this function owns the API call and the message.
+ */
+export async function sandboxPush(
+  client: Dormice,
+  userKey: string,
+  content: Uint8Array,
+  remotePath: string,
+): Promise<string> {
+  const { files } = await client.writeFiles(userKey, [
+    { path: remotePath, content },
+  ]);
+  const written = files[0]?.path ?? remotePath;
+  return `Wrote ${printable(written)} (${content.length} bytes).`;
+}
+
+/**
+ * `dor sandbox pull <userKey> <remotePath> [localPath]`: one file out of the
+ * sandbox. Returns the exact bytes; main.ts decides between a local file and
+ * raw stdout — raw on purpose, the same rule as exec output: these are the
+ * operator's own bytes, not a place to strip control characters.
+ */
+export async function sandboxPull(
+  client: Dormice,
+  userKey: string,
+  remotePath: string,
+): Promise<ReadFileResult> {
+  return client.readFile(userKey, remotePath);
+}
+
+/** The message printed instead of raw bytes when pull saves to a local file. */
+export function pullSavedMessage(
+  result: ReadFileResult,
+  localPath: string,
+): string {
+  return `Pulled ${printable(result.path)} -> ${localPath} (${result.content.length} bytes).`;
 }
 
 /** `dor sandbox release <userKey>`: destroy the sandbox behind a key, idempotently. */

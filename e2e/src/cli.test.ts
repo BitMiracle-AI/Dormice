@@ -1,5 +1,8 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Dormice } from '@dormice/sdk';
@@ -69,6 +72,27 @@ describe('dor CLI against a real daemon', () => {
     await expect(
       cli('sandbox', 'exec', 'cli-exec-key', 'exit 3'),
     ).rejects.toMatchObject({ code: 3 });
+  });
+
+  it('sandbox push and pull move a file in and back out through the real binary', async () => {
+    const sdk = new Dormice({
+      endpoint: inject('dormiceEndpoint'),
+      token: inject('dormiceToken'),
+    });
+    await sdk.acquireSandbox('cli-files-key');
+    const local = path.join(
+      await mkdtemp(path.join(tmpdir(), 'dor-e2e-')),
+      'in.txt',
+    );
+    await writeFile(local, 'through the CLI\n');
+
+    const pushed = await cli('sandbox', 'push', 'cli-files-key', local);
+    // No remotePath given: the local file name lands under /home/user.
+    expect(pushed.stdout).toContain('Wrote /home/user/in.txt (16 bytes).');
+
+    // No localPath given: raw bytes to stdout, untouched.
+    const pulled = await cli('sandbox', 'pull', 'cli-files-key', 'in.txt');
+    expect(pulled.stdout).toBe('through the CLI\n');
   });
 
   it('fails honestly when the environment is missing', async () => {
