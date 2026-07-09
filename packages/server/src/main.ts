@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { pino } from 'pino';
 import { buildApp } from './app';
@@ -66,7 +67,23 @@ const executor = buildExecutor(config, (msg) => log.info(msg));
 // must share the same per-sandbox slots or the serialization means nothing.
 const locks = new KeyedQueue();
 
-const app = buildApp({ config, db, executor, locks, logger: log });
+// The web console ships beside the server in the monorepo; this file sits
+// one level under packages/server both as src/main.ts and as dist/main.js,
+// so the relative hop to packages/web/dist is the same either way. A
+// missing dist is loud but not fatal: the API works without the console.
+const webDistDir = fileURLToPath(new URL('../../web/dist', import.meta.url));
+if (!existsSync(webDistDir)) {
+  log.warn(`web console not found at ${webDistDir} — /ui disabled`);
+}
+
+const app = buildApp({
+  config,
+  db,
+  executor,
+  locks,
+  logger: log,
+  webDistDir: existsSync(webDistDir) ? webDistDir : undefined,
+});
 
 // Before trusting the pairing of this ledger and this reality, check it:
 // reconciliation destroys whatever the ledger disowns, so a daemon booted

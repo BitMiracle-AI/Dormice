@@ -1,3 +1,4 @@
+import fastifyCookie from '@fastify/cookie';
 import fastify, { type FastifyError } from 'fastify';
 import {
   serializerCompiler,
@@ -6,13 +7,14 @@ import {
 } from 'fastify-type-provider-zod';
 import { type Logger, pino } from 'pino';
 import { z } from 'zod';
-import { requireApiToken } from './auth';
+import { requireApiAuth } from './auth';
 import type { Config } from './config';
 import type { Db } from './db/db';
 import { registerE2bCompat } from './e2b';
 import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
 import { sandboxRoutes } from './routes/sandboxes';
+import { uiRoutes } from './routes/ui';
 
 export interface AppDeps {
   config: Config;
@@ -30,6 +32,11 @@ export interface AppDeps {
    * before anything that needs it.
    */
   logger?: boolean | Logger;
+  /**
+   * Where the built web console lives; main.ts resolves the monorepo
+   * layout, tests inject a fixture. Absent means /ui answers an honest 404.
+   */
+  webDistDir?: string;
 }
 
 /**
@@ -47,6 +54,7 @@ export function buildApp({
   executor,
   locks,
   logger = true,
+  webDistDir,
 }: AppDeps) {
   // Always a pino instance (booleans are normalized into one): two fastify()
   // call shapes would give the instance two different types.
@@ -88,9 +96,19 @@ export function buildApp({
     async () => ({ status: 'ok' as const }),
   );
 
+  // Cookie parsing app-wide: the auth arbiter reads the console's session
+  // cookie on the native routes, the /ui surface mints and clears it.
+  app.register(fastifyCookie);
+
   app.register(async (api) => {
-    api.addHook('onRequest', requireApiToken(config.DORMICE_API_TOKEN));
+    api.addHook('onRequest', requireApiAuth(config.DORMICE_API_TOKEN));
     await api.register(sandboxRoutes, { config, db, executor, locks });
+  });
+
+  // The web console: session endpoints (open — login carries the token
+  // itself) and the static SPA. Its API calls go through the routes above.
+  app.register(async (ui) => {
+    await ui.register(uiRoutes, { config, webDistDir });
   });
 
   // The E2B compatibility surface lives beside the native API with its own
