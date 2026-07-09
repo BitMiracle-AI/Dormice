@@ -11,8 +11,11 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   clientFromEnv,
+  pullSavedMessage,
   sandboxExec,
   sandboxLs,
+  sandboxPull,
+  sandboxPush,
   sandboxRelease,
 } from './commands';
 
@@ -123,6 +126,32 @@ describe('sandbox commands over real HTTP', () => {
     // process's own.
     expect((await sandboxExec(client, 'dave', 'exit 3')).exitCode).toBe(3);
     await client.releaseSandbox('dave');
+  });
+
+  it('push reports the resolved path and byte count', async () => {
+    await client.acquireSandbox('pusher');
+    const message = await sandboxPush(
+      client,
+      'pusher',
+      new TextEncoder().encode('hi'),
+      'notes.txt',
+    );
+    expect(message).toBe('Wrote /home/user/notes.txt (2 bytes).');
+    await client.releaseSandbox('pusher');
+  });
+
+  it('pull hands back the exact bytes; the save message is separate', async () => {
+    await client.acquireSandbox('puller');
+    const bytes = new Uint8Array([0, 1, 254, 255]);
+    await client.writeFiles('puller', [{ path: 'data.bin', content: bytes }]);
+
+    const result = await sandboxPull(client, 'puller', 'data.bin');
+    expect(result.path).toBe('/home/user/data.bin');
+    expect(result.content).toEqual(bytes);
+    expect(pullSavedMessage(result, 'local.bin')).toBe(
+      'Pulled /home/user/data.bin -> local.bin (4 bytes).',
+    );
+    await client.releaseSandbox('puller');
   });
 
   it('release reports both outcomes of the idempotent destroy', async () => {
