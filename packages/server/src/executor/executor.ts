@@ -28,6 +28,12 @@ export interface ExecResult {
   stderrTruncated: boolean;
 }
 
+/** Terminal dimensions, the shape Process/Update's resize speaks. */
+export interface PtySize {
+  cols: number;
+  rows: number;
+}
+
 export interface ExecStreamOptions {
   /** A shell string, executed as `bash -c <command>` inside the sandbox. */
   command: string;
@@ -42,10 +48,19 @@ export interface ExecStreamOptions {
    */
   loginShell?: boolean;
   /**
+   * Keep stdin open for the handle's sendStdin/closeStdin. Absent means the
+   * command starts with stdin already at EOF (the old behavior); the handle
+   * verbs then refuse honestly instead of writing into nothing.
+   */
+  stdin?: boolean;
+  /**
    * Called with each output chunk as it arrives. No cap: nothing accumulates
    * server-side. A returned promise MAY be awaited before the next chunk
    * (the real executor does — backpressure travels to the container; the
    * fake's in-memory source has nothing to press back on).
+   * Never called before execStream itself resolves: the caller gets to
+   * finish its own bookkeeping (write a wire start frame, register the
+   * process) knowing no output has slipped past it.
    */
   onStdout: (chunk: Buffer) => void | Promise<void>;
   onStderr: (chunk: Buffer) => void | Promise<void>;
@@ -53,12 +68,32 @@ export interface ExecStreamOptions {
 
 /**
  * A started command. Obtaining the handle means the exec is running; wait()
- * is its result. Deliberately handle-shaped (not a plain promise): process
- * management verbs — kill, stdin, reconnect — will grow here later without
- * reshaping every caller.
+ * is its result. The management verbs exist on every handle and refuse
+ * honestly when they do not apply — their refusal messages are part of the
+ * executor contract, because the E2B surface forwards them to clients.
  */
 export interface ExecStreamHandle {
   wait(): Promise<{ exitCode: number }>;
+  /**
+   * Writes into the command's stdin. Requires the command to have been
+   * started with `stdin: true` (else: "process was started without stdin");
+   * after closeStdin it refuses with "stdin is closed". A resolved promise
+   * means the bytes are on their way to the in-container reader.
+   */
+  sendStdin(data: Buffer): Promise<void>;
+  /** Delivers EOF to the command's stdin. Same refusals as sendStdin. */
+  closeStdin(): Promise<void>;
+  /**
+   * Delivers a signal to the command's whole process group — SIGKILL lands
+   * as exit 137 through wait(), SIGTERM as 143 (unless caught). Rejects when
+   * the process has already finished; that wording is not contract-pinned.
+   */
+  signal(sig: 'SIGTERM' | 'SIGKILL'): Promise<void>;
+  /**
+   * Resizes the command's pseudo-terminal. Refuses with "process has no PTY"
+   * for a plain command — PTY sessions arrive with the pty exec option.
+   */
+  resizePty(size: PtySize): Promise<void>;
 }
 
 export interface FileToWrite {
