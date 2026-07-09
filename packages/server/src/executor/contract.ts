@@ -603,18 +603,27 @@ export function describeExecutorContract(
     );
 
     it(
-      'a command survives freeze/unfreeze and completes afterwards',
+      'a running command survives freeze/unfreeze and completes afterwards',
       async () => {
         const id = await fresh();
         const seen: string[] = [];
         const handle = await executor.execStream(id, {
-          command: 'sleep 1; echo woke',
+          command: 'echo started; sleep 1; echo woke',
           timeoutSeconds: 30,
           onStdout: (c) => {
             seen.push(c.toString('utf8'));
           },
           onStderr: () => {},
         });
+        // Wait for proof the command is actually running before freezing:
+        // dockerd acknowledges exec start before the process has spawned
+        // (measured 2026-07-10 — a zero-gap pause wins that race and the
+        // exec dies 128 "cannot exec in a paused state"). The contract's
+        // claim is about running commands, so observe one first.
+        const before = Date.now();
+        while (seen.length === 0 && Date.now() - before < 5_000) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
         await executor.freeze(id);
         await executor.unfreeze(id);
         const { exitCode } = await handle.wait();
