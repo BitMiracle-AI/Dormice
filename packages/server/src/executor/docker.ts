@@ -158,10 +158,13 @@ const REMOVE_SCRIPT = [
  * Wrapper every execStream command runs under, so the handle can signal it
  * later. $1 = pidfile, $2 = timeout seconds, $3 = the user's command.
  * The exec chain keeps the pid stable: the recorded $$ is the bash that
- * becomes `timeout`, and `setsid --wait` outside made that pid a fresh
- * process-group leader — one `kill -- -pid` reaps the command and all its
- * descendants (GNU timeout's own group-kill relies on the same pgid).
- * setsid needs --wait or the exec would observe the fork's instant exit 0.
+ * becomes `timeout`, and GNU timeout itself (without --foreground) calls
+ * setpgid(0,0) — that same pid becomes a fresh process-group leader, so
+ * one `kill -- -pid` reaps the command and all its descendants.
+ * Deliberately NOT setsid --wait for the group: measured 2026-07-10,
+ * setsid reports a signal-killed child as the raw signal number (9/15)
+ * where the shell convention — and E2B — speak 128+N; timeout's own
+ * signal propagation (it re-raises on itself) preserves 137/143.
  */
 function execStreamWrapper(loginShell: boolean): string {
   const shell = loginShell ? 'bash -l -c' : 'bash -c';
@@ -555,8 +558,6 @@ export class DockerExecutor implements Executor {
     }
     const started = await this.startInContainer(container, sandboxId, {
       cmd: [
-        'setsid',
-        '--wait',
         'bash',
         '-c',
         execStreamWrapper(opts.loginShell ?? false),
