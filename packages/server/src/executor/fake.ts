@@ -22,13 +22,14 @@ import {
  * Directories every real sandbox is born with, with the owner and mode
  * reality gives them: the image's skeleton plus lost+found — the mkfs.ext4
  * artifact every disk carries in its root (/home/user), which a directory
- * listing must therefore show on the fake too.
+ * listing must therefore show on the fake too. lost+found belongs to the
+ * user because provisionDisk chowns it at disk birth.
  */
 const BUILTIN_DIRS: Record<string, { owner: string; mode: number }> = {
   '/': { owner: 'root', mode: 0o755 },
   '/home': { owner: 'root', mode: 0o755 },
   '/home/user': { owner: 'user', mode: 0o755 },
-  '/home/user/lost+found': { owner: 'root', mode: 0o700 },
+  '/home/user/lost+found': { owner: 'user', mode: 0o700 },
   '/tmp': { owner: 'root', mode: 0o1777 },
 };
 
