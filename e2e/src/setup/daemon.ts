@@ -56,6 +56,12 @@ export default async function setup(project: TestProject) {
   }
   const child = spawn('node', [MAIN], {
     env: {
+      // Exam disks evaporate with the exam: without this default, a docker
+      // run without an exported DORMICE_DATA_DIR drops its sandbox disks
+      // into /var/lib/dormice — the resident daemon's data dir, whose
+      // startup guard then refuses to start (measured 2026-07-10). An
+      // exported value still wins through `inherited` below.
+      DORMICE_DATA_DIR: dataDir,
       ...inherited,
       DORMICE_PORT: String(port),
       DORMICE_DB_PATH: join(dataDir, 'dormice.db'),
