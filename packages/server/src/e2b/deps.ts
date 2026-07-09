@@ -3,10 +3,12 @@ import type { Db } from '../db/db';
 import type { Executor } from '../executor/executor';
 import type { KeyedQueue } from '../keyed-queue';
 import type { ProcessTable } from './process-table';
+import type { WatcherTable } from './watcher-table';
 
 /**
  * What every compat plugin needs — the native routes' four, plus the
- * process table both e2b prefixes share (control kills what envd started).
+ * process table both e2b prefixes share (control kills what envd started)
+ * and the polling watchers' table.
  */
 export interface E2bDeps {
   config: Config;
@@ -14,4 +16,5 @@ export interface E2bDeps {
   executor: Executor;
   locks: KeyedQueue;
   processes: ProcessTable;
+  watchers: WatcherTable;
 }

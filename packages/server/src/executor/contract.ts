@@ -1187,5 +1187,235 @@ export function describeExecutorContract(
       },
       timeoutMs,
     );
+
+    // ---- watchDir ------------------------------------------------------
+    // Assertions are inclusion, never counts: one real write can surface as
+    // several MODIFY lines, and event multiplicity is the kernel's business,
+    // not the contract's.
+
+    /** Collects events; watch() must be awaited before the change is made. */
+    function eventLog() {
+      const events: Array<{ name: string; type: string }> = [];
+      return {
+        events,
+        onEvent: (e: { name: string; type: string }) => {
+          events.push({ ...e });
+        },
+        has: (name: string, type: string) =>
+          events.some((e) => e.name === name && e.type === type),
+      };
+    }
+
+    it(
+      'a watcher sees a new file as create and write, an overwrite as write',
+      async () => {
+        const id = await fresh();
+        const log = eventLog();
+        const watch = await executor.watchDir(id, {
+          path: '/home/user',
+          recursive: false,
+          onEvent: log.onEvent,
+          onEnd: () => {},
+        });
+        await executor.writeFiles(id, [
+          { path: 'seen.txt', content: Buffer.from('one') },
+        ]);
+        await until(() => log.has('seen.txt', 'create'));
+        await until(() => log.has('seen.txt', 'write'));
+
+        log.events.length = 0;
+        await executor.writeFiles(id, [
+          { path: 'seen.txt', content: Buffer.from('two') },
+        ]);
+        await until(() => log.has('seen.txt', 'write'));
+        expect(log.has('seen.txt', 'create')).toBe(false);
+        await watch.stop();
+      },
+      timeoutMs,
+    );
+
+    it(
+      'a watcher sees removals, and a move as rename plus create',
+      async () => {
+        const id = await fresh();
+        await executor.writeFiles(id, [
+          { path: 'old.txt', content: Buffer.from('x') },
+          { path: 'doomed.txt', content: Buffer.from('y') },
+        ]);
+        const log = eventLog();
+        const watch = await executor.watchDir(id, {
+          path: '/home/user',
+          recursive: false,
+          onEvent: log.onEvent,
+          onEnd: () => {},
+        });
+        await executor.remove(id, 'doomed.txt');
+        await until(() => log.has('doomed.txt', 'remove'));
+
+        await executor.move(id, 'old.txt', 'new.txt');
+        await until(() => log.has('old.txt', 'rename'));
+        await until(() => log.has('new.txt', 'create'));
+        await watch.stop();
+      },
+      timeoutMs,
+    );
+
+    it(
+      'subtree events reach a recursive watcher only, with subdir-relative names',
+      async () => {
+        const id = await fresh();
+        await executor.makeDir(id, '/home/user/sub');
+        const flat = eventLog();
+        const deep = eventLog();
+        const flatWatch = await executor.watchDir(id, {
+          path: '/home/user',
+          recursive: false,
+          onEvent: flat.onEvent,
+          onEnd: () => {},
+        });
+        const deepWatch = await executor.watchDir(id, {
+          path: '/home/user',
+          recursive: true,
+          onEvent: deep.onEvent,
+          onEnd: () => {},
+        });
+        await executor.writeFiles(id, [
+          { path: 'sub/inner.txt', content: Buffer.from('deep') },
+        ]);
+        await until(() => deep.has('sub/inner.txt', 'create'));
+        expect(flat.events).toEqual([]);
+        await flatWatch.stop();
+        await deepWatch.stop();
+      },
+      timeoutMs,
+    );
+
+    it(
+      'a recursive watcher follows directories created after it started',
+      async () => {
+        // Measured under gVisor 2026-07-10: inotifywait -r adds watches for
+        // directories born while it is running; the fake's prefix matching
+        // gives the same answer.
+        const id = await fresh();
+        const log = eventLog();
+        const watch = await executor.watchDir(id, {
+          path: '/home/user',
+          recursive: true,
+          onEvent: log.onEvent,
+          onEnd: () => {},
+        });
+        await executor.makeDir(id, '/home/user/born-later');
+        await until(() => log.has('born-later', 'create'));
+        await executor.writeFiles(id, [
+          { path: 'born-later/inside.txt', content: Buffer.from('!') },
+        ]);
+        await until(() => log.has('born-later/inside.txt', 'create'));
+        await watch.stop();
+      },
+      timeoutMs,
+    );
+
+    it(
+      'stop() ends delivery; the watcher does not call onEnd for its own stop',
+      async () => {
+        const id = await fresh();
+        const log = eventLog();
+        let ended = false;
+        const watch = await executor.watchDir(id, {
+          path: '/home/user',
+          recursive: false,
+          onEvent: log.onEvent,
+          onEnd: () => {
+            ended = true;
+          },
+        });
+        await watch.stop();
+        await executor.writeFiles(id, [
+          { path: 'after-stop.txt', content: Buffer.from('x') },
+        ]);
+        // Bounded quiet: nothing arrives for a change made after stop().
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(log.events).toEqual([]);
+        expect(ended).toBe(false);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'watchDir refuses a missing path and a file path with the typed errors',
+      async () => {
+        const id = await fresh();
+        const missing = await executor
+          .watchDir(id, {
+            path: '/home/user/nowhere',
+            recursive: false,
+            onEvent: () => {},
+            onEnd: () => {},
+          })
+          .catch((e) => e);
+        expect(missing).toBeInstanceOf(FileNotFoundError);
+        expect(missing.message).toBe('no such file: /home/user/nowhere');
+
+        await executor.writeFiles(id, [
+          { path: 'plain.txt', content: Buffer.from('x') },
+        ]);
+        const onFile = await executor
+          .watchDir(id, {
+            path: 'plain.txt',
+            recursive: false,
+            onEvent: () => {},
+            onEnd: () => {},
+          })
+          .catch((e) => e);
+        expect(onFile).toBeInstanceOf(NotADirectoryError);
+        expect(onFile.message).toBe('not a directory: /home/user/plain.txt');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'the container stopping ends the watcher through onEnd',
+      async () => {
+        const id = await fresh();
+        let ended: Error | undefined;
+        const watch = await executor.watchDir(id, {
+          path: '/home/user',
+          recursive: false,
+          onEvent: () => {},
+          onEnd: (error) => {
+            ended = error ?? new Error('ended without error');
+          },
+        });
+        await executor.freeze(id);
+        await executor.stop(id);
+        await until(() => ended !== undefined);
+        // Ending was the container's doing, not stop()'s — which now finds
+        // nothing left to do and must still resolve.
+        await watch.stop();
+      },
+      timeoutMs,
+    );
+
+    it(
+      'a watcher survives freeze/unfreeze and reports changes made after',
+      async () => {
+        const id = await fresh();
+        const log = eventLog();
+        const watch = await executor.watchDir(id, {
+          path: '/home/user',
+          recursive: false,
+          onEvent: log.onEvent,
+          onEnd: () => {},
+        });
+        await executor.freeze(id);
+        await executor.unfreeze(id);
+        await executor.writeFiles(id, [
+          { path: 'thawed.txt', content: Buffer.from('back') },
+        ]);
+        await until(() => log.has('thawed.txt', 'create'));
+        await watch.stop();
+      },
+      timeoutMs,
+    );
   });
 }

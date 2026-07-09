@@ -19,6 +19,9 @@ import {
   NotAFileError,
   type PtySize,
   type SandboxEntry,
+  type WatchDirHandle,
+  type WatchDirOptions,
+  type WatchEvent,
 } from './executor';
 
 /**
@@ -77,6 +80,21 @@ function entryFor(path: string, node: FakeNode): SandboxEntry {
     owner: meta.owner,
     group: meta.owner,
   };
+}
+
+/**
+ * One live fake watcher: a subscription on the fake disk's mutation funnels.
+ * Events chain through `queue` so a slow onEvent (backpressure) never
+ * reorders deliveries — the same serialization the real executor gets from
+ * reading inotifywait's pipe line by line.
+ */
+interface FakeWatcher {
+  base: string;
+  recursive: boolean;
+  onEvent: (event: WatchEvent) => void | Promise<void>;
+  onEnd: (error?: Error) => void;
+  stopped: boolean;
+  queue: Promise<void>;
 }
 
 /**
@@ -178,6 +196,12 @@ export class FakeExecutor implements Executor {
    * modeled where it physically lives.
    */
   private readonly fs = new Map<string, Map<string, FakeNode>>();
+  /**
+   * Live watchers per sandbox. Keyed like processes, not disks: a watcher
+   * is a running inotifywait on the real executor, so the container's death
+   * ends it even though the files it watched survive.
+   */
+  private readonly watchers = new Map<string, Set<FakeWatcher>>();
 
   /** Test hook: what does "reality" say about this sandbox? */
   stateOf(sandboxId: string): ContainerState | undefined {
@@ -437,8 +461,74 @@ export class FakeExecutor implements Executor {
 
   private killProcesses(sandboxId: string): void {
     const set = this.procs.get(sandboxId);
+    if (set) for (const io of set) io.kill('SIGKILL');
+    this.endWatchers(sandboxId);
+  }
+
+  /** The container died under the watchers — conduct it, like processes. */
+  private endWatchers(sandboxId: string): void {
+    const set = this.watchers.get(sandboxId);
     if (!set) return;
-    for (const io of set) io.kill('SIGKILL');
+    this.watchers.delete(sandboxId);
+    for (const watcher of set) {
+      if (watcher.stopped) continue;
+      watcher.stopped = true;
+      watcher.onEnd(new Error('watcher stopped: its container died'));
+    }
+  }
+
+  /** The mutation funnels report here; each watcher filters and enqueues. */
+  private emitWatch(
+    sandboxId: string,
+    path: string,
+    type: WatchEvent['type'],
+  ): void {
+    const set = this.watchers.get(sandboxId);
+    if (!set) return;
+    for (const watcher of set) {
+      if (watcher.stopped) continue;
+      const prefix = watcher.base === '/' ? '/' : `${watcher.base}/`;
+      if (!path.startsWith(prefix)) continue;
+      const name = path.slice(prefix.length);
+      if (!watcher.recursive && name.includes('/')) continue;
+      watcher.queue = watcher.queue.then(async () => {
+        if (watcher.stopped) return;
+        await watcher.onEvent({ name, type });
+      });
+      // A throwing onEvent must not silence the watcher or crash anything;
+      // the real pipe reader shrugs the same way.
+      watcher.queue = watcher.queue.catch(() => {});
+    }
+  }
+
+  async watchDir(
+    sandboxId: string,
+    opts: WatchDirOptions,
+  ): Promise<WatchDirHandle> {
+    this.expect(sandboxId, 'running');
+    const base = resolveSandboxPath(opts.path);
+    const node = this.disk(sandboxId).get(base);
+    if (!node) throw new FileNotFoundError(`no such file: ${base}`);
+    if (node.type !== 'dir') {
+      throw new NotADirectoryError(`not a directory: ${base}`);
+    }
+    const watcher: FakeWatcher = {
+      base,
+      recursive: opts.recursive,
+      onEvent: opts.onEvent,
+      onEnd: opts.onEnd,
+      stopped: false,
+      queue: Promise.resolve(),
+    };
+    const set = this.watchers.get(sandboxId) ?? new Set();
+    set.add(watcher);
+    this.watchers.set(sandboxId, set);
+    return {
+      stop: async () => {
+        watcher.stopped = true;
+        set.delete(watcher);
+      },
+    };
   }
 
   async writeFiles(sandboxId: string, files: FileToWrite[]): Promise<void> {
@@ -532,6 +622,7 @@ export class FakeExecutor implements Executor {
     const now = new Date().toISOString();
     this.ensureParents(sandboxId, disk, resolved);
     disk.set(resolved, { type: 'dir', modifiedTime: now });
+    this.emitWatch(sandboxId, resolved, 'create');
     return true;
   }
 
@@ -564,6 +655,11 @@ export class FakeExecutor implements Executor {
       disk.delete(p);
       disk.set(destination + p.slice(source.length), n);
     }
+    // inotify's move pair: RENAME fires on the old path, CREATE on the new
+    // one (fsnotify's reading of MOVED_FROM/MOVED_TO); children move along
+    // silently, exactly like the kernel's.
+    this.emitWatch(sandboxId, source, 'rename');
+    this.emitWatch(sandboxId, destination, 'create');
     return entryFor(destination, node);
   }
 
@@ -579,9 +675,17 @@ export class FakeExecutor implements Executor {
       throw new Error(`removing ${resolved} failed: built-in directory`);
     }
     const prefix = `${resolved}/`;
+    const deleted: string[] = [];
     for (const p of [...disk.keys()]) {
-      if (p === resolved || p.startsWith(prefix)) disk.delete(p);
+      if (p === resolved || p.startsWith(prefix)) {
+        disk.delete(p);
+        deleted.push(p);
+      }
     }
+    // rm -rf works depth-first, so inotify reports children before their
+    // directory; deepest-first reproduces that order.
+    deleted.sort((a, b) => b.length - a.length);
+    for (const p of deleted) this.emitWatch(sandboxId, p, 'remove');
   }
 
   private disk(sandboxId: string): Map<string, FakeNode> {
@@ -607,6 +711,10 @@ export class FakeExecutor implements Executor {
       content,
       modifiedTime: new Date().toISOString(),
     });
+    // A new file is CREATE then MODIFY through inotify; an overwrite is
+    // MODIFY only (the real cat > truncates in place).
+    if (!existing) this.emitWatch(sandboxId, resolved, 'create');
+    this.emitWatch(sandboxId, resolved, 'write');
   }
 
   /** mkdir -p leaves real directories behind; so does the fake. */
@@ -625,6 +733,7 @@ export class FakeExecutor implements Executor {
           type: 'dir',
           modifiedTime: new Date().toISOString(),
         });
+        this.emitWatch(sandboxId, parent, 'create');
       } else if (node.type !== 'dir') {
         // mkdir -p over a file fails on the real executor too (its stderr
         // wording differs; the contract does not pin this path).

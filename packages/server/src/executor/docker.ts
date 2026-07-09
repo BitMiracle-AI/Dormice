@@ -33,6 +33,9 @@ import {
   NotAFileError,
   type PtySize,
   type SandboxEntry,
+  type WatchDirHandle,
+  type WatchDirOptions,
+  type WatchEvent,
 } from './executor';
 
 /**
@@ -153,6 +156,62 @@ const REMOVE_SCRIPT = [
   `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
   'exec rm -rf -- "$1"',
 ].join('\n');
+
+/**
+ * A watcher may outlive any one request, but not the sandbox's day — the
+ * same backstop as e2b-surface execs, physical cleanup only.
+ */
+const WATCH_BACKSTOP_SECONDS = 24 * 60 * 60;
+
+/**
+ * $1 = pidfile, $2 = recursive flag (`-r` or empty), $3 = watched dir.
+ * The existence checks run in-script: one round trip, no gap for the path
+ * to change under a separate stat. Readiness is inotifywait's own
+ * "Watches established." on stderr — measured under gVisor 2026-07-10,
+ * along with -r picking up directories created after the watch began.
+ */
+const WATCH_SCRIPT = [
+  'echo "$$" > "$1"',
+  `[ -e "$3" ] || exit ${NO_SUCH_FILE_EXIT}`,
+  `[ -d "$3" ] || exit ${NOT_A_DIR_EXIT}`,
+  // $2 rides unquoted on purpose: empty must vanish, not become an argument.
+  `exec timeout --signal=KILL ${WATCH_BACKSTOP_SECONDS} inotifywait -m $2 -e create,modify,delete,move,attrib --format '%e|%w%f' -- "$3"`,
+].join('\n');
+
+/**
+ * One inotifywait line -> wire events. A line reads `OPS|/abs/path` with
+ * OPS comma-separated; `ISDIR` and anything unmapped fall through silently.
+ * MOVED_FROM/MOVED_TO land as rename/create — fsnotify's reading, which is
+ * what the E2B wire speaks. Events on the watched directory itself (empty
+ * name) are dropped, like real envd's "." edge.
+ */
+export function parseInotifyLine(line: string, base: string): WatchEvent[] {
+  const cut = line.indexOf('|');
+  if (cut === -1) return [];
+  const eventPath = line.slice(cut + 1);
+  const prefix = base === '/' ? '/' : `${base}/`;
+  if (!eventPath.startsWith(prefix) || eventPath.length === prefix.length) {
+    return [];
+  }
+  const name = eventPath.slice(prefix.length);
+  const events: WatchEvent[] = [];
+  for (const op of line.slice(0, cut).split(',')) {
+    const type =
+      op === 'CREATE' || op === 'MOVED_TO'
+        ? ('create' as const)
+        : op === 'MODIFY'
+          ? ('write' as const)
+          : op === 'DELETE'
+            ? ('remove' as const)
+            : op === 'MOVED_FROM'
+              ? ('rename' as const)
+              : op === 'ATTRIB'
+                ? ('chmod' as const)
+                : undefined;
+    if (type) events.push({ name, type });
+  }
+  return events;
+}
 
 /**
  * Wrapper every execStream command runs under, so the handle can signal it
@@ -1044,6 +1103,108 @@ export class DockerExecutor implements Executor {
         `removing ${resolved} in ${sandboxId} failed (exit ${run.exitCode}): ${run.stderr.text().trim()}`,
       );
     }
+  }
+
+  async watchDir(
+    sandboxId: string,
+    opts: WatchDirOptions,
+  ): Promise<WatchDirHandle> {
+    const resolved = resolveSandboxPath(opts.path);
+    const containerId = await this.expectState(sandboxId, 'running');
+    const container = this.docker.getContainer(containerId);
+    const pidfile = `/tmp/.dormice-exec-${randomUUID()}.pid`;
+
+    // Once true, arriving lines drain and drop — after stop() nothing is
+    // delivered, even the pipe's stragglers.
+    let stopped = false;
+    let pending = '';
+    const onStdout = async (chunk: Buffer) => {
+      pending += chunk.toString('utf8');
+      while (true) {
+        const eol = pending.indexOf('\n');
+        if (eol === -1) return;
+        const line = pending.slice(0, eol);
+        pending = pending.slice(eol + 1);
+        for (const event of parseInotifyLine(line, resolved)) {
+          // Awaited: backpressure travels through to inotifywait's pipe.
+          if (!stopped) await opts.onEvent(event);
+        }
+      }
+    };
+    let stderrText = '';
+    let markReady = () => {};
+    const ready = new Promise<'ready'>((resolve) => {
+      markReady = () => resolve('ready');
+    });
+    const onStderr = (chunk: Buffer) => {
+      stderrText += chunk.toString('utf8');
+      if (stderrText.includes('Watches established.')) markReady();
+    };
+
+    const started = await this.startInContainer(container, sandboxId, {
+      cmd: [
+        'bash',
+        '-c',
+        WATCH_SCRIPT,
+        'bash',
+        pidfile,
+        opts.recursive ? '-r' : '',
+        resolved,
+      ],
+      stdout: new CallbackSink(onStdout),
+      stderr: new CallbackSink(onStderr),
+    });
+    const exitInfo = started.wait().then(
+      (exitCode) => ({ exitCode, error: undefined as Error | undefined }),
+      (error) => ({
+        exitCode: -1,
+        error: error instanceof Error ? error : new Error(String(error)),
+      }),
+    );
+
+    const outcome = await Promise.race([ready, exitInfo]);
+    if (outcome !== 'ready') {
+      // The script spoke through its exit code before the watch stood up.
+      if (outcome.exitCode === NO_SUCH_FILE_EXIT) {
+        throw new FileNotFoundError(`no such file: ${resolved}`);
+      }
+      if (outcome.exitCode === NOT_A_DIR_EXIT) {
+        throw new NotADirectoryError(`not a directory: ${resolved}`);
+      }
+      if (outcome.exitCode === 127) {
+        throw new Error(
+          `inotifywait is not in this sandbox's image — rebuild it from images/Dockerfile (it installs inotify-tools) to enable watch`,
+        );
+      }
+      throw new Error(
+        `starting watcher on ${resolved} in ${sandboxId} failed (exit ${outcome.exitCode}): ${stderrText.trim()}`,
+      );
+    }
+
+    void exitInfo.then(({ exitCode, error }) => {
+      if (stopped) return;
+      stopped = true;
+      opts.onEnd(
+        error ?? new Error(`watcher on ${resolved} exited with ${exitCode}`),
+      );
+    });
+
+    return {
+      stop: async () => {
+        if (stopped) return;
+        stopped = true;
+        try {
+          await this.signalProcess(container, sandboxId, pidfile, 'SIGKILL');
+        } catch {
+          // The container is paused or gone: the signal cannot land, so
+          // waiting for the exit would hang. The stopped flag already
+          // silences the watcher; the process itself is reaped by the
+          // container's own death or the 24h backstop.
+          return;
+        }
+        await exitInfo;
+      },
+    };
   }
 
   /** The buffered face of the exec pipeline: capped sinks, awaited to the end. */

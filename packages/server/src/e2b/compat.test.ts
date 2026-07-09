@@ -950,4 +950,211 @@ describe('E2B envd surface', () => {
       'unavailable',
     );
   });
+
+  // ---- directory watching -----------------------------------------------
+
+  /** WatchDir with a wire deadline: the SDK's watch shape, ending honestly. */
+  function watchDir(
+    t: TestApp,
+    sandboxID: string,
+    body: Record<string, unknown>,
+    deadlineMs: number,
+  ) {
+    return t.app.inject({
+      method: 'POST',
+      url: '/e2b/envd/filesystem.Filesystem/WatchDir',
+      headers: {
+        ...envdHeaders(sandboxID),
+        'content-type': 'application/connect+json',
+        'connect-timeout-ms': String(deadlineMs),
+      },
+      payload: enveloped(body),
+    });
+  }
+
+  it('WatchDir opens with start, streams filesystem events, and ends at the deadline', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const pending = watchDir(t, sandboxID, { path: '/home/user' }, 600);
+    // The change arrives from the side while the stream hangs open — the
+    // executor's disk is the same one the watch observes.
+    setTimeout(() => {
+      void t.executor.writeFiles(sandboxID, [
+        { path: 'watched.txt', content: Buffer.from('x') },
+      ]);
+    }, 100);
+    const res = await pending;
+    expect(res.statusCode).toBe(200);
+    const frames = parseEnvelopes(res.rawPayload);
+    // Start frame strictly first — the SDK's hard requirement.
+    expect(frames[0]?.json).toEqual({ start: {} });
+    const events = frames
+      .map((f) => f.json.filesystem as { name: string; type: string })
+      .filter(Boolean);
+    expect(events).toContainEqual({
+      name: 'watched.txt',
+      type: 'EVENT_TYPE_CREATE',
+    });
+    expect(events).toContainEqual({
+      name: 'watched.txt',
+      type: 'EVENT_TYPE_WRITE',
+    });
+    const last = frames[frames.length - 1];
+    expect(last?.flags).toBe(2);
+    expect((last?.json.error as { code: string }).code).toBe(
+      'deadline_exceeded',
+    );
+  });
+
+  it('WatchDir refuses a missing path and a file before any start frame', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const missing = await watchDir(
+      t,
+      sandboxID,
+      { path: '/home/user/nowhere' },
+      500,
+    );
+    const missingFrames = parseEnvelopes(missing.rawPayload);
+    expect(missingFrames).toHaveLength(1);
+    expect(missingFrames[0]?.flags).toBe(2);
+    expect(missingFrames[0]?.json.error).toEqual({
+      code: 'not_found',
+      message: 'no such file: /home/user/nowhere',
+    });
+
+    await t.executor.writeFiles(sandboxID, [
+      { path: 'plain.txt', content: Buffer.from('x') },
+    ]);
+    const onFile = await watchDir(t, sandboxID, { path: 'plain.txt' }, 500);
+    const fileFrames = parseEnvelopes(onFile.rawPayload);
+    expect(fileFrames).toHaveLength(1);
+    expect(fileFrames[0]?.json.error).toEqual({
+      code: 'invalid_argument',
+      message: 'not a directory: /home/user/plain.txt',
+    });
+  });
+
+  it('an attached watch does not keep the sandbox warm — the scanner freezes it', async () => {
+    const t = testApp();
+    // Day-long TTL so the idle scanner speaks before the kill deadline.
+    const { sandboxID } = await createSandbox(t, { timeout: 86400 });
+    let stateDuringWatch: string | undefined;
+    const pending = watchDir(t, sandboxID, { path: '/home/user' }, 600);
+    setTimeout(() => {
+      void (async () => {
+        const row = findBySandboxId(t.db, sandboxID);
+        const later = new Date(
+          Date.now() + ((row?.freezeAfterSeconds ?? 0) + 60) * 1000,
+        );
+        await scanOnce(t.db, t.executor, t.locks, later);
+        stateDuringWatch = t.executor.stateOf(sandboxID);
+      })();
+    }, 100);
+    const res = await pending;
+    // Frozen mid-watch: no heartbeat held the sandbox awake, and the stream
+    // itself still ended through its own deadline, not through an error.
+    expect(stateDuringWatch).toBe('paused');
+    const frames = parseEnvelopes(res.rawPayload);
+    const last = frames[frames.length - 1];
+    expect((last?.json.error as { code: string }).code).toBe(
+      'deadline_exceeded',
+    );
+  });
+
+  it('the polling trio: create, drain, drain empty, remove, then not_found', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const created = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/CreateWatcher',
+      { path: '/home/user' },
+    );
+    expect(created.statusCode).toBe(200);
+    const { watcherId } = created.json() as { watcherId: string };
+    expect(watcherId).toBeTruthy();
+
+    await t.executor.writeFiles(sandboxID, [
+      { path: 'polled.txt', content: Buffer.from('x') },
+    ]);
+    const first = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/GetWatcherEvents',
+      { watcherId },
+    );
+    expect(first.json().events).toContainEqual({
+      name: 'polled.txt',
+      type: 'EVENT_TYPE_CREATE',
+    });
+    // Drained means drained: the second poll answers empty.
+    const second = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/GetWatcherEvents',
+      { watcherId },
+    );
+    expect(second.json().events).toEqual([]);
+
+    const removed = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/RemoveWatcher',
+      { watcherId },
+    );
+    expect(removed.statusCode).toBe(200);
+    const gone = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/GetWatcherEvents',
+      { watcherId },
+    );
+    expect(gone.statusCode).toBe(404);
+    expect(gone.json()).toEqual({
+      code: 'not_found',
+      message: `watcher with id ${watcherId} not found`,
+    });
+  });
+
+  it('a polled watcher dies with its container: the next poll answers not_found', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const created = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/CreateWatcher',
+      { path: '/home/user' },
+    );
+    const { watcherId } = created.json() as { watcherId: string };
+    // The container stops under the watcher (physically, past the ledger —
+    // the conduction being tested is executor -> watcher table).
+    await t.executor.freeze(sandboxID);
+    await t.executor.stop(sandboxID);
+    await t.executor.start(sandboxID);
+    const res = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/GetWatcherEvents',
+      { watcherId },
+    );
+    expect(res.statusCode).toBe(404);
+    expect(res.json().code).toBe('not_found');
+  });
+
+  it('CreateWatcher validates the path with the unary error dialect', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const missing = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/CreateWatcher',
+      { path: '/home/user/nowhere' },
+    );
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({
+      code: 'not_found',
+      message: 'no such file: /home/user/nowhere',
+    });
+  });
 });

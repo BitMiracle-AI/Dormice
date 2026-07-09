@@ -26,7 +26,7 @@ RUN if [ -n "$UBUNTU_MIRROR" ]; then \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv python3-dev \
       build-essential ca-certificates curl wget git unzip xz-utils \
-      vim-tiny less jq ripgrep \
+      vim-tiny less jq ripgrep inotify-tools \
  && rm -rf /var/lib/apt/lists/* \
  && rm -f /usr/lib/python3.12/EXTERNALLY-MANAGED \
  && ln -sf /usr/bin/python3 /usr/local/bin/python

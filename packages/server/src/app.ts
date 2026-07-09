@@ -13,6 +13,7 @@ import type { Config } from './config';
 import type { Db } from './db/db';
 import { registerE2bCompat } from './e2b';
 import { ProcessTable } from './e2b/process-table';
+import { WatcherTable } from './e2b/watcher-table';
 import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
 import { sandboxRoutes } from './routes/sandboxes';
@@ -141,11 +142,19 @@ export function buildApp({
 
   // The E2B compatibility surface lives beside the native API with its own
   // auth (X-API-KEY / X-Access-Token) and its own error dialect. The process
-  // table is per-daemon state, born with the app and gone with it — a
-  // restart honestly empties it.
+  // and watcher tables are per-daemon state, born with the app and gone
+  // with it — a restart honestly empties them.
   const processes = new ProcessTable();
+  const watchers = new WatcherTable();
   app.register(async (compat) => {
-    await registerE2bCompat(compat, { config, db, executor, locks, processes });
+    await registerE2bCompat(compat, {
+      config,
+      db,
+      executor,
+      locks,
+      processes,
+      watchers,
+    });
   });
 
   return app;
