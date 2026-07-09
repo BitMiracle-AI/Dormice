@@ -1,5 +1,5 @@
 import type { Db } from './db/db';
-import { deleteSandbox, transition } from './db/ledger';
+import { deleteSandbox, setPausedByUser, transition } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import type { Executor } from './executor/executor';
 
@@ -58,10 +58,10 @@ export async function wakeSandbox(
       return row;
     case 'frozen':
       await executor.unfreeze(row.sandboxId);
-      return transition(db, row.sandboxId, 'active');
+      return awaken(db, row);
     case 'stopped':
       await executor.start(row.sandboxId);
-      return transition(db, row.sandboxId, 'active');
+      return awaken(db, row);
     case 'archived':
     case 'restoring':
       // Unreachable today — nothing archives until the S3 archiver lands.
@@ -70,4 +70,16 @@ export async function wakeSandbox(
         `sandbox ${row.sandboxId} is ${row.state}; restore is not implemented yet`,
       );
   }
+}
+
+/**
+ * The ledger side of a wake. An awake sandbox is by definition not paused,
+ * so any explicit E2B pause mark is cleared along with the transition —
+ * ledger honesty, not an E2B-surface concern leaking in.
+ */
+function awaken(db: Db, row: SandboxRow): SandboxRow {
+  if (row.pausedByUser) {
+    setPausedByUser(db, row.sandboxId, false);
+  }
+  return { ...transition(db, row.sandboxId, 'active'), pausedByUser: false };
 }

@@ -15,6 +15,13 @@
       "when": 1783538558684,
       "tag": "0001_stop-after-nullable",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1783592514453,
+      "tag": "0002_e2b-columns",
+      "breakpoints": true
     }
   ]
 }

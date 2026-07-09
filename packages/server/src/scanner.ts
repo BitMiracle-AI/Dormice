@@ -3,13 +3,31 @@ import { findBySandboxId, listSandboxes } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
-import { freezeSandbox, stopSandbox } from './lifecycle';
+import { freezeSandbox, releaseSandbox, stopSandbox } from './lifecycle';
 
 export interface ScanResult {
   frozen: number;
   stopped: number;
+  /** E2B deadlines whose action was kill, enforced this sweep: sandbox destroyed. */
+  expiredKilled: number;
   /** Sandboxes whose transition failed this sweep; the caller logs them. */
   failures: Array<{ sandboxId: string; message: string }>;
+}
+
+/**
+ * The E2B deadline rule. Unlike the idle rules it is an absolute clock —
+ * E2B kills a sandbox at its deadline even mid-command; activity does not
+ * extend it, only create/connect/setTimeout do. `kill` applies from any
+ * state (release handles them all); `pause` only has physical work while
+ * the sandbox is still active — colder states already satisfy it, and the
+ * logical view reads the expired deadline directly.
+ */
+function dueDeadline(row: SandboxRow, now: Date): 'kill' | 'pause' | null {
+  if (row.deadlineAt === null || Date.parse(row.deadlineAt) > now.getTime()) {
+    return null;
+  }
+  if (row.onDeadline !== 'pause') return 'kill';
+  return row.state === 'active' ? 'pause' : null;
 }
 
 /**
@@ -65,9 +83,14 @@ export async function scanOnce(
   locks: KeyedQueue,
   now: Date,
 ): Promise<ScanResult> {
-  const result: ScanResult = { frozen: 0, stopped: 0, failures: [] };
+  const result: ScanResult = {
+    frozen: 0,
+    stopped: 0,
+    expiredKilled: 0,
+    failures: [],
+  };
   for (const row of listSandboxes(db)) {
-    if (dueTransition(row, now) === null) {
+    if (dueDeadline(row, now) === null && dueTransition(row, now) === null) {
       continue;
     }
     try {
@@ -75,6 +98,19 @@ export async function scanOnce(
         const fresh = findBySandboxId(db, row.sandboxId);
         if (!fresh) {
           return; // Released since the sweep's snapshot.
+        }
+        // The deadline outranks idle cooling: a row due for both dies (or
+        // parks) by its deadline, not one rung colder.
+        const deadline = dueDeadline(fresh, now);
+        if (deadline === 'kill') {
+          await releaseSandbox(db, executor, fresh.sandboxId);
+          result.expiredKilled += 1;
+          return;
+        }
+        if (deadline === 'pause') {
+          await freezeSandbox(db, executor, fresh.sandboxId);
+          result.frozen += 1;
+          return;
         }
         const due = dueTransition(fresh, now);
         if (due === 'freeze') {

@@ -6,7 +6,7 @@ import {
 } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { type Db, migrateDb, openDb } from './db/db';
-import { createSandbox, findByUserKey } from './db/ledger';
+import { createSandbox, findByUserKey, setDeadline, touch } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
@@ -42,7 +42,12 @@ describe('idle scanner', () => {
     const { db, executor, locks } = setup();
     const row = await seed(db, executor, 'alice');
     const result = await scanOnce(db, executor, locks, after(row, 1));
-    expect(result).toEqual({ frozen: 0, stopped: 0, failures: [] });
+    expect(result).toEqual({
+      frozen: 0,
+      stopped: 0,
+      expiredKilled: 0,
+      failures: [],
+    });
     expect(findByUserKey(db, 'alice')?.state).toBe('active');
     expect(executor.stateOf(row.sandboxId)).toBe('running');
   });
@@ -56,7 +61,12 @@ describe('idle scanner', () => {
       locks,
       after(row, row.freezeAfterSeconds),
     );
-    expect(result).toEqual({ frozen: 1, stopped: 0, failures: [] });
+    expect(result).toEqual({
+      frozen: 1,
+      stopped: 0,
+      expiredKilled: 0,
+      failures: [],
+    });
     expect(findByUserKey(db, 'alice')?.state).toBe('frozen');
     expect(executor.stateOf(row.sandboxId)).toBe('paused');
   });
@@ -71,7 +81,12 @@ describe('idle scanner', () => {
     });
     await scanOnce(db, executor, locks, after(row, 60));
     const result = await scanOnce(db, executor, locks, after(row, 120));
-    expect(result).toEqual({ frozen: 0, stopped: 1, failures: [] });
+    expect(result).toEqual({
+      frozen: 0,
+      stopped: 1,
+      expiredKilled: 0,
+      failures: [],
+    });
     expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
     expect(executor.stateOf(row.sandboxId)).toBe('stopped');
   });
@@ -83,12 +98,14 @@ describe('idle scanner', () => {
     expect(await scanOnce(db, executor, locks, yearLater)).toEqual({
       frozen: 1,
       stopped: 0,
+      expiredKilled: 0,
       failures: [],
     });
     expect(findByUserKey(db, 'alice')?.state).toBe('frozen');
     expect(await scanOnce(db, executor, locks, yearLater)).toEqual({
       frozen: 0,
       stopped: 1,
+      expiredKilled: 0,
       failures: [],
     });
     expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
@@ -102,7 +119,12 @@ describe('idle scanner', () => {
     });
     const slow = await seed(db, executor, 'slow');
     const result = await scanOnce(db, executor, locks, after(quick, 100));
-    expect(result).toEqual({ frozen: 1, stopped: 0, failures: [] });
+    expect(result).toEqual({
+      frozen: 1,
+      stopped: 0,
+      expiredKilled: 0,
+      failures: [],
+    });
     expect(findByUserKey(db, 'quick')?.state).toBe('frozen');
     expect(findByUserKey(db, 'slow')?.state).toBe('active');
     expect(executor.stateOf(slow.sandboxId)).toBe('running');
@@ -125,7 +147,12 @@ describe('idle scanner', () => {
       locks,
       after(row, 365 * 24 * 60 * 60),
     );
-    expect(yearLater).toEqual({ frozen: 0, stopped: 0, failures: [] });
+    expect(yearLater).toEqual({
+      frozen: 0,
+      stopped: 0,
+      expiredKilled: 0,
+      failures: [],
+    });
     expect(findByUserKey(db, 'resident')?.state).toBe('frozen');
   });
 
@@ -182,7 +209,12 @@ describe('idle scanner vs the per-key queue', () => {
       locks,
       after(row, row.freezeAfterSeconds),
     );
-    expect(result).toEqual({ frozen: 0, stopped: 0, failures: [] });
+    expect(result).toEqual({
+      frozen: 0,
+      stopped: 0,
+      expiredKilled: 0,
+      failures: [],
+    });
     expect(findByUserKey(db, 'alice')?.state).toBe('active');
 
     release();
@@ -194,7 +226,12 @@ describe('idle scanner vs the per-key queue', () => {
       locks,
       after(row, row.freezeAfterSeconds),
     );
-    expect(next).toEqual({ frozen: 1, stopped: 0, failures: [] });
+    expect(next).toEqual({
+      frozen: 1,
+      stopped: 0,
+      expiredKilled: 0,
+      failures: [],
+    });
   });
 
   it('re-reads under the lock: a sandbox released mid-sweep is skipped, not failed', async () => {
@@ -226,7 +263,125 @@ describe('idle scanner vs the per-key queue', () => {
     );
     const [result] = await Promise.all([sweep, released]);
 
-    expect(result).toEqual({ frozen: 1, stopped: 0, failures: [] });
+    expect(result).toEqual({
+      frozen: 1,
+      stopped: 0,
+      expiredKilled: 0,
+      failures: [],
+    });
     expect(findByUserKey(db, 'doomed')).toBeUndefined();
+  });
+});
+
+describe('E2B deadline rule', () => {
+  async function seedWithDeadline(
+    db: Db,
+    executor: FakeExecutor,
+    userKey: string,
+    row: SandboxRow | null,
+    afterSeconds: number,
+    onDeadline: 'kill' | 'pause',
+  ): Promise<SandboxRow> {
+    const seeded = row ?? (await seed(db, executor, userKey));
+    setDeadline(db, seeded.sandboxId, {
+      deadlineAt: after(seeded, afterSeconds).toISOString(),
+      onDeadline,
+    });
+    return seeded;
+  }
+
+  it('kills an expired kill-deadline sandbox: container, disk and row gone', async () => {
+    const { db, executor, locks } = setup();
+    const row = await seedWithDeadline(
+      db,
+      executor,
+      'doomed',
+      null,
+      100,
+      'kill',
+    );
+
+    // Before the deadline nothing happens (idle is far below freeze too).
+    const early = await scanOnce(db, executor, locks, after(row, 50));
+    expect(early).toEqual({
+      frozen: 0,
+      stopped: 0,
+      expiredKilled: 0,
+      failures: [],
+    });
+
+    const late = await scanOnce(db, executor, locks, after(row, 100));
+    expect(late).toEqual({
+      frozen: 0,
+      stopped: 0,
+      expiredKilled: 1,
+      failures: [],
+    });
+    expect(findByUserKey(db, 'doomed')).toBeUndefined();
+    expect(executor.stateOf(row.sandboxId)).toBeUndefined();
+    expect(await executor.listDisks()).not.toContain(row.sandboxId);
+  });
+
+  it('the deadline outranks idle cooling: due for both means dead, not frozen', async () => {
+    const { db, executor, locks } = setup();
+    const row = await seedWithDeadline(db, executor, 'both', null, 10, 'kill');
+    // Way past freezeAfterSeconds AND past the deadline.
+    const result = await scanOnce(
+      db,
+      executor,
+      locks,
+      after(row, row.freezeAfterSeconds + 1000),
+    );
+    expect(result).toEqual({
+      frozen: 0,
+      stopped: 0,
+      expiredKilled: 1,
+      failures: [],
+    });
+    expect(findByUserKey(db, 'both')).toBeUndefined();
+  });
+
+  it('activity does not extend a deadline — it is an absolute clock', async () => {
+    const { db, executor, locks } = setup();
+    const row = await seedWithDeadline(db, executor, 'busy', null, 100, 'kill');
+    // The sandbox stays busy right up to the deadline; E2B kills anyway —
+    // only create/connect/setTimeout move a deadline, never activity.
+    touch(db, row.sandboxId, after(row, 99).toISOString());
+    const result = await scanOnce(db, executor, locks, after(row, 101));
+    expect(result.expiredKilled).toBe(1);
+    expect(findByUserKey(db, 'busy')).toBeUndefined();
+  });
+
+  it('parks an expired pause-deadline sandbox frozen, once, and keeps the row', async () => {
+    const { db, executor, locks } = setup();
+    const row = await seedWithDeadline(
+      db,
+      executor,
+      'parked',
+      null,
+      100,
+      'pause',
+    );
+
+    const late = await scanOnce(db, executor, locks, after(row, 100));
+    expect(late).toEqual({
+      frozen: 1,
+      stopped: 0,
+      expiredKilled: 0,
+      failures: [],
+    });
+    expect(findByUserKey(db, 'parked')?.state).toBe('frozen');
+    expect(executor.stateOf(row.sandboxId)).toBe('paused');
+
+    // A second sweep finds no physical work left: frozen already satisfies
+    // the pause action, and the logical view reads the deadline directly.
+    const again = await scanOnce(db, executor, locks, after(row, 200));
+    expect(again).toEqual({
+      frozen: 0,
+      stopped: 0,
+      expiredKilled: 0,
+      failures: [],
+    });
+    expect(findByUserKey(db, 'parked')?.state).toBe('frozen');
   });
 });
