@@ -2,7 +2,7 @@
 
 **The SQLite of agent sandboxes** — a self-hosted sandbox platform for AI agents. One machine, sandboxes that live forever, idle costs nothing.
 
-> **Status: early development.** The daemon, its lifecycle engine, the SDK, the CLI, the real Docker + gVisor executor, and the E2B-compatible API work end to end — the full create → freeze → stop → wake cycle, command execution, file I/O, and the official `e2b` SDK against real infrastructure. Nothing here is ready for production yet.
+> **Status: early development.** The daemon, its lifecycle engine, the SDK, the CLI, the web console, the real Docker + gVisor executor, and the E2B-compatible API work end to end — the full create → freeze → stop → wake cycle, command execution, file I/O, and the official `e2b` SDK against real infrastructure. Nothing here is ready for production yet.
 
 ## The idea
 
@@ -27,6 +27,16 @@ drift, and never rotates your API token. It ends by running `dor doctor`,
 19 read-only checks (including three that boot a real gVisor container)
 that decide whether the install actually succeeded; `dor doctor` can be
 re-run on its own at any time.
+
+## Web console
+
+The daemon serves a small web console at `http://127.0.0.1:3676/ui` —
+sign in with the API token once and it becomes an httpOnly session cookie;
+the token itself is never stored anywhere the page can read. The console
+shows every sandbox with its live lifecycle state (the same
+`/listSandboxes` the SDK sees) and can release sandboxes. Since the daemon
+listens on 127.0.0.1 only, reach a remote host's console through an SSH
+tunnel: `ssh -L 3676:127.0.0.1:3676 root@host`.
 
 ## Host prerequisites (docker executor)
 
@@ -63,7 +73,7 @@ pnpm monorepo:
 | `packages/server` | The daemon: Fastify + SQLite ledger + lifecycle engine |
 | `packages/sdk` | `@dormice/sdk` — TypeScript client for the native API |
 | `packages/cli` | `dormice` command-line tool (`dor` for short) |
-| `packages/web` | Web console (skeleton) |
+| `packages/web` | Web console: React SPA, served by the daemon at `/ui` |
 | `e2e` | Black-box suite: boots the built daemon, drives it over the wire |
 
 ## Development
