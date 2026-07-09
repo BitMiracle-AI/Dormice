@@ -1,7 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { EXEC_OUTPUT_LIMIT_BYTES } from '@dormice/shared';
+import {
+  EXEC_OUTPUT_LIMIT_BYTES,
+  FILE_SIZE_LIMIT_BYTES,
+} from '@dormice/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ContainerState, Executor } from './executor';
+import {
+  type ContainerState,
+  type Executor,
+  FileNotFoundError,
+  FileTooLargeError,
+  NotAFileError,
+} from './executor';
 
 /**
  * What a contract run needs beyond the executor itself: a way to stage the
@@ -373,6 +382,205 @@ export function describeExecutorContract(
         expect(result.stdoutTruncated).toBe(true);
         expect(result.stdout.length).toBe(EXEC_OUTPUT_LIMIT_BYTES);
         expect(result.stderrTruncated).toBe(false);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'writeFiles then readFile round-trips text',
+      async () => {
+        const id = await fresh();
+        await executor.writeFiles(id, [
+          { path: '/home/user/hello.txt', content: Buffer.from('hello\n') },
+        ]);
+        const read = await executor.readFile(id, '/home/user/hello.txt');
+        expect(read.toString('utf8')).toBe('hello\n');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'file content round-trips byte-exact, binary included',
+      async () => {
+        const id = await fresh();
+        // Every byte value, repeated — any encoding sloppiness (utf8 coercion,
+        // base64 mangling, CR/LF translation) breaks the exact comparison.
+        const bytes = Buffer.alloc(256 * 64);
+        for (let i = 0; i < bytes.length; i++) bytes[i] = i % 256;
+        await executor.writeFiles(id, [
+          { path: '/home/user/blob.bin', content: bytes },
+        ]);
+        const read = await executor.readFile(id, '/home/user/blob.bin');
+        expect(read.equals(bytes)).toBe(true);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'writeFiles writes the whole batch',
+      async () => {
+        const id = await fresh();
+        await executor.writeFiles(id, [
+          { path: '/home/user/a.txt', content: Buffer.from('a') },
+          { path: '/home/user/b.txt', content: Buffer.from('b') },
+          { path: '/home/user/c.txt', content: Buffer.from('c') },
+        ]);
+        expect(
+          (await executor.readFile(id, '/home/user/a.txt')).toString(),
+        ).toBe('a');
+        expect(
+          (await executor.readFile(id, '/home/user/b.txt')).toString(),
+        ).toBe('b');
+        expect(
+          (await executor.readFile(id, '/home/user/c.txt')).toString(),
+        ).toBe('c');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'relative paths resolve against /home/user',
+      async () => {
+        const id = await fresh();
+        await executor.writeFiles(id, [
+          { path: 'rel.txt', content: Buffer.from('via relative') },
+        ]);
+        const read = await executor.readFile(id, '/home/user/rel.txt');
+        expect(read.toString('utf8')).toBe('via relative');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'writeFiles creates missing parent directories',
+      async () => {
+        const id = await fresh();
+        await executor.writeFiles(id, [
+          {
+            path: '/home/user/deep/er/nested.txt',
+            content: Buffer.from('deep'),
+          },
+        ]);
+        const read = await executor.readFile(
+          id,
+          '/home/user/deep/er/nested.txt',
+        );
+        expect(read.toString('utf8')).toBe('deep');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'writing an existing path overwrites it',
+      async () => {
+        const id = await fresh();
+        await executor.writeFiles(id, [
+          { path: '/home/user/v.txt', content: Buffer.from('first') },
+        ]);
+        await executor.writeFiles(id, [
+          { path: '/home/user/v.txt', content: Buffer.from('second') },
+        ]);
+        const read = await executor.readFile(id, '/home/user/v.txt');
+        expect(read.toString('utf8')).toBe('second');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'files live on the disk: they survive stop, start, even a vanished container',
+      async () => {
+        const id = await fresh();
+        await executor.writeFiles(id, [
+          { path: '/home/user/keep.txt', content: Buffer.from('still here') },
+        ]);
+        await executor.freeze(id);
+        await executor.stop(id);
+        // The container object itself is lost (a prune) — the disk, which
+        // holds the files, is the sandbox's actual body.
+        await subject.vanishContainer(id);
+        await executor.start(id);
+        const read = await executor.readFile(id, '/home/user/keep.txt');
+        expect(read.toString('utf8')).toBe('still here');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'readFile on a missing path throws FileNotFoundError',
+      async () => {
+        const id = await fresh();
+        const missing = '/home/user/absent.txt';
+        const error = await executor.readFile(id, missing).catch((e) => e);
+        expect(error).toBeInstanceOf(FileNotFoundError);
+        expect(error.message).toBe(`no such file: ${missing}`);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'readFile on a directory throws NotAFileError',
+      async () => {
+        const id = await fresh();
+        // /home/user exists as a directory in every sandbox by construction.
+        const error = await executor.readFile(id, '/home/user').catch((e) => e);
+        expect(error).toBeInstanceOf(NotAFileError);
+        expect(error.message).toBe('not a regular file: /home/user');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'writeFiles onto a directory throws NotAFileError',
+      async () => {
+        const id = await fresh();
+        const error = await executor
+          .writeFiles(id, [{ path: '/home/user', content: Buffer.from('x') }])
+          .catch((e) => e);
+        expect(error).toBeInstanceOf(NotAFileError);
+        expect(error.message).toBe('not a regular file: /home/user');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'readFile refuses an over-limit file with its actual size, never truncates',
+      async () => {
+        const id = await fresh();
+        // One byte over the line. The executor's write path is deliberately
+        // uncapped (the protocol schema is the write-cap adjudicator), which
+        // is exactly what lets the exam stage an over-limit file to read.
+        const size = FILE_SIZE_LIMIT_BYTES + 1;
+        await executor.writeFiles(id, [
+          { path: '/home/user/big.bin', content: Buffer.alloc(size) },
+        ]);
+        const error = await executor
+          .readFile(id, '/home/user/big.bin')
+          .catch((e) => e);
+        expect(error).toBeInstanceOf(FileTooLargeError);
+        expect(error.message).toBe(
+          `file too large: /home/user/big.bin is ${size} bytes, limit ${FILE_SIZE_LIMIT_BYTES}`,
+        );
+      },
+      timeoutMs * 4,
+    );
+
+    it(
+      'rejects file operations on a container that is not running',
+      async () => {
+        const paused = await fresh();
+        await executor.freeze(paused);
+        await expect(
+          executor.writeFiles(paused, [
+            { path: 'x.txt', content: Buffer.from('x') },
+          ]),
+        ).rejects.toThrow(/is paused, expected running/);
+        await expect(executor.readFile(paused, 'x.txt')).rejects.toThrow(
+          /is paused, expected running/,
+        );
+
+        await expect(executor.readFile(randomUUID(), 'x.txt')).rejects.toThrow(
+          /is absent, expected running/,
+        );
       },
       timeoutMs,
     );

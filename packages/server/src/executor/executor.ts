@@ -28,6 +28,21 @@ export interface ExecResult {
   stderrTruncated: boolean;
 }
 
+export interface FileToWrite {
+  /** Absolute, or relative to /home/user — resolveSandboxPath's rules. */
+  path: string;
+  content: Buffer;
+}
+
+/**
+ * The file-op error taxonomy, shared by both executors down to the message
+ * (the contract exam holds them to it) and mapped to HTTP statuses by the
+ * route: not found -> 404, not a regular file -> 400, too large -> 413.
+ */
+export class FileNotFoundError extends Error {}
+export class NotAFileError extends Error {}
+export class FileTooLargeError extends Error {}
+
 /**
  * The executor is where lifecycle decisions become physical reality:
  * containers created, paused, stopped. The daemon's decision logic (the
@@ -86,4 +101,22 @@ export interface Executor {
    * drained and dropped, and the truncation reported.
    */
   exec(sandboxId: string, opts: ExecOptions): Promise<ExecResult>;
+  /**
+   * Writes every file in the batch, in order, failing fast — earlier files
+   * stay written (a batch saves round-trips, it is not a transaction).
+   * Parent directories are created; existing files are overwritten. Requires
+   * state `running`, like exec. Paths resolve inside the container — a
+   * symlink planted by the sandbox can only point at the sandbox's own view,
+   * never the host's; this is why file I/O goes through the container and
+   * not through the host-side mount. No size check here: the protocol
+   * schema is the single write-cap adjudicator.
+   */
+  writeFiles(sandboxId: string, files: FileToWrite[]): Promise<void>;
+  /**
+   * Returns one file's bytes. Requires state `running`. Throws the typed
+   * file errors above; a file over FILE_SIZE_LIMIT_BYTES is refused, never
+   * truncated — a truncated file is a corrupt file. The read cap lives here
+   * and not in the schema because only the executor can observe the size.
+   */
+  readFile(sandboxId: string, path: string): Promise<Buffer>;
 }
