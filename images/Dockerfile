@@ -1,4 +1,5 @@
-# Dormice sandbox base image: Ubuntu 24.04 + Python 3.12 + Node.js 24 LTS.
+# Dormice sandbox base image: Ubuntu 24.04 + Python 3.12 + Node.js 24 LTS
+# + Claude Code.
 #
 # Three rules this file lives by:
 #   1. Layers are ordered by change frequency: system packages at the bottom,
@@ -58,7 +59,16 @@ RUN if [ -n "$PIP_INDEX" ]; then \
       && printf 'registry=%s\n' "$NPM_REGISTRY" > "/opt/node-$NODE_VERSION-linux-x64/etc/npmrc"; \
     fi
 
-# ---- Layer 4: non-root user (top layer) ----
+# ---- Layer 4: Claude Code, version-pinned ----
+# Placed after the registry layer on purpose: `npm install -g` reads the
+# global npmrc written above, so a mirror configured for the sandbox also
+# speeds up this build step. Installs into the Node prefix under /opt
+# (never /home/user — rule 2), with the usual /usr/local/bin symlink.
+ARG CLAUDE_CODE_VERSION=2.1.200
+RUN npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" \
+ && ln -s "/opt/node-$NODE_VERSION-linux-x64/bin/claude" /usr/local/bin/claude
+
+# ---- Layer 5: non-root user (top layer) ----
 # ubuntu:24.04 ships an "ubuntu" user at uid 1000; replace it with "user" so
 # the uid the executor chowns sandbox disks to always maps to the same name.
 RUN userdel -r ubuntu 2>/dev/null; useradd -m -u 1000 -s /bin/bash user
