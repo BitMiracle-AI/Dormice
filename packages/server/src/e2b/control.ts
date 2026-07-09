@@ -1,0 +1,377 @@
+import { randomUUID } from 'node:crypto';
+import type { FastifyError } from 'fastify';
+import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
+import { z } from 'zod';
+import {
+  countSandboxes,
+  createSandbox,
+  findBySandboxId,
+  findByUserKey,
+  listSandboxes,
+  setDeadline,
+  setPausedByUser,
+  touch,
+} from '../db/ledger';
+import type { SandboxRow } from '../db/schema';
+import {
+  freezeSandbox,
+  releaseSandbox,
+  stopSandbox,
+  wakeSandbox,
+} from '../lifecycle';
+import { resolvePolicy } from '../policy';
+import type { E2bDeps } from './deps';
+import {
+  apiError,
+  E2bError,
+  ENVD_VERSION,
+  mintEnvdToken,
+  verifyApiKey,
+} from './protocol';
+import { e2bView } from './view';
+
+/**
+ * The E2B control plane: what the official SDK calls api.e2b.app for.
+ * Mounted under /e2b/api; the SDK reaches it through its `apiUrl` option.
+ * Faithful by default — timeouts kill, kill destroys; Dormice's immortality
+ * is opt-in via metadata.userKey (idempotent create) or autoPause.
+ */
+
+/** The Dormice extension key: metadata.userKey makes create idempotent. */
+const USER_KEY_PATTERN = /^[a-zA-Z0-9._-]{1,64}$/;
+
+/** Seconds; E2B's default sandbox TTL. */
+const DEFAULT_TIMEOUT_SECONDS = 300;
+
+const timeoutSchema = z
+  .number()
+  .int()
+  .positive()
+  .max(30 * 24 * 60 * 60);
+
+// .loose(): the v2 SDK sends fields we deliberately ignore (secure,
+// autoResume, network, ...) — tolerating them is what "two URLs and it
+// works" requires; acting on them is tracked feature by feature.
+const createBodySchema = z
+  .object({
+    templateID: z.string().optional(),
+    timeout: timeoutSchema.optional(),
+    metadata: z.record(z.string(), z.string()).optional(),
+    envVars: z.record(z.string(), z.string()).optional(),
+    autoPause: z.boolean().optional(),
+  })
+  .loose();
+
+const timeoutBodySchema = z.object({ timeout: timeoutSchema }).loose();
+
+const connectBodySchema = z
+  .object({ timeout: timeoutSchema.optional() })
+  .loose();
+
+const pauseBodySchema = z
+  .object({ memory: z.boolean().optional() })
+  .loose()
+  .optional();
+
+const listQuerySchema = z.object({
+  metadata: z.string().optional(),
+  state: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(1000).default(100),
+  nextToken: z.string().optional(),
+});
+
+const notFound = (sandboxId: string) =>
+  apiError(404, `sandbox "${sandboxId}" not found`);
+
+export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
+  app,
+  { config, db, executor, locks },
+) => {
+  app.addHook('onRequest', async (request, reply) => {
+    const presented = request.headers['x-api-key'];
+    const key = Array.isArray(presented) ? presented[0] : presented;
+    if (!verifyApiKey(config.DORMICE_API_TOKEN, key)) {
+      await reply.code(401).send({ code: 401, message: 'invalid API key' });
+    }
+  });
+
+  // The E2B error dialect: every non-2xx body is { code, message } — the
+  // SDK's handleApiError reads both. Scoped here; the native { message }
+  // dialect stays untouched outside /e2b.
+  app.setErrorHandler((error: FastifyError | E2bError, request, reply) => {
+    if (error instanceof E2bError) {
+      return reply
+        .code(error.statusCode)
+        .send({ code: error.code, message: error.message });
+    }
+    const status = error.statusCode ?? 500;
+    if (status >= 500) {
+      request.log.error(error, 'e2b control request failed');
+    }
+    // openapi shape: the body's code mirrors the numeric status.
+    return reply.code(status).send({ code: status, message: error.message });
+  });
+  app.setNotFoundHandler((request, reply) => {
+    reply.code(404).send({
+      code: 404,
+      message: `route ${request.method} ${request.url} not found`,
+    });
+  });
+
+  /** What create and connect answer with. */
+  function sessionView(row: SandboxRow) {
+    return {
+      sandboxID: row.sandboxId,
+      templateID: config.DORMICE_BASE_IMAGE ?? 'base',
+      alias: row.userKey,
+      envdVersion: ENVD_VERSION,
+      envdAccessToken: mintEnvdToken(config.DORMICE_API_TOKEN, row.sandboxId),
+    };
+  }
+
+  /** What getInfo and list answer with. */
+  function infoView(row: SandboxRow, state: 'running' | 'paused') {
+    return {
+      sandboxID: row.sandboxId,
+      templateID: config.DORMICE_BASE_IMAGE ?? 'base',
+      alias: row.userKey,
+      metadata: row.metadata ? JSON.parse(row.metadata) : {},
+      state,
+      startedAt: row.createdAt,
+      // No deadline (a natively-acquired immortal sandbox) reports a year
+      // out, so SDK-side "expired?" arithmetic never trips.
+      endAt:
+        row.deadlineAt ??
+        new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+      cpuCount: config.DORMICE_SANDBOX_CPUS,
+      memoryMB: Math.round(config.DORMICE_SANDBOX_MEMORY_GB * 1024),
+      envdVersion: ENVD_VERSION,
+    };
+  }
+
+  /**
+   * Looks a sandbox up as the protocol sees it. A row whose kill-deadline
+   * has passed is protocol-dead — 404, exactly what the SDK expects of a
+   * timed-out sandbox — even while the scanner's physical teardown is still
+   * a sweep away.
+   */
+  function findLive(sandboxId: string): {
+    row: SandboxRow;
+    state: 'running' | 'paused';
+  } {
+    const row = findBySandboxId(db, sandboxId);
+    if (!row) throw notFound(sandboxId);
+    const state = e2bView(row, new Date());
+    if (state === 'dead') throw notFound(sandboxId);
+    return { row, state };
+  }
+
+  /**
+   * connect's TTL rule: only ever extended, never shortened. And only for
+   * sandboxes the E2B surface created (they always carry onDeadline):
+   * a natively-acquired sandbox is immortal by its owner's choice, and the
+   * compat surface must not quietly impose a deadline on it.
+   */
+  function extendDeadline(row: SandboxRow, timeoutSeconds: number): void {
+    if (row.onDeadline === null) return;
+    const candidate = Date.now() + timeoutSeconds * 1000;
+    const current = row.deadlineAt ? Date.parse(row.deadlineAt) : 0;
+    if (candidate > current) {
+      setDeadline(db, row.sandboxId, {
+        deadlineAt: new Date(candidate).toISOString(),
+        onDeadline: row.onDeadline,
+      });
+    }
+  }
+
+  app.post(
+    '/sandboxes',
+    { schema: { body: createBodySchema } },
+    async (request, reply) => {
+      const body = request.body;
+      const timeoutSeconds = body.timeout ?? DEFAULT_TIMEOUT_SECONDS;
+      const requestedKey = body.metadata?.userKey;
+      if (requestedKey !== undefined && !USER_KEY_PATTERN.test(requestedKey)) {
+        throw apiError(
+          400,
+          `invalid metadata.userKey "${requestedKey}": expected 1-64 chars of [a-zA-Z0-9._-]`,
+        );
+      }
+      const userKey = requestedKey ?? `e2b-${randomUUID()}`;
+
+      const row = await locks.run(userKey, async () => {
+        const existing = findByUserKey(db, userKey);
+        if (existing && e2bView(existing, new Date()) !== 'dead') {
+          // The Dormice extension: same key, same sandbox — an acquire in
+          // E2B clothes. Stored metadata/envs stay (same principle as the
+          // native policy's "override applies at creation only"); the
+          // deadline is extended like a connect.
+          const awake = await wakeSandbox(db, executor, existing);
+          extendDeadline(awake, timeoutSeconds);
+          return touch(db, awake.sandboxId);
+        }
+        if (existing) {
+          // Protocol-dead but not yet reaped: E2B semantics say it is gone,
+          // so finish the job and build fresh under the same key.
+          await releaseSandbox(db, executor, existing.sandboxId);
+        }
+
+        if (countSandboxes(db) >= config.DORMICE_MAX_SANDBOXES) {
+          throw apiError(
+            429,
+            `sandbox limit reached (DORMICE_MAX_SANDBOXES=${config.DORMICE_MAX_SANDBOXES}) — release a sandbox or raise the limit`,
+          );
+        }
+        const sandboxId = randomUUID();
+        await executor.create(sandboxId);
+        return createSandbox(db, {
+          sandboxId,
+          userKey,
+          nodeId: config.DORMICE_NODE_ID,
+          policy: resolvePolicy(undefined),
+          e2b: {
+            metadata: body.metadata ? JSON.stringify(body.metadata) : null,
+            envs:
+              body.envVars && Object.keys(body.envVars).length > 0
+                ? JSON.stringify(body.envVars)
+                : null,
+            deadlineAt: new Date(
+              Date.now() + timeoutSeconds * 1000,
+            ).toISOString(),
+            // Faithful default: E2B kills at the deadline unless the caller
+            // opted into pause (lifecycle.onTimeout='pause' on the wire).
+            onDeadline: body.autoPause ? 'pause' : 'kill',
+          },
+        });
+      });
+      return reply.code(201).send(sessionView(row));
+    },
+  );
+
+  app.post(
+    '/sandboxes/:id/connect',
+    { schema: { body: connectBodySchema } },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const before = findLive(id);
+      const row = await locks.run(before.row.userKey, async () => {
+        const fresh = findBySandboxId(db, id);
+        if (!fresh || e2bView(fresh, new Date()) === 'dead') {
+          throw notFound(id);
+        }
+        const awake = await wakeSandbox(db, executor, fresh);
+        extendDeadline(awake, request.body.timeout ?? DEFAULT_TIMEOUT_SECONDS);
+        return touch(db, awake.sandboxId);
+      });
+      // 200 = it was already running, 201 = this connect resumed it.
+      return reply
+        .code(before.state === 'running' ? 200 : 201)
+        .send(sessionView(row));
+    },
+  );
+
+  app.get('/sandboxes/:id', async (request) => {
+    const { id } = request.params as { id: string };
+    const { row, state } = findLive(id);
+    return infoView(row, state);
+  });
+
+  app.delete('/sandboxes/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    // kill = release, for real: container, disk and row gone. Persistence
+    // on the E2B surface is "don't kill" (autoPause / userKey), never a
+    // kill that secretly keeps data.
+    const { row } = findLive(id);
+    await locks.run(row.userKey, async () => {
+      const fresh = findBySandboxId(db, id);
+      if (!fresh) throw notFound(id);
+      await releaseSandbox(db, executor, fresh.sandboxId);
+    });
+    return reply.code(204).send();
+  });
+
+  app.post(
+    '/sandboxes/:id/timeout',
+    { schema: { body: timeoutBodySchema } },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const { row } = findLive(id);
+      // setTimeout overwrites in both directions, measured from now — but
+      // only for E2B-created sandboxes; native ones stay immortal.
+      if (row.onDeadline !== null) {
+        setDeadline(db, row.sandboxId, {
+          deadlineAt: new Date(
+            Date.now() + request.body.timeout * 1000,
+          ).toISOString(),
+          onDeadline: row.onDeadline,
+        });
+      }
+      return reply.code(204).send();
+    },
+  );
+
+  app.post(
+    '/sandboxes/:id/pause',
+    { schema: { body: pauseBodySchema } },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const before = findLive(id);
+      if (before.state === 'paused') {
+        // The SDK reads a 409 as "already paused" and answers false.
+        throw apiError(409, 'sandbox is already paused');
+      }
+      await locks.run(before.row.userKey, async () => {
+        const fresh = findBySandboxId(db, id);
+        if (!fresh) throw notFound(id);
+        let current = fresh;
+        if (current.state === 'active') {
+          current = await freezeSandbox(db, executor, current.sandboxId);
+        }
+        // keepMemory:false maps to stopped: filesystem only, cold boot on
+        // resume — physically exactly what E2B promises for it.
+        if (request.body?.memory === false && current.state === 'frozen') {
+          await stopSandbox(db, executor, current.sandboxId);
+        }
+        setPausedByUser(db, fresh.sandboxId, true);
+      });
+      return reply.code(204).send();
+    },
+  );
+
+  app.get(
+    '/v2/sandboxes',
+    { schema: { querystring: listQuerySchema } },
+    async (request, reply) => {
+      const { metadata, state, limit, nextToken } = request.query;
+      const wanted = new Set(
+        (state ? state.split(',') : ['running', 'paused']).map((s) => s.trim()),
+      );
+      const filters = [...new URLSearchParams(metadata ?? '')];
+
+      const now = new Date();
+      const all = listSandboxes(db)
+        .map((row) => ({ row, state: e2bView(row, now) }))
+        .filter(
+          (item): item is { row: SandboxRow; state: 'running' | 'paused' } => {
+            if (item.state === 'dead' || !wanted.has(item.state)) return false;
+            if (filters.length === 0) return true;
+            const meta: Record<string, string> = item.row.metadata
+              ? JSON.parse(item.row.metadata)
+              : {};
+            return filters.every(([key, value]) => meta[key] === value);
+          },
+        )
+        // Newest first, like the E2B dashboard; stable under pagination.
+        .sort((a, b) => (a.row.createdAt < b.row.createdAt ? 1 : -1));
+
+      const offset = Number(nextToken ?? '0') || 0;
+      const page = all.slice(offset, offset + limit);
+      if (offset + limit < all.length) {
+        // The v2 pagination protocol: the cursor lives in this header; its
+        // absence is what means "no next page".
+        reply.header('x-next-token', String(offset + limit));
+      }
+      return page.map((item) => infoView(item.row, item.state));
+    },
+  );
+};

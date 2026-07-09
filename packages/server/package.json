@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@dormice/shared": "workspace:*",
+    "@fastify/multipart": "^10.0.0",
     "better-sqlite3": "^12.11.1",
     "dockerode": "^5.0.1",
     "drizzle-orm": "^0.45.2",
