@@ -10,6 +10,14 @@ import {
   releaseSandboxResponseSchema,
   type Sandbox,
 } from '@dormice/shared';
+import { Agent, fetch, type Response } from 'undici';
+
+// The daemon answers an exec only when the command finishes, so response
+// headers can be legitimately hours away — but a default dispatcher stops
+// waiting for headers after 300s (measured 2026-07-09: every exec past five
+// minutes died as `fetch failed`). This dispatcher switches undici's hidden
+// clocks off; the AbortSignal in rpc() is the one deadline that counts.
+const dispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 
 export interface DormiceOptions {
   /** Base URL of the daemon, e.g. `http://127.0.0.1:3676`. */
@@ -131,6 +139,7 @@ export class Dormice {
         'content-type': 'application/json',
       },
       body: JSON.stringify(body),
+      dispatcher,
       // Rejects with a TimeoutError — honestly not an API error, so it is
       // deliberately not wrapped in DormiceApiError.
       signal: AbortSignal.timeout(timeoutMs),

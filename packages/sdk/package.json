@@ -19,7 +19,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dormice/shared": "workspace:*"
+    "@dormice/shared": "workspace:*",
+    "undici": "^8.7.0"
   },
   "devDependencies": {
     "@dormice/server": "workspace:*"

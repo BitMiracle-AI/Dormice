@@ -11,6 +11,12 @@ import {
   scanOnce,
 } from '@dormice/server';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
+import {
+  Agent,
+  getGlobalDispatcher,
+  setGlobalDispatcher,
+  fetch as undiciFetch,
+} from 'undici';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Dormice } from './client';
 
@@ -164,6 +170,36 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
     });
     // A nonzero exit is a result, not a throw.
     expect((await client.execCommand('grace', 'exit 3')).exitCode).toBe(3);
+  });
+
+  it("outlives a default dispatcher's headers clock on a long exec", async () => {
+    // An exec response starts only when the command ends, so a long command
+    // starves any clock that watches for response headers — undici's default
+    // gives up at 300s (measured on the real daemon: `fetch failed` at
+    // exactly five minutes). 300s is untestable here, so pinch the global
+    // dispatcher's clock down to 250ms and race it against `sleep 1`.
+    const prior = getGlobalDispatcher();
+    setGlobalDispatcher(new Agent({ headersTimeout: 250 }));
+    try {
+      await client.acquireSandbox('henry');
+      // Reverse verification: a fetch that does NOT bring its own
+      // dispatcher dies on the pinched clock — the threat is real.
+      await expect(
+        undiciFetch(`${endpoint}/execCommand`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${TOKEN}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ userKey: 'henry', command: 'sleep 1' }),
+        }),
+      ).rejects.toThrow(/fetch failed/);
+      // The SDK carries its own dispatcher, so the same call sails through.
+      const result = await client.execCommand('henry', 'sleep 1');
+      expect(result.exitCode).toBe(0);
+    } finally {
+      setGlobalDispatcher(prior);
+    }
   });
 
   it('surfaces the 404 for an exec against an unknown key', async () => {
