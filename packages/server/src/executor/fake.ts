@@ -1,10 +1,25 @@
-import { EXEC_OUTPUT_LIMIT_BYTES } from '@dormice/shared';
-import type {
-  ContainerState,
-  ExecOptions,
-  ExecResult,
-  Executor,
+import {
+  EXEC_OUTPUT_LIMIT_BYTES,
+  FILE_SIZE_LIMIT_BYTES,
+  resolveSandboxPath,
+} from '@dormice/shared';
+import {
+  type ContainerState,
+  type ExecOptions,
+  type ExecResult,
+  type Executor,
+  FileNotFoundError,
+  FileTooLargeError,
+  type FileToWrite,
+  NotAFileError,
 } from './executor';
+
+/**
+ * Directories the base image guarantees in every sandbox. The fake's
+ * filesystem is otherwise implicit — a directory exists exactly when some
+ * file lives under it, which is all mkdir -p semantics leave observable.
+ */
+const BUILTIN_DIRS = new Set(['/', '/home', '/home/user', '/tmp']);
 
 /**
  * In-memory stand-in for the Docker+gVisor executor. Not a throwaway: it is
@@ -18,6 +33,13 @@ import type {
 export class FakeExecutor implements Executor {
   private readonly containers = new Map<string, ContainerState>();
   private readonly disks = new Set<string>();
+  /**
+   * Keyed like disks, not containers: files are the disk's content, so they
+   * survive stop, start, and a vanished container object, and die only when
+   * the disk does. That is the "the disk is the sandbox's body" invariant,
+   * modeled where it physically lives.
+   */
+  private readonly files = new Map<string, Map<string, Buffer>>();
 
   /** Test hook: what does "reality" say about this sandbox? */
   stateOf(sandboxId: string): ContainerState | undefined {
@@ -48,6 +70,7 @@ export class FakeExecutor implements Executor {
       throw new Error(`container ${sandboxId} already exists`);
     }
     this.disks.add(sandboxId);
+    this.files.set(sandboxId, new Map());
     this.containers.set(sandboxId, 'running');
   }
 
@@ -90,6 +113,7 @@ export class FakeExecutor implements Executor {
     // hearing.
     const hadContainer = this.containers.delete(sandboxId);
     const hadDisk = this.disks.delete(sandboxId);
+    this.files.delete(sandboxId);
     if (!hadContainer && !hadDisk) {
       throw new Error(`container ${sandboxId} is absent, cannot destroy`);
     }
@@ -107,6 +131,7 @@ export class FakeExecutor implements Executor {
   async removeDisk(sandboxId: string): Promise<void> {
     // Idempotent by contract: an absent disk already is the goal state.
     this.disks.delete(sandboxId);
+    this.files.delete(sandboxId);
   }
 
   async exec(sandboxId: string, opts: ExecOptions): Promise<ExecResult> {
@@ -125,6 +150,52 @@ export class FakeExecutor implements Executor {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  async writeFiles(sandboxId: string, files: FileToWrite[]): Promise<void> {
+    this.expect(sandboxId, 'running');
+    const disk = this.files.get(sandboxId) ?? new Map<string, Buffer>();
+    this.files.set(sandboxId, disk);
+    for (const file of files) {
+      const path = resolveSandboxPath(file.path);
+      if (this.isDirectory(disk, path)) {
+        throw new NotAFileError(`not a regular file: ${path}`);
+      }
+      // Copy on the way in: the caller's buffer is theirs to reuse.
+      disk.set(path, Buffer.from(file.content));
+    }
+  }
+
+  async readFile(sandboxId: string, path: string): Promise<Buffer> {
+    this.expect(sandboxId, 'running');
+    const disk = this.files.get(sandboxId) ?? new Map<string, Buffer>();
+    const resolved = resolveSandboxPath(path);
+    const content = disk.get(resolved);
+    if (content !== undefined) {
+      if (content.length > FILE_SIZE_LIMIT_BYTES) {
+        throw new FileTooLargeError(
+          `file too large: ${resolved} is ${content.length} bytes, limit ${FILE_SIZE_LIMIT_BYTES}`,
+        );
+      }
+      return Buffer.from(content);
+    }
+    if (this.isDirectory(disk, resolved)) {
+      throw new NotAFileError(`not a regular file: ${resolved}`);
+    }
+    throw new FileNotFoundError(`no such file: ${resolved}`);
+  }
+
+  /**
+   * A path is a directory when the image ships it or some file lives under
+   * it — the same observable truth mkdir -p leaves behind on a real disk.
+   */
+  private isDirectory(disk: Map<string, Buffer>, path: string): boolean {
+    if (BUILTIN_DIRS.has(path)) return true;
+    const prefix = path === '/' ? '/' : `${path}/`;
+    for (const existing of disk.keys()) {
+      if (existing.startsWith(prefix)) return true;
+    }
+    return false;
   }
 
   private expect(sandboxId: string, wanted: ContainerState): void {

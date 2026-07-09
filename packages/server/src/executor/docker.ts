@@ -9,14 +9,22 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import { Writable } from 'node:stream';
-import { EXEC_OUTPUT_LIMIT_BYTES } from '@dormice/shared';
+import {
+  EXEC_OUTPUT_LIMIT_BYTES,
+  FILE_SIZE_LIMIT_BYTES,
+  resolveSandboxPath,
+} from '@dormice/shared';
 import Docker from 'dockerode';
 import { execa } from 'execa';
-import type {
-  ContainerState,
-  ExecOptions,
-  ExecResult,
-  Executor,
+import {
+  type ContainerState,
+  type ExecOptions,
+  type ExecResult,
+  type Executor,
+  FileNotFoundError,
+  FileTooLargeError,
+  type FileToWrite,
+  NotAFileError,
 } from './executor';
 
 /**
@@ -44,6 +52,45 @@ export interface DockerExecutorOptions {
 export function containerName(sandboxId: string): string {
   return `sbx-${sandboxId}`;
 }
+
+/**
+ * In-container deadline for file operations, same mechanism as exec's
+ * (host-side disconnects cannot kill an in-container process). Not a user
+ * knob: 16 MiB on a local ext4 is subsecond work — this guard only exists
+ * so a pathological target cannot hang the daemon's request forever.
+ */
+const FILE_OP_TIMEOUT_SECONDS = 60;
+
+/**
+ * The file-op scripts talk back through exit codes of our choosing — private
+ * numbers between the daemon and its own script, no user command runs inside.
+ * They map 1:1 onto the typed file errors both executors must throw.
+ */
+const NO_SUCH_FILE_EXIT = 44;
+const NOT_A_FILE_EXIT = 45;
+const TOO_LARGE_EXIT = 46;
+
+/**
+ * $1 = absolute path. Refuses a target that exists but is not a regular
+ * file (directory, FIFO — `cat >` into a FIFO would block forever), creates
+ * the parents, then streams stdin into the file. Runs as uid 1000, so
+ * in-sandbox permissions apply honestly, and path resolution — symlinks
+ * included — happens inside the container, where there is no host to
+ * escape to.
+ */
+const WRITE_FILE_SCRIPT = [
+  `[ ! -e "$1" ] || [ -f "$1" ] || exit ${NOT_A_FILE_EXIT}`,
+  'mkdir -p -- "$(dirname -- "$1")" && exec cat > "$1"',
+].join('\n');
+
+/** $1 = absolute path, $2 = size limit in bytes. Size gate before content: an over-limit file is refused, never truncated. */
+const READ_FILE_SCRIPT = [
+  `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
+  `[ -f "$1" ] || exit ${NOT_A_FILE_EXIT}`,
+  'size=$(stat -c %s -- "$1") || exit 1',
+  `[ "$size" -le "$2" ] || { echo "$size" >&2; exit ${TOO_LARGE_EXIT}; }`,
+  'exec cat -- "$1"',
+].join('\n');
 
 /**
  * Docker reports seven statuses; the executor's contract knows three. With
@@ -94,8 +141,12 @@ class CappedBuffer extends Writable {
     callback();
   }
 
+  bytes(): Buffer {
+    return Buffer.concat(this.chunks);
+  }
+
   text(): string {
-    return Buffer.concat(this.chunks).toString('utf8');
+    return this.bytes().toString('utf8');
   }
 }
 
@@ -269,8 +320,8 @@ export class DockerExecutor implements Executor {
     // The deadline lives in-container, via GNU timeout: closing the
     // host-side stream cannot kill the in-container process (measured in
     // the predecessor system); only an in-container SIGKILL can. 137 = killed.
-    const exec = await container.exec({
-      Cmd: [
+    const run = await this.runInContainer(container, sandboxId, {
+      cmd: [
         'timeout',
         '--signal=KILL',
         String(opts.timeoutSeconds),
@@ -278,28 +329,140 @@ export class DockerExecutor implements Executor {
         '-c',
         opts.command,
       ],
+      outputCap: EXEC_OUTPUT_LIMIT_BYTES,
+      workingDir: opts.cwd,
+      env: opts.env,
+    });
+    return {
+      exitCode: run.exitCode,
+      stdout: run.stdout.text(),
+      stderr: run.stderr.text(),
+      stdoutTruncated: run.stdout.truncated,
+      stderrTruncated: run.stderr.truncated,
+    };
+  }
+
+  async writeFiles(sandboxId: string, files: FileToWrite[]): Promise<void> {
+    const containerId = await this.expectState(sandboxId, 'running');
+    const container = this.docker.getContainer(containerId);
+    // In array order, failing fast — the batch saves round-trips, it is not
+    // a transaction; earlier files stay written, as the protocol documents.
+    for (const file of files) {
+      const path = resolveSandboxPath(file.path);
+      const run = await this.runInContainer(container, sandboxId, {
+        cmd: [
+          'timeout',
+          '--signal=KILL',
+          String(FILE_OP_TIMEOUT_SECONDS),
+          'bash',
+          '-c',
+          WRITE_FILE_SCRIPT,
+          'bash',
+          path,
+        ],
+        outputCap: EXEC_OUTPUT_LIMIT_BYTES,
+        stdin: file.content,
+      });
+      if (run.exitCode === NOT_A_FILE_EXIT) {
+        throw new NotAFileError(`not a regular file: ${path}`);
+      }
+      if (run.exitCode !== 0) {
+        throw new Error(
+          `writing ${path} in ${sandboxId} failed (exit ${run.exitCode}): ${run.stderr.text().trim()}`,
+        );
+      }
+    }
+  }
+
+  async readFile(sandboxId: string, path: string): Promise<Buffer> {
+    const resolved = resolveSandboxPath(path);
+    const containerId = await this.expectState(sandboxId, 'running');
+    const container = this.docker.getContainer(containerId);
+    const run = await this.runInContainer(container, sandboxId, {
+      cmd: [
+        'timeout',
+        '--signal=KILL',
+        String(FILE_OP_TIMEOUT_SECONDS),
+        'bash',
+        '-c',
+        READ_FILE_SCRIPT,
+        'bash',
+        resolved,
+        String(FILE_SIZE_LIMIT_BYTES),
+      ],
+      outputCap: FILE_SIZE_LIMIT_BYTES,
+    });
+    if (run.exitCode === NO_SUCH_FILE_EXIT) {
+      throw new FileNotFoundError(`no such file: ${resolved}`);
+    }
+    if (run.exitCode === NOT_A_FILE_EXIT) {
+      throw new NotAFileError(`not a regular file: ${resolved}`);
+    }
+    if (run.exitCode === TOO_LARGE_EXIT) {
+      const size = Number(run.stderr.text().trim());
+      throw new FileTooLargeError(
+        `file too large: ${resolved} is ${size} bytes, limit ${FILE_SIZE_LIMIT_BYTES}`,
+      );
+    }
+    if (run.exitCode !== 0) {
+      throw new Error(
+        `reading ${resolved} in ${sandboxId} failed (exit ${run.exitCode}): ${run.stderr.text().trim()}`,
+      );
+    }
+    if (run.stdout.truncated) {
+      // The size gate passed but the file grew past the cap before cat
+      // finished — rare, but delivering a silently cut file is never right.
+      throw new FileTooLargeError(
+        `file too large: ${resolved} exceeds limit ${FILE_SIZE_LIMIT_BYTES}`,
+      );
+    }
+    return run.stdout.bytes();
+  }
+
+  /**
+   * The one exec pipeline: start, demux, optionally feed stdin (ending the
+   * stream is what delivers EOF to the in-container reader), wait for the
+   * stream, then poll for the exit code — the engine records it a beat
+   * after the stream ends, the same measured lag as kill vs exited in
+   * stop(). Tty stays off: the multiplexed stream is what demuxStream can
+   * split back into distinct stdout and stderr.
+   */
+  private async runInContainer(
+    container: Docker.Container,
+    sandboxId: string,
+    spec: {
+      cmd: string[];
+      outputCap: number;
+      stdin?: Buffer;
+      workingDir?: string;
+      env?: Record<string, string>;
+    },
+  ): Promise<{ exitCode: number; stdout: CappedBuffer; stderr: CappedBuffer }> {
+    const exec = await container.exec({
+      Cmd: spec.cmd,
+      AttachStdin: spec.stdin !== undefined,
       AttachStdout: true,
       AttachStderr: true,
-      WorkingDir: opts.cwd,
-      Env: opts.env
-        ? Object.entries(opts.env).map(([key, value]) => `${key}=${value}`)
+      WorkingDir: spec.workingDir,
+      Env: spec.env
+        ? Object.entries(spec.env).map(([key, value]) => `${key}=${value}`)
         : undefined,
       User: 'user',
     });
-    // Tty stays off: the multiplexed stream is what demuxStream can split
-    // back into distinct stdout and stderr.
-    const stream = await exec.start({});
-    const stdout = new CappedBuffer(EXEC_OUTPUT_LIMIT_BYTES);
-    const stderr = new CappedBuffer(EXEC_OUTPUT_LIMIT_BYTES);
+    const stream = await exec.start(
+      spec.stdin !== undefined ? { hijack: true, stdin: true } : {},
+    );
+    const stdout = new CappedBuffer(spec.outputCap);
+    const stderr = new CappedBuffer(spec.outputCap);
     this.docker.modem.demuxStream(stream, stdout, stderr);
+    if (spec.stdin !== undefined) {
+      stream.end(spec.stdin);
+    }
     await new Promise<void>((resolve, reject) => {
       stream.on('end', resolve);
       stream.on('close', resolve);
       stream.on('error', reject);
     });
-    // The engine records the exit code a beat after the stream ends — the
-    // same measured lag as kill vs exited in stop(). Poll briefly instead
-    // of reading a null.
     let info = await exec.inspect();
     for (let i = 0; info.Running || info.ExitCode === null; i++) {
       if (i >= 20) {
@@ -310,13 +473,7 @@ export class DockerExecutor implements Executor {
       await new Promise((resolve) => setTimeout(resolve, 50));
       info = await exec.inspect();
     }
-    return {
-      exitCode: info.ExitCode,
-      stdout: stdout.text(),
-      stderr: stderr.text(),
-      stdoutTruncated: stdout.truncated,
-      stderrTruncated: stderr.truncated,
-    };
+    return { exitCode: info.ExitCode, stdout, stderr };
   }
 
   private imagePath(sandboxId: string): string {
