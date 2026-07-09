@@ -15,10 +15,23 @@ import {
   sandboxPush,
   sandboxRelease,
 } from './commands';
+import { realDoctorContext, runDoctor } from './doctor';
 
 const program = new Command('dor').description(
   'Command-line tool for a Dormice daemon (also installed as `dormice`)',
 );
+
+program
+  .command('doctor')
+  .description('Check whether this host can run the Dormice daemon (read-only)')
+  .option('--quick', 'skip the probes that start a real sandbox container')
+  .action(async (opts: { quick?: boolean }) => {
+    const { report, failed } = await runDoctor(realDoctorContext(), {
+      quick: opts.quick,
+    });
+    console.log(report);
+    if (failed) process.exitCode = 1;
+  });
 
 const sandbox = program
   .command('sandbox')
