@@ -28,20 +28,79 @@ export interface ExecResult {
   stderrTruncated: boolean;
 }
 
+export interface ExecStreamOptions {
+  /** A shell string, executed as `bash -c <command>` inside the sandbox. */
+  command: string;
+  /** Same in-container deadline as ExecOptions; on expiry exit 137. */
+  timeoutSeconds: number;
+  cwd?: string;
+  env?: Record<string, string>;
+  /**
+   * Run under a login shell (`bash -l -c`), which loads the image's profile
+   * — the E2B surface's habit. The native API keeps plain `bash -c`; each
+   * protocol stays true to its own contract.
+   */
+  loginShell?: boolean;
+  /**
+   * Called with each output chunk as it arrives. No cap: nothing accumulates
+   * server-side. A returned promise MAY be awaited before the next chunk
+   * (the real executor does — backpressure travels to the container; the
+   * fake's in-memory source has nothing to press back on).
+   */
+  onStdout: (chunk: Buffer) => void | Promise<void>;
+  onStderr: (chunk: Buffer) => void | Promise<void>;
+}
+
+/**
+ * A started command. Obtaining the handle means the exec is running; wait()
+ * is its result. Deliberately handle-shaped (not a plain promise): process
+ * management verbs — kill, stdin, reconnect — will grow here later without
+ * reshaping every caller.
+ */
+export interface ExecStreamHandle {
+  wait(): Promise<{ exitCode: number }>;
+}
+
 export interface FileToWrite {
   /** Absolute, or relative to /home/user — resolveSandboxPath's rules. */
   path: string;
   content: Buffer;
 }
 
+/** What the filesystem says about one path — the shape stat and listDir speak. */
+export interface SandboxEntry {
+  /** Basename; '/' for the root itself. */
+  name: string;
+  /** Absolute resolved path. */
+  path: string;
+  /** 'other' covers symlinks, FIFOs and friends — observed, not modeled. */
+  type: 'file' | 'dir' | 'other';
+  /** Bytes for files; whatever the filesystem reports for directories. */
+  sizeBytes: number;
+  /** ISO 8601 UTC. */
+  modifiedTime: string;
+  /** Permission bits, e.g. 0o644. */
+  mode: number;
+  owner: string;
+  group: string;
+}
+
 /**
  * The file-op error taxonomy, shared by both executors down to the message
  * (the contract exam holds them to it) and mapped to HTTP statuses by the
- * route: not found -> 404, not a regular file -> 400, too large -> 413.
+ * routes: not found -> 404, not a regular file / not a directory -> 400,
+ * too large -> 413, disk full -> 507.
  */
 export class FileNotFoundError extends Error {}
 export class NotAFileError extends Error {}
+export class NotADirectoryError extends Error {}
 export class FileTooLargeError extends Error {}
+/**
+ * The sandbox disk ran out of room mid-write. Only the real executor can
+ * produce it (the fake's memory disk has no edge), so unlike the rest of the
+ * taxonomy its message is not contract-pinned.
+ */
+export class DiskFullError extends Error {}
 
 /**
  * The executor is where lifecycle decisions become physical reality:
@@ -102,6 +161,17 @@ export interface Executor {
    */
   exec(sandboxId: string, opts: ExecOptions): Promise<ExecResult>;
   /**
+   * Runs a shell command, delivering output live through the callbacks
+   * instead of buffering — chunk boundaries follow the command's own writes.
+   * The returned promise resolves once the command has started (a start
+   * failure rejects here); handle.wait() resolves with the honest exit code.
+   * Same running-state requirement and in-container deadline as exec.
+   */
+  execStream(
+    sandboxId: string,
+    opts: ExecStreamOptions,
+  ): Promise<ExecStreamHandle>;
+  /**
    * Writes every file in the batch, in order, failing fast — earlier files
    * stay written (a batch saves round-trips, it is not a transaction).
    * Parent directories are created; existing files are overwritten. Requires
@@ -119,4 +189,58 @@ export interface Executor {
    * and not in the schema because only the executor can observe the size.
    */
   readFile(sandboxId: string, path: string): Promise<Buffer>;
+  /**
+   * Streams one file's bytes through the callback, uncapped — nothing
+   * accumulates server-side, so the disk quota is the only ceiling (the E2B
+   * surface's contract; the native API's 16 MiB cap is the base64-JSON
+   * shape's own rule and does not reach here). A returned promise from the
+   * callback is awaited before the next chunk: backpressure travels through
+   * to the in-container reader. Errors as readFile, minus the size gate.
+   */
+  readFileStream(
+    sandboxId: string,
+    path: string,
+    onChunk: (chunk: Buffer) => void | Promise<void>,
+  ): Promise<void>;
+  /**
+   * Streams content into one file, uncapped, parents created, overwriting —
+   * writeFiles' semantics without materializing the bytes. A full disk
+   * throws DiskFullError.
+   */
+  writeFileStream(
+    sandboxId: string,
+    path: string,
+    content: NodeJS.ReadableStream,
+  ): Promise<void>;
+  /**
+   * Entries under a directory, depth ≥ 1 levels down, sorted by path.
+   * Throws FileNotFoundError for a missing path, NotADirectoryError for a
+   * file. Requires state `running`, like every file verb.
+   */
+  listDir(
+    sandboxId: string,
+    path: string,
+    depth: number,
+  ): Promise<SandboxEntry[]>;
+  /** One path's entry. FileNotFoundError when nothing is there. */
+  statEntry(sandboxId: string, path: string): Promise<SandboxEntry>;
+  /**
+   * mkdir -p. True when created; false when the path already exists —
+   * whatever it is: claiming "created" over an existing file would be a lie,
+   * and the caller's next stat tells the truth either way.
+   */
+  makeDir(sandboxId: string, path: string): Promise<boolean>;
+  /**
+   * rename(2) semantics (`mv -T`): an existing destination file is
+   * replaced, a destination directory is not merged into. The source must
+   * exist (FileNotFoundError); parents of the destination are not created.
+   * Returns the destination's entry.
+   */
+  move(sandboxId: string, from: string, to: string): Promise<SandboxEntry>;
+  /**
+   * rm -rf: file or directory tree. FileNotFoundError when nothing is there
+   * — removing nothing is a caller's confusion worth reporting, not a goal
+   * state (unlike removeDisk, whose caller is reconciliation).
+   */
+  remove(sandboxId: string, path: string): Promise<void>;
 }

@@ -18,13 +18,18 @@ import Docker from 'dockerode';
 import { execa } from 'execa';
 import {
   type ContainerState,
+  DiskFullError,
   type ExecOptions,
   type ExecResult,
+  type ExecStreamHandle,
+  type ExecStreamOptions,
   type Executor,
   FileNotFoundError,
   FileTooLargeError,
   type FileToWrite,
+  NotADirectoryError,
   NotAFileError,
+  type SandboxEntry,
 } from './executor';
 
 /**
@@ -92,6 +97,100 @@ const READ_FILE_SCRIPT = [
   'exec cat -- "$1"',
 ].join('\n');
 
+const NOT_A_DIR_EXIT = 47;
+const ALREADY_EXISTS_EXIT = 48;
+
+/**
+ * Streaming file transfers have no size cap, so their in-container deadline
+ * must fit a quota-sized file crawling to a slow client — generous, but
+ * still a bound so a wedged transfer cannot hold an exec forever.
+ */
+const STREAM_FILE_OP_TIMEOUT_SECONDS = 3600;
+
+/** Ceiling for one directory listing; past it the listing errors instead of silently losing entries. */
+const LIST_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
+
+/** $1 = absolute path. READ_FILE_SCRIPT without the size gate — the streaming read is the uncapped path. */
+const READ_FILE_STREAM_SCRIPT = [
+  `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
+  `[ -f "$1" ] || exit ${NOT_A_FILE_EXIT}`,
+  'exec cat -- "$1"',
+].join('\n');
+
+/**
+ * $1 = absolute dir, $2 = depth. One NUL-terminated record per entry, tab
+ * separated with the path last, so a path containing tabs still parses
+ * (nothing else can contain a tab, and a path cannot contain a NUL).
+ */
+const LIST_DIR_SCRIPT = [
+  `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
+  `[ -d "$1" ] || exit ${NOT_A_DIR_EXIT}`,
+  `exec find "$1" -mindepth 1 -maxdepth "$2" -printf '%y\\t%s\\t%T@\\t%m\\t%u\\t%g\\t%p\\0'`,
+].join('\n');
+
+/** $1 = absolute path. --printf, not -c: only --printf interprets \t. */
+const STAT_SCRIPT = [
+  `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
+  `exec stat --printf '%F\\t%s\\t%Y\\t%a\\t%U\\t%G' -- "$1"`,
+].join('\n');
+
+/** $1 = absolute path. Exists (whatever it is) -> "already there", else mkdir -p. */
+const MAKE_DIR_SCRIPT = [
+  `[ ! -e "$1" ] || exit ${ALREADY_EXISTS_EXIT}`,
+  'exec mkdir -p -- "$1"',
+].join('\n');
+
+/** $1 = source, $2 = destination. -T = rename(2) semantics: never "move into". */
+const MOVE_SCRIPT = [
+  `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
+  'exec mv -T -- "$1" "$2"',
+].join('\n');
+
+const REMOVE_SCRIPT = [
+  `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
+  'exec rm -rf -- "$1"',
+].join('\n');
+
+/** One `find -printf` record (see LIST_DIR_SCRIPT) -> entry. */
+function entryFromFindRecord(record: string): SandboxEntry {
+  const fields = record.split('\t');
+  const [kind = '', size = '', mtime = '', mode = '', owner = '', group = ''] =
+    fields;
+  // The path is everything after the sixth tab — its own tabs survive.
+  const path = fields.slice(6).join('\t');
+  return {
+    name: path.slice(path.lastIndexOf('/') + 1) || '/',
+    path,
+    type: kind === 'f' ? 'file' : kind === 'd' ? 'dir' : 'other',
+    sizeBytes: Number(size),
+    modifiedTime: new Date(Number(mtime) * 1000).toISOString(),
+    mode: Number.parseInt(mode, 8),
+    owner,
+    group,
+  };
+}
+
+/** One `stat --printf` line (see STAT_SCRIPT) -> entry. */
+function entryFromStatLine(resolved: string, line: string): SandboxEntry {
+  const [kind = '', size = '', mtime = '', mode = '', owner = '', group = ''] =
+    line.split('\t');
+  return {
+    name: resolved.slice(resolved.lastIndexOf('/') + 1) || '/',
+    path: resolved,
+    // %F says "regular file" or "regular empty file" — both are files.
+    type: kind.startsWith('regular')
+      ? 'file'
+      : kind === 'directory'
+        ? 'dir'
+        : 'other',
+    sizeBytes: Number(size),
+    modifiedTime: new Date(Number(mtime) * 1000).toISOString(),
+    mode: Number.parseInt(mode, 8),
+    owner,
+    group,
+  };
+}
+
 /**
  * Docker reports seven statuses; the executor's contract knows three. With
  * RestartPolicy "no" a container never restarts on its own, so everything
@@ -147,6 +246,33 @@ class CappedBuffer extends Writable {
 
   text(): string {
     return this.bytes().toString('utf8');
+  }
+}
+
+/**
+ * A Writable that hands each chunk to a callback — the streaming sink for
+ * exec output and file downloads. When the callback returns a promise it is
+ * awaited before the next chunk is accepted: that is how a slow consumer's
+ * backpressure travels through demux all the way to the in-container writer.
+ */
+class CallbackSink extends Writable {
+  constructor(
+    private readonly onChunk: (chunk: Buffer) => void | Promise<void>,
+  ) {
+    super();
+  }
+
+  override _write(
+    chunk: Buffer,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ): void {
+    Promise.resolve()
+      .then(() => this.onChunk(chunk))
+      .then(
+        () => callback(),
+        (err) => callback(err instanceof Error ? err : new Error(String(err))),
+      );
   }
 }
 
@@ -342,6 +468,29 @@ export class DockerExecutor implements Executor {
     };
   }
 
+  async execStream(
+    sandboxId: string,
+    opts: ExecStreamOptions,
+  ): Promise<ExecStreamHandle> {
+    const containerId = await this.expectState(sandboxId, 'running');
+    const container = this.docker.getContainer(containerId);
+    const shell = opts.loginShell ? ['bash', '-l', '-c'] : ['bash', '-c'];
+    const wait = await this.startInContainer(container, sandboxId, {
+      cmd: [
+        'timeout',
+        '--signal=KILL',
+        String(opts.timeoutSeconds),
+        ...shell,
+        opts.command,
+      ],
+      stdout: new CallbackSink(opts.onStdout),
+      stderr: new CallbackSink(opts.onStderr),
+      workingDir: opts.cwd,
+      env: opts.env,
+    });
+    return { wait: async () => ({ exitCode: await wait() }) };
+  }
+
   async writeFiles(sandboxId: string, files: FileToWrite[]): Promise<void> {
     const containerId = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
@@ -419,25 +568,291 @@ export class DockerExecutor implements Executor {
     return run.stdout.bytes();
   }
 
-  /**
-   * The one exec pipeline: start, demux, optionally feed stdin (ending the
-   * stream is what delivers EOF to the in-container reader), wait for the
-   * stream, then poll for the exit code — the engine records it a beat
-   * after the stream ends, the same measured lag as kill vs exited in
-   * stop(). Tty stays off: the multiplexed stream is what demuxStream can
-   * split back into distinct stdout and stderr.
-   */
+  async readFileStream(
+    sandboxId: string,
+    path: string,
+    onChunk: (chunk: Buffer) => void | Promise<void>,
+  ): Promise<void> {
+    const resolved = resolveSandboxPath(path);
+    const containerId = await this.expectState(sandboxId, 'running');
+    const container = this.docker.getContainer(containerId);
+    const stderr = new CappedBuffer(EXEC_OUTPUT_LIMIT_BYTES);
+    const wait = await this.startInContainer(container, sandboxId, {
+      cmd: [
+        'timeout',
+        '--signal=KILL',
+        String(STREAM_FILE_OP_TIMEOUT_SECONDS),
+        'bash',
+        '-c',
+        READ_FILE_STREAM_SCRIPT,
+        'bash',
+        resolved,
+      ],
+      stdout: new CallbackSink(onChunk),
+      stderr,
+    });
+    const exitCode = await wait();
+    if (exitCode === NO_SUCH_FILE_EXIT) {
+      throw new FileNotFoundError(`no such file: ${resolved}`);
+    }
+    if (exitCode === NOT_A_FILE_EXIT) {
+      throw new NotAFileError(`not a regular file: ${resolved}`);
+    }
+    if (exitCode !== 0) {
+      throw new Error(
+        `reading ${resolved} in ${sandboxId} failed (exit ${exitCode}): ${stderr.text().trim()}`,
+      );
+    }
+  }
+
+  async writeFileStream(
+    sandboxId: string,
+    path: string,
+    content: NodeJS.ReadableStream,
+  ): Promise<void> {
+    const resolved = resolveSandboxPath(path);
+    const containerId = await this.expectState(sandboxId, 'running');
+    const container = this.docker.getContainer(containerId);
+    const run = await this.runInContainer(container, sandboxId, {
+      cmd: [
+        'timeout',
+        '--signal=KILL',
+        String(STREAM_FILE_OP_TIMEOUT_SECONDS),
+        'bash',
+        '-c',
+        WRITE_FILE_SCRIPT,
+        'bash',
+        resolved,
+      ],
+      outputCap: EXEC_OUTPUT_LIMIT_BYTES,
+      stdin: content,
+    });
+    if (run.exitCode === NOT_A_FILE_EXIT) {
+      throw new NotAFileError(`not a regular file: ${resolved}`);
+    }
+    if (run.exitCode !== 0) {
+      const message = run.stderr.text().trim();
+      if (/no space left/i.test(message)) {
+        throw new DiskFullError(`no space left on device: ${resolved}`);
+      }
+      throw new Error(
+        `writing ${resolved} in ${sandboxId} failed (exit ${run.exitCode}): ${message}`,
+      );
+    }
+  }
+
+  async listDir(
+    sandboxId: string,
+    path: string,
+    depth: number,
+  ): Promise<SandboxEntry[]> {
+    const resolved = resolveSandboxPath(path);
+    const containerId = await this.expectState(sandboxId, 'running');
+    const container = this.docker.getContainer(containerId);
+    const run = await this.runInContainer(container, sandboxId, {
+      cmd: [
+        'timeout',
+        '--signal=KILL',
+        String(FILE_OP_TIMEOUT_SECONDS),
+        'bash',
+        '-c',
+        LIST_DIR_SCRIPT,
+        'bash',
+        resolved,
+        String(depth),
+      ],
+      outputCap: LIST_OUTPUT_LIMIT_BYTES,
+    });
+    if (run.exitCode === NO_SUCH_FILE_EXIT) {
+      throw new FileNotFoundError(`no such file: ${resolved}`);
+    }
+    if (run.exitCode === NOT_A_DIR_EXIT) {
+      throw new NotADirectoryError(`not a directory: ${resolved}`);
+    }
+    if (run.exitCode !== 0) {
+      throw new Error(
+        `listing ${resolved} in ${sandboxId} failed (exit ${run.exitCode}): ${run.stderr.text().trim()}`,
+      );
+    }
+    if (run.stdout.truncated) {
+      // Losing entries silently would make the listing a lie.
+      throw new Error(
+        `listing ${resolved} in ${sandboxId} exceeded ${LIST_OUTPUT_LIMIT_BYTES} bytes — use a smaller depth`,
+      );
+    }
+    return run.stdout
+      .bytes()
+      .toString('utf8')
+      .split('\0')
+      .filter((record) => record.length > 0)
+      .map(entryFromFindRecord)
+      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  }
+
+  async statEntry(sandboxId: string, path: string): Promise<SandboxEntry> {
+    const resolved = resolveSandboxPath(path);
+    const containerId = await this.expectState(sandboxId, 'running');
+    const container = this.docker.getContainer(containerId);
+    const run = await this.runInContainer(container, sandboxId, {
+      cmd: [
+        'timeout',
+        '--signal=KILL',
+        String(FILE_OP_TIMEOUT_SECONDS),
+        'bash',
+        '-c',
+        STAT_SCRIPT,
+        'bash',
+        resolved,
+      ],
+      outputCap: EXEC_OUTPUT_LIMIT_BYTES,
+    });
+    if (run.exitCode === NO_SUCH_FILE_EXIT) {
+      throw new FileNotFoundError(`no such file: ${resolved}`);
+    }
+    if (run.exitCode !== 0) {
+      throw new Error(
+        `stat ${resolved} in ${sandboxId} failed (exit ${run.exitCode}): ${run.stderr.text().trim()}`,
+      );
+    }
+    return entryFromStatLine(resolved, run.stdout.text());
+  }
+
+  async makeDir(sandboxId: string, path: string): Promise<boolean> {
+    const resolved = resolveSandboxPath(path);
+    const containerId = await this.expectState(sandboxId, 'running');
+    const container = this.docker.getContainer(containerId);
+    const run = await this.runInContainer(container, sandboxId, {
+      cmd: [
+        'timeout',
+        '--signal=KILL',
+        String(FILE_OP_TIMEOUT_SECONDS),
+        'bash',
+        '-c',
+        MAKE_DIR_SCRIPT,
+        'bash',
+        resolved,
+      ],
+      outputCap: EXEC_OUTPUT_LIMIT_BYTES,
+    });
+    if (run.exitCode === ALREADY_EXISTS_EXIT) {
+      return false;
+    }
+    if (run.exitCode !== 0) {
+      throw new Error(
+        `mkdir ${resolved} in ${sandboxId} failed (exit ${run.exitCode}): ${run.stderr.text().trim()}`,
+      );
+    }
+    return true;
+  }
+
+  async move(
+    sandboxId: string,
+    from: string,
+    to: string,
+  ): Promise<SandboxEntry> {
+    const source = resolveSandboxPath(from);
+    const destination = resolveSandboxPath(to);
+    const containerId = await this.expectState(sandboxId, 'running');
+    const container = this.docker.getContainer(containerId);
+    const run = await this.runInContainer(container, sandboxId, {
+      cmd: [
+        'timeout',
+        '--signal=KILL',
+        String(FILE_OP_TIMEOUT_SECONDS),
+        'bash',
+        '-c',
+        MOVE_SCRIPT,
+        'bash',
+        source,
+        destination,
+      ],
+      outputCap: EXEC_OUTPUT_LIMIT_BYTES,
+    });
+    if (run.exitCode === NO_SUCH_FILE_EXIT) {
+      throw new FileNotFoundError(`no such file: ${source}`);
+    }
+    if (run.exitCode !== 0) {
+      throw new Error(
+        `moving ${source} to ${destination} in ${sandboxId} failed (exit ${run.exitCode}): ${run.stderr.text().trim()}`,
+      );
+    }
+    return this.statEntry(sandboxId, destination);
+  }
+
+  async remove(sandboxId: string, path: string): Promise<void> {
+    const resolved = resolveSandboxPath(path);
+    const containerId = await this.expectState(sandboxId, 'running');
+    const container = this.docker.getContainer(containerId);
+    const run = await this.runInContainer(container, sandboxId, {
+      cmd: [
+        'timeout',
+        '--signal=KILL',
+        String(FILE_OP_TIMEOUT_SECONDS),
+        'bash',
+        '-c',
+        REMOVE_SCRIPT,
+        'bash',
+        resolved,
+      ],
+      outputCap: EXEC_OUTPUT_LIMIT_BYTES,
+    });
+    if (run.exitCode === NO_SUCH_FILE_EXIT) {
+      throw new FileNotFoundError(`no such file: ${resolved}`);
+    }
+    if (run.exitCode !== 0) {
+      throw new Error(
+        `removing ${resolved} in ${sandboxId} failed (exit ${run.exitCode}): ${run.stderr.text().trim()}`,
+      );
+    }
+  }
+
+  /** The buffered face of the exec pipeline: capped sinks, awaited to the end. */
   private async runInContainer(
     container: Docker.Container,
     sandboxId: string,
     spec: {
       cmd: string[];
       outputCap: number;
-      stdin?: Buffer;
+      stdin?: Buffer | NodeJS.ReadableStream;
       workingDir?: string;
       env?: Record<string, string>;
     },
   ): Promise<{ exitCode: number; stdout: CappedBuffer; stderr: CappedBuffer }> {
+    const stdout = new CappedBuffer(spec.outputCap);
+    const stderr = new CappedBuffer(spec.outputCap);
+    const wait = await this.startInContainer(container, sandboxId, {
+      cmd: spec.cmd,
+      stdout,
+      stderr,
+      stdin: spec.stdin,
+      workingDir: spec.workingDir,
+      env: spec.env,
+    });
+    return { exitCode: await wait(), stdout, stderr };
+  }
+
+  /**
+   * The one exec pipeline: start, demux into the caller's sinks, optionally
+   * feed stdin (ending the stream is what delivers EOF to the in-container
+   * reader), then — inside the returned wait — wait for the stream and poll
+   * for the exit code: the engine records it a beat after the stream ends,
+   * the same measured lag as kill vs exited in stop(). Tty stays off: the
+   * multiplexed stream is what demuxStream can split back into distinct
+   * stdout and stderr. Resolving means the command has started; everything
+   * after start is the wait's business.
+   */
+  private async startInContainer(
+    container: Docker.Container,
+    sandboxId: string,
+    spec: {
+      cmd: string[];
+      stdout: Writable;
+      stderr: Writable;
+      stdin?: Buffer | NodeJS.ReadableStream;
+      workingDir?: string;
+      env?: Record<string, string>;
+    },
+  ): Promise<() => Promise<number>> {
     const exec = await container.exec({
       Cmd: spec.cmd,
       AttachStdin: spec.stdin !== undefined,
@@ -452,28 +867,41 @@ export class DockerExecutor implements Executor {
     const stream = await exec.start(
       spec.stdin !== undefined ? { hijack: true, stdin: true } : {},
     );
-    const stdout = new CappedBuffer(spec.outputCap);
-    const stderr = new CappedBuffer(spec.outputCap);
-    this.docker.modem.demuxStream(stream, stdout, stderr);
+    this.docker.modem.demuxStream(stream, spec.stdout, spec.stderr);
     if (spec.stdin !== undefined) {
-      stream.end(spec.stdin);
-    }
-    await new Promise<void>((resolve, reject) => {
-      stream.on('end', resolve);
-      stream.on('close', resolve);
-      stream.on('error', reject);
-    });
-    let info = await exec.inspect();
-    for (let i = 0; info.Running || info.ExitCode === null; i++) {
-      if (i >= 20) {
-        throw new Error(
-          `exec on ${sandboxId} ended but no exit code was recorded`,
-        );
+      if (Buffer.isBuffer(spec.stdin)) {
+        stream.end(spec.stdin);
+      } else {
+        // pipe() forwards the source's end as the exec's stdin EOF. A source
+        // error would otherwise leave the in-container reader waiting for
+        // the timeout wrapper to kill it — destroying the stream surfaces
+        // the failure now instead.
+        spec.stdin.on('error', (err) => stream.destroy(err));
+        spec.stdin.pipe(stream);
       }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      info = await exec.inspect();
     }
-    return { exitCode: info.ExitCode, stdout, stderr };
+    const finished = (async () => {
+      await new Promise<void>((resolve, reject) => {
+        stream.on('end', resolve);
+        stream.on('close', resolve);
+        stream.on('error', reject);
+      });
+      let info = await exec.inspect();
+      for (let i = 0; info.Running || info.ExitCode === null; i++) {
+        if (i >= 20) {
+          throw new Error(
+            `exec on ${sandboxId} ended but no exit code was recorded`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        info = await exec.inspect();
+      }
+      return info.ExitCode;
+    })();
+    // A failure before anyone calls wait must not crash the daemon as an
+    // unhandled rejection; wait() still observes it through the same promise.
+    finished.catch(() => {});
+    return () => finished;
   }
 
   private imagePath(sandboxId: string): string {

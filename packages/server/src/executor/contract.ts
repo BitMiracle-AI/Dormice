@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import {
   EXEC_OUTPUT_LIMIT_BYTES,
   FILE_SIZE_LIMIT_BYTES,
@@ -9,6 +10,7 @@ import {
   type Executor,
   FileNotFoundError,
   FileTooLargeError,
+  NotADirectoryError,
   NotAFileError,
 } from './executor';
 
@@ -387,6 +389,68 @@ export function describeExecutorContract(
     );
 
     it(
+      'execStream delivers output live, chunk by chunk',
+      async () => {
+        const id = await fresh();
+        const chunks: Array<{ text: string; at: number }> = [];
+        const handle = await executor.execStream(id, {
+          command: 'echo first; sleep 1; echo second',
+          timeoutSeconds: 30,
+          onStdout: (c) => {
+            chunks.push({ text: c.toString('utf8'), at: Date.now() });
+          },
+          onStderr: () => {},
+        });
+        const { exitCode } = await handle.wait();
+        expect(exitCode).toBe(0);
+        expect(chunks.map((c) => c.text).join('')).toBe('first\nsecond\n');
+        // The anti-buffering assertion: with the sleep between the echoes,
+        // live delivery shows a real gap between the first and last chunk.
+        // A buffered implementation delivers everything at once — gap zero.
+        const at = chunks.map((c) => c.at);
+        expect(Math.max(...at) - Math.min(...at)).toBeGreaterThanOrEqual(500);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'execStream reports a nonzero exit through wait, not an error',
+      async () => {
+        const id = await fresh();
+        const handle = await executor.execStream(id, {
+          command: 'exit 7',
+          timeoutSeconds: 30,
+          onStdout: () => {},
+          onStderr: () => {},
+        });
+        await expect(handle.wait()).resolves.toEqual({ exitCode: 7 });
+      },
+      timeoutMs,
+    );
+
+    it(
+      'execStream timeout kills in-container; chunks already delivered stay delivered',
+      async () => {
+        const id = await fresh();
+        const seen: string[] = [];
+        const before = Date.now();
+        const handle = await executor.execStream(id, {
+          command: 'echo early; sleep 5',
+          timeoutSeconds: 1,
+          onStdout: (c) => {
+            seen.push(c.toString('utf8'));
+          },
+          onStderr: () => {},
+        });
+        const { exitCode } = await handle.wait();
+        expect(Date.now() - before).toBeLessThan(4_000);
+        expect(exitCode).toBe(137);
+        expect(seen.join('')).toBe('early\n');
+      },
+      timeoutMs,
+    );
+
+    it(
       'writeFiles then readFile round-trips text',
       async () => {
         const id = await fresh();
@@ -581,6 +645,231 @@ export function describeExecutorContract(
         await expect(executor.readFile(randomUUID(), 'x.txt')).rejects.toThrow(
           /is absent, expected running/,
         );
+      },
+      timeoutMs,
+    );
+
+    it(
+      'statEntry reports a file with its real metadata',
+      async () => {
+        const id = await fresh();
+        await executor.writeFiles(id, [
+          { path: '/home/user/s.txt', content: Buffer.from('12345') },
+        ]);
+        // Relative path resolves like every other file verb.
+        const entry = await executor.statEntry(id, 's.txt');
+        expect(entry).toMatchObject({
+          name: 's.txt',
+          path: '/home/user/s.txt',
+          type: 'file',
+          sizeBytes: 5,
+          mode: 0o644,
+          owner: 'user',
+          group: 'user',
+        });
+        // Written moments ago; both executors report a live clock.
+        expect(
+          Math.abs(Date.parse(entry.modifiedTime) - Date.now()),
+        ).toBeLessThan(60_000);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'statEntry reports directories and refuses missing paths',
+      async () => {
+        const id = await fresh();
+        const home = await executor.statEntry(id, '/home/user');
+        expect(home).toMatchObject({
+          name: 'user',
+          path: '/home/user',
+          type: 'dir',
+          mode: 0o755,
+          owner: 'user',
+        });
+
+        const missing = '/home/user/nope';
+        const error = await executor.statEntry(id, missing).catch((e) => e);
+        expect(error).toBeInstanceOf(FileNotFoundError);
+        expect(error.message).toBe(`no such file: ${missing}`);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'listDir walks exactly as deep as asked, sorted by path',
+      async () => {
+        const id = await fresh();
+        await executor.writeFiles(id, [
+          { path: '/home/user/a.txt', content: Buffer.from('a') },
+          { path: '/home/user/sub/b.txt', content: Buffer.from('b') },
+        ]);
+        // Depth 1: the file, the created dir — and lost+found, the mkfs
+        // artifact every real disk root carries; the listing shows reality.
+        const one = await executor.listDir(id, '/home/user', 1);
+        expect(one.map((e) => [e.path, e.type])).toEqual([
+          ['/home/user/a.txt', 'file'],
+          ['/home/user/lost+found', 'dir'],
+          ['/home/user/sub', 'dir'],
+        ]);
+        const two = await executor.listDir(id, '/home/user', 2);
+        expect(two.map((e) => e.path)).toEqual([
+          '/home/user/a.txt',
+          '/home/user/lost+found',
+          '/home/user/sub',
+          '/home/user/sub/b.txt',
+        ]);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'listDir refuses files and missing paths with the right errors',
+      async () => {
+        const id = await fresh();
+        await executor.writeFiles(id, [
+          { path: '/home/user/plain.txt', content: Buffer.from('x') },
+        ]);
+        const onFile = await executor
+          .listDir(id, '/home/user/plain.txt', 1)
+          .catch((e) => e);
+        expect(onFile).toBeInstanceOf(NotADirectoryError);
+        expect(onFile.message).toBe('not a directory: /home/user/plain.txt');
+
+        const onMissing = await executor
+          .listDir(id, '/home/user/void', 1)
+          .catch((e) => e);
+        expect(onMissing).toBeInstanceOf(FileNotFoundError);
+        expect(onMissing.message).toBe('no such file: /home/user/void');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'makeDir creates with parents, and reports "already there" as false',
+      async () => {
+        const id = await fresh();
+        expect(await executor.makeDir(id, '/home/user/mk/deep')).toBe(true);
+        expect(
+          await executor.statEntry(id, '/home/user/mk/deep'),
+        ).toMatchObject({ type: 'dir', owner: 'user' });
+        // Again: already exists — false, not an error, whatever is there.
+        expect(await executor.makeDir(id, '/home/user/mk/deep')).toBe(false);
+        await executor.writeFiles(id, [
+          { path: '/home/user/mk/file.txt', content: Buffer.from('f') },
+        ]);
+        expect(await executor.makeDir(id, '/home/user/mk/file.txt')).toBe(
+          false,
+        );
+      },
+      timeoutMs,
+    );
+
+    it(
+      'move renames a file and refuses a missing source',
+      async () => {
+        const id = await fresh();
+        await executor.writeFiles(id, [
+          { path: '/home/user/m1.txt', content: Buffer.from('payload') },
+        ]);
+        const moved = await executor.move(
+          id,
+          '/home/user/m1.txt',
+          '/home/user/m2.txt',
+        );
+        expect(moved).toMatchObject({
+          path: '/home/user/m2.txt',
+          type: 'file',
+          sizeBytes: 7,
+        });
+        const gone = await executor
+          .readFile(id, '/home/user/m1.txt')
+          .catch((e) => e);
+        expect(gone).toBeInstanceOf(FileNotFoundError);
+        expect(
+          (await executor.readFile(id, '/home/user/m2.txt')).toString(),
+        ).toBe('payload');
+
+        const missing = await executor
+          .move(id, '/home/user/void.txt', '/home/user/x.txt')
+          .catch((e) => e);
+        expect(missing).toBeInstanceOf(FileNotFoundError);
+        expect(missing.message).toBe('no such file: /home/user/void.txt');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'remove takes a file, takes a tree, refuses what is not there',
+      async () => {
+        const id = await fresh();
+        await executor.writeFiles(id, [
+          { path: '/home/user/r/a.txt', content: Buffer.from('a') },
+          { path: '/home/user/r/sub/b.txt', content: Buffer.from('b') },
+          { path: '/home/user/single.txt', content: Buffer.from('s') },
+        ]);
+        await executor.remove(id, '/home/user/single.txt');
+        await executor.remove(id, '/home/user/r');
+        const statR = await executor
+          .statEntry(id, '/home/user/r')
+          .catch((e) => e);
+        expect(statR).toBeInstanceOf(FileNotFoundError);
+
+        const again = await executor.remove(id, '/home/user/r').catch((e) => e);
+        expect(again).toBeInstanceOf(FileNotFoundError);
+        expect(again.message).toBe('no such file: /home/user/r');
+      },
+      timeoutMs,
+    );
+
+    it(
+      'the streaming file path is the uncapped one: over-limit content round-trips byte-exact',
+      async () => {
+        const id = await fresh();
+        // Past the buffered API's 16 MiB line — only the stream may carry it.
+        const size = FILE_SIZE_LIMIT_BYTES + 5;
+        const big = Buffer.alloc(size);
+        for (let i = 0; i < size; i += 4096) big[i] = i % 251;
+        const half = Math.floor(size / 2);
+        await executor.writeFileStream(
+          id,
+          '/home/user/big-stream.bin',
+          Readable.from([big.subarray(0, half), big.subarray(half)]),
+        );
+        const chunks: Buffer[] = [];
+        await executor.readFileStream(id, '/home/user/big-stream.bin', (c) => {
+          chunks.push(Buffer.from(c));
+        });
+        expect(Buffer.concat(chunks).equals(big)).toBe(true);
+        // The buffered read still refuses it: two paths, two contracts.
+        await expect(
+          executor.readFile(id, '/home/user/big-stream.bin'),
+        ).rejects.toThrow(FileTooLargeError);
+      },
+      timeoutMs * 4,
+    );
+
+    it(
+      'streaming file verbs throw the same typed errors as the buffered ones',
+      async () => {
+        const id = await fresh();
+        const missing = await executor
+          .readFileStream(id, '/home/user/void.bin', () => {})
+          .catch((e) => e);
+        expect(missing).toBeInstanceOf(FileNotFoundError);
+        expect(missing.message).toBe('no such file: /home/user/void.bin');
+
+        const onDir = await executor
+          .readFileStream(id, '/home/user', () => {})
+          .catch((e) => e);
+        expect(onDir).toBeInstanceOf(NotAFileError);
+        expect(onDir.message).toBe('not a regular file: /home/user');
+
+        const writeDir = await executor
+          .writeFileStream(id, '/home/user', Readable.from([Buffer.from('x')]))
+          .catch((e) => e);
+        expect(writeDir).toBeInstanceOf(NotAFileError);
+        expect(writeDir.message).toBe('not a regular file: /home/user');
       },
       timeoutMs,
     );
