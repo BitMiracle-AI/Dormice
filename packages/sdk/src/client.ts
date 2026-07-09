@@ -7,8 +7,11 @@ import {
   type LifecyclePolicyOverride,
   listSandboxesResponseSchema,
   type ReleaseSandboxResponse,
+  readFileResponseSchema,
   releaseSandboxResponseSchema,
   type Sandbox,
+  type WriteFilesResponse,
+  writeFilesResponseSchema,
 } from '@dormice/shared';
 import { Agent, fetch, type Response } from 'undici';
 
@@ -30,6 +33,20 @@ export interface DormiceOptions {
    * sandbox takes seconds; restores return `restoring` immediately).
    */
   timeoutMs?: number;
+}
+
+export interface FileToWrite {
+  /** Absolute, or relative to /home/user. */
+  path: string;
+  /** A string is written as its UTF-8 bytes; a Uint8Array is written as-is. */
+  content: string | Uint8Array;
+}
+
+export interface ReadFileResult {
+  /** The path as resolved inside the sandbox, always absolute. */
+  path: string;
+  /** The file's exact bytes. Text? `new TextDecoder().decode(content)`. */
+  content: Uint8Array;
 }
 
 export interface ExecCommandOptions {
@@ -124,6 +141,43 @@ export class Dormice {
       timeoutSeconds * 1000 + 30_000,
     );
     return execCommandResponseSchema.parse(data);
+  }
+
+  /**
+   * Writes a batch of files into the sandbox behind a user key, waking a
+   * cold sandbox first. Parents are created, existing files overwritten.
+   * Per-file cap is 16 MiB — content travels as base64 inside JSON; a big
+   * batch on a slow link may need a larger client `timeoutMs`.
+   */
+  async writeFiles(
+    userKey: string,
+    files: FileToWrite[],
+  ): Promise<WriteFilesResponse> {
+    const data = await this.rpc('writeFiles', {
+      userKey,
+      files: files.map((file) => ({
+        path: file.path,
+        contentBase64: Buffer.from(
+          typeof file.content === 'string'
+            ? new TextEncoder().encode(file.content)
+            : file.content,
+        ).toString('base64'),
+      })),
+    });
+    return writeFilesResponseSchema.parse(data);
+  }
+
+  /**
+   * Reads one file's bytes out of the sandbox. A file over the 16 MiB cap
+   * is refused by the daemon (413), never truncated.
+   */
+  async readFile(userKey: string, path: string): Promise<ReadFileResult> {
+    const data = await this.rpc('readFile', { userKey, path });
+    const parsed = readFileResponseSchema.parse(data);
+    return {
+      path: parsed.path,
+      content: new Uint8Array(Buffer.from(parsed.contentBase64, 'base64')),
+    };
   }
 
   /** Native API convention: every operation is POST /<method>, body in, body out. */
