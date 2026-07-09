@@ -21,9 +21,12 @@ export default defineConfig({
     // API — same paths the browser uses in production, so no API base knob.
     proxy: {
       '/ui/auth': 'http://127.0.0.1:3676',
+      '/ui/envdToken': 'http://127.0.0.1:3676',
       '/listSandboxes': 'http://127.0.0.1:3676',
       '/releaseSandbox': 'http://127.0.0.1:3676',
       '/acquireSandbox': 'http://127.0.0.1:3676',
+      // The terminal speaks the envd surface directly, like the e2b SDK.
+      '/e2b': 'http://127.0.0.1:3676',
     },
   },
 });

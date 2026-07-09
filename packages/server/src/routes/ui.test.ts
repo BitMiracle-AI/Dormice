@@ -13,6 +13,7 @@ import {
 } from '../auth';
 import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
+import { verifyEnvdToken } from '../e2b/protocol';
 import { FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
 
@@ -155,6 +156,45 @@ describe('cookie-authenticated API access', () => {
       cookies: { [SESSION_COOKIE]: cookie.value },
       headers: { [CONSOLE_HEADER]: '1' },
     });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('POST /ui/envdToken', () => {
+  async function mint(
+    app: ReturnType<typeof testApp>,
+    cookieValue: string,
+    headers: Record<string, string> = { [CONSOLE_HEADER]: '1' },
+  ) {
+    return app.inject({
+      method: 'POST',
+      url: '/ui/envdToken',
+      cookies: { [SESSION_COOKIE]: cookieValue },
+      headers,
+      payload: { sandboxId: 'sb-terminal' },
+    });
+  }
+
+  it('a session cookie mints the exact token the envd surface verifies', async () => {
+    const app = testApp();
+    const cookie = sessionCookie(await login(app));
+    const res = await mint(app, cookie.value);
+    expect(res.statusCode).toBe(200);
+    const { envdAccessToken } = res.json() as { envdAccessToken: string };
+    expect(verifyEnvdToken(TOKEN, 'sb-terminal', envdAccessToken)).toBe(true);
+    // Per-sandbox: the same token opens no other sandbox.
+    expect(verifyEnvdToken(TOKEN, 'sb-other', envdAccessToken)).toBe(false);
+  });
+
+  it('goes through the API-wide arbiter: no console header, no token', async () => {
+    const app = testApp();
+    const cookie = sessionCookie(await login(app));
+    const res = await mint(app, cookie.value, {});
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('rejects a tampered cookie', async () => {
+    const res = await mint(testApp(), `${mintSession(TOKEN)}ff`);
     expect(res.statusCode).toBe(401);
   });
 });

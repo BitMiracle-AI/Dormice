@@ -3,11 +3,13 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import {
   mintSession,
+  requireApiAuth,
   SESSION_COOKIE,
   SESSION_TTL_SECONDS,
   tokensEqual,
 } from '../auth';
 import type { Config } from '../config';
+import { mintEnvdToken } from '../e2b/protocol';
 
 export interface UiRoutesOptions {
   config: Config;
@@ -71,6 +73,32 @@ export const uiRoutes: FastifyPluginAsyncZod<UiRoutesOptions> = async (
       reply.clearCookie(SESSION_COOKIE, COOKIE_OPTIONS);
       return { loggedIn: false as const };
     },
+  );
+
+  // The console's terminal speaks to the envd surface directly — the same
+  // wire the e2b SDK uses — but envd auth is the per-sandbox HMAC, which
+  // only an API-token holder can compute and the browser deliberately is
+  // not one. This trades the session for exactly one sandbox's token; the
+  // API-wide arbiter guards it, so the cookie path also needs the console
+  // header. Minting is stateless on purpose (like the token itself): a
+  // made-up sandboxId yields a token that opens nothing.
+  app.post(
+    '/ui/envdToken',
+    {
+      onRequest: requireApiAuth(config.DORMICE_API_TOKEN),
+      schema: {
+        body: z.object({ sandboxId: z.string().min(1) }),
+        response: {
+          200: z.object({ envdAccessToken: z.string() }),
+        },
+      },
+    },
+    async (request) => ({
+      envdAccessToken: mintEnvdToken(
+        config.DORMICE_API_TOKEN,
+        request.body.sandboxId,
+      ),
+    }),
   );
 
   if (webDistDir) {

@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/empty';
 import { ReleaseSandboxButton } from '../components/ReleaseSandboxButton';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
+import { SandboxTerminalCard } from '../components/SandboxTerminal';
 import { formatDuration, since } from '../format';
 import { useSandbox } from '../hooks/useSandboxes';
 
@@ -76,6 +77,10 @@ export function SandboxDetailPage() {
           onReleased={() => navigate({ to: '/' })}
         />
       </header>
+
+      <div className="mb-6">
+        <SandboxTerminalCard sandboxId={sandbox.sandboxId} />
+      </div>
 
       <Card>
         <CardContent>
