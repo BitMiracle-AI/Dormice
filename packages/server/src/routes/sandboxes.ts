@@ -6,9 +6,15 @@ import {
   execCommandResponseSchema,
   type LifecyclePolicy,
   listSandboxesResponseSchema,
+  readFileRequestSchema,
+  readFileResponseSchema,
   releaseSandboxRequestSchema,
   releaseSandboxResponseSchema,
+  resolveSandboxPath,
   type Sandbox,
+  WRITE_FILES_BODY_LIMIT_BYTES,
+  writeFilesRequestSchema,
+  writeFilesResponseSchema,
 } from '@dormice/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { ZodError, z } from 'zod';
@@ -22,7 +28,12 @@ import {
   touch,
 } from '../db/ledger';
 import type { SandboxRow } from '../db/schema';
-import type { Executor } from '../executor/executor';
+import {
+  type Executor,
+  FileNotFoundError,
+  FileTooLargeError,
+  NotAFileError,
+} from '../executor/executor';
 import { httpError } from '../http-error';
 import type { KeyedQueue } from '../keyed-queue';
 import { releaseSandbox, wakeSandbox } from '../lifecycle';
@@ -132,6 +143,23 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     });
   }
 
+  // Shared by every verb that uses an existing sandbox (exec, file ops):
+  // 404 for an unknown key — these verbs are not creators, an unknown key
+  // is more likely a typo than an intent to build a sandbox as a side
+  // effect — then wake whatever cold state the sandbox is in and refresh
+  // its idle clock. Must be called while holding the key's queue slot.
+  async function wakeForUse(userKey: string): Promise<SandboxRow> {
+    const existing = findByUserKey(db, userKey);
+    if (!existing) {
+      throw httpError(
+        404,
+        `no sandbox for key "${userKey}" — acquire it first`,
+      );
+    }
+    const awake = await wakeSandbox(db, executor, existing);
+    return touch(db, awake.sandboxId);
+  }
+
   // Native API convention: RPC style — every operation is a POST to a
   // camelCase verb route, input and output entirely in the body, route name
   // identical to the SDK method name. By construction this can never collide
@@ -208,19 +236,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       // whole duration. The heartbeat keeps the scanner away; a concurrent
       // release mid-exec destroys the container and this exec fails with
       // the executor's honest error — accepted, not defended against.
-      const row = await locks.run(userKey, async () => {
-        const existing = findByUserKey(db, userKey);
-        if (!existing) {
-          // exec is not a creator: an unknown key here is more likely a
-          // typo than an intent to build a sandbox as a side effect.
-          throw httpError(
-            404,
-            `no sandbox for key "${userKey}" — acquire it first`,
-          );
-        }
-        const awake = await wakeSandbox(db, executor, existing);
-        return touch(db, awake.sandboxId);
-      });
+      const row = await locks.run(userKey, () => wakeForUse(userKey));
 
       const stopHeartbeat = startExecHeartbeat(
         db,
@@ -244,6 +260,80 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           // Released mid-exec; the exec's own result or error tells the story.
         }
       }
+    },
+  );
+
+  // Maps the executor's typed file errors onto HTTP, message untouched.
+  function throwFileHttpError(error: unknown): never {
+    if (error instanceof FileNotFoundError) throw httpError(404, error.message);
+    if (error instanceof NotAFileError) throw httpError(400, error.message);
+    if (error instanceof FileTooLargeError) throw httpError(413, error.message);
+    throw error;
+  }
+
+  // Both file verbs run ENTIRELY inside the key's queue slot, unlike exec:
+  // a file operation's work is bounded (16 MiB against a local ext4 —
+  // seconds at worst), so holding the slot is cheap and buys the same
+  // guarantees acquire enjoys — the scanner cannot freeze the sandbox
+  // mid-write and a concurrent release queues up behind us instead of
+  // destroying the container under our feet. No heartbeat needed.
+  app.post(
+    '/writeFiles',
+    {
+      // The one total gate for a batch; per-file size is the schema's job.
+      bodyLimit: WRITE_FILES_BODY_LIMIT_BYTES,
+      schema: {
+        body: writeFilesRequestSchema,
+        response: { 200: writeFilesResponseSchema },
+      },
+    },
+    async (request) => {
+      const { userKey, files } = request.body;
+      return locks.run(userKey, async () => {
+        const row = await wakeForUse(userKey);
+        try {
+          await executor.writeFiles(
+            row.sandboxId,
+            files.map((file) => ({
+              path: file.path,
+              content: Buffer.from(file.contentBase64, 'base64'),
+            })),
+          );
+        } catch (error) {
+          throwFileHttpError(error);
+        }
+        touch(db, row.sandboxId);
+        return {
+          files: files.map((file) => ({ path: resolveSandboxPath(file.path) })),
+        };
+      });
+    },
+  );
+
+  app.post(
+    '/readFile',
+    {
+      schema: {
+        body: readFileRequestSchema,
+        response: { 200: readFileResponseSchema },
+      },
+    },
+    async (request) => {
+      const { userKey, path } = request.body;
+      return locks.run(userKey, async () => {
+        const row = await wakeForUse(userKey);
+        let content: Buffer;
+        try {
+          content = await executor.readFile(row.sandboxId, path);
+        } catch (error) {
+          throwFileHttpError(error);
+        }
+        touch(db, row.sandboxId);
+        return {
+          path: resolveSandboxPath(path),
+          contentBase64: content.toString('base64'),
+        };
+      });
     },
   );
 

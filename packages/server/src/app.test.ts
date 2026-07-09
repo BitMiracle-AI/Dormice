@@ -1,5 +1,8 @@
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
+import {
+  DEFAULT_LIFECYCLE_POLICY,
+  FILE_SIZE_LIMIT_BYTES,
+} from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app';
 import { loadConfig } from './config';
@@ -539,6 +542,171 @@ describe('POST /execCommand', () => {
     ];
     for (const payload of bad) {
       const res = await rpc(app, '/execCommand', payload);
+      expect(res.statusCode).toBe(400);
+      expect(Object.keys(res.json())).toEqual(['message']);
+    }
+  });
+});
+
+describe('POST /writeFiles and /readFile', () => {
+  it('round-trips content through base64, resolving paths to absolute', async () => {
+    const { app } = testApp();
+    await acquire(app, { userKey: 'alice' });
+    // Every byte value: any utf8 coercion or base64 sloppiness breaks this.
+    const bytes = Buffer.alloc(256);
+    for (let i = 0; i < 256; i++) bytes[i] = i;
+
+    const write = await rpc(app, '/writeFiles', {
+      userKey: 'alice',
+      files: [
+        {
+          path: 'notes.txt',
+          contentBase64: Buffer.from('hi\n').toString('base64'),
+        },
+        {
+          path: '/home/user/blob.bin',
+          contentBase64: bytes.toString('base64'),
+        },
+      ],
+    });
+    expect(write.statusCode).toBe(200);
+    expect(write.json()).toEqual({
+      files: [
+        { path: '/home/user/notes.txt' },
+        { path: '/home/user/blob.bin' },
+      ],
+    });
+
+    const read = await rpc(app, '/readFile', {
+      userKey: 'alice',
+      path: 'blob.bin',
+    });
+    expect(read.statusCode).toBe(200);
+    expect(read.json().path).toBe('/home/user/blob.bin');
+    expect(Buffer.from(read.json().contentBase64, 'base64').equals(bytes)).toBe(
+      true,
+    );
+  });
+
+  it('answers an unknown key with a 404 on both verbs, never a silent create', async () => {
+    const { app } = testApp();
+    const write = await rpc(app, '/writeFiles', {
+      userKey: 'nobody',
+      files: [{ path: 'x', contentBase64: 'eA==' }],
+    });
+    expect(write.statusCode).toBe(404);
+    const read = await rpc(app, '/readFile', { userKey: 'nobody', path: 'x' });
+    expect(read.statusCode).toBe(404);
+    expect(read.json().message).toMatch(/no sandbox for key/);
+  });
+
+  it('wakes a frozen sandbox before touching files', async () => {
+    const { app, db, executor, locks } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(
+        created.sandbox.lastActiveAt,
+        DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+      ),
+    );
+    expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
+
+    const res = await rpc(app, '/writeFiles', {
+      userKey: 'alice',
+      files: [{ path: 'woke.txt', contentBase64: 'eA==' }],
+    });
+    expect(res.statusCode).toBe(200);
+    expect(executor.stateOf(created.sandbox.sandboxId)).toBe('running');
+  });
+
+  it('maps the typed file errors onto 404, 400 and 413', async () => {
+    const { app, executor } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+
+    const missing = await rpc(app, '/readFile', {
+      userKey: 'alice',
+      path: 'absent.txt',
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json().message).toBe('no such file: /home/user/absent.txt');
+
+    const directory = await rpc(app, '/readFile', {
+      userKey: 'alice',
+      path: '/home/user',
+    });
+    expect(directory.statusCode).toBe(400);
+    expect(directory.json().message).toBe('not a regular file: /home/user');
+
+    // Staged straight through the executor: its write path is deliberately
+    // uncapped (the schema is the write-cap adjudicator), which is what
+    // lets an over-limit file exist to be read.
+    const size = FILE_SIZE_LIMIT_BYTES + 1;
+    await executor.writeFiles(created.sandbox.sandboxId, [
+      { path: 'big.bin', content: Buffer.alloc(size) },
+    ]);
+    const big = await rpc(app, '/readFile', {
+      userKey: 'alice',
+      path: 'big.bin',
+    });
+    expect(big.statusCode).toBe(413);
+    expect(big.json().message).toBe(
+      `file too large: /home/user/big.bin is ${size} bytes, limit ${FILE_SIZE_LIMIT_BYTES}`,
+    );
+  });
+
+  it('rejects an over-limit write with a 400 from the schema, not a body-limit 413', async () => {
+    // One byte over, as base64 — ~21 MiB of body. Passing the raised route
+    // bodyLimit and failing the per-file refine proves both gates sit where
+    // they should: total bytes at the body limit, per-file size in the schema.
+    const { app } = testApp();
+    await acquire(app, { userKey: 'alice' });
+    const res = await rpc(app, '/writeFiles', {
+      userKey: 'alice',
+      files: [
+        {
+          path: 'big.bin',
+          contentBase64: Buffer.alloc(FILE_SIZE_LIMIT_BYTES + 3).toString(
+            'base64',
+          ),
+        },
+      ],
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toMatch(/exceeds the \d+-byte limit/);
+  });
+
+  it('rejects malformed requests with the protocol {message} shape', async () => {
+    const { app } = testApp();
+    await acquire(app, { userKey: 'alice' });
+    const bad = [
+      ['/writeFiles', { userKey: 'alice', files: [] }],
+      ['/writeFiles', { userKey: 'alice' }],
+      [
+        '/writeFiles',
+        { userKey: 'alice', files: [{ path: '', contentBase64: 'eA==' }] },
+      ],
+      [
+        '/writeFiles',
+        {
+          userKey: 'alice',
+          files: [{ path: 'a\0b', contentBase64: 'eA==' }],
+        },
+      ],
+      [
+        '/writeFiles',
+        {
+          userKey: 'alice',
+          files: [{ path: 'x', contentBase64: '!!not-b64' }],
+        },
+      ],
+      ['/readFile', { userKey: 'alice' }],
+      ['/readFile', { userKey: 'alice', path: '' }],
+    ] as const;
+    for (const [url, payload] of bad) {
+      const res = await rpc(app, url, payload as Record<string, unknown>);
       expect(res.statusCode).toBe(400);
       expect(Object.keys(res.json())).toEqual(['message']);
     }
