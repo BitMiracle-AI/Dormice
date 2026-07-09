@@ -35,10 +35,32 @@ sign in with the API token once and it becomes an httpOnly session cookie;
 the token itself is never stored anywhere the page can read. The console
 shows every sandbox with its live lifecycle state (the same
 `/listSandboxes` the SDK sees), opens a per-sandbox detail view, creates
-sandboxes (the same idempotent `acquire`, with the lifecycle knobs), and
-releases them. Since the daemon listens on 127.0.0.1 only, reach a remote
-host's console through an SSH tunnel:
-`ssh -L 3676:127.0.0.1:3676 root@host`.
+sandboxes (the same idempotent `acquire`, with the lifecycle knobs),
+releases them, and has a Connect page with copy-paste snippets for every
+client (E2B SDK, native SDK, CLI) pointed at your own endpoint.
+
+The daemon listens on 127.0.0.1 only, so reaching it from another machine
+is a choice you make explicitly, one of two ways:
+
+- **SSH tunnel** (private, zero setup):
+  `ssh -L 3676:127.0.0.1:3676 root@host`, then open
+  `http://127.0.0.1:3676/ui`.
+- **Reverse proxy** for the console, the API, and the E2B surface at once —
+  e.g. Caddy, which also handles TLS certificates automatically once you
+  give it a domain:
+
+  ```
+  your-domain.example {
+  	reverse_proxy 127.0.0.1:3676 {
+  		flush_interval -1
+  	}
+  }
+  ```
+
+  `flush_interval -1` matters: streamed command output is written frame by
+  frame, and a buffering proxy would turn it into one lump at the end.
+  Anything exposed beyond localhost should be HTTPS — the API token and the
+  session cookie travel in every request.
 
 ## Host prerequisites (docker executor)
 

@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppConnectRouteImport } from './routes/_app/connect'
 import { Route as AppSandboxesUserKeyRouteImport } from './routes/_app/sandboxes/$userKey'
 
 const LoginRoute = LoginRouteImport.update({
@@ -28,6 +29,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppConnectRoute = AppConnectRouteImport.update({
+  id: '/connect',
+  path: '/connect',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppSandboxesUserKeyRoute = AppSandboxesUserKeyRouteImport.update({
   id: '/sandboxes/$userKey',
   path: '/sandboxes/$userKey',
@@ -37,10 +43,12 @@ const AppSandboxesUserKeyRoute = AppSandboxesUserKeyRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
+  '/connect': typeof AppConnectRoute
   '/sandboxes/$userKey': typeof AppSandboxesUserKeyRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
+  '/connect': typeof AppConnectRoute
   '/': typeof AppIndexRoute
   '/sandboxes/$userKey': typeof AppSandboxesUserKeyRoute
 }
@@ -48,15 +56,22 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
+  '/_app/connect': typeof AppConnectRoute
   '/_app/': typeof AppIndexRoute
   '/_app/sandboxes/$userKey': typeof AppSandboxesUserKeyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/sandboxes/$userKey'
+  fullPaths: '/' | '/login' | '/connect' | '/sandboxes/$userKey'
   fileRoutesByTo: FileRoutesByTo
-  to: '/login' | '/' | '/sandboxes/$userKey'
-  id: '__root__' | '/_app' | '/login' | '/_app/' | '/_app/sandboxes/$userKey'
+  to: '/login' | '/connect' | '/' | '/sandboxes/$userKey'
+  id:
+    | '__root__'
+    | '/_app'
+    | '/login'
+    | '/_app/connect'
+    | '/_app/'
+    | '/_app/sandboxes/$userKey'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -87,6 +102,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/connect': {
+      id: '/_app/connect'
+      path: '/connect'
+      fullPath: '/connect'
+      preLoaderRoute: typeof AppConnectRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/sandboxes/$userKey': {
       id: '/_app/sandboxes/$userKey'
       path: '/sandboxes/$userKey'
@@ -98,11 +120,13 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
+  AppConnectRoute: typeof AppConnectRoute
   AppIndexRoute: typeof AppIndexRoute
   AppSandboxesUserKeyRoute: typeof AppSandboxesUserKeyRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppConnectRoute: AppConnectRoute,
   AppIndexRoute: AppIndexRoute,
   AppSandboxesUserKeyRoute: AppSandboxesUserKeyRoute,
 }

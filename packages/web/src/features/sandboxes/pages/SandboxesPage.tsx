@@ -48,6 +48,9 @@ export function SandboxesPage() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" render={<Link to="/connect" />}>
+            Connect
+          </Button>
           <CreateSandboxDialog />
           <Button variant="ghost" size="sm" onClick={signOut}>
             Sign out
