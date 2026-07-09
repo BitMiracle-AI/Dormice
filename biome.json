@@ -1,7 +1,15 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.2/schema.json",
   "files": {
-    "includes": ["**", "!packages/*/drizzle"]
+    "includes": [
+      "**",
+      "!packages/*/drizzle",
+      "!packages/web/src/components/ui",
+      "!packages/web/src/hooks/use-mobile.ts",
+      "!packages/web/src/lib/utils.ts",
+      "!packages/web/src/shadcn.css",
+      "!packages/web/src/routeTree.gen.ts"
+    ]
   },
   "vcs": {
     "enabled": true,

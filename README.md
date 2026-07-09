@@ -34,9 +34,11 @@ The daemon serves a small web console at `http://127.0.0.1:3676/ui` —
 sign in with the API token once and it becomes an httpOnly session cookie;
 the token itself is never stored anywhere the page can read. The console
 shows every sandbox with its live lifecycle state (the same
-`/listSandboxes` the SDK sees) and can release sandboxes. Since the daemon
-listens on 127.0.0.1 only, reach a remote host's console through an SSH
-tunnel: `ssh -L 3676:127.0.0.1:3676 root@host`.
+`/listSandboxes` the SDK sees), opens a per-sandbox detail view, creates
+sandboxes (the same idempotent `acquire`, with the lifecycle knobs), and
+releases them. Since the daemon listens on 127.0.0.1 only, reach a remote
+host's console through an SSH tunnel:
+`ssh -L 3676:127.0.0.1:3676 root@host`.
 
 ## Host prerequisites (docker executor)
 

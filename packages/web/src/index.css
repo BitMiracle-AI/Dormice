@@ -1,0 +1,4 @@
+/* Style entry: imports only, plus project-level overrides. src/shadcn.css is
+   owned by the shadcn CLI (rewritten wholesale by `shadcn apply`) — custom
+   styles live here, never there. */
+@import "./shadcn.css";
