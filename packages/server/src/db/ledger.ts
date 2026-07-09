@@ -29,6 +29,14 @@ export interface CreateSandboxInput {
   userKey: string;
   nodeId: string;
   policy: LifecyclePolicy;
+  /** E2B-surface extras; native acquire never sets them. */
+  e2b?: {
+    /** JSON-serialized objects, stored verbatim. */
+    metadata: string | null;
+    envs: string | null;
+    deadlineAt: string;
+    onDeadline: 'kill' | 'pause';
+  };
 }
 
 /** Inserts a new sandbox row in `active` state. Throws if the user key is taken. */
@@ -44,6 +52,11 @@ export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
     archiveAfterSeconds: input.policy.archiveAfterSeconds,
     createdAt: now,
     lastActiveAt: now,
+    metadata: input.e2b?.metadata ?? null,
+    envs: input.e2b?.envs ?? null,
+    deadlineAt: input.e2b?.deadlineAt ?? null,
+    onDeadline: input.e2b?.onDeadline ?? null,
+    pausedByUser: false,
   };
   db.insert(sandboxes).values(row).run();
   return row;
@@ -106,6 +119,36 @@ export function overwriteState(
 ): void {
   db.update(sandboxes)
     .set({ state })
+    .where(eq(sandboxes.sandboxId, sandboxId))
+    .run();
+}
+
+/**
+ * Sets or clears the E2B deadline. Both travel together: a deadline without
+ * an action (or the reverse) would be a row the scanner cannot interpret.
+ */
+export function setDeadline(
+  db: Db,
+  sandboxId: string,
+  deadline: { deadlineAt: string; onDeadline: 'kill' | 'pause' } | null,
+): void {
+  db.update(sandboxes)
+    .set({
+      deadlineAt: deadline?.deadlineAt ?? null,
+      onDeadline: deadline?.onDeadline ?? null,
+    })
+    .where(eq(sandboxes.sandboxId, sandboxId))
+    .run();
+}
+
+/** Marks an explicit E2B pause; wakes clear it (an awake sandbox is not paused). */
+export function setPausedByUser(
+  db: Db,
+  sandboxId: string,
+  paused: boolean,
+): void {
+  db.update(sandboxes)
+    .set({ pausedByUser: paused })
     .where(eq(sandboxes.sandboxId, sandboxId))
     .run();
 }

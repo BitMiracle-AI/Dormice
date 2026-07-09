@@ -23,6 +23,25 @@ export const sandboxes = sqliteTable('sandboxes', {
   archiveAfterSeconds: integer('archive_after_seconds'),
   createdAt: text('created_at').notNull(),
   lastActiveAt: text('last_active_at').notNull(),
+  /**
+   * The E2B surface's columns. All NULL / defaulted for natively-acquired
+   * sandboxes — the native lifecycle never reads them.
+   */
+  /** JSON object; E2B metadata, persisted for list filtering and echo. */
+  metadata: text('metadata'),
+  /** JSON object; sandbox-level default envs, merged under per-command envs. */
+  envs: text('envs'),
+  /** ISO 8601; the E2B timeout's absolute deadline. NULL = no deadline. */
+  deadlineAt: text('deadline_at'),
+  /** What the scanner does when deadlineAt passes. Non-null iff deadlineAt is. */
+  onDeadline: text('on_deadline', { enum: ['kill', 'pause'] }),
+  /**
+   * Explicitly paused through the E2B surface and not woken since. Only
+   * consulted by the logical-state view; every wake back to active clears it.
+   */
+  pausedByUser: integer('paused_by_user', { mode: 'boolean' })
+    .notNull()
+    .default(false),
 });
 
 export type SandboxRow = typeof sandboxes.$inferSelect;
