@@ -1,4 +1,19 @@
+import type { SandboxState } from '@dormice/shared';
 import type { ContainerState } from './executor/executor';
+
+/**
+ * How many ledger rows claim LOCAL reality. Archived and restoring rows
+ * claim S3 instead — a ledger of nothing but archived sandboxes
+ * legitimately faces an empty machine, and counting them into the guard
+ * below would brick every such daemon at its next restart.
+ */
+export function locallyClaimedCount(
+  rows: readonly { state: SandboxState }[],
+): number {
+  return rows.filter(
+    (row) => row.state !== 'archived' && row.state !== 'restoring',
+  ).length;
+}
 
 /**
  * The identity check between "this ledger" and "this reality", run once at

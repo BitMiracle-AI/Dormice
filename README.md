@@ -2,7 +2,7 @@
 
 **The SQLite of agent sandboxes** — a self-hosted sandbox platform for AI agents. One machine, sandboxes that live forever, idle costs nothing.
 
-> **Status: early development.** The daemon, its lifecycle engine, the SDK, the CLI, the web console, the real Docker + gVisor executor, and the E2B-compatible API work end to end — the full create → freeze → stop → wake cycle, command execution, file I/O, and the official `e2b` SDK against real infrastructure. Nothing here is ready for production yet.
+> **Status: early development.** The daemon, its lifecycle engine, the SDK, the CLI, the web console, the real Docker + gVisor executor, the S3 archiver, and the E2B-compatible API work end to end — the full create → freeze → stop → archive → restore cycle, command execution, file I/O, and the official `e2b` SDK against real infrastructure. Nothing here is ready for production yet.
 
 ## The idea
 
@@ -98,9 +98,10 @@ official package*, and has passed against a real Docker + gVisor daemon:
 
 Deliberate deltas from the hosted product:
 
-- **No template builds.** Every sandbox runs the daemon's single base
-  image (`DORMICE_BASE_IMAGE`); the `template` argument is accepted and
-  ignored.
+- **No template builds.** Templates are named images: build one with
+  docker, register it with `dor template add`, and `Sandbox.create('name')`
+  resolves it (an unregistered name is an honest 404). The hosted
+  product's build pipeline (`e2b template build`) is not implemented.
 - **Freezing keeps processes.** A frozen sandbox's processes suspend and
   resume mid-flight — any touch wakes the sandbox in ~50 ms.
 - **Permanence stays the default.** Sandboxes created through the E2B
@@ -147,6 +148,30 @@ is a choice you make explicitly, one of two ways:
   Anything exposed beyond localhost should be HTTPS — the API token and the
   session cookie travel in every request.
 
+## Cold archive (S3, optional)
+
+Set the four `DORMICE_S3_*` variables and idle sandboxes take the last
+step down: a week after stopping (tunable per sandbox via
+`archiveAfterSeconds`), the disk is packed with `tar` + `zstd`, shipped to
+any S3-compatible bucket (AWS, Cloudflare R2, MinIO, Alibaba OSS in
+S3-compat mode), and freed locally. The next `acquireSandbox` answers
+`{ status: 'restoring', progress }` immediately and flips to `ready` once
+the disk is back — slow wake-ups are honest, never a silent hang.
+
+```sh
+DORMICE_S3_ENDPOINT=https://s3.example.com   # full URL; MinIO speaks http
+DORMICE_S3_BUCKET=dormice-archive
+DORMICE_S3_ACCESS_KEY_ID=...
+DORMICE_S3_SECRET_ACCESS_KEY=...
+# DORMICE_S3_REGION=us-east-1
+# DORMICE_S3_FORCE_PATH_STYLE=true           # MinIO needs this
+```
+
+Unset, the feature is honestly absent: sandboxes park at `stopped`
+forever, and a policy asking to archive is refused rather than silently
+stored. The bucket must exist; the host needs `zstd` (`install.sh`
+installs it, `dor doctor` checks it).
+
 ## Host prerequisites (docker executor)
 
 The daemon itself runs anywhere Node 22+ runs, with an in-memory fake
@@ -186,9 +211,6 @@ Pick something else if:
   requires sandboxes to be processes, and "installs anywhere" rules out
   requiring KVM. If only Firecracker-class VM isolation will do, this
   trade is not for you.
-- **You need cold archive today.** The `archived` state exists in the
-  protocol, but the S3 archiver is not built yet; the knob defaults to off
-  and nothing pretends otherwise.
 - **Your workloads aren't Linux.** Sandboxes are Linux containers.
 
 ## Repository layout

@@ -19,7 +19,9 @@ export const ALLOWED_TRANSITIONS: Record<
   frozen: ['active', 'stopped'],
   stopped: ['active', 'archived'],
   archived: ['restoring'],
-  restoring: ['active'],
+  // The archived edge is the failure edge: a restore that dies reverts —
+  // the S3 object is untouched, so the next acquire simply retries.
+  restoring: ['active', 'archived'],
 };
 
 export interface CreateSandboxInput {

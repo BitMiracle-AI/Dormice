@@ -299,6 +299,30 @@ export interface Executor {
    */
   removeDisk(sandboxId: string): Promise<void>;
   /**
+   * Packs the sandbox's disk into one local archive file at destPath — the
+   * archiver's read half. The disk must exist ("disk ... is absent, cannot
+   * export") and the container must be stopped or absent ("container ... is
+   * <state>, expected stopped or absent"): a live filesystem cannot be
+   * captured consistently. The archive's format is each executor's own;
+   * only the importDisk round-trip is the contract. Speaks local paths only
+   * — object storage is the archiver's business, never the executor's.
+   */
+  exportDisk(sandboxId: string, destPath: string): Promise<void>;
+  /**
+   * Provisions a fresh disk — at the executor's *current* configured size,
+   * which is how a restored sandbox picks up a raised disk quota — and
+   * unpacks an exportDisk archive into it. The disk must not exist yet
+   * ("disk ... already exists, cannot import"); a failed unpack tears the
+   * fresh disk down again rather than leaving a half-disk behind the verb's
+   * own failure. onProgress reports a monotonic fraction 0..1, best-effort,
+   * ending at 1.
+   */
+  importDisk(
+    sandboxId: string,
+    srcPath: string,
+    onProgress?: (fraction: number) => void,
+  ): Promise<void>;
+  /**
    * Where the host can reach a TCP port of this sandbox — what the sandbox
    * proxy dials to serve `<port>-<sandboxId>.<domain>` traffic. Requires
    * state `running` (same message as every exec verb); whether anything

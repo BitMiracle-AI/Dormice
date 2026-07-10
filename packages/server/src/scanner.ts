@@ -1,3 +1,4 @@
+import type { Archiver } from './archive/archiver';
 import type { Db } from './db/db';
 import { findBySandboxId, listSandboxes } from './db/ledger';
 import type { SandboxRow } from './db/schema';
@@ -8,6 +9,8 @@ import { freezeSandbox, releaseSandbox, stopSandbox } from './lifecycle';
 export interface ScanResult {
   frozen: number;
   stopped: number;
+  /** Disks shipped to S3 and freed locally this sweep. */
+  archived: number;
   /** E2B deadlines whose action was kill, enforced this sweep: sandbox destroyed. */
   expiredKilled: number;
   /** Sandboxes whose transition failed this sweep; the caller logs them. */
@@ -23,6 +26,13 @@ export interface ScanResult {
  * logical view reads the expired deadline directly.
  */
 function dueDeadline(row: SandboxRow, now: Date): 'kill' | 'pause' | null {
+  if (row.state === 'restoring') {
+    // A kill mid-restore would race the restore task over the half-built
+    // disk. Deferred one sweep: the task's finish makes the row active (or
+    // archived on failure) and the kill then lands clean — meanwhile the
+    // logical view already reports the expired deadline as dead.
+    return null;
+  }
   if (row.deadlineAt === null || Date.parse(row.deadlineAt) > now.getTime()) {
     return null;
   }
@@ -35,7 +45,10 @@ function dueDeadline(row: SandboxRow, now: Date): 'kill' | 'pause' | null {
  * mirroring ALLOWED_TRANSITIONS — a long-dead sandbox freezes on this sweep
  * and stops on the next; nothing ever skips a state.
  */
-function dueTransition(row: SandboxRow, now: Date): 'freeze' | 'stop' | null {
+function dueTransition(
+  row: SandboxRow,
+  now: Date,
+): 'freeze' | 'stop' | 'archive' | null {
   const idleSeconds = (now.getTime() - Date.parse(row.lastActiveAt)) / 1000;
   if (row.state === 'active' && idleSeconds >= row.freezeAfterSeconds) {
     return 'freeze';
@@ -49,8 +62,14 @@ function dueTransition(row: SandboxRow, now: Date): 'freeze' | 'stop' | null {
     // and would stop every never-stop sandbox on its first frozen sweep.
     return 'stop';
   }
-  // stopped -> archived lands with the S3 archiver. The archiveAfterSeconds
-  // knob already exists so sandboxes created today carry their intent.
+  if (
+    row.state === 'stopped' &&
+    row.archiveAfterSeconds !== null &&
+    idleSeconds >= row.archiveAfterSeconds
+  ) {
+    // Same load-bearing null check as stop's.
+    return 'archive';
+  }
   return null;
 }
 
@@ -70,6 +89,14 @@ function dueTransition(row: SandboxRow, now: Date): 'freeze' | 'stop' | null {
  * catches rows that were released or woken between the snapshot and the
  * slot.
  *
+ * Two phases, fast then slow: an archive is minutes of tar and upload, and
+ * a batch of same-aged sandboxes crossing the archive line together would
+ * otherwise stall every freeze, stop and deadline-kill behind them for the
+ * whole heartbeat tick. Every cheap move lands first; archives then run
+ * serially (one disk's worth of I/O at a time — the host has one disk),
+ * each re-verified inside its own slot. With no archiver the archive rung
+ * simply never moves and rows keep their recorded intent.
+ *
  * One sandbox's failure must not punish the rest: a vanished container (a
  * gVisor box exits whole on OOM) would otherwise block every row behind it
  * on every sweep, and cooling — the product's core promise — would silently
@@ -82,15 +109,22 @@ export async function scanOnce(
   executor: Executor,
   locks: KeyedQueue,
   now: Date,
+  archiver?: Archiver,
 ): Promise<ScanResult> {
   const result: ScanResult = {
     frozen: 0,
     stopped: 0,
+    archived: 0,
     expiredKilled: 0,
     failures: [],
   };
+  const archiveDue: SandboxRow[] = [];
   for (const row of listSandboxes(db)) {
-    if (dueDeadline(row, now) === null && dueTransition(row, now) === null) {
+    const due = dueTransition(row, now);
+    if (due === 'archive' && archiver !== undefined) {
+      archiveDue.push(row);
+    }
+    if (dueDeadline(row, now) === null && (due === null || due === 'archive')) {
       continue;
     }
     try {
@@ -103,7 +137,12 @@ export async function scanOnce(
         // parks) by its deadline, not one rung colder.
         const deadline = dueDeadline(fresh, now);
         if (deadline === 'kill') {
-          await releaseSandbox(db, executor, fresh.sandboxId);
+          await releaseSandbox(
+            db,
+            executor,
+            fresh.sandboxId,
+            archiver?.store ?? null,
+          );
           result.expiredKilled += 1;
           return;
         }
@@ -112,14 +151,40 @@ export async function scanOnce(
           result.frozen += 1;
           return;
         }
-        const due = dueTransition(fresh, now);
-        if (due === 'freeze') {
+        const freshDue = dueTransition(fresh, now);
+        if (freshDue === 'freeze') {
           await freezeSandbox(db, executor, fresh.sandboxId);
           result.frozen += 1;
-        } else if (due === 'stop') {
+        } else if (freshDue === 'stop') {
           await stopSandbox(db, executor, fresh.sandboxId);
           result.stopped += 1;
         }
+      });
+    } catch (error) {
+      result.failures.push({
+        sandboxId: row.sandboxId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (archiver === undefined) return result;
+  for (const row of archiveDue) {
+    try {
+      await locks.tryRun(row.userKey, async () => {
+        const fresh = findBySandboxId(db, row.sandboxId);
+        // Re-verified in the slot: phase one may have killed it by
+        // deadline, an acquire may have woken it, a release removed it —
+        // the snapshot's opinion is void either way.
+        if (
+          !fresh ||
+          dueDeadline(fresh, now) !== null ||
+          dueTransition(fresh, now) !== 'archive'
+        ) {
+          return;
+        }
+        await archiver.archive(fresh);
+        result.archived += 1;
       });
     } catch (error) {
       result.failures.push({

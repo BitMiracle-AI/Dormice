@@ -1,8 +1,14 @@
 import { createHash } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from '../app';
+import { Archiver } from '../archive/archiver';
+import { MemStore } from '../archive/mem-store';
+import { objectKey } from '../archive/store';
 import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
 import { findBySandboxId, setDeadline } from '../db/ledger';
@@ -1720,5 +1726,197 @@ describe('E2B templates', () => {
     const res = await control(t, 'GET', '/v2/sandboxes');
     const items = res.json() as Array<{ templateID: string; alias?: string }>;
     expect(items).toMatchObject([{ templateID: 'py311', alias: 'py311' }]);
+  });
+});
+
+describe('E2B surface vs the archiver', () => {
+  /** testApp plus a MemStore-backed archiver — the S3-configured daemon. */
+  function archiverTestApp(executor: FakeExecutor = new FakeExecutor()) {
+    const db = openDb(':memory:');
+    migrateDb(db, MIGRATIONS);
+    const config = loadConfig({
+      DORMICE_DB_PATH: ':memory:',
+      DORMICE_NODE_ID: 'node-test',
+      DORMICE_API_TOKEN: TOKEN,
+    });
+    const locks = new KeyedQueue();
+    const store = new MemStore();
+    const archiver = new Archiver({
+      db,
+      executor,
+      locks,
+      store,
+      tmpDir: mkdtempSync(path.join(tmpdir(), 'dormice-compat-')),
+    });
+    const app = buildApp({
+      config,
+      db,
+      executor,
+      locks,
+      logger: false,
+      archiver,
+    });
+    return { app, db, executor, locks, store, archiver };
+  }
+
+  /**
+   * Walks an autoPause sandbox down to archived. Only pause-type sandboxes
+   * can ever get there on this surface: a kill-type deadline destroys the
+   * sandbox long before any archive threshold — which is why every test
+   * here creates with autoPause.
+   */
+  async function walkToArchived(
+    t: ReturnType<typeof archiverTestApp>,
+    sandboxID: string,
+  ): Promise<void> {
+    const row = findBySandboxId(t.db, sandboxID);
+    if (!row) throw new Error('row missing');
+    const at = (s: number) => new Date(Date.parse(row.lastActiveAt) + s * 1000);
+    // The scanner sweeps travel in time, but e2bView reads the ledger's
+    // deadline against the real clock — so the deadline is planted in the
+    // real past, the shape a 7-days-idle autoPause sandbox actually has.
+    setDeadline(t.db, sandboxID, {
+      deadlineAt: new Date(Date.parse(row.lastActiveAt) - 1000).toISOString(),
+      onDeadline: 'pause',
+    });
+    // The expired pause deadline parks it frozen; the default idle policy
+    // then stops it at 3 days and archives it at 7.
+    await scanOnce(t.db, t.executor, t.locks, at(300), t.archiver);
+    await scanOnce(t.db, t.executor, t.locks, at(3 * 86400), t.archiver);
+    await scanOnce(t.db, t.executor, t.locks, at(7 * 86400), t.archiver);
+    expect(findBySandboxId(t.db, sandboxID)?.state).toBe('archived');
+    expect(t.store.has(objectKey(sandboxID))).toBe(true);
+  }
+
+  it('reports an archived autoPause sandbox as paused — archived is not a wire state', async () => {
+    const t = archiverTestApp();
+    const { sandboxID } = await createSandbox(t, { autoPause: true });
+    await walkToArchived(t, sandboxID);
+    const res = await control(t, 'GET', '/v2/sandboxes?state=paused');
+    expect(
+      (res.json() as Array<{ sandboxID: string }>).map((s) => s.sandboxID),
+    ).toContain(sandboxID);
+  });
+
+  it('connect blocks through the restore and answers a live session', async () => {
+    const t = archiverTestApp();
+    const { sandboxID } = await createSandbox(t, { autoPause: true });
+    await walkToArchived(t, sandboxID);
+
+    const res = await control(t, 'POST', `/sandboxes/${sandboxID}/connect`, {});
+    // 201 = this connect resumed it — same answer as resuming a pause.
+    expect(res.statusCode).toBe(201);
+    expect(t.executor.stateOf(sandboxID)).toBe('running');
+    // The envd face serves immediately: the restore really finished.
+    const list = await envdRpc(t, sandboxID, '/process.Process/List', {});
+    expect(list.statusCode).toBe(200);
+  });
+
+  it('answers 502 for envd on a paused-archived sandbox WITHOUT restoring it', async () => {
+    // The logical gate outranks the restore: a paused sandbox refuses envd
+    // traffic whether frozen or archived, and refusing must not cost a
+    // whole restore first. connect (which extends the deadline) is the way
+    // back in — same as for a plain paused sandbox.
+    const t = archiverTestApp();
+    const { sandboxID } = await createSandbox(t, { autoPause: true });
+    await walkToArchived(t, sandboxID);
+
+    const stat = await envdRpc(t, sandboxID, '/filesystem.Filesystem/Stat', {
+      path: '/home/user',
+    });
+    expect(stat.statusCode).toBe(502);
+    expect(findBySandboxId(t.db, sandboxID)?.state).toBe('archived');
+    expect(t.store.has(objectKey(sandboxID))).toBe(true);
+  });
+
+  it('the envd face restores a logically-running archived sandbox on first touch', async () => {
+    // A natively-acquired sandbox has no deadline — archived by idleness,
+    // it is still logically running, and envd traffic (a console terminal,
+    // a signed URL) restores it in place.
+    const t = archiverTestApp();
+    const acquired = await t.app.inject({
+      method: 'POST',
+      url: '/acquireSandbox',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        userKey: 'native',
+        policy: {
+          freezeAfterSeconds: 1,
+          stopAfterSeconds: 2,
+          archiveAfterSeconds: 3,
+        },
+      },
+    });
+    const sandboxID = acquired.json().sandbox.sandboxId as string;
+    const row = findBySandboxId(t.db, sandboxID);
+    if (!row) throw new Error('row missing');
+    const at = (s: number) => new Date(Date.parse(row.lastActiveAt) + s * 1000);
+    await scanOnce(t.db, t.executor, t.locks, at(1), t.archiver);
+    await scanOnce(t.db, t.executor, t.locks, at(2), t.archiver);
+    await scanOnce(t.db, t.executor, t.locks, at(3), t.archiver);
+    expect(findBySandboxId(t.db, sandboxID)?.state).toBe('archived');
+
+    const stat = await envdRpc(t, sandboxID, '/filesystem.Filesystem/Stat', {
+      path: '/home/user',
+    });
+    expect(stat.statusCode).toBe(200);
+    expect(t.executor.stateOf(sandboxID)).toBe('running');
+    expect(findBySandboxId(t.db, sandboxID)?.state).toBe('active');
+  });
+
+  it('create with metadata.userKey resumes its archived sandbox', async () => {
+    const t = archiverTestApp();
+    const first = await createSandbox(t, {
+      autoPause: true,
+      metadata: { userKey: 'alice' },
+    });
+    await walkToArchived(t, first.sandboxID);
+
+    const res = await control(t, 'POST', '/sandboxes', {
+      metadata: { userKey: 'alice' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().sandboxID).toBe(first.sandboxID);
+    expect(t.executor.stateOf(first.sandboxID)).toBe('running');
+  });
+
+  it('kill deletes an archived sandbox and its S3 object', async () => {
+    const t = archiverTestApp();
+    const { sandboxID } = await createSandbox(t, { autoPause: true });
+    await walkToArchived(t, sandboxID);
+
+    const res = await control(t, 'DELETE', `/sandboxes/${sandboxID}`);
+    expect(res.statusCode).toBe(204);
+    expect(t.store.has(objectKey(sandboxID))).toBe(false);
+    expect(findBySandboxId(t.db, sandboxID)).toBeUndefined();
+  });
+
+  it('kill mid-restore joins the task first, then deletes', async () => {
+    const t = archiverTestApp();
+    const { sandboxID } = await createSandbox(t, { autoPause: true });
+    await walkToArchived(t, sandboxID);
+    // Hold the download open so the row is mid-restoring when kill arrives.
+    let releaseDownload!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseDownload = resolve;
+    });
+    const innerGet = t.store.get.bind(t.store);
+    t.store.get = async (key, dest, onProgress) => {
+      await gate;
+      return innerGet(key, dest, onProgress);
+    };
+    const row = findBySandboxId(t.db, sandboxID);
+    if (!row) throw new Error('row missing');
+    t.archiver.beginRestore(row);
+    expect(findBySandboxId(t.db, sandboxID)?.state).toBe('restoring');
+
+    const del = control(t, 'DELETE', `/sandboxes/${sandboxID}`);
+    // Let the DELETE reach its join, then release the download.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseDownload();
+    const res = await del;
+    expect(res.statusCode).toBe(204);
+    expect(t.store.has(objectKey(sandboxID))).toBe(false);
+    expect(findBySandboxId(t.db, sandboxID)).toBeUndefined();
   });
 });

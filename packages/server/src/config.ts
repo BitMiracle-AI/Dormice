@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
+import type { S3Settings } from './archive/s3-store';
 
 /**
  * All configuration comes from environment variables, validated once at
@@ -73,6 +74,27 @@ const envSchema = z.object({
       },
     )
     .optional(),
+  /**
+   * The S3-compatible object store behind the archiver (AWS, R2, MinIO,
+   * OSS in S3-compat mode). The four core variables come as a set: with
+   * none of them, archiving is honestly absent — sandboxes park at stopped
+   * forever, and policies asking to archive are refused (the
+   * SANDBOX_DOMAIN precedent). Endpoint is a full URL including scheme
+   * (MinIO speaks http, the clouds https).
+   */
+  DORMICE_S3_ENDPOINT: z
+    .url({
+      protocol: /^https?$/,
+      error:
+        'DORMICE_S3_ENDPOINT must be a full http(s) URL, e.g. https://s3.example.com or http://127.0.0.1:9000',
+    })
+    .optional(),
+  DORMICE_S3_BUCKET: z.string().min(1).optional(),
+  DORMICE_S3_ACCESS_KEY_ID: z.string().min(1).optional(),
+  DORMICE_S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  DORMICE_S3_REGION: z.string().default('us-east-1'),
+  /** Path-style addressing: MinIO needs true; the clouds route by subdomain. */
+  DORMICE_S3_FORCE_PATH_STYLE: z.stringbool().default(false),
 });
 
 const checkedSchema = envSchema
@@ -106,10 +128,55 @@ const checkedSchema = envSchema
         'DORMICE_DATA_DIR must be an absolute path when DORMICE_EXECUTOR=docker — sandbox disks must not move when the start directory does',
       path: ['DORMICE_DATA_DIR'],
     },
-  );
+  )
+  // All-or-none: a half-configured store would make the archiver's
+  // existence ambiguous, and ambiguity here decides real policy defaults.
+  .superRefine((cfg, ctx) => {
+    const wanted = [
+      'DORMICE_S3_ENDPOINT',
+      'DORMICE_S3_BUCKET',
+      'DORMICE_S3_ACCESS_KEY_ID',
+      'DORMICE_S3_SECRET_ACCESS_KEY',
+    ] as const;
+    const missing = wanted.filter((name) => cfg[name] === undefined);
+    const first = missing[0];
+    if (first !== undefined && missing.length < wanted.length) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `the DORMICE_S3_* variables come as a set: ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing — set all four to enable the archiver, or none to disable it`,
+        path: [first],
+      });
+    }
+  });
 
 export type Config = z.infer<typeof envSchema>;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return checkedSchema.parse(env);
+}
+
+/**
+ * The single adjudicator of "is the archiver configured": null unless the
+ * whole S3 set is present (a partial set never gets past the schema). What
+ * hangs off this one answer: whether an Archiver is built at boot, whether
+ * new sandboxes default to archiving, and whether archive-asking policy
+ * overrides are accepted at all.
+ */
+export function s3Settings(config: Config): S3Settings | null {
+  if (
+    config.DORMICE_S3_ENDPOINT === undefined ||
+    config.DORMICE_S3_BUCKET === undefined ||
+    config.DORMICE_S3_ACCESS_KEY_ID === undefined ||
+    config.DORMICE_S3_SECRET_ACCESS_KEY === undefined
+  ) {
+    return null;
+  }
+  return {
+    endpoint: config.DORMICE_S3_ENDPOINT,
+    bucket: config.DORMICE_S3_BUCKET,
+    accessKeyId: config.DORMICE_S3_ACCESS_KEY_ID,
+    secretAccessKey: config.DORMICE_S3_SECRET_ACCESS_KEY,
+    region: config.DORMICE_S3_REGION,
+    forcePathStyle: config.DORMICE_S3_FORCE_PATH_STYLE,
+  };
 }

@@ -130,7 +130,37 @@ export interface EnvdContext extends E2bDeps {
 }
 
 export function createEnvdContext(deps: E2bDeps): EnvdContext {
-  const { db, executor, locks } = deps;
+  const { db, executor, locks, archiver } = deps;
+
+  /**
+   * The archive detour, taken before any wake: E2B has no restoring
+   * concept, so this surface blocks until the sandbox is back — resuming
+   * an archived sandbox just takes longer. Joined OUTSIDE the key slot
+   * (the restore task's own finish needs it). No-op for anything that is
+   * not archived/restoring.
+   */
+  async function joinRestore(sandboxId: string): Promise<void> {
+    if (archiver) {
+      try {
+        await archiver.restoreJoin(sandboxId);
+      } catch (error) {
+        throw new E2bError(
+          502,
+          'unavailable',
+          `restoring the sandbox failed: ${error instanceof Error ? error.message : String(error)} — retry`,
+        );
+      }
+      return;
+    }
+    const row = findBySandboxId(db, sandboxId);
+    if (row && (row.state === 'archived' || row.state === 'restoring')) {
+      throw new E2bError(
+        502,
+        'unavailable',
+        'sandbox is archived and the daemon has no S3 configured (DORMICE_S3_*)',
+      );
+    }
+  }
 
   /**
    * Only a logically-running sandbox serves envd traffic: paused and dead
@@ -159,7 +189,11 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
    * take seconds and must not race the scanner or a release.
    */
   async function wakeForUse(sandboxId: string): Promise<SandboxRow> {
+    // The logical gate first: a paused-by-deadline sandbox answers 502
+    // whether it is frozen or archived — restoring it for a request that
+    // will be refused anyway would waste a whole restore.
     const before = requireRunningRow(sandboxId);
+    await joinRestore(sandboxId);
     return locks.run(before.userKey, async () => {
       const fresh = requireRunningRow(sandboxId);
       const awake = await wakeSandbox(db, executor, fresh);
@@ -172,6 +206,7 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
     work: (row: SandboxRow) => Promise<T>,
   ): Promise<T> {
     const before = requireRunningRow(sandboxId);
+    await joinRestore(sandboxId);
     return locks.run(before.userKey, async () => {
       const fresh = requireRunningRow(sandboxId);
       const awake = await wakeSandbox(db, executor, fresh);

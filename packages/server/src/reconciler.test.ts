@@ -16,6 +16,7 @@ const NONE = {
   deletedRows: 0,
   destroyedOrphans: 0,
   removedDisks: 0,
+  archivedSwept: 0,
   suspects: [],
 };
 
@@ -118,20 +119,123 @@ describe('startup reconcile', () => {
     expect(executor.stateOf('orphan')).toBeUndefined();
   });
 
-  it('leaves archived rows to the future archiver', async () => {
+  it('sweeps the stale local copy of an archived row', async () => {
     const { db, executor, locks } = setup();
     const row = await seed(db, executor, 'alice');
-    // Walk the legal path to archived; the container is still around, but
-    // judging that is the archiver's reconciliation, not this one's.
+    // A crash between the archive's ledger write and its local cleanup:
+    // the transition to archived IS the upload confirmation, so whatever is
+    // still here is a stale copy — the sweep resumes the interrupted job.
     await executor.freeze(row.sandboxId);
     await executor.stop(row.sandboxId);
     transition(db, row.sandboxId, 'frozen');
     transition(db, row.sandboxId, 'stopped');
     transition(db, row.sandboxId, 'archived');
 
+    expect(await reconcile(db, executor, locks)).toEqual({
+      ...NONE,
+      archivedSwept: 1,
+    });
+    expect(findByUserKey(db, 'alice')?.state).toBe('archived');
+    expect(executor.stateOf(row.sandboxId)).toBeUndefined();
+    expect(await executor.listDisks()).not.toContain(row.sandboxId);
+  });
+
+  it('sweeps an archived row whose container is gone but disk remains', async () => {
+    const { db, executor, locks } = setup();
+    const row = await seed(db, executor, 'alice');
+    await executor.freeze(row.sandboxId);
+    await executor.stop(row.sandboxId);
+    transition(db, row.sandboxId, 'frozen');
+    transition(db, row.sandboxId, 'stopped');
+    transition(db, row.sandboxId, 'archived');
+    executor.vanishContainer(row.sandboxId);
+
+    expect(await reconcile(db, executor, locks)).toEqual({
+      ...NONE,
+      archivedSwept: 1,
+    });
+    expect(findByUserKey(db, 'alice')?.state).toBe('archived');
+    expect(await executor.listDisks()).not.toContain(row.sandboxId);
+  });
+
+  it('leaves a fully-archived row alone — its body is in S3', async () => {
+    const { db, executor, locks } = setup();
+    const row = await seed(db, executor, 'alice');
+    await executor.freeze(row.sandboxId);
+    await executor.stop(row.sandboxId);
+    transition(db, row.sandboxId, 'frozen');
+    transition(db, row.sandboxId, 'stopped');
+    transition(db, row.sandboxId, 'archived');
+    await executor.destroy(row.sandboxId);
+
+    // Nothing local, and crucially NOT deletedRows: an archived row with no
+    // local remains is the normal state, not drift.
     expect(await reconcile(db, executor, locks)).toEqual(NONE);
     expect(findByUserKey(db, 'alice')?.state).toBe('archived');
-    expect(executor.stateOf(row.sandboxId)).toBe('stopped');
+  });
+
+  it('reverts a restoring zombie with no live task to archived', async () => {
+    const { db, executor, locks } = setup();
+    const row = await seed(db, executor, 'alice');
+    // A crash mid-restore: the row says restoring, a half-extracted disk
+    // exists, no container yet — and the tracker (daemon memory) is empty.
+    await executor.freeze(row.sandboxId);
+    await executor.stop(row.sandboxId);
+    transition(db, row.sandboxId, 'frozen');
+    transition(db, row.sandboxId, 'stopped');
+    transition(db, row.sandboxId, 'archived');
+    await executor.destroy(row.sandboxId);
+    executor.plantDiskResidue(row.sandboxId);
+    transition(db, row.sandboxId, 'restoring');
+
+    const result = await reconcile(db, executor, locks);
+    // The disk is the task's garbage; the S3 object is intact, so archived
+    // makes the next acquire a clean retry.
+    expect(result).toEqual({ ...NONE, repairedStates: 1 });
+    expect(findByUserKey(db, 'alice')?.state).toBe('archived');
+    expect(await executor.listDisks()).not.toContain(row.sandboxId);
+  });
+
+  it('records a restoring zombie whose container runs as active', async () => {
+    const { db, executor, locks } = setup();
+    const row = await seed(db, executor, 'alice');
+    // A crash between the restore's start() and its ledger write: the
+    // restore physically finished. Reality wins — removing the disk under
+    // a live container would be the ledger trashing reality.
+    await executor.freeze(row.sandboxId);
+    await executor.stop(row.sandboxId);
+    transition(db, row.sandboxId, 'frozen');
+    transition(db, row.sandboxId, 'stopped');
+    transition(db, row.sandboxId, 'archived');
+    transition(db, row.sandboxId, 'restoring');
+    await executor.start(row.sandboxId);
+
+    const result = await reconcile(db, executor, locks);
+    expect(result).toEqual({ ...NONE, repairedStates: 1 });
+    expect(findByUserKey(db, 'alice')?.state).toBe('active');
+    expect(executor.stateOf(row.sandboxId)).toBe('running');
+  });
+
+  it('leaves a restoring row with a live task untouched', async () => {
+    const { db, executor, locks } = setup();
+    const row = await seed(db, executor, 'alice');
+    await executor.freeze(row.sandboxId);
+    await executor.stop(row.sandboxId);
+    transition(db, row.sandboxId, 'frozen');
+    transition(db, row.sandboxId, 'stopped');
+    transition(db, row.sandboxId, 'archived');
+    await executor.destroy(row.sandboxId);
+    // Mid-restore: the task has built half a disk and is still running.
+    executor.plantDiskResidue(row.sandboxId);
+    transition(db, row.sandboxId, 'restoring');
+
+    const result = await reconcile(db, executor, locks, new Set(), {
+      hasLiveRestore: () => true,
+    });
+    expect(result).toEqual(NONE);
+    expect(findByUserKey(db, 'alice')?.state).toBe('restoring');
+    // The mid-flight disk also dodges the orphan pass: the row owns it.
+    expect(await executor.listDisks()).toContain(row.sandboxId);
   });
 
   it('repairs every sandbox in one pass', async () => {
@@ -152,6 +256,7 @@ describe('startup reconcile', () => {
       deletedRows: 1,
       destroyedOrphans: 1,
       removedDisks: 0,
+      archivedSwept: 0,
       suspects: [],
     });
     expect(findByUserKey(db, 'healthy')?.state).toBe('active');

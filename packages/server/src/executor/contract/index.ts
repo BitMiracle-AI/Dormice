@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe } from 'vitest';
 import type { ContainerState, Executor, ShellOptions } from '../executor';
+import { diskTransferTests } from './disk-transfer';
 import { entryTests } from './entries';
 import { execTests } from './exec';
 import { execStreamTests } from './exec-stream';
@@ -136,6 +137,7 @@ export function describeExecutorContract(
 
     lifecycleTests(ctx);
     imageTests(ctx);
+    diskTransferTests(ctx);
     execTests(ctx);
     execStreamTests(ctx);
     fileTests(ctx);

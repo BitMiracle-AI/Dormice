@@ -1,4 +1,6 @@
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_LIFECYCLE_POLICY,
@@ -7,10 +9,15 @@ import {
 } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app';
+import { Archiver } from './archive/archiver';
+import { MemStore } from './archive/mem-store';
+import { objectKey } from './archive/store';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
+import { transition } from './db/ledger';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
+import { ARCHIVE_DEFAULT_SECONDS } from './policy';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
 
@@ -129,10 +136,23 @@ describe('POST /acquireSandbox', () => {
   it('rejects an override whose merged result breaks the ordering rule', async () => {
     const res = await acquire(testApp().app, {
       userKey: 'alice',
-      policy: { archiveAfterSeconds: 1 },
+      policy: { freezeAfterSeconds: 61, stopAfterSeconds: 60 },
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().message).toMatch(/stopAfterSeconds/);
+    expect(res.json().message).toMatch(/freezeAfterSeconds/);
+  });
+
+  it('refuses an archive-asking policy when no S3 is configured', async () => {
+    // Without an archiver a stored archive threshold would be a standing
+    // lie; the daemon refuses rather than nodding along.
+    const res = await acquire(testApp().app, {
+      userKey: 'alice',
+      policy: { archiveAfterSeconds: 3600 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toMatch(
+      /archiving requires S3 \(DORMICE_S3_\*\)/,
+    );
   });
 
   it('rejects a malformed body', async () => {
@@ -859,6 +879,220 @@ describe('POST /releaseSandbox', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ released: false });
+  });
+});
+
+describe('the archiver through the app', () => {
+  /** testApp plus a MemStore-backed archiver — the S3-configured daemon. */
+  function archiverTestApp(executor: FakeExecutor = new FakeExecutor()) {
+    const db = openDb(':memory:');
+    migrateDb(db, MIGRATIONS);
+    const config = loadConfig({
+      DORMICE_DB_PATH: ':memory:',
+      DORMICE_NODE_ID: 'node-test',
+      DORMICE_API_TOKEN: TOKEN,
+    });
+    const locks = new KeyedQueue();
+    const store = new MemStore();
+    const archiver = new Archiver({
+      db,
+      executor,
+      locks,
+      store,
+      tmpDir: mkdtempSync(path.join(tmpdir(), 'dormice-app-')),
+    });
+    const app = buildApp({
+      config,
+      db,
+      executor,
+      locks,
+      logger: false,
+      archiver,
+    });
+    return { app, db, executor, locks, store, archiver };
+  }
+
+  /** Polls acquire until the union flips to ready; the whole restore path. */
+  async function acquireUntilReady(
+    app: ReturnType<typeof testApp>['app'],
+    userKey: string,
+  ) {
+    const deadline = Date.now() + 5_000;
+    while (true) {
+      const body = (await acquire(app, { userKey })).json();
+      if (body.status === 'ready') return body;
+      expect(body.status).toBe('restoring');
+      expect(body.progress.phase).toMatch(/downloading|extracting/);
+      if (Date.now() > deadline) {
+        throw new Error(`still restoring: ${JSON.stringify(body)}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+
+  it('runs the full cold cycle: archive by idleness, restore by acquire', async () => {
+    const { app, db, executor, locks, store, archiver } = archiverTestApp();
+    const created = (
+      await acquire(app, {
+        userKey: 'alice',
+        policy: {
+          freezeAfterSeconds: 1,
+          stopAfterSeconds: 2,
+          archiveAfterSeconds: 3,
+        },
+      })
+    ).json();
+    const id = created.sandbox.sandboxId;
+    await rpc(app, '/writeFiles', {
+      userKey: 'alice',
+      files: [
+        {
+          path: 'kept.txt',
+          contentBase64: Buffer.from('through the archive').toString('base64'),
+        },
+      ],
+    });
+    const { lastActiveAt } = (await rpc(app, '/listSandboxes')).json()
+      .sandboxes[0];
+
+    // Three sweeps, one rung each: frozen, stopped, archived.
+    await scanOnce(db, executor, locks, after(lastActiveAt, 1), archiver);
+    await scanOnce(db, executor, locks, after(lastActiveAt, 2), archiver);
+    await scanOnce(db, executor, locks, after(lastActiveAt, 3), archiver);
+    const listed = (await rpc(app, '/listSandboxes')).json().sandboxes[0];
+    expect(listed.state).toBe('archived');
+    expect(store.has(objectKey(id))).toBe(true);
+    expect(executor.stateOf(id)).toBeUndefined();
+    expect(await executor.listDisks()).not.toContain(id);
+
+    // The re-acquire begins the restore and answers restoring immediately;
+    // polling lands on ready with the same sandbox and its data intact.
+    const ready = await acquireUntilReady(app, 'alice');
+    expect(ready.sandbox.sandboxId).toBe(id);
+    expect(ready.sandbox.state).toBe('active');
+    const read = (
+      await rpc(app, '/readFile', { userKey: 'alice', path: 'kept.txt' })
+    ).json();
+    expect(Buffer.from(read.contentBase64, 'base64').toString()).toBe(
+      'through the archive',
+    );
+  });
+
+  it('stores the 7-day archive default when S3 is configured', async () => {
+    const { app } = archiverTestApp();
+    const res = await acquire(app, { userKey: 'alice' });
+    expect(res.json().sandbox.policy.archiveAfterSeconds).toBe(
+      ARCHIVE_DEFAULT_SECONDS,
+    );
+  });
+
+  it('answers 503 for an archived sandbox on a daemon without S3', async () => {
+    // The operator archived with S3 configured, then rebooted without it:
+    // the rows are honest, the restore is impossible, the error names it.
+    const executor = new FakeExecutor();
+    const { app, db } = testApp(executor);
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const id = created.sandbox.sandboxId;
+    transition(db, id, 'frozen');
+    transition(db, id, 'stopped');
+    transition(db, id, 'archived');
+    await executor.destroy(id);
+
+    const res = await acquire(app, { userKey: 'alice' });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().message).toMatch(/no S3 configured \(DORMICE_S3_\*\)/);
+  });
+
+  it('release of an archived sandbox deletes the S3 object and the row', async () => {
+    const { app, db, executor, locks, store, archiver } = archiverTestApp();
+    const created = (
+      await acquire(app, {
+        userKey: 'alice',
+        policy: {
+          freezeAfterSeconds: 1,
+          stopAfterSeconds: 2,
+          archiveAfterSeconds: 3,
+        },
+      })
+    ).json();
+    const id = created.sandbox.sandboxId;
+    const stamp = created.sandbox.lastActiveAt;
+    await scanOnce(db, executor, locks, after(stamp, 1), archiver);
+    await scanOnce(db, executor, locks, after(stamp, 2), archiver);
+    await scanOnce(db, executor, locks, after(stamp, 3), archiver);
+    expect(store.has(objectKey(id))).toBe(true);
+
+    const res = await rpc(app, '/releaseSandbox', { userKey: 'alice' });
+    expect(res.json()).toEqual({ released: true });
+    expect(store.has(objectKey(id))).toBe(false);
+    expect((await rpc(app, '/listSandboxes')).json().sandboxes).toEqual([]);
+  });
+
+  it('answers 409 for a release while the restore runs', async () => {
+    const { app, db, executor, locks, store, archiver } = archiverTestApp();
+    const created = (
+      await acquire(app, {
+        userKey: 'alice',
+        policy: {
+          freezeAfterSeconds: 1,
+          stopAfterSeconds: 2,
+          archiveAfterSeconds: 3,
+        },
+      })
+    ).json();
+    const stamp = created.sandbox.lastActiveAt;
+    await scanOnce(db, executor, locks, after(stamp, 1), archiver);
+    await scanOnce(db, executor, locks, after(stamp, 2), archiver);
+    await scanOnce(db, executor, locks, after(stamp, 3), archiver);
+    // Hold the download open so the sandbox is mid-restoring for the test.
+    let releaseDownload!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseDownload = resolve;
+    });
+    const innerGet = store.get.bind(store);
+    store.get = async (key, dest, onProgress) => {
+      await gate;
+      return innerGet(key, dest, onProgress);
+    };
+
+    const restoring = (await acquire(app, { userKey: 'alice' })).json();
+    expect(restoring.status).toBe('restoring');
+    const res = await rpc(app, '/releaseSandbox', { userKey: 'alice' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toMatch(/restoring; retry/);
+
+    releaseDownload();
+    await acquireUntilReady(app, 'alice');
+  });
+
+  it('answers 409 for exec and file verbs on an archived sandbox', async () => {
+    const { app, db, executor, locks, archiver } = archiverTestApp();
+    const created = (
+      await acquire(app, {
+        userKey: 'alice',
+        policy: {
+          freezeAfterSeconds: 1,
+          stopAfterSeconds: 2,
+          archiveAfterSeconds: 3,
+        },
+      })
+    ).json();
+    const stamp = created.sandbox.lastActiveAt;
+    await scanOnce(db, executor, locks, after(stamp, 1), archiver);
+    await scanOnce(db, executor, locks, after(stamp, 2), archiver);
+    await scanOnce(db, executor, locks, after(stamp, 3), archiver);
+
+    const exec = await rpc(app, '/execCommand', {
+      userKey: 'alice',
+      command: 'echo hi',
+    });
+    expect(exec.statusCode).toBe(409);
+    expect(exec.json().message).toMatch(/call acquireSandbox and poll/);
+    const read = await rpc(app, '/readFile', {
+      userKey: 'alice',
+      path: 'kept.txt',
+    });
+    expect(read.statusCode).toBe(409);
   });
 });
 

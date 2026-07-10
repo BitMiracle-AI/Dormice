@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import {
   access,
   chown,
@@ -11,7 +12,7 @@ import {
   statfs,
 } from 'node:fs/promises';
 import path from 'node:path';
-import type { Duplex, Writable } from 'node:stream';
+import { type Duplex, Transform, type Writable } from 'node:stream';
 import {
   EXEC_OUTPUT_LIMIT_BYTES,
   FILE_SIZE_LIMIT_BYTES,
@@ -298,6 +299,75 @@ export class DockerExecutor implements Executor {
     // Idempotent by contract: teardown already treats "nothing mounted"
     // and "no such file" as the goal state.
     await this.teardownDisk(sandboxId);
+  }
+
+  async exportDisk(sandboxId: string, destPath: string): Promise<void> {
+    const found = await this.inspect(sandboxId);
+    if (found !== null) {
+      const actual = containerStateFromDocker(found.status);
+      if (actual !== 'stopped') {
+        throw new Error(
+          `container ${sandboxId} is ${actual}, expected stopped or absent`,
+        );
+      }
+    }
+    if (!(await this.diskExists(sandboxId))) {
+      throw new Error(`disk ${sandboxId} is absent, cannot export`);
+    }
+    // A host reboot drops loop mounts while the image file survives; the
+    // tree has to be mounted to be read.
+    await this.ensureMounted(sandboxId);
+    // The mounted tree, not the raw image: the container is dead, so the
+    // tree is quiescent, and importDisk provisioning a fresh disk is what
+    // lets the restored sandbox follow the current size configuration.
+    // tar does not follow symlinks, so a link planted by the sandbox is
+    // archived as a link, never chased by the root-running daemon.
+    await execa('tar', [
+      '-I',
+      'zstd -T0',
+      '-cf',
+      destPath,
+      '-C',
+      this.mountDir(sandboxId),
+      '.',
+    ]);
+  }
+
+  async importDisk(
+    sandboxId: string,
+    srcPath: string,
+    onProgress?: (fraction: number) => void,
+  ): Promise<void> {
+    if (await this.diskExists(sandboxId)) {
+      throw new Error(`disk ${sandboxId} already exists, cannot import`);
+    }
+    await this.provisionDisk(sandboxId);
+    try {
+      const { size } = await stat(srcPath);
+      let consumed = 0;
+      // The archive is fed through a byte-counting stream into tar's stdin,
+      // so progress is what actually reached the extractor — not a guess.
+      const meter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          consumed += chunk.length;
+          onProgress?.(size > 0 ? consumed / size : 1);
+          callback(null, chunk);
+        },
+      });
+      createReadStream(srcPath).pipe(meter);
+      // -p as root restores the recorded owners — uid-1000 files stay
+      // uid 1000 (measured in the predecessor system).
+      await execa(
+        'tar',
+        ['-I', 'zstd', '-xpf', '-', '-C', this.mountDir(sandboxId)],
+        { input: meter },
+      );
+      onProgress?.(1);
+    } catch (err) {
+      // Leave no half-disk behind the verb's own failure.
+      await this.teardownDisk(sandboxId);
+      throw err;
+    }
   }
 
   async diskUsage(): Promise<DiskUsage> {

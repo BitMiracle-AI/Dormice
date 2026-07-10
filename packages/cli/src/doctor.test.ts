@@ -68,6 +68,7 @@ function fakeHost(
     [`docker run --rm --runtime=runsc ${IMAGE} id -u`]: ok('1000\n'),
     [`docker run --rm --runtime=runsc ${IMAGE} bash -c command -v inotifywait || echo MISSING`]:
       ok('/usr/bin/inotifywait\n'),
+    'zstd --version': ok('zstd command line interface v1.5.5\n'),
     ...overrides.commands,
   };
   const calls: string[] = [];
@@ -81,6 +82,10 @@ function fakeHost(
       DORMICE_BASE_IMAGE: IMAGE,
       DORMICE_DB_PATH: '/var/lib/dormice/dormice.db',
       DORMICE_DATA_DIR: '/var/lib/dormice',
+      DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
+      DORMICE_S3_BUCKET: 'dormice-archive',
+      DORMICE_S3_ACCESS_KEY_ID: 'minio-user',
+      DORMICE_S3_SECRET_ACCESS_KEY: 'minio-secret',
     },
     calls,
     run: async (cmd, args) => {
@@ -344,6 +349,65 @@ describe('container probes', () => {
     expect(results['probe-image-user']).toMatchObject({
       status: 'fail',
       detail: expect.stringContaining('uid 0'),
+    });
+  });
+});
+
+describe('the S3 archive checks', () => {
+  // fakeHost's env override replaces wholesale; this is the healthy host's
+  // env WITHOUT the S3 set — the archiver-less operator.
+  const NO_S3_ENV = {
+    DORMICE_API_TOKEN: TOKEN,
+    DORMICE_EXECUTOR: 'docker',
+    DORMICE_BASE_IMAGE: IMAGE,
+    DORMICE_DB_PATH: '/var/lib/dormice/dormice.db',
+    DORMICE_DATA_DIR: '/var/lib/dormice',
+  };
+
+  it('skips both checks when no S3 is configured', async () => {
+    const { results, failed } = await runDoctor(fakeHost({ env: NO_S3_ENV }));
+    expect(results['s3-config']).toMatchObject({
+      status: 'skip',
+      detail: expect.stringContaining('archiver is disabled'),
+    });
+    // zstd is gated on s3-config passing, and skips are not failures.
+    expect(results.zstd).toMatchObject({ status: 'skip' });
+    expect(failed).toBe(false);
+  });
+
+  it('fails a partial S3 set, naming the missing variables', async () => {
+    const { results } = await runDoctor(
+      fakeHost({
+        env: {
+          ...NO_S3_ENV,
+          DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
+          DORMICE_S3_BUCKET: 'dormice-archive',
+        },
+      }),
+    );
+    expect(results['s3-config']).toMatchObject({
+      status: 'fail',
+      detail: expect.stringContaining('DORMICE_S3_ACCESS_KEY_ID'),
+    });
+  });
+
+  it('passes a full set and checks zstd on the docker executor', async () => {
+    // The healthy default host carries the full S3 set and zstd.
+    const { results } = await runDoctor(fakeHost());
+    expect(results['s3-config']).toMatchObject({ status: 'pass' });
+    expect(results.zstd).toMatchObject({
+      status: 'pass',
+      detail: expect.stringContaining('zstd'),
+    });
+  });
+
+  it('fails when zstd is missing on a docker host with S3 configured', async () => {
+    const { results } = await runDoctor(
+      fakeHost({ commands: { 'zstd --version': boom('not found') } }),
+    );
+    expect(results.zstd).toMatchObject({
+      status: 'fail',
+      fix: 'apt-get install -y zstd',
     });
   });
 });

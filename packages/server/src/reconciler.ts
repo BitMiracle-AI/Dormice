@@ -19,6 +19,8 @@ export interface ReconcileResult {
   destroyedOrphans: number;
   /** Disks removed because neither a row nor a container owns them. */
   removedDisks: number;
+  /** Stale local remains of archived rows swept away (interrupted cleanups). */
+  archivedSwept: number;
   /**
    * Containers and disks with no row, seen for the first time — not
    * destroyed yet. The caller passes them back as `priorSuspects` on the
@@ -77,14 +79,24 @@ const LEDGER_STATE: Record<ContainerState, SandboxState> = {
  * `priorSuspects` carries the first strikes between runs; omitting it (at
  * startup, when nothing can be in flight) destroys orphans immediately.
  *
- * Archived and restoring rows are skipped: those sandboxes live in S3, not
- * in the executor, and their reconciliation lands with the archiver.
+ * Archived rows claim S3, not local reality — anything of theirs still
+ * here is an interrupted cleanup (the transition to archived IS the upload
+ * confirmation), swept by resuming it: a leftover container is destroyed,
+ * a leftover disk removed. Restoring rows with a live restore task are the
+ * task's own business and skipped; without one they are crash zombies (the
+ * tracker is daemon memory) repaired reality-first — a container means the
+ * restore physically finished before the crash, so the ledger records it;
+ * no container means a half-restore, whose disk is removed and whose row
+ * reverts to archived (the S3 object is intact — the next acquire retries
+ * cleanly). The startup run happens before listen, so no request ever
+ * observes an unrepaired zombie.
  */
 export async function reconcile(
   db: Db,
   executor: Executor,
   locks: KeyedQueue,
   priorSuspects?: ReadonlySet<string>,
+  archiver?: { hasLiveRestore(sandboxId: string): boolean },
 ): Promise<ReconcileResult> {
   const rows = listSandboxes(db);
   const containers = await executor.listContainers();
@@ -94,6 +106,7 @@ export async function reconcile(
     deletedRows: 0,
     destroyedOrphans: 0,
     removedDisks: 0,
+    archivedSwept: 0,
     suspects: [],
   };
   // Everything a disk may legitimately belong to: rows that survive this
@@ -102,21 +115,55 @@ export async function reconcile(
   const owners = new Set<string>();
 
   // Re-reads the row inside its queue slot and applies the repair only if
-  // the state this pass decided on still holds; ledger writes are
-  // synchronous, so nothing interleaves between the re-read and the write.
-  const repairUnderLock = (row: SandboxRow, apply: () => void) =>
+  // the state this pass decided on still holds. The slot is the guard:
+  // apply may await executor work (the archived sweep destroys), and
+  // nothing else touches this sandbox while the slot is held.
+  const repairUnderLock = (
+    row: SandboxRow,
+    apply: () => void | Promise<void>,
+  ) =>
     locks.tryRun(row.userKey, async () => {
       const fresh = findBySandboxId(db, row.sandboxId);
       if (fresh && fresh.state === row.state) {
-        apply();
+        await apply();
       }
     });
 
   for (const row of rows) {
     const observed = containers.get(row.sandboxId);
     containers.delete(row.sandboxId);
-    if (row.state === 'archived' || row.state === 'restoring') {
+    if (row.state === 'archived') {
       owners.add(row.sandboxId);
+      if (observed !== undefined) {
+        await repairUnderLock(row, async () => {
+          await executor.destroy(row.sandboxId);
+          result.archivedSwept += 1;
+        });
+      } else if (disks.has(row.sandboxId)) {
+        await repairUnderLock(row, async () => {
+          await executor.removeDisk(row.sandboxId);
+          result.archivedSwept += 1;
+        });
+      }
+      continue;
+    }
+    if (row.state === 'restoring') {
+      owners.add(row.sandboxId);
+      if (archiver?.hasLiveRestore(row.sandboxId)) {
+        continue; // The task owns this row; what we observe is its mid-work.
+      }
+      if (observed !== undefined) {
+        await repairUnderLock(row, () => {
+          overwriteState(db, row.sandboxId, LEDGER_STATE[observed]);
+          result.repairedStates += 1;
+        });
+      } else {
+        await repairUnderLock(row, async () => {
+          await executor.removeDisk(row.sandboxId);
+          overwriteState(db, row.sandboxId, 'archived');
+          result.repairedStates += 1;
+        });
+      }
       continue;
     }
     if (observed !== undefined) {

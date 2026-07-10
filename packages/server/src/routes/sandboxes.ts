@@ -20,6 +20,7 @@ import {
 } from '@dormice/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { ZodError, z } from 'zod';
+import type { Archiver, RestoreProgress } from '../archive/archiver';
 import type { Config } from '../config';
 import type { Db } from '../db/db';
 import {
@@ -41,14 +42,23 @@ import {
 import { httpError } from '../http-error';
 import type { KeyedQueue } from '../keyed-queue';
 import { rebuildSandbox, releaseSandbox, wakeSandbox } from '../lifecycle';
-import { resolvePolicy } from '../policy';
+import { ArchiveDisabledError, resolvePolicy } from '../policy';
 
 export interface SandboxRoutesOptions {
   config: Config;
   db: Db;
   executor: Executor;
   locks: KeyedQueue;
+  /** Absent = no S3 configured: archiving and restores are honestly off. */
+  archiver?: Archiver;
+  /** buildApp's one adjudication of the archive policy default (null = off). */
+  archiveDefaultSeconds: number | null;
 }
+
+/** What acquire's slot work resolves to — the wire union's two arms. */
+type AcquireOutcome =
+  | { status: 'ready'; row: SandboxRow }
+  | { status: 'restoring'; row: SandboxRow; progress: RestoreProgress };
 
 /** Ledger row -> wire shape: nest the flat policy columns, attach the endpoint. */
 function toSandbox(row: SandboxRow, endpoint: string): Sandbox {
@@ -71,7 +81,10 @@ function toSandbox(row: SandboxRow, endpoint: string): Sandbox {
 
 export const sandboxRoutes: FastifyPluginAsyncZod<
   SandboxRoutesOptions
-> = async (app, { config, db, executor, locks }) => {
+> = async (
+  app,
+  { config, db, executor, locks, archiver, archiveDefaultSeconds },
+) => {
   // Every sandbox lives on this daemon today, so the endpoint is our own
   // address; with sharding it may point at another node.
   const endpoint = `http://127.0.0.1:${config.DORMICE_PORT}`;
@@ -87,15 +100,44 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     userKey: string,
     policy: LifecyclePolicy,
     template: string | null,
-  ): Promise<SandboxRow> {
+  ): Promise<AcquireOutcome> {
     const existing = findByUserKey(db, userKey);
+    if (existing?.state === 'archived' || existing?.state === 'restoring') {
+      // The protocol's promise: acquire never blocks on a slow wake-up. An
+      // archived sandbox starts its restore and answers `restoring` with
+      // progress at once; the caller polls acquire until it flips to ready.
+      if (!archiver) {
+        throw httpError(
+          503,
+          `sandbox for key "${userKey}" is ${existing.state} but the daemon has no S3 configured (DORMICE_S3_*) — restore is impossible until it is`,
+        );
+      }
+      if (existing.state === 'archived') {
+        archiver.beginRestore(existing);
+      }
+      const restoring = findByUserKey(db, userKey);
+      if (!restoring) {
+        throw httpError(500, `sandbox for key "${userKey}" vanished mid-slot`);
+      }
+      return {
+        status: 'restoring',
+        row: restoring,
+        // The fallback covers the crash-zombie instant before the next
+        // reconcile flips the row back to archived; at runtime a restoring
+        // row always has a live task.
+        progress: archiver.progressOf(existing.sandboxId) ?? {
+          phase: 'downloading',
+          percent: 0,
+        },
+      };
+    }
     if (existing) {
       // Wake whatever cold state it is in (a single jump back to active),
       // then refresh the idle clock — an acquire is what "activity" means.
       // A requested template is not applied: like policy, it takes effect
       // only when this acquire creates the sandbox.
       const awake = await wakeSandbox(db, executor, existing);
-      return touch(db, awake.sandboxId);
+      return { status: 'ready', row: touch(db, awake.sandboxId) };
     }
 
     // The capacity check lives at the only verb that creates — wakes of
@@ -118,13 +160,16 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     // names, DNS labels.
     const sandboxId = randomUUID();
     await executor.create(sandboxId, { image: resolveImage(db, template) });
-    return createSandbox(db, {
-      sandboxId,
-      userKey,
-      nodeId: config.DORMICE_NODE_ID,
-      policy,
-      template,
-    });
+    return {
+      status: 'ready',
+      row: createSandbox(db, {
+        sandboxId,
+        userKey,
+        nodeId: config.DORMICE_NODE_ID,
+        policy,
+        template,
+      }),
+    };
   }
 
   // Shared by every verb that uses an existing sandbox (exec, file ops):
@@ -138,6 +183,14 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       throw httpError(
         404,
         `no sandbox for key "${userKey}" — acquire it first`,
+      );
+    }
+    if (existing.state === 'archived' || existing.state === 'restoring') {
+      // The native restore path is acquire's poll loop; a use verb neither
+      // blocks for minutes nor starts restores on the side.
+      throw httpError(
+        409,
+        `sandbox for key "${userKey}" is ${existing.state} — call acquireSandbox and poll until it is ready`,
       );
     }
     const awake = await wakeSandbox(db, executor, existing);
@@ -169,7 +222,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       // deserves a 400, not a silent ignore.
       let policy: LifecyclePolicy;
       try {
-        policy = resolvePolicy(override);
+        policy = resolvePolicy(override, archiveDefaultSeconds);
       } catch (error) {
         if (error instanceof ZodError) {
           // The override passed shape validation but the merged policy broke
@@ -178,6 +231,11 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
             message: `invalid lifecycle policy: ${error.issues
               .map((issue) => issue.message)
               .join('; ')}`,
+          });
+        }
+        if (error instanceof ArchiveDisabledError) {
+          return reply.code(400).send({
+            message: `invalid lifecycle policy: ${error.message}`,
           });
         }
         throw error;
@@ -192,10 +250,20 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         });
       }
 
-      const row = await locks.run(userKey, () =>
+      const outcome = await locks.run(userKey, () =>
         findOrCreate(userKey, policy, template ?? null),
       );
-      return { status: 'ready' as const, sandbox: toSandbox(row, endpoint) };
+      if (outcome.status === 'restoring') {
+        return {
+          status: 'restoring' as const,
+          sandbox: toSandbox(outcome.row, endpoint),
+          progress: outcome.progress,
+        };
+      }
+      return {
+        status: 'ready' as const,
+        sandbox: toSandbox(outcome.row, endpoint),
+      };
     },
   );
 
@@ -390,7 +458,18 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           // under this key — already holds.
           return { released: false };
         }
-        await releaseSandbox(db, executor, existing.sandboxId);
+        if (existing.state === 'restoring') {
+          // The one documented dent in release's idempotence: tearing the
+          // half-built disk down would race the restore task over it. The
+          // task finishes in seconds to minutes; retry then.
+          throw httpError(409, 'sandbox is restoring; retry when it finishes');
+        }
+        await releaseSandbox(
+          db,
+          executor,
+          existing.sandboxId,
+          archiver?.store ?? null,
+        );
         return { released: true };
       });
     },
