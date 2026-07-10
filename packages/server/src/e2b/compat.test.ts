@@ -344,6 +344,68 @@ describe('E2B control plane', () => {
     expect(findBySandboxId(t.db, sandboxID)?.state).toBe('stopped');
   });
 
+  it('metrics answers one sample in SDK field names; start/end accepted, ignored', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    // start/end slice a history we do not keep — one sample, taken now.
+    const res = await control(
+      t,
+      'GET',
+      `/sandboxes/${sandboxID}/metrics?start=1&end=2`,
+    );
+    expect(res.statusCode).toBe(200);
+    const samples = res.json();
+    expect(samples).toHaveLength(1);
+    const m = samples[0];
+    expect(Date.parse(m.timestamp)).not.toBeNaN();
+    expect(
+      Math.abs(Date.parse(m.timestamp) / 1000 - m.timestampUnix),
+    ).toBeLessThanOrEqual(1);
+    expect(m.cpuCount).toBeGreaterThanOrEqual(1);
+    expect(m.cpuUsedPct).toBeGreaterThanOrEqual(0);
+    expect(m.memUsed).toBeGreaterThan(0);
+    expect(m.memTotal).toBeGreaterThan(0);
+    expect(m.memCache).toBeGreaterThanOrEqual(0);
+    expect(m.diskUsed).toBeGreaterThan(0);
+    expect(m.diskTotal).toBeGreaterThan(0);
+  });
+
+  it('metrics reads a frozen sandbox without waking it; a stopped one answers []', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t, { timeout: 86400 });
+    // Freeze through the idle scanner, exactly like production.
+    const row = findBySandboxId(t.db, sandboxID);
+    const later = new Date(
+      Date.now() + ((row?.freezeAfterSeconds ?? 0) + 60) * 1000,
+    );
+    await scanOnce(t.db, t.executor, t.locks, later);
+    expect(t.executor.stateOf(sandboxID)).toBe('paused');
+
+    const frozen = await control(t, 'GET', `/sandboxes/${sandboxID}/metrics`);
+    expect(frozen.statusCode).toBe(200);
+    expect(frozen.json()).toHaveLength(1);
+    // Observation is not activity: still paused afterwards.
+    expect(t.executor.stateOf(sandboxID)).toBe('paused');
+
+    // keepMemory:false parks it stopped — nothing runs, so no samples.
+    await control(t, 'POST', `/sandboxes/${sandboxID}/pause`, {
+      memory: false,
+    });
+    const stopped = await control(t, 'GET', `/sandboxes/${sandboxID}/metrics`);
+    expect(stopped.statusCode).toBe(200);
+    expect(stopped.json()).toEqual([]);
+  });
+
+  it('metrics 404s an unknown sandbox in the control-plane dialect', async () => {
+    const t = testApp();
+    const res = await control(t, 'GET', '/sandboxes/no-such/metrics');
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({
+      code: 404,
+      message: 'sandbox "no-such" not found',
+    });
+  });
+
   it('lists with metadata and state filters, paginating via x-next-token', async () => {
     const t = testApp();
     const blue1 = await createSandbox(t, { metadata: { team: 'blue' } });

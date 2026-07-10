@@ -7,6 +7,7 @@ import {
   readdir,
   readFile,
   rm,
+  statfs,
 } from 'node:fs/promises';
 import path from 'node:path';
 import type { Duplex, Writable } from 'node:stream';
@@ -58,6 +59,7 @@ import {
   NotAFileError,
   type PtySize,
   type SandboxEntry,
+  type SandboxMetrics,
   type WatchDirHandle,
   type WatchDirOptions,
 } from './executor';
@@ -311,6 +313,48 @@ export class DockerExecutor implements Executor {
       throw new Error(`container ${sandboxId} has no network address`);
     }
     return { host: ip, port };
+  }
+
+  async metrics(sandboxId: string): Promise<SandboxMetrics> {
+    const found = await this.inspect(sandboxId);
+    const actual =
+      found === null ? undefined : containerStateFromDocker(found.status);
+    if (found === null || (actual !== 'running' && actual !== 'paused')) {
+      throw new Error(
+        `container ${sandboxId} is ${actual ?? 'absent'}, expected running or paused`,
+      );
+    }
+    // stream:false makes the engine take two samples a beat apart so the
+    // CPU delta below has a denominator; one reading costs about a second.
+    const stats = await this.docker
+      .getContainer(found.id)
+      .stats({ stream: false });
+    const cpuDelta =
+      (stats.cpu_stats?.cpu_usage?.total_usage ?? 0) -
+      (stats.precpu_stats?.cpu_usage?.total_usage ?? 0);
+    const systemDelta =
+      (stats.cpu_stats?.system_cpu_usage ?? 0) -
+      (stats.precpu_stats?.system_cpu_usage ?? 0);
+    const onlineCpus = stats.cpu_stats?.online_cpus || this.opts.cpus;
+    // cgroup v2 calls the page cache inactive_file; v1 calls it cache.
+    const memStats = (stats.memory_stats?.stats ?? {}) as Record<
+      string,
+      number
+    >;
+    const disk = await statfs(this.mountDir(sandboxId));
+    return {
+      cpuCount: this.opts.cpus,
+      cpuUsedPct:
+        systemDelta > 0 && cpuDelta > 0
+          ? (cpuDelta / systemDelta) * onlineCpus * 100
+          : 0,
+      memUsedBytes: stats.memory_stats?.usage ?? 0,
+      memTotalBytes:
+        stats.memory_stats?.limit || Math.round(this.opts.memoryGb * 1024 ** 3),
+      memCacheBytes: memStats.cache ?? memStats.inactive_file ?? 0,
+      diskUsedBytes: (disk.blocks - disk.bfree) * disk.bsize,
+      diskTotalBytes: disk.blocks * disk.bsize,
+    };
   }
 
   async exec(sandboxId: string, opts: ExecOptions): Promise<ExecResult> {

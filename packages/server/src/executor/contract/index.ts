@@ -6,6 +6,7 @@ import { execTests } from './exec';
 import { execStreamTests } from './exec-stream';
 import { fileTests } from './files';
 import { lifecycleTests } from './lifecycle';
+import { metricsTests } from './metrics';
 import { watchTests } from './watch';
 
 /**
@@ -122,5 +123,6 @@ export function describeExecutorContract(
     fileTests(ctx);
     entryTests(ctx);
     watchTests(ctx);
+    metricsTests(ctx);
   });
 }
