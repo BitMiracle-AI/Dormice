@@ -28,7 +28,7 @@ describe('web console over a real daemon', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
     const html = await res.text();
-    expect(html).toContain('<title>Dormice</title>');
+    expect(html).toContain('<title>Dormice 控制台</title>');
     // The base path is baked in at build time — a bare /assets reference
     // would 404 behind the daemon's /console prefix.
     expect(html).toContain('/console/assets/');
@@ -37,7 +37,7 @@ describe('web console over a real daemon', () => {
   it('falls back to the SPA for client-side routes', async () => {
     const res = await fetch(`${endpoint()}/console/login`);
     expect(res.status).toBe(200);
-    expect(await res.text()).toContain('<title>Dormice</title>');
+    expect(await res.text()).toContain('<title>Dormice 控制台</title>');
   });
 
   it('rejects a login with the wrong token', async () => {
