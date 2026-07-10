@@ -12,5 +12,8 @@
   "dependencies": {
     "@dormice/sdk": "workspace:*",
     "e2b": "^2.31.0"
+  },
+  "devDependencies": {
+    "@dormice/server": "workspace:*"
   }
 }

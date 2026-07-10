@@ -354,6 +354,52 @@ const CHECKS: DoctorCheck[] = [
     },
   },
   {
+    id: 's3-config',
+    title: 'S3 archive configuration',
+    run: async (ctx) => {
+      const wanted = [
+        'DORMICE_S3_ENDPOINT',
+        'DORMICE_S3_BUCKET',
+        'DORMICE_S3_ACCESS_KEY_ID',
+        'DORMICE_S3_SECRET_ACCESS_KEY',
+      ];
+      const missing = wanted.filter((name) => !ctx.env[name]);
+      if (missing.length === wanted.length) {
+        return skip(
+          'DORMICE_S3_* not set — the archiver is disabled; sandboxes park at stopped forever',
+        );
+      }
+      if (missing.length > 0) {
+        // The daemon's config schema refuses this too; naming it here saves
+        // one failed boot.
+        return fail(
+          `partial S3 set: ${missing.join(', ')} missing — the daemon refuses a half-configured archiver`,
+          'set all four DORMICE_S3_* variables (endpoint, bucket, key id, secret) or none',
+        );
+      }
+      return pass('all four DORMICE_S3_* variables set — archiver enabled');
+    },
+  },
+  {
+    id: 'zstd',
+    title: 'zstd available',
+    needs: ['s3-config'],
+    run: async (ctx) => {
+      // Only the docker executor shells out to tar/zstd; the archiver runs
+      // `tar -I zstd` on the host at every archive and restore.
+      if (ctx.env.DORMICE_EXECUTOR !== 'docker') {
+        return skip('only the docker executor archives with host tar+zstd');
+      }
+      const res = await ctx.run('zstd', ['--version']);
+      return res.ok
+        ? pass(res.stdout.trim().split('\n')[0] ?? 'present')
+        : fail(
+            'zstd is not installed — every archive attempt will fail at tar',
+            'apt-get install -y zstd',
+          );
+    },
+  },
+  {
     id: 'base-image',
     title: 'base image available',
     needs: ['docker-daemon'],

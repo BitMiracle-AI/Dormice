@@ -86,8 +86,34 @@ const notFound = (sandboxId: string) =>
 
 export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   app,
-  { config, db, executor, locks },
+  { config, db, executor, locks, archiver, archiveDefaultSeconds },
 ) => {
+  /**
+   * The archive detour, taken before any slot work: E2B has no restoring
+   * concept, so this surface blocks until the sandbox is back — resuming
+   * an archived sandbox just takes longer. No-op for anything that is not
+   * archived/restoring; joined OUTSIDE the key slot (the restore task's
+   * own finish needs it).
+   */
+  async function joinRestore(row: SandboxRow | undefined): Promise<void> {
+    if (!row || (row.state !== 'archived' && row.state !== 'restoring')) {
+      return;
+    }
+    if (!archiver) {
+      throw apiError(
+        502,
+        `sandbox "${row.sandboxId}" is archived but the daemon has no S3 configured (DORMICE_S3_*)`,
+      );
+    }
+    try {
+      await archiver.restoreJoin(row.sandboxId);
+    } catch (error) {
+      throw apiError(
+        502,
+        `restoring sandbox "${row.sandboxId}" failed: ${error instanceof Error ? error.message : String(error)} — retry`,
+      );
+    }
+  }
   app.addHook('onRequest', async (request, reply) => {
     const presented = request.headers['x-api-key'];
     const key = Array.isArray(presented) ? presented[0] : presented;
@@ -226,6 +252,12 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       }
       const userKey = requestedKey ?? `e2b-${randomUUID()}`;
 
+      // The userKey reuse path may find an archived sandbox; the join
+      // brings it back before the slot work below wakes it as usual.
+      if (requestedKey !== undefined) {
+        await joinRestore(findByUserKey(db, requestedKey));
+      }
+
       // templateID resolution: a registered name wins; 'base', the base
       // image's own name (we have always echoed it as templateID, so it must
       // round-trip) and absence mean the base image; anything else is 404 —
@@ -257,7 +289,12 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         if (existing) {
           // Protocol-dead but not yet reaped: E2B semantics say it is gone,
           // so finish the job and build fresh under the same key.
-          await releaseSandbox(db, executor, existing.sandboxId);
+          await releaseSandbox(
+            db,
+            executor,
+            existing.sandboxId,
+            archiver?.store ?? null,
+          );
         }
 
         if (countSandboxes(db) >= config.DORMICE_MAX_SANDBOXES) {
@@ -274,7 +311,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           sandboxId,
           userKey,
           nodeId: config.DORMICE_NODE_ID,
-          policy: resolvePolicy(undefined),
+          policy: resolvePolicy(undefined, archiveDefaultSeconds),
           template,
           e2b: {
             metadata: body.metadata ? JSON.stringify(body.metadata) : null,
@@ -301,6 +338,10 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     async (request, reply) => {
       const { id } = request.params as { id: string };
       const before = findLive(id);
+      // An archived sandbox resumes through the archiver first — connect
+      // then finds it active and the wake below is a no-op. Blocking is the
+      // faithful behavior: E2B's connect returns a live sandbox, period.
+      await joinRestore(before.row);
       const row = await locks.run(before.row.userKey, async () => {
         const fresh = findBySandboxId(db, id);
         if (!fresh || e2bView(fresh, new Date()) === 'dead') {
@@ -362,10 +403,22 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     // on the E2B surface is "don't kill" (autoPause / userKey), never a
     // kill that secretly keeps data.
     const { row } = findLive(id);
+    if (row.state === 'restoring') {
+      // A mid-restore teardown would race the task over the half-built
+      // disk; join it first. The outcome is irrelevant — we are deleting
+      // either way, and a failed restore parks the row back on archived,
+      // whose release below deletes the S3 object.
+      await archiver?.restoreJoin(id).catch(() => {});
+    }
     await locks.run(row.userKey, async () => {
       const fresh = findBySandboxId(db, id);
       if (!fresh) throw notFound(id);
-      await releaseSandbox(db, executor, fresh.sandboxId);
+      await releaseSandbox(
+        db,
+        executor,
+        fresh.sandboxId,
+        archiver?.store ?? null,
+      );
     });
     return reply.code(204).send();
   });

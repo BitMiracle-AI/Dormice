@@ -31,7 +31,12 @@ describe('native API over a real daemon', () => {
     expect(res.status).toBe('ready');
     expect(res.sandbox.state).toBe('active');
     expect(res.sandbox.userKey).toBe('fresh-key');
-    expect(res.sandbox.policy).toEqual(DEFAULT_LIFECYCLE_POLICY);
+    // The exam daemon runs with S3 configured (see setup/daemon.ts), so the
+    // archive default is live: a week from stopped to archived.
+    expect(res.sandbox.policy).toEqual({
+      ...DEFAULT_LIFECYCLE_POLICY,
+      archiveAfterSeconds: 7 * 24 * 60 * 60,
+    });
     expect(res.sandbox.endpoint).toBe(inject('dormiceEndpoint'));
   });
 

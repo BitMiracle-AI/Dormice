@@ -1,3 +1,4 @@
+import type { Archiver } from '../archive/archiver';
 import type { Config } from '../config';
 import type { Db } from '../db/db';
 import type { Executor } from '../executor/executor';
@@ -17,4 +18,12 @@ export interface E2bDeps {
   locks: KeyedQueue;
   processes: ProcessTable;
   watchers: WatcherTable;
+  /**
+   * Present exactly when S3 is configured. E2B has no restoring concept,
+   * so this surface's verbs block on restoreJoin — resuming an archived
+   * sandbox just takes longer, which is the faithful behavior.
+   */
+  archiver?: Archiver;
+  /** buildApp's one adjudication of the archive policy default (null = off). */
+  archiveDefaultSeconds: number | null;
 }

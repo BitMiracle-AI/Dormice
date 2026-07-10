@@ -1,3 +1,4 @@
+import { readFile, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
@@ -354,6 +355,66 @@ export class FakeExecutor implements Executor {
     this.disks.delete(sandboxId);
     this.fs.delete(sandboxId);
     this.closeUpstream(sandboxId);
+  }
+
+  async exportDisk(sandboxId: string, destPath: string): Promise<void> {
+    const state = this.containers.get(sandboxId);
+    if (state === 'running' || state === 'paused') {
+      throw new Error(
+        `container ${sandboxId} is ${state}, expected stopped or absent`,
+      );
+    }
+    if (!this.disks.has(sandboxId)) {
+      throw new Error(`disk ${sandboxId} is absent, cannot export`);
+    }
+    // A real file on purpose (precedent: the proxy's real upstream socket):
+    // the archiver uploads whatever exportDisk wrote, so the fake writing
+    // real bytes is what lets the whole archive pipeline — store, daemon,
+    // e2e — run without Docker. The format is the fake's own; only the
+    // importDisk round-trip is the contract.
+    const files = [...this.disk(sandboxId)].map(([path, node]) => ({
+      path,
+      type: node.type,
+      modifiedTime: node.modifiedTime,
+      ...(node.type === 'file'
+        ? { contentBase64: node.content.toString('base64') }
+        : {}),
+    }));
+    await writeFile(destPath, JSON.stringify({ version: 1, files }));
+  }
+
+  async importDisk(
+    sandboxId: string,
+    srcPath: string,
+    onProgress?: (fraction: number) => void,
+  ): Promise<void> {
+    if (this.disks.has(sandboxId)) {
+      throw new Error(`disk ${sandboxId} already exists, cannot import`);
+    }
+    const parsed = JSON.parse(await readFile(srcPath, 'utf8')) as {
+      files: Array<{
+        path: string;
+        type: 'file' | 'dir';
+        modifiedTime: string;
+        contentBase64?: string;
+      }>;
+    };
+    const disk = new Map<string, FakeNode>();
+    for (const entry of parsed.files) {
+      disk.set(
+        entry.path,
+        entry.type === 'file'
+          ? {
+              type: 'file',
+              content: Buffer.from(entry.contentBase64 ?? '', 'base64'),
+              modifiedTime: entry.modifiedTime,
+            }
+          : { type: 'dir', modifiedTime: entry.modifiedTime },
+      );
+    }
+    this.disks.add(sandboxId);
+    this.fs.set(sandboxId, disk);
+    onProgress?.(1);
   }
 
   async resolvePortTarget(

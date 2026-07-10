@@ -71,9 +71,10 @@ grep -qw memory /sys/fs/cgroup/cgroup.controllers 2>/dev/null \
 note "Linux x86_64, root, cgroup v2 — ok"
 
 # ---- base packages ---------------------------------------------------------
-log 'base packages (git, curl, openssl)'
+log 'base packages (git, curl, openssl, zstd)'
 missing=''
-for tool in git curl openssl; do
+# zstd: the archiver's tar -I zstd runs on the host at every archive/restore.
+for tool in git curl openssl zstd; do
   command -v "$tool" >/dev/null || missing="$missing $tool"
 done
 if [ -n "$missing" ]; then
@@ -326,6 +327,15 @@ DORMICE_EXECUTOR=docker
 DORMICE_BASE_IMAGE=$base_image
 DORMICE_DB_PATH=$DATA_DIR/dormice.db
 DORMICE_DATA_DIR=$DATA_DIR
+# Optional: the S3 archiver. Set all four to archive idle sandboxes' disks
+# to any S3-compatible store (AWS, R2, MinIO, OSS in S3-compat mode) after
+# a week of idleness — and restore them on the next acquire. Endpoint is a
+# full URL; MinIO needs DORMICE_S3_FORCE_PATH_STYLE=true.
+#DORMICE_S3_ENDPOINT=
+#DORMICE_S3_BUCKET=
+#DORMICE_S3_ACCESS_KEY_ID=
+#DORMICE_S3_SECRET_ACCESS_KEY=
+#DORMICE_S3_FORCE_PATH_STYLE=false
 EOF
   chmod 600 "$ENV_FILE"
   note "wrote $ENV_FILE (mode 600) with a fresh API token"

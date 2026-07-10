@@ -1,10 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_LIFECYCLE_POLICY,
   type LifecyclePolicy,
 } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
+import { Archiver } from './archive/archiver';
+import { MemStore } from './archive/mem-store';
+import { objectKey } from './archive/store';
 import { type Db, migrateDb, openDb } from './db/db';
 import { createSandbox, findByUserKey, setDeadline, touch } from './db/ledger';
 import type { SandboxRow } from './db/schema';
@@ -19,6 +25,18 @@ function setup() {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
   return { db, executor: new FakeExecutor(), locks: new KeyedQueue() };
+}
+
+/** The archive-enabled flavor: same setup plus a MemStore-backed archiver. */
+function setupWithArchiver() {
+  const base = setup();
+  const store = new MemStore();
+  const archiver = new Archiver({
+    ...base,
+    store,
+    tmpDir: mkdtempSync(path.join(tmpdir(), 'dormice-scan-')),
+  });
+  return { ...base, store, archiver };
 }
 
 async function seed(
@@ -45,6 +63,7 @@ describe('idle scanner', () => {
     expect(result).toEqual({
       frozen: 0,
       stopped: 0,
+      archived: 0,
       expiredKilled: 0,
       failures: [],
     });
@@ -64,6 +83,7 @@ describe('idle scanner', () => {
     expect(result).toEqual({
       frozen: 1,
       stopped: 0,
+      archived: 0,
       expiredKilled: 0,
       failures: [],
     });
@@ -84,6 +104,7 @@ describe('idle scanner', () => {
     expect(result).toEqual({
       frozen: 0,
       stopped: 1,
+      archived: 0,
       expiredKilled: 0,
       failures: [],
     });
@@ -98,6 +119,7 @@ describe('idle scanner', () => {
     expect(await scanOnce(db, executor, locks, yearLater)).toEqual({
       frozen: 1,
       stopped: 0,
+      archived: 0,
       expiredKilled: 0,
       failures: [],
     });
@@ -105,6 +127,7 @@ describe('idle scanner', () => {
     expect(await scanOnce(db, executor, locks, yearLater)).toEqual({
       frozen: 0,
       stopped: 1,
+      archived: 0,
       expiredKilled: 0,
       failures: [],
     });
@@ -122,6 +145,7 @@ describe('idle scanner', () => {
     expect(result).toEqual({
       frozen: 1,
       stopped: 0,
+      archived: 0,
       expiredKilled: 0,
       failures: [],
     });
@@ -150,6 +174,7 @@ describe('idle scanner', () => {
     expect(yearLater).toEqual({
       frozen: 0,
       stopped: 0,
+      archived: 0,
       expiredKilled: 0,
       failures: [],
     });
@@ -212,6 +237,7 @@ describe('idle scanner vs the per-key queue', () => {
     expect(result).toEqual({
       frozen: 0,
       stopped: 0,
+      archived: 0,
       expiredKilled: 0,
       failures: [],
     });
@@ -229,6 +255,7 @@ describe('idle scanner vs the per-key queue', () => {
     expect(next).toEqual({
       frozen: 1,
       stopped: 0,
+      archived: 0,
       expiredKilled: 0,
       failures: [],
     });
@@ -259,17 +286,207 @@ describe('idle scanner vs the per-key queue', () => {
       after(first, first.freezeAfterSeconds),
     );
     const released = locks.run('doomed', () =>
-      releaseSandbox(db, executor, doomed.sandboxId),
+      releaseSandbox(db, executor, doomed.sandboxId, null),
     );
     const [result] = await Promise.all([sweep, released]);
 
     expect(result).toEqual({
       frozen: 1,
       stopped: 0,
+      archived: 0,
       expiredKilled: 0,
       failures: [],
     });
     expect(findByUserKey(db, 'doomed')).toBeUndefined();
+  });
+});
+
+describe('idle scanner: the archive rung', () => {
+  /** A short three-rung policy: freeze at 60, stop at 120, archive at 180. */
+  const ARCHIVING_POLICY: LifecyclePolicy = {
+    freezeAfterSeconds: 60,
+    stopAfterSeconds: 120,
+    archiveAfterSeconds: 180,
+  };
+
+  async function walkToStopped(
+    db: Db,
+    executor: FakeExecutor,
+    locks: KeyedQueue,
+    row: SandboxRow,
+  ): Promise<void> {
+    await scanOnce(db, executor, locks, after(row, 60));
+    await scanOnce(db, executor, locks, after(row, 120));
+    expect(findByUserKey(db, row.userKey)?.state).toBe('stopped');
+  }
+
+  it('archives a stopped sandbox idle past archiveAfterSeconds', async () => {
+    const { db, executor, locks, store, archiver } = setupWithArchiver();
+    const row = await seed(db, executor, 'alice', ARCHIVING_POLICY);
+    await executor.writeFiles(row.sandboxId, [
+      { path: 'kept.txt', content: Buffer.from('made it') },
+    ]);
+    await walkToStopped(db, executor, locks, row);
+
+    const result = await scanOnce(
+      db,
+      executor,
+      locks,
+      after(row, 180),
+      archiver,
+    );
+    expect(result).toEqual({
+      frozen: 0,
+      stopped: 0,
+      archived: 1,
+      expiredKilled: 0,
+      failures: [],
+    });
+    expect(findByUserKey(db, 'alice')?.state).toBe('archived');
+    expect(store.has(objectKey(row.sandboxId))).toBe(true);
+    // Local copy freed: container and disk both gone.
+    expect(executor.stateOf(row.sandboxId)).toBeUndefined();
+    expect(await executor.listDisks()).not.toContain(row.sandboxId);
+  });
+
+  it('never moves the archive rung without an archiver', async () => {
+    const { db, executor, locks } = setup();
+    const row = await seed(db, executor, 'alice', ARCHIVING_POLICY);
+    await walkToStopped(db, executor, locks, row);
+
+    // No archiver passed: the row keeps its recorded intent, untouched.
+    const result = await scanOnce(db, executor, locks, after(row, 9999));
+    expect(result.archived).toBe(0);
+    expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
+    expect(await executor.listDisks()).toContain(row.sandboxId);
+  });
+
+  it('never archives a policy that says archive: null', async () => {
+    const { db, executor, locks, archiver } = setupWithArchiver();
+    const row = await seed(db, executor, 'alice', {
+      ...ARCHIVING_POLICY,
+      archiveAfterSeconds: null,
+    });
+    await walkToStopped(db, executor, locks, row);
+
+    const yearLater = await scanOnce(
+      db,
+      executor,
+      locks,
+      after(row, 365 * 24 * 60 * 60),
+      archiver,
+    );
+    expect(yearLater.archived).toBe(0);
+    expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
+  });
+
+  it('an archive failure lands in failures without blocking the sweep', async () => {
+    // The two-phase shape under test: the failing archive runs after —
+    // and therefore cannot stall — the same sweep's cheap freeze.
+    const { db, executor, locks, archiver } = setupWithArchiver();
+    const doomed = await seed(db, executor, 'doomed', ARCHIVING_POLICY);
+    await walkToStopped(db, executor, locks, doomed);
+    const cooling = await seed(db, executor, 'cooling', ARCHIVING_POLICY);
+    // Sabotage the upload: the store refuses everything.
+    archiver.store.put = async () => {
+      throw new Error('the bucket said no');
+    };
+
+    // One instant serves both rows (seeded milliseconds apart): cooling is
+    // 180s idle (past freeze), doomed is 180s idle (past archive).
+    const result = await scanOnce(
+      db,
+      executor,
+      locks,
+      after(cooling, 180),
+      archiver,
+    );
+    expect(result.frozen).toBe(1);
+    expect(result.archived).toBe(0);
+    expect(result.failures).toEqual([
+      {
+        sandboxId: doomed.sandboxId,
+        message: expect.stringContaining('the bucket said no'),
+      },
+    ]);
+    // Retryable: still stopped, disk still local.
+    expect(findByUserKey(db, 'doomed')?.state).toBe('stopped');
+    expect(await executor.listDisks()).toContain(doomed.sandboxId);
+  });
+
+  it('kill-deadline on an archived row deletes the S3 object too', async () => {
+    const { db, executor, locks, store, archiver } = setupWithArchiver();
+    const row = await seed(db, executor, 'alice', ARCHIVING_POLICY);
+    await walkToStopped(db, executor, locks, row);
+    await scanOnce(db, executor, locks, after(row, 180), archiver);
+    expect(store.has(objectKey(row.sandboxId))).toBe(true);
+    setDeadline(db, row.sandboxId, {
+      deadlineAt: after(row, 200).toISOString(),
+      onDeadline: 'kill',
+    });
+
+    const result = await scanOnce(
+      db,
+      executor,
+      locks,
+      after(row, 200),
+      archiver,
+    );
+    expect(result.expiredKilled).toBe(1);
+    expect(findByUserKey(db, 'alice')).toBeUndefined();
+    expect(store.has(objectKey(row.sandboxId))).toBe(false);
+  });
+
+  it('kill-deadline on a restoring row is deferred one sweep', async () => {
+    const { db, executor, locks, archiver } = setupWithArchiver();
+    const row = await seed(db, executor, 'alice', ARCHIVING_POLICY);
+    await walkToStopped(db, executor, locks, row);
+    await scanOnce(db, executor, locks, after(row, 180), archiver);
+    // Begin a restore whose download hangs on a test-held promise, so the
+    // row is mid-restoring when the killing sweep arrives.
+    let releaseDownload!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseDownload = resolve;
+    });
+    const innerGet = archiver.store.get.bind(archiver.store);
+    archiver.store.get = async (key, dest, onProgress) => {
+      await gate;
+      return innerGet(key, dest, onProgress);
+    };
+    const archived = findByUserKey(db, 'alice');
+    if (!archived) throw new Error('row vanished');
+    archiver.beginRestore(archived);
+    expect(findByUserKey(db, 'alice')?.state).toBe('restoring');
+    setDeadline(db, row.sandboxId, {
+      deadlineAt: after(row, 200).toISOString(),
+      onDeadline: 'kill',
+    });
+
+    // Mid-restore: the kill is deferred, the row survives this sweep.
+    const during = await scanOnce(
+      db,
+      executor,
+      locks,
+      after(row, 300),
+      archiver,
+    );
+    expect(during.expiredKilled).toBe(0);
+    expect(findByUserKey(db, 'alice')?.state).toBe('restoring');
+
+    releaseDownload();
+    await archiver.restoreJoin(row.sandboxId);
+    expect(findByUserKey(db, 'alice')?.state).toBe('active');
+
+    // Next sweep, with the restore settled, the kill lands clean.
+    const settled = await scanOnce(
+      db,
+      executor,
+      locks,
+      after(row, 300),
+      archiver,
+    );
+    expect(settled.expiredKilled).toBe(1);
+    expect(findByUserKey(db, 'alice')).toBeUndefined();
   });
 });
 
@@ -306,6 +523,7 @@ describe('E2B deadline rule', () => {
     expect(early).toEqual({
       frozen: 0,
       stopped: 0,
+      archived: 0,
       expiredKilled: 0,
       failures: [],
     });
@@ -314,6 +532,7 @@ describe('E2B deadline rule', () => {
     expect(late).toEqual({
       frozen: 0,
       stopped: 0,
+      archived: 0,
       expiredKilled: 1,
       failures: [],
     });
@@ -335,6 +554,7 @@ describe('E2B deadline rule', () => {
     expect(result).toEqual({
       frozen: 0,
       stopped: 0,
+      archived: 0,
       expiredKilled: 1,
       failures: [],
     });
@@ -367,6 +587,7 @@ describe('E2B deadline rule', () => {
     expect(late).toEqual({
       frozen: 1,
       stopped: 0,
+      archived: 0,
       expiredKilled: 0,
       failures: [],
     });
@@ -379,6 +600,7 @@ describe('E2B deadline rule', () => {
     expect(again).toEqual({
       frozen: 0,
       stopped: 0,
+      archived: 0,
       expiredKilled: 0,
       failures: [],
     });

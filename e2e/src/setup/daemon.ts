@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startMiniS3 } from '@dormice/server/mini-s3';
 import type { TestProject } from 'vitest/node';
 
 declare module 'vitest' {
@@ -35,6 +36,12 @@ export default async function setup(project: TestProject) {
   // Random high port: never collides with a locally running daemon on 3676.
   const port = 20000 + Math.floor(Math.random() * 20000);
   const endpoint = `http://127.0.0.1:${port}`;
+
+  // The exam's own S3 (in-process, test-only): the archive lifecycle runs
+  // black-box in every mode — the fake executor exports real files, the
+  // store speaks real HTTP. It also mimics OSS's checksum strictness, so a
+  // daemon that regressed pit #8 fails here too.
+  const miniS3 = await startMiniS3();
 
   // An explicit allowlist instead of inheriting the whole environment:
   // whatever DORMICE_* knobs happen to be exported in the developer's shell
@@ -72,6 +79,14 @@ export default async function setup(project: TestProject) {
       // A wildcard sandbox domain so getHost() and the port proxy are
       // exercised — no DNS needed, tests spoof the Host header locally.
       DORMICE_SANDBOX_DOMAIN: 'sbx.dormice.test',
+      // The archiver, pointed at the exam's mini S3. Deliberately NOT in
+      // the inherited allowlist: a developer's real DORMICE_S3_* exports
+      // must never leak an exam's archives into a production bucket.
+      DORMICE_S3_ENDPOINT: miniS3.url,
+      DORMICE_S3_BUCKET: 'e2e-archive',
+      DORMICE_S3_ACCESS_KEY_ID: 'e2e-key',
+      DORMICE_S3_SECRET_ACCESS_KEY: 'e2e-secret',
+      DORMICE_S3_FORCE_PATH_STYLE: 'true',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -108,6 +123,7 @@ export default async function setup(project: TestProject) {
 
   return async () => {
     child.kill();
+    await miniS3.close();
     await rm(dataDir, { recursive: true, force: true });
   };
 }

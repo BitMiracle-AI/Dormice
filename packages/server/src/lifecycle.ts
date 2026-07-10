@@ -1,5 +1,11 @@
+import { type ArchiveStore, objectKey } from './archive/store';
 import type { Db } from './db/db';
-import { deleteSandbox, setPausedByUser, transition } from './db/ledger';
+import {
+  deleteSandbox,
+  findBySandboxId,
+  setPausedByUser,
+  transition,
+} from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import { resolveImage } from './db/templates';
 import type { Executor } from './executor/executor';
@@ -38,12 +44,31 @@ export async function stopSandbox(
  * Same order as everything else — reality first, ledger second; a crash in
  * between leaves a row pointing at nothing, which is the reconciler's kind
  * of drift, not this caller's.
+ *
+ * An archived sandbox's body is its S3 object — nothing physical exists
+ * locally, so release deletes the object instead of calling destroy (which
+ * would honestly throw at the double absence). Every caller passes the
+ * store explicitly (null = no archiver configured): releasing an archived
+ * row without a store fails loudly and keeps the row, retryable once the
+ * operator restores the DORMICE_S3_* configuration.
  */
 export async function releaseSandbox(
   db: Db,
   executor: Executor,
   sandboxId: string,
+  store: ArchiveStore | null,
 ): Promise<void> {
+  const row = findBySandboxId(db, sandboxId);
+  if (row?.state === 'archived') {
+    if (store === null) {
+      throw new Error(
+        `sandbox ${sandboxId} is archived but the daemon has no S3 configured (DORMICE_S3_*) — its archive object cannot be deleted`,
+      );
+    }
+    await store.delete(objectKey(sandboxId));
+    deleteSandbox(db, sandboxId);
+    return;
+  }
   await executor.destroy(sandboxId);
   deleteSandbox(db, sandboxId);
 }
@@ -91,10 +116,11 @@ export async function wakeSandbox(
       return awaken(db, row);
     case 'archived':
     case 'restoring':
-      // Unreachable today — nothing archives until the S3 archiver lands.
-      // If it fires anyway, fail loudly instead of pretending.
+      // Every legitimate path branches to the archiver before landing here
+      // (acquire begins a restore, the E2B surface joins one); reaching
+      // this arm is a caller bug worth hearing loudly.
       throw new Error(
-        `sandbox ${row.sandboxId} is ${row.state}; restore is not implemented yet`,
+        `sandbox ${row.sandboxId} is ${row.state}; restore goes through the archiver — this wake is a caller bug`,
       );
   }
 }

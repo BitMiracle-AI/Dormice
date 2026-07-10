@@ -8,6 +8,7 @@ import {
 } from 'fastify-type-provider-zod';
 import { type Logger, pino } from 'pino';
 import { z } from 'zod';
+import type { Archiver } from './archive/archiver';
 import { requireApiAuth } from './auth';
 import type { Config } from './config';
 import type { Db } from './db/db';
@@ -16,6 +17,7 @@ import { ProcessTable } from './e2b/process-table';
 import { WatcherTable } from './e2b/watcher-table';
 import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
+import { ARCHIVE_DEFAULT_SECONDS } from './policy';
 import { consoleRoutes } from './routes/console';
 import { hostRoutes } from './routes/host';
 import { sandboxRoutes } from './routes/sandboxes';
@@ -44,6 +46,14 @@ export interface AppDeps {
    * honest 404.
    */
   consoleDistDir?: string;
+  /**
+   * The archive/restore engine, present exactly when S3 is configured.
+   * Absent, the daemon is byte-for-byte the archive-less daemon: the
+   * scanner never moves the archive rung and archive-asking policies are
+   * refused (the SANDBOX_DOMAIN precedent — an unconfigured feature is
+   * honestly absent, never half-present).
+   */
+  archiver?: Archiver;
 }
 
 /**
@@ -62,7 +72,12 @@ export function buildApp({
   locks,
   logger = true,
   consoleDistDir,
+  archiver,
 }: AppDeps) {
+  // The archive default is adjudicated once, here, by the archiver's
+  // presence: with one, new sandboxes archive after a week of idleness;
+  // without one, never — and asking is a 400.
+  const archiveDefaultSeconds = archiver ? ARCHIVE_DEFAULT_SECONDS : null;
   // Always a pino instance (booleans are normalized into one): two fastify()
   // call shapes would give the instance two different types.
   const loggerInstance =
@@ -134,7 +149,14 @@ export function buildApp({
 
   app.register(async (api) => {
     api.addHook('onRequest', requireApiAuth(config.DORMICE_API_TOKEN));
-    await api.register(sandboxRoutes, { config, db, executor, locks });
+    await api.register(sandboxRoutes, {
+      config,
+      db,
+      executor,
+      locks,
+      archiver,
+      archiveDefaultSeconds,
+    });
     await api.register(templateRoutes, { db });
     await api.register(hostRoutes, { config, db, executor });
   });
@@ -159,6 +181,8 @@ export function buildApp({
       locks,
       processes,
       watchers,
+      archiver,
+      archiveDefaultSeconds,
     });
   });
 

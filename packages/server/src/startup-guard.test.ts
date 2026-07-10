@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ContainerState } from './executor/executor';
-import { startupGuard } from './startup-guard';
+import { locallyClaimedCount, startupGuard } from './startup-guard';
 
 function containers(...ids: string[]): Map<string, ContainerState> {
   return new Map(ids.map((id) => [id, 'running' as const]));
@@ -86,5 +86,39 @@ describe('startupGuard', () => {
         executor: 'docker',
       }),
     ).toBeNull();
+  });
+
+  it('starts a docker daemon whose whole ledger is archived sandboxes', () => {
+    // Every sandbox archived after a week of idleness, then a deploy
+    // restart: the ledger is populated, local reality legitimately empty —
+    // those rows claim S3. locallyClaimedCount is what main.ts feeds the
+    // guard, and it must exclude them or this daemon bricks forever.
+    const rows = [
+      { state: 'archived' as const },
+      { state: 'archived' as const },
+      { state: 'restoring' as const },
+    ];
+    expect(locallyClaimedCount(rows)).toBe(0);
+    expect(
+      startupGuard({
+        ledgerCount: locallyClaimedCount(rows),
+        containers: containers(),
+        disks: [],
+        executor: 'docker',
+      }),
+    ).toBeNull();
+  });
+
+  it('still refuses when active rows face an empty docker reality', () => {
+    const rows = [{ state: 'archived' as const }, { state: 'active' as const }];
+    expect(locallyClaimedCount(rows)).toBe(1);
+    expect(
+      startupGuard({
+        ledgerCount: locallyClaimedCount(rows),
+        containers: containers(),
+        disks: [],
+        executor: 'docker',
+      }),
+    ).toMatch(/cannot see the sandboxes it owns/);
   });
 });

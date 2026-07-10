@@ -1,8 +1,11 @@
 import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pino } from 'pino';
 import { buildApp } from './app';
-import { type Config, loadConfig } from './config';
+import { Archiver } from './archive/archiver';
+import { S3Store } from './archive/s3-store';
+import { type Config, loadConfig, s3Settings } from './config';
 import { migrateDb, openDb } from './db/db';
 import { listSandboxes } from './db/ledger';
 import { acquireSingleWriterLock } from './db/lock';
@@ -12,7 +15,7 @@ import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
-import { startupGuard } from './startup-guard';
+import { locallyClaimedCount, startupGuard } from './startup-guard';
 
 // One logger, created before everything that needs it: the executor logs
 // through it directly and Fastify adopts it as its own.
@@ -67,6 +70,26 @@ const executor = buildExecutor(config, (msg) => log.info(msg));
 // must share the same per-sandbox slots or the serialization means nothing.
 const locks = new KeyedQueue();
 
+// The archiver exists exactly when S3 is configured; without it the daemon
+// is byte-for-byte the archive-less daemon. Temp transfers stage next to
+// the disks (same filesystem — they are disk-sized, and /tmp may be RAM).
+const s3 = s3Settings(config);
+let archiver: Archiver | undefined;
+if (s3 !== null) {
+  archiver = new Archiver({
+    db,
+    executor,
+    locks,
+    store: new S3Store(s3),
+    tmpDir: path.join(config.DORMICE_DATA_DIR, 'tmp'),
+    log: (msg) => log.info(msg),
+  });
+  await archiver.init();
+  log.info(`archiver enabled: bucket ${s3.bucket} at ${s3.endpoint}`);
+} else {
+  log.info('archiver disabled: DORMICE_S3_* not configured');
+}
+
 // The web console ships beside the server in the monorepo; this file sits
 // one level under packages/server both as src/main.ts and as dist/main.js,
 // so the relative hop to packages/console/dist is the same either way. A
@@ -85,6 +108,7 @@ const app = buildApp({
   locks,
   logger: log,
   consoleDistDir: existsSync(consoleDistDir) ? consoleDistDir : undefined,
+  archiver,
 });
 
 // Before trusting the pairing of this ledger and this reality, check it:
@@ -92,7 +116,7 @@ const app = buildApp({
 // against the wrong ledger, executor or data dir must refuse to start
 // instead of erasing sandboxes it merely cannot see.
 const refusal = startupGuard({
-  ledgerCount: listSandboxes(db).length,
+  ledgerCount: locallyClaimedCount(listSandboxes(db)),
   containers: await executor.listContainers(),
   disks: await executor.listDisks(),
   executor: config.DORMICE_EXECUTOR,
@@ -104,8 +128,10 @@ if (refusal !== null) {
 // Repair ledger/reality drift left by a crash — before serving traffic, so
 // every request runs against a ledger that reflects what actually exists.
 // A failure here is fatal on purpose: a daemon that cannot read reality
-// should not pretend to manage it.
-const repaired = await reconcile(db, executor, locks);
+// should not pretend to manage it. The archiver's restore tracker is empty
+// at boot, so this pass is also what repairs restoring zombies — before
+// listen, so no request ever observes one.
+const repaired = await reconcile(db, executor, locks, undefined, archiver);
 app.log.info(repaired, 'startup reconcile');
 
 // Red line: the daemon binds to loopback only, and the host is deliberately
@@ -130,18 +156,19 @@ await app.listen({ host: '127.0.0.1', port: config.DORMICE_PORT });
 let suspects: ReadonlySet<string> = new Set();
 async function tick() {
   try {
-    const drift = await reconcile(db, executor, locks, suspects);
+    const drift = await reconcile(db, executor, locks, suspects, archiver);
     suspects = new Set(drift.suspects);
     if (
       drift.repairedStates +
         drift.deletedRows +
         drift.destroyedOrphans +
-        drift.removedDisks >
+        drift.removedDisks +
+        drift.archivedSwept >
       0
     ) {
       app.log.warn(drift, 'runtime reconcile repaired drift');
     }
-    const scan = await scanOnce(db, executor, locks, new Date());
+    const scan = await scanOnce(db, executor, locks, new Date(), archiver);
     for (const failure of scan.failures) {
       app.log.error(failure, 'idle scan: sandbox transition failed');
     }

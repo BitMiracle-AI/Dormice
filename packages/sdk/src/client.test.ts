@@ -97,10 +97,23 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
 
   it("surfaces the server's message for an invalid policy", async () => {
     await expect(
+      client.acquireSandbox('carol', {
+        policy: { freezeAfterSeconds: 61, stopAfterSeconds: 60 },
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringMatching(/freezeAfterSeconds/),
+    });
+  });
+
+  it("surfaces the server's refusal of archiving without S3", async () => {
+    // This test server has no archiver; the union's `restoring` arm is
+    // exercised end-to-end by the e2e archive suite instead.
+    await expect(
       client.acquireSandbox('carol', { policy: { archiveAfterSeconds: 1 } }),
     ).rejects.toMatchObject({
       status: 400,
-      message: expect.stringMatching(/stopAfterSeconds/),
+      message: expect.stringMatching(/archiving requires S3/),
     });
   });
 
