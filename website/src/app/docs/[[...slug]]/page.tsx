@@ -1,7 +1,10 @@
+import { ArrowLeft01Icon, ArrowRight01Icon } from '@hugeicons/core-free-icons';
+import { HugeiconsIcon } from '@hugeicons/react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { DocsToc } from '@/components/docs-toc';
+import { DocsToc } from '@/components/docs/DocsToc';
+import { Button } from '@/components/ui/button';
 import { docs, getDoc } from '@/lib/docs';
 
 // Static export: every page below /docs is enumerated here, nothing is
@@ -29,24 +32,28 @@ export default async function Page(props: PageProps) {
           <p className="lead">{entry.description}</p>
           <Content />
         </article>
-        <nav className="mt-10 flex justify-between gap-4 border-t pt-6 text-sm">
+        <nav className="mt-10 flex items-center justify-between gap-4 border-t pt-6">
           {prev ? (
-            <Link
-              href={prev.href}
-              className="text-muted-foreground transition-colors hover:text-foreground"
+            <Button
+              variant="ghost"
+              className="text-muted-foreground"
+              render={<Link href={prev.href} />}
             >
-              ← {prev.title}
-            </Link>
+              <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
+              {prev.title}
+            </Button>
           ) : (
             <span />
           )}
           {next ? (
-            <Link
-              href={next.href}
-              className="text-right text-muted-foreground transition-colors hover:text-foreground"
+            <Button
+              variant="ghost"
+              className="text-muted-foreground"
+              render={<Link href={next.href} />}
             >
-              {next.title} →
-            </Link>
+              {next.title}
+              <HugeiconsIcon icon={ArrowRight01Icon} data-icon="inline-end" />
+            </Button>
           ) : (
             <span />
           )}
