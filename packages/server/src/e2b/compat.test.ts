@@ -705,6 +705,73 @@ describe('E2B envd surface', () => {
     ).toBe('over\n');
   });
 
+  it('user rides Basic auth: root runs as root, an unknown name is refused in both dialects', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const basic = (name: string) => ({
+      authorization: `Basic ${Buffer.from(`${name}:`).toString('base64')}`,
+    });
+
+    // Streaming face: Start with Basic root — whoami answers root.
+    const asRoot = await startCommand(t, sandboxID, 'whoami', {
+      headers: basic('root'),
+    });
+    const events = parseEnvelopes(asRoot.rawPayload)
+      .filter((f) => f.flags === 0)
+      .map((f) => f.json.event as Record<string, unknown>);
+    const data = events.find((e) => 'data' in e) as {
+      data: { stdout: string };
+    };
+    expect(Buffer.from(data.data.stdout, 'base64').toString('utf8')).toBe(
+      'root\n',
+    );
+
+    // Streaming face, unknown name: refused inside the stream, before start.
+    const refused = await startCommand(t, sandboxID, 'whoami', {
+      headers: basic('nobody'),
+    });
+    const frames = parseEnvelopes(refused.rawPayload);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toEqual({
+      flags: 2,
+      json: {
+        error: {
+          code: 'unauthenticated',
+          message: "invalid username: 'nobody'",
+        },
+      },
+    });
+
+    // Unary face: same identity, same refusal, unary dialect.
+    const stat = await t.app.inject({
+      method: 'POST',
+      url: '/e2b/envd/filesystem.Filesystem/Stat',
+      headers: { ...envdHeaders(sandboxID), ...basic('root') },
+      payload: { path: '/home/user' },
+    });
+    expect(stat.statusCode).toBe(200);
+    const statRefused = await t.app.inject({
+      method: 'POST',
+      url: '/e2b/envd/filesystem.Filesystem/Stat',
+      headers: { ...envdHeaders(sandboxID), ...basic('nobody') },
+      payload: { path: '/home/user' },
+    });
+    expect(statRefused.statusCode).toBe(401);
+    expect(statRefused.json()).toEqual({
+      code: 'unauthenticated',
+      message: "invalid username: 'nobody'",
+    });
+
+    // Files face: username in the query, vetted the same way.
+    const filesRefused = await t.app.inject({
+      method: 'GET',
+      url: '/e2b/envd/files?path=x&username=nobody',
+      headers: envdHeaders(sandboxID),
+    });
+    expect(filesRefused.statusCode).toBe(401);
+    expect(filesRefused.json().message).toBe("invalid username: 'nobody'");
+  });
+
   it('answers a blown connect-timeout-ms deadline with deadline_exceeded, not an end event', async () => {
     const t = testApp();
     const { sandboxID } = await createSandbox(t);
@@ -1451,7 +1518,7 @@ describe('signed file URLs at the daemon root', () => {
 
   it("vets the signed username: only the image's users exist", async () => {
     const t = testApp();
-    const { envdAccessToken } = await createSandbox(t);
+    const { sandboxID, envdAccessToken } = await createSandbox(t);
     const sig = sdkSignature({
       path: 'x',
       operation: 'read',
@@ -1464,5 +1531,21 @@ describe('signed file URLs at the daemon root', () => {
     });
     expect(res.statusCode).toBe(401);
     expect(res.json().message).toBe("invalid username: 'nobody'");
+
+    // root exists: a root-signed download passes the vet (the fake has no
+    // permission model — root's real powers are the docker e2e's business).
+    await putFile(t, sandboxID, 'rooted.txt', 'root readable\n');
+    const rootSig = sdkSignature({
+      path: 'rooted.txt',
+      operation: 'read',
+      user: 'root',
+      envdAccessToken,
+    });
+    const asRoot = await t.app.inject({
+      method: 'GET',
+      url: `/files?path=rooted.txt&username=root&signature=${encodeURIComponent(rootSig)}`,
+    });
+    expect(asRoot.statusCode).toBe(200);
+    expect(asRoot.body).toBe('root readable\n');
   });
 });

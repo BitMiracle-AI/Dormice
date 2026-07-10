@@ -9,7 +9,12 @@ import {
   type SandboxEntry,
 } from '../../executor/executor';
 import { E2bError } from '../protocol';
-import { type EnvdContext, sandboxIdOf, UNLIMITED_BODY_BYTES } from './shared';
+import {
+  type EnvdContext,
+  sandboxIdOf,
+  UNLIMITED_BODY_BYTES,
+  vetUsername,
+} from './shared';
 
 /**
  * The plain-HTTP file faces: GET /files streams out, POST /files streams in.
@@ -38,10 +43,13 @@ export async function serveFileDownload(
   reply: FastifyReply,
 ): Promise<void> {
   const { db, executor } = ctx;
-  const query = request.query as { path?: string };
+  const query = request.query as { path?: string; username?: string };
   if (!query.path) {
     throw new E2bError(400, 'invalid_argument', 'missing path query');
   }
+  // Identity rides the username query on this face (the SDK's user option);
+  // vetted before anything wakes.
+  const user = vetUsername(query.username);
   const row = await ctx.wakeForUse(sandboxId);
   const stopHeartbeat = startExecHeartbeat(
     db,
@@ -51,7 +59,7 @@ export async function serveFileDownload(
   try {
     let entry: SandboxEntry;
     try {
-      entry = await executor.statEntry(row.sandboxId, query.path);
+      entry = await executor.statEntry(row.sandboxId, query.path, user);
       if (entry.type !== 'file') {
         throw new NotAFileError(`not a regular file: ${entry.path}`);
       }
@@ -71,13 +79,20 @@ export async function serveFileDownload(
       'content-type': 'application/octet-stream',
       'content-length': String(entry.sizeBytes),
     });
-    await executor.readFileStream(row.sandboxId, query.path, (chunk) => {
-      if (!reply.raw.write(chunk)) {
-        // Backpressure: the promise pauses the pipe all the way into the
-        // container until the client drains.
-        return new Promise<void>((resolve) => reply.raw.once('drain', resolve));
-      }
-    });
+    await executor.readFileStream(
+      row.sandboxId,
+      query.path,
+      (chunk) => {
+        if (!reply.raw.write(chunk)) {
+          // Backpressure: the promise pauses the pipe all the way into the
+          // container until the client drains.
+          return new Promise<void>((resolve) =>
+            reply.raw.once('drain', resolve),
+          );
+        }
+      },
+      user,
+    );
     reply.raw.end();
   } catch (error) {
     if (reply.raw.headersSent) {
@@ -105,7 +120,8 @@ export async function serveFileUpload(
   reply: FastifyReply,
 ): Promise<unknown> {
   const { db, executor } = ctx;
-  const query = request.query as { path?: string };
+  const query = request.query as { path?: string; username?: string };
+  const user = vetUsername(query.username);
   const row = await ctx.wakeForUse(sandboxId);
   const stopHeartbeat = startExecHeartbeat(
     db,
@@ -116,7 +132,7 @@ export async function serveFileUpload(
     const written: Array<{ name: string; type: 'file'; path: string }> = [];
     const writeOne = async (path: string, content: NodeJS.ReadableStream) => {
       try {
-        await executor.writeFileStream(row.sandboxId, path, content);
+        await executor.writeFileStream(row.sandboxId, path, content, user);
       } catch (error) {
         if (error instanceof NotAFileError) {
           throw new E2bError(400, 'invalid_argument', error.message);

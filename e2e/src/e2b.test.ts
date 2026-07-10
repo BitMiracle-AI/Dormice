@@ -414,6 +414,41 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
+  it("user:'root' changes who commands and PTYs run as; unknown names are refused", async () => {
+    const sbx = await Sandbox.create(connection());
+    try {
+      expect((await sbx.commands.run('whoami')).stdout).toBe('user\n');
+      expect((await sbx.commands.run('id -u')).stdout).toBe('1000\n');
+      expect((await sbx.commands.run('whoami', { user: 'root' })).stdout).toBe(
+        'root\n',
+      );
+      expect((await sbx.commands.run('id -u', { user: 'root' })).stdout).toBe(
+        '0\n',
+      );
+
+      await expect(
+        sbx.commands.run('whoami', { user: 'nobody' }),
+      ).rejects.toThrow(/invalid username: 'nobody'/);
+
+      // A root terminal: `id` because a root prompt already says "root",
+      // while uid=0 can only come from the shell itself.
+      const seen: string[] = [];
+      const term = await sbx.pty.create({
+        cols: 80,
+        rows: 24,
+        user: 'root',
+        onData: (data) => {
+          seen.push(Buffer.from(data).toString('utf8'));
+        },
+      });
+      await sbx.pty.sendInput(term.pid, new TextEncoder().encode('id\r'));
+      await until(() => seen.join('').includes('uid=0'));
+      await sbx.pty.kill(term.pid);
+    } finally {
+      await sbx.kill();
+    }
+  });
+
   it('pty.create: a live terminal — typed input runs, resize lands, kill ends it', async () => {
     const sbx = await Sandbox.create(connection());
     try {
@@ -660,6 +695,27 @@ describe.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
         // `bash -l -c` sources the profile; $HOME comes from the user entry.
         const result = await sbx.commands.run('echo $HOME');
         expect(result.stdout).toBe('/home/user\n');
+      } finally {
+        await sbx.kill();
+      }
+    });
+
+    it("root has real powers: write and read under /root, where 'user' cannot", async () => {
+      const sbx = await Sandbox.create(connection());
+      try {
+        await sbx.files.write('/root/probe.txt', 'root wrote this\n', {
+          user: 'root',
+        });
+        expect(await sbx.files.read('/root/probe.txt', { user: 'root' })).toBe(
+          'root wrote this\n',
+        );
+        // /root is 0700: the default user cannot even stat inside it.
+        await expect(sbx.files.read('/root/probe.txt')).rejects.toThrow();
+        // Ownership followed the writer.
+        const owner = await sbx.commands.run('stat -c %U /root/probe.txt', {
+          user: 'root',
+        });
+        expect(owner.stdout).toBe('root\n');
       } finally {
         await sbx.kill();
       }

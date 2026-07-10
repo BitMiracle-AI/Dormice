@@ -109,16 +109,9 @@ export const signedFileRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         'signature is already expired',
       );
     }
-    // The signed username also names the execution identity; only the
-    // image's own users exist. (The signature already covers it — a
-    // tampered username never gets this far.)
-    if (query.username !== undefined && query.username !== 'user') {
-      throw new E2bError(
-        401,
-        'unauthenticated',
-        `invalid username: '${query.username}'`,
-      );
-    }
+    // The signed username also names the execution identity; the file
+    // handler cores vet it against the image's users (a tampered username
+    // never gets that far — the signature covers it).
     return row;
   }
 

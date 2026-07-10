@@ -1,4 +1,4 @@
-import type { Buffer } from 'node:buffer';
+import { Buffer } from 'node:buffer';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { findBySandboxId, touch } from '../../db/ledger';
 import type { SandboxRow } from '../../db/schema';
@@ -49,6 +49,33 @@ export function sandboxIdOf(request: FastifyRequest): string {
     throw new E2bError(401, 'unauthenticated', 'missing E2b-Sandbox-Id header');
   }
   return id;
+}
+
+/**
+ * The SDK's `user` option travels as `Authorization: Basic base64("<u>:")`
+ * — username, empty password (real envd's authenticate.go reads BasicAuth
+ * the same way). Absent (the SDK sends nothing against envd >= 0.4.0, which
+ * we report) means the default user.
+ */
+export function usernameOf(request: FastifyRequest): string | undefined {
+  const header = request.headers.authorization;
+  const value = Array.isArray(header) ? header[0] : header;
+  if (!value?.startsWith('Basic ')) return undefined;
+  const decoded = Buffer.from(value.slice(6), 'base64').toString('utf8');
+  const colon = decoded.indexOf(':');
+  const username = colon === -1 ? decoded : decoded.slice(0, colon);
+  return username || undefined;
+}
+
+/**
+ * The single arbiter of which usernames exist: the base image has exactly
+ * `user` (uid 1000) and `root` — a deliberate narrowing of real envd's
+ * "any system user" (documented in the protocol rules). The message is real
+ * envd's own wording for an unknown user.
+ */
+export function vetUsername(name: string | undefined): string | undefined {
+  if (name === undefined || name === 'user' || name === 'root') return name;
+  throw connectError('unauthenticated', `invalid username: '${name}'`);
 }
 
 /** The SDK's connect-timeout-ms header, absent meaning "effectively never". */
