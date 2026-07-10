@@ -20,10 +20,14 @@ import {
   type PtySize,
   type SandboxEntry,
   type SandboxMetrics,
+  type ShellOptions,
   type WatchDirHandle,
   type WatchDirOptions,
   type WatchEvent,
 } from './executor';
+
+/** The image the fake's shells boot from when no other image is asked for. */
+export const FAKE_BASE_IMAGE = 'fake-base';
 
 /**
  * Directories every real sandbox is born with, with the owner and mode
@@ -178,6 +182,13 @@ export class FakeExecutor implements Executor {
   private readonly containers = new Map<string, ContainerState>();
   private readonly disks = new Set<string>();
   /**
+   * The image each shell was born from. Keyed like containers, not disks:
+   * an image is a property of the shell, set at its birth and gone with it
+   * — that is what lets a rebuilt shell boot a different image over the
+   * same disk.
+   */
+  private readonly images = new Map<string, string>();
+  /**
    * Live processes per sandbox. stop/destroy/vanish kill them — on the real
    * executor the container's death takes every exec with it, and the fake
    * must conduct the same physics or the process table above it would leak.
@@ -209,6 +220,11 @@ export class FakeExecutor implements Executor {
     return this.containers.get(sandboxId);
   }
 
+  /** Test hook: the image the sandbox's current shell was born from. */
+  imageOf(sandboxId: string): string | undefined {
+    return this.images.get(sandboxId);
+  }
+
   /**
    * Test hook: the container disappears, the disk stays — a removal behind
    * the daemon's back, or a crash in the middle of destroy. The one-sided
@@ -218,6 +234,7 @@ export class FakeExecutor implements Executor {
     if (!this.containers.delete(sandboxId)) {
       throw new Error(`container ${sandboxId} is absent, cannot vanish`);
     }
+    this.images.delete(sandboxId);
     this.killProcesses(sandboxId);
   }
 
@@ -229,13 +246,14 @@ export class FakeExecutor implements Executor {
     this.disks.add(sandboxId);
   }
 
-  async create(sandboxId: string): Promise<void> {
+  async create(sandboxId: string, opts?: ShellOptions): Promise<void> {
     if (this.containers.has(sandboxId)) {
       throw new Error(`container ${sandboxId} already exists`);
     }
     this.disks.add(sandboxId);
     this.fs.set(sandboxId, seededDisk());
     this.containers.set(sandboxId, 'running');
+    this.images.set(sandboxId, opts?.image ?? FAKE_BASE_IMAGE);
   }
 
   async freeze(sandboxId: string): Promise<void> {
@@ -254,7 +272,7 @@ export class FakeExecutor implements Executor {
     this.killProcesses(sandboxId);
   }
 
-  async start(sandboxId: string): Promise<void> {
+  async start(sandboxId: string, opts?: ShellOptions): Promise<void> {
     const actual = this.containers.get(sandboxId);
     if (actual === undefined) {
       // The container object is gone (pruned, removed behind the daemon's
@@ -264,9 +282,12 @@ export class FakeExecutor implements Executor {
         throw new Error(`disk ${sandboxId} is absent, cannot start`);
       }
       this.containers.set(sandboxId, 'running');
+      this.images.set(sandboxId, opts?.image ?? FAKE_BASE_IMAGE);
       return;
     }
     this.expect(sandboxId, 'stopped');
+    // The existing shell keeps the image it was born with — start only
+    // starts; opts.image applies to the rebuild path above.
     this.containers.set(sandboxId, 'running');
   }
 
@@ -278,6 +299,7 @@ export class FakeExecutor implements Executor {
     // hearing.
     const hadContainer = this.containers.delete(sandboxId);
     const hadDisk = this.disks.delete(sandboxId);
+    this.images.delete(sandboxId);
     this.fs.delete(sandboxId);
     this.killProcesses(sandboxId);
     this.closeUpstream(sandboxId);
@@ -295,6 +317,7 @@ export class FakeExecutor implements Executor {
     if (!hadContainer && !this.disks.has(sandboxId)) {
       throw new Error(`container ${sandboxId} is absent, cannot remove`);
     }
+    this.images.delete(sandboxId);
     // The container's death takes every process and watcher with it, same
     // physics as stop and vanish.
     this.killProcesses(sandboxId);

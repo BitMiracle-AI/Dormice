@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeExecutorContract } from './contract';
-import { FakeExecutor } from './fake';
+import { FAKE_BASE_IMAGE, FakeExecutor } from './fake';
 
 describeExecutorContract('FakeExecutor', () => {
   const executor = new FakeExecutor();
@@ -8,6 +8,16 @@ describeExecutorContract('FakeExecutor', () => {
     executor,
     vanishContainer: async (sandboxId: string) =>
       executor.vanishContainer(sandboxId),
+    baseImage: FAKE_BASE_IMAGE,
+    // Any string: the fake plays whatever image it is asked to.
+    altImage: 'fake-alt-image',
+    imageOf: async (sandboxId: string) => {
+      const image = executor.imageOf(sandboxId);
+      if (!image) {
+        throw new Error(`no shell for ${sandboxId}`);
+      }
+      return image;
+    },
   };
 });
 

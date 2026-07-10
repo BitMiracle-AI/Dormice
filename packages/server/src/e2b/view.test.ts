@@ -11,6 +11,7 @@ function row(overrides: Partial<SandboxRow>): SandboxRow {
     freezeAfterSeconds: 60,
     stopAfterSeconds: null,
     archiveAfterSeconds: null,
+    template: null,
     createdAt: '2026-07-09T00:00:00.000Z',
     lastActiveAt: '2026-07-09T00:00:00.000Z',
     metadata: null,

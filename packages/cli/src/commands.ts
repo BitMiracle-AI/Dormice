@@ -1,4 +1,9 @@
-import { Dormice, type ReadFileResult, type Sandbox } from '@dormice/sdk';
+import {
+  Dormice,
+  type ReadFileResult,
+  type Sandbox,
+  type Template,
+} from '@dormice/sdk';
 
 /**
  * Builds the API client from the environment. The daemon's address and
@@ -43,29 +48,29 @@ function printable(value: string): string {
   return value.replace(/\p{Cc}/gu, '?');
 }
 
-/** `dor sandbox ls`: every sandbox with its lifecycle state, as plain columns. */
-export async function sandboxLs(client: Dormice): Promise<string> {
-  const sandboxes = await client.listSandboxes();
-  if (sandboxes.length === 0) {
-    return 'No sandboxes.';
-  }
-  const cell = (column: (typeof COLUMNS)[number], s: Sandbox) =>
-    printable(column.value(s));
-  const widths = COLUMNS.map((column) =>
-    Math.max(
-      column.header.length,
-      ...sandboxes.map((s) => cell(column, s).length),
-    ),
+/** Plain-column rendering shared by the ls verbs. Cells must be printable already. */
+function renderTable(headers: string[], rows: string[][]): string {
+  const widths = headers.map((header, i) =>
+    Math.max(header.length, ...rows.map((row) => (row[i] ?? '').length)),
   );
   const line = (cells: string[]) =>
     cells
       .map((cell, i) => cell.padEnd(widths[i] ?? 0))
       .join('  ')
       .trimEnd();
-  return [
-    line(COLUMNS.map((column) => column.header)),
-    ...sandboxes.map((s) => line(COLUMNS.map((column) => cell(column, s)))),
-  ].join('\n');
+  return [line(headers), ...rows.map(line)].join('\n');
+}
+
+/** `dor sandbox ls`: every sandbox with its lifecycle state, as plain columns. */
+export async function sandboxLs(client: Dormice): Promise<string> {
+  const sandboxes = await client.listSandboxes();
+  if (sandboxes.length === 0) {
+    return 'No sandboxes.';
+  }
+  return renderTable(
+    COLUMNS.map((column) => column.header),
+    sandboxes.map((s) => COLUMNS.map((column) => printable(column.value(s)))),
+  );
 }
 
 export interface ExecOutput {
@@ -139,17 +144,20 @@ export function pullSavedMessage(
 
 /**
  * `dor sandbox rebuild <userKey>`: swap the sandbox's container, keep its
- * disk. /home/user survives; everything else resets onto the daemon's
- * current base image at the next use.
+ * disk. /home/user survives; everything else resets onto the current image
+ * of the sandbox's template (or the base image) at the next use.
  */
 export async function sandboxRebuild(
   client: Dormice,
   userKey: string,
 ): Promise<string> {
   const { sandbox } = await client.rebuildSandbox(userKey);
+  const target = sandbox.template
+    ? `template "${printable(sandbox.template)}"'s current image`
+    : 'the current base image';
   return (
     `Rebuilt the sandbox for key "${printable(userKey)}" — /home/user kept, ` +
-    `now ${sandbox.state}; its next use starts on the current base image.`
+    `now ${sandbox.state}; its next use starts on ${target}.`
   );
 }
 
@@ -162,4 +170,46 @@ export async function sandboxRelease(
   return released
     ? `Released the sandbox for key "${printable(userKey)}".`
     : `No sandbox for key "${printable(userKey)}" — nothing to release.`;
+}
+
+/**
+ * `dor template add <name> <image>`: name a Docker image on the daemon's
+ * host as a template. An upsert — re-adding a name re-points it, which is
+ * how a template is upgraded; existing sandboxes move on their next rebuild.
+ */
+export async function templateAdd(
+  client: Dormice,
+  name: string,
+  image: string,
+): Promise<string> {
+  const { template } = await client.registerTemplate(name, image);
+  return `Registered template "${printable(template.name)}" -> ${printable(template.image)}.`;
+}
+
+/** `dor template ls`: every registered template, as plain columns. */
+export async function templateLs(client: Dormice): Promise<string> {
+  const templates = await client.listTemplates();
+  if (templates.length === 0) {
+    return 'No templates.';
+  }
+  const columns: { header: string; value: (t: Template) => string }[] = [
+    { header: 'NAME', value: (t) => t.name },
+    { header: 'IMAGE', value: (t) => t.image },
+    { header: 'CREATED', value: (t) => t.createdAt },
+  ];
+  return renderTable(
+    columns.map((column) => column.header),
+    templates.map((t) => columns.map((column) => printable(column.value(t)))),
+  );
+}
+
+/** `dor template rm <name>`: drop a template's registration (never the image), idempotently. */
+export async function templateRm(
+  client: Dormice,
+  name: string,
+): Promise<string> {
+  const { removed } = await client.removeTemplate(name);
+  return removed
+    ? `Removed template "${printable(name)}".`
+    : `No template named "${printable(name)}" — nothing to remove.`;
 }

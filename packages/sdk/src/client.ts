@@ -6,12 +6,18 @@ import {
   execCommandResponseSchema,
   type LifecyclePolicyOverride,
   listSandboxesResponseSchema,
+  listTemplatesResponseSchema,
   type RebuildSandboxResponse,
+  type RegisterTemplateResponse,
   type ReleaseSandboxResponse,
+  type RemoveTemplateResponse,
   readFileResponseSchema,
   rebuildSandboxResponseSchema,
+  registerTemplateResponseSchema,
   releaseSandboxResponseSchema,
+  removeTemplateResponseSchema,
   type Sandbox,
+  type Template,
   type WriteFilesResponse,
   writeFilesResponseSchema,
 } from '@dormice/shared';
@@ -59,6 +65,21 @@ export interface ExecCommandOptions {
   env?: Record<string, string>;
 }
 
+export interface AcquireSandboxOptions {
+  /**
+   * Lifecycle override applied when this acquire creates the sandbox;
+   * an existing sandbox keeps its stored policy, but an invalid override
+   * is still a 400.
+   */
+  policy?: LifecyclePolicyOverride;
+  /**
+   * Registered template to create the sandbox from; omitted means the
+   * daemon's base image. Same rules as policy: creation-time only, and an
+   * unknown name is a 400.
+   */
+  template?: string;
+}
+
 /** A non-2xx answer from the daemon, carrying the HTTP status and the server's message. */
 export class DormiceApiError extends Error {
   readonly status: number;
@@ -89,9 +110,13 @@ export class Dormice {
    */
   async acquireSandbox(
     userKey: string,
-    policy?: LifecyclePolicyOverride,
+    options?: AcquireSandboxOptions,
   ): Promise<AcquireResponse> {
-    const data = await this.rpc('acquireSandbox', { userKey, policy });
+    const data = await this.rpc('acquireSandbox', {
+      userKey,
+      policy: options?.policy,
+      template: options?.template,
+    });
     // Never trust the wire blindly: parsing against the shared schema makes
     // a version-skewed or misbehaving server fail loudly right here.
     return acquireResponseSchema.parse(data);
@@ -105,11 +130,12 @@ export class Dormice {
 
   /**
    * Swaps the sandbox's container while keeping its disk: /home/user is
-   * untouched, and the next use builds a fresh container from the daemon's
-   * current base image — how an existing sandbox picks up new shared layers
-   * (anything outside /home/user is reset). The sandbox is left `stopped`;
-   * the next acquire or exec wakes it, paying one cold start. Unknown key:
-   * 404 — rebuild is not a creator.
+   * untouched, and the next use builds a fresh container from the current
+   * image of the sandbox's template (or the daemon's current base image) —
+   * how an existing sandbox picks up new shared layers (anything outside
+   * /home/user is reset). The sandbox is left `stopped`; the next acquire
+   * or exec wakes it, paying one cold start. Unknown key: 404 — rebuild is
+   * not a creator.
    */
   async rebuildSandbox(userKey: string): Promise<RebuildSandboxResponse> {
     const data = await this.rpc('rebuildSandbox', { userKey });
@@ -124,6 +150,35 @@ export class Dormice {
   async releaseSandbox(userKey: string): Promise<ReleaseSandboxResponse> {
     const data = await this.rpc('releaseSandbox', { userKey });
     return releaseSandboxResponseSchema.parse(data);
+  }
+
+  /**
+   * Names a Docker image on the daemon's host as a template. An upsert:
+   * re-registering a name re-points it at the new image — how a template is
+   * upgraded (existing sandboxes move on their next rebuildSandbox). The
+   * image is not checked for existence; it may arrive after registration.
+   */
+  async registerTemplate(
+    name: string,
+    image: string,
+  ): Promise<RegisterTemplateResponse> {
+    const data = await this.rpc('registerTemplate', { name, image });
+    return registerTemplateResponseSchema.parse(data);
+  }
+
+  /** Every registered template. */
+  async listTemplates(): Promise<Template[]> {
+    const data = await this.rpc('listTemplates', {});
+    return listTemplatesResponseSchema.parse(data).templates;
+  }
+
+  /**
+   * Removes a template's registration (never the image). Refused with a 409
+   * while any sandbox still uses it; idempotent on an unknown name.
+   */
+  async removeTemplate(name: string): Promise<RemoveTemplateResponse> {
+    const data = await this.rpc('removeTemplate', { name });
+    return removeTemplateResponseSchema.parse(data);
   }
 
   /**

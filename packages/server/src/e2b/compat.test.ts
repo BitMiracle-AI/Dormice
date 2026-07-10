@@ -5,7 +5,7 @@ import { buildApp } from '../app';
 import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
 import { findBySandboxId, setDeadline } from '../db/ledger';
-import { FakeExecutor } from '../executor/fake';
+import { FAKE_BASE_IMAGE, FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
 import { scanOnce } from '../scanner';
 import { mintEnvdToken } from './protocol';
@@ -13,13 +13,17 @@ import { mintEnvdToken } from './protocol';
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
 
-function testApp(executor: FakeExecutor = new FakeExecutor()) {
+function testApp(
+  executor: FakeExecutor = new FakeExecutor(),
+  env: Record<string, string> = {},
+) {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
   const config = loadConfig({
     DORMICE_DB_PATH: ':memory:',
     DORMICE_NODE_ID: 'node-test',
     DORMICE_API_TOKEN: TOKEN,
+    ...env,
   });
   const locks = new KeyedQueue();
   const app = buildApp({ config, db, executor, locks, logger: false });
@@ -1547,5 +1551,106 @@ describe('signed file URLs at the daemon root', () => {
     });
     expect(asRoot.statusCode).toBe(200);
     expect(asRoot.body).toBe('root readable\n');
+  });
+});
+
+describe('E2B templates', () => {
+  // Registration is a native verb; the compat surface only consumes it.
+  async function registerTemplate(t: TestApp, name: string, image: string) {
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/registerTemplate',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { name, image },
+    });
+    expect(res.statusCode).toBe(200);
+  }
+
+  it('creates from a registered templateID: its image boots, name echoes as templateID and alias', async () => {
+    const t = testApp();
+    await registerTemplate(t, 'py311', 'img-py');
+    const res = await control(t, 'POST', '/sandboxes', { templateID: 'py311' });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.templateID).toBe('py311');
+    expect(body.alias).toBe('py311');
+    // The physical half: the shell was born from the template's image.
+    expect(t.executor.imageOf(body.sandboxID)).toBe('img-py');
+
+    const info = await control(t, 'GET', `/sandboxes/${body.sandboxID}`);
+    // The SDK maps wire templateID -> SandboxInfo.templateId and a truthy
+    // alias -> SandboxInfo.name.
+    expect(info.json()).toMatchObject({ templateID: 'py311', alias: 'py311' });
+  });
+
+  it('answers an unknown templateID with 404 in the control-plane dialect', async () => {
+    const res = await control(testApp(), 'POST', '/sandboxes', {
+      templateID: 'nope',
+    });
+    expect(res.statusCode).toBe(404);
+    // openapi-fetch parses this body; the SDK then throws
+    // SandboxError("404: template 'nope' not found").
+    expect(res.json()).toEqual({
+      code: 404,
+      message: "template 'nope' not found",
+    });
+  });
+
+  it("'base', the configured base image name, and absence all mean the base image", async () => {
+    const t = testApp(new FakeExecutor(), {
+      DORMICE_BASE_IMAGE: 'dormice-base:test',
+    });
+    for (const payload of [
+      {},
+      { templateID: 'base' },
+      { templateID: 'dormice-base:test' },
+    ]) {
+      const res = await control(t, 'POST', '/sandboxes', payload);
+      expect(res.statusCode).toBe(201);
+      const body = res.json();
+      // Echo keeps the pre-templates shape: the base image name, no alias.
+      expect(body.templateID).toBe('dormice-base:test');
+      expect(body.alias).toBeUndefined();
+      expect(t.executor.imageOf(body.sandboxID)).toBe(FAKE_BASE_IMAGE);
+    }
+  });
+
+  it('userKey reuse keeps the original template; an unknown one still 404s first', async () => {
+    const t = testApp();
+    await registerTemplate(t, 'tpl-a', 'img-a');
+    await registerTemplate(t, 'tpl-b', 'img-b');
+    const first = await createSandbox(t, {
+      templateID: 'tpl-a',
+      metadata: { userKey: 'alice' },
+    });
+
+    // Same key, different template: the stored one stays — same principle
+    // as metadata and envs on the reuse path.
+    const again = await control(t, 'POST', '/sandboxes', {
+      templateID: 'tpl-b',
+      metadata: { userKey: 'alice' },
+    });
+    expect(again.statusCode).toBe(201);
+    expect(again.json().sandboxID).toBe(first.sandboxID);
+    expect(again.json().templateID).toBe('tpl-a');
+
+    // Validation happens before the reuse shortcut: a typo is a typo.
+    const typo = await control(t, 'POST', '/sandboxes', {
+      templateID: 'ghost',
+      metadata: { userKey: 'alice' },
+    });
+    expect(typo.statusCode).toBe(404);
+  });
+
+  it('list items carry the template as templateID', async () => {
+    const t = testApp();
+    await registerTemplate(t, 'py311', 'img-py');
+    await createSandbox(t, {
+      templateID: 'py311',
+      metadata: { userKey: 'tpl-list' },
+    });
+    const res = await control(t, 'GET', '/v2/sandboxes');
+    const items = res.json() as Array<{ templateID: string; alias?: string }>;
+    expect(items).toMatchObject([{ templateID: 'py311', alias: 'py311' }]);
   });
 });

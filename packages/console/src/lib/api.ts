@@ -1,4 +1,9 @@
-import type { AcquireRequest, AcquireResponse, Sandbox } from '@dormice/shared';
+import type {
+  AcquireRequest,
+  AcquireResponse,
+  Sandbox,
+  Template,
+} from '@dormice/shared';
 import { clearSessionMarker, hasSessionMarker } from './session';
 
 /**
@@ -75,6 +80,9 @@ export const logout = () =>
 
 export const listSandboxes = () =>
   rpc<{ sandboxes: Sandbox[] }>('/listSandboxes');
+
+export const listTemplates = () =>
+  rpc<{ templates: Template[] }>('/listTemplates');
 
 export const acquireSandbox = (request: AcquireRequest) =>
   rpc<AcquireResponse>('/acquireSandbox', request);

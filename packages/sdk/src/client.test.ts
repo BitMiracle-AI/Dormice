@@ -78,8 +78,7 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
 
   it('passes a policy override through', async () => {
     const res = await client.acquireSandbox('bob', {
-      freezeAfterSeconds: 60,
-      archiveAfterSeconds: null,
+      policy: { freezeAfterSeconds: 60, archiveAfterSeconds: null },
     });
     expect(res.sandbox.policy).toEqual({
       ...DEFAULT_LIFECYCLE_POLICY,
@@ -98,7 +97,7 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
 
   it("surfaces the server's message for an invalid policy", async () => {
     await expect(
-      client.acquireSandbox('carol', { archiveAfterSeconds: 1 }),
+      client.acquireSandbox('carol', { policy: { archiveAfterSeconds: 1 } }),
     ).rejects.toMatchObject({
       status: 400,
       message: expect.stringMatching(/stopAfterSeconds/),
@@ -275,5 +274,40 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
 
     const again = await client.acquireSandbox('frank');
     expect(again.sandbox.sandboxId).not.toBe(created.sandbox.sandboxId);
+  });
+});
+
+describe('templates over real HTTP', () => {
+  it('registers, lists, applies at acquire, and removes through the full life', async () => {
+    await client.registerTemplate('tpl-sdk', 'img-sdk');
+    expect(await client.listTemplates()).toMatchObject([
+      { name: 'tpl-sdk', image: 'img-sdk' },
+    ]);
+
+    const res = await client.acquireSandbox('tpl-user', {
+      template: 'tpl-sdk',
+    });
+    expect(res.sandbox.template).toBe('tpl-sdk');
+    expect(executor.imageOf(res.sandbox.sandboxId)).toBe('img-sdk');
+
+    // In use: removal is refused, naming the key that holds it.
+    await expect(client.removeTemplate('tpl-sdk')).rejects.toMatchObject({
+      name: 'DormiceApiError',
+      status: 409,
+      message: expect.stringMatching(/tpl-user/),
+    });
+
+    await client.releaseSandbox('tpl-user');
+    expect(await client.removeTemplate('tpl-sdk')).toEqual({ removed: true });
+    expect(await client.removeTemplate('tpl-sdk')).toEqual({ removed: false });
+  });
+
+  it("surfaces the server's 400 for an unknown template", async () => {
+    await expect(
+      client.acquireSandbox('tpl-nobody', { template: 'ghost' }),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: "unknown template 'ghost' — register it first",
+    });
   });
 });

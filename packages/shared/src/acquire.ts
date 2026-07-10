@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { lifecyclePolicyOverrideSchema } from './policy';
 import { sandboxSchema, userKeySchema } from './sandbox';
+import { templateNameSchema } from './templates';
 
 /**
  * acquire(userKey) — the platform's single entry point. Idempotent:
@@ -16,6 +17,13 @@ export const acquireRequestSchema = z.object({
    * never silently ignored.
    */
   policy: lifecyclePolicyOverrideSchema.optional(),
+  /**
+   * Template to create the sandbox from; omitted means the daemon's base
+   * image. Same rules as policy: applied only when this acquire creates the
+   * sandbox — an existing sandbox keeps its template — but an unknown
+   * template name is still answered with a 400, never silently ignored.
+   */
+  template: templateNameSchema.optional(),
 });
 
 export type AcquireRequest = z.infer<typeof acquireRequestSchema>;

@@ -21,6 +21,13 @@ export const sandboxes = sqliteTable('sandboxes', {
   stopAfterSeconds: integer('stop_after_seconds'),
   /** NULL means never archive. */
   archiveAfterSeconds: integer('archive_after_seconds'),
+  /**
+   * Template the sandbox was created from; NULL means the base image. The
+   * name is recorded, not the image it pointed at when the sandbox was born:
+   * shells are rebuilt from the template's *current* image — the same rule
+   * that already governs the base image.
+   */
+  template: text('template'),
   createdAt: text('created_at').notNull(),
   lastActiveAt: text('last_active_at').notNull(),
   /**
@@ -45,3 +52,17 @@ export const sandboxes = sqliteTable('sandboxes', {
 });
 
 export type SandboxRow = typeof sandboxes.$inferSelect;
+
+/**
+ * Registered templates: a name for a Docker image that lives on this host.
+ * The host's Docker daemon is the image store; this table only records which
+ * name points where. Sandboxes reference templates by name (column above),
+ * so re-pointing a name upgrades every future shell built for it.
+ */
+export const templates = sqliteTable('templates', {
+  name: text('name').primaryKey(),
+  image: text('image').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
+export type TemplateRow = typeof templates.$inferSelect;

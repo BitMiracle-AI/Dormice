@@ -7,3 +7,4 @@ export * from './rebuild';
 export * from './release';
 export * from './sandbox';
 export * from './states';
+export * from './templates';

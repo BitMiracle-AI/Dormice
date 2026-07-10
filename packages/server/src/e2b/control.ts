@@ -13,6 +13,7 @@ import {
   touch,
 } from '../db/ledger';
 import type { SandboxRow } from '../db/schema';
+import { findTemplate, resolveImage } from '../db/templates';
 import {
   freezeSandbox,
   releaseSandbox,
@@ -125,12 +126,22 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     ? { domain: config.DORMICE_SANDBOX_DOMAIN }
     : {};
 
+  // What the views report as the sandbox's template. E2B's alias is the
+  // template's human name — present only when a registered template was
+  // used; a base sandbox echoes the base image name (or 'base') as its
+  // templateID, the honest pre-templates behavior kept for round-trips.
+  function templateFields(row: SandboxRow) {
+    return {
+      templateID: row.template ?? config.DORMICE_BASE_IMAGE ?? 'base',
+      ...(row.template ? { alias: row.template } : {}),
+    };
+  }
+
   /** What create and connect answer with. */
   function sessionView(row: SandboxRow) {
     return {
       sandboxID: row.sandboxId,
-      templateID: config.DORMICE_BASE_IMAGE ?? 'base',
-      alias: row.userKey,
+      ...templateFields(row),
       envdVersion: ENVD_VERSION,
       envdAccessToken: mintEnvdToken(config.DORMICE_API_TOKEN, row.sandboxId),
       ...domainField,
@@ -141,8 +152,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   function infoView(row: SandboxRow, state: 'running' | 'paused') {
     return {
       sandboxID: row.sandboxId,
-      templateID: config.DORMICE_BASE_IMAGE ?? 'base',
-      alias: row.userKey,
+      ...templateFields(row),
       metadata: row.metadata ? JSON.parse(row.metadata) : {},
       state,
       startedAt: row.createdAt,
@@ -208,6 +218,23 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       }
       const userKey = requestedKey ?? `e2b-${randomUUID()}`;
 
+      // templateID resolution: a registered name wins; 'base', the base
+      // image's own name (we have always echoed it as templateID, so it must
+      // round-trip) and absence mean the base image; anything else is 404 —
+      // the SDK default is the literal string 'base', so `Sandbox.create()`
+      // with no template lands on the base image by name, not by fallback.
+      let template: string | null = null;
+      if (body.templateID !== undefined) {
+        if (findTemplate(db, body.templateID)) {
+          template = body.templateID;
+        } else if (
+          body.templateID !== 'base' &&
+          body.templateID !== config.DORMICE_BASE_IMAGE
+        ) {
+          throw apiError(404, `template '${body.templateID}' not found`);
+        }
+      }
+
       const row = await locks.run(userKey, async () => {
         const existing = findByUserKey(db, userKey);
         if (existing && e2bView(existing, new Date()) !== 'dead') {
@@ -232,12 +259,15 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           );
         }
         const sandboxId = randomUUID();
-        await executor.create(sandboxId);
+        await executor.create(sandboxId, {
+          image: resolveImage(db, template),
+        });
         return createSandbox(db, {
           sandboxId,
           userKey,
           nodeId: config.DORMICE_NODE_ID,
           policy: resolvePolicy(undefined),
+          template,
           e2b: {
             metadata: body.metadata ? JSON.stringify(body.metadata) : null,
             envs:

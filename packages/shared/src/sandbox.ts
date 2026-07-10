@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { lifecyclePolicySchema } from './policy';
 import { SANDBOX_STATES } from './states';
+import { templateNameSchema } from './templates';
 
 /**
  * Caller-chosen key that acquire() is idempotent on: same key, same sandbox,
@@ -29,6 +30,12 @@ export const sandboxSchema = z.object({
    */
   endpoint: z.string(),
   policy: lifecyclePolicySchema,
+  /**
+   * Template the sandbox was created from; null means the daemon's base
+   * image. The name is recorded, not the image it pointed at: a rebuilt
+   * shell always boots the template's *current* image.
+   */
+  template: templateNameSchema.nullable(),
   createdAt: z.iso.datetime(),
   lastActiveAt: z.iso.datetime(),
 });
