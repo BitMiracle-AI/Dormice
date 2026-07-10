@@ -31,7 +31,7 @@ async function signOut() {
   // matters is clearing the marker and starting over from the login page.
   await logout().catch(() => undefined);
   clearSessionMarker();
-  window.location.href = '/ui/login';
+  window.location.href = '/console/login';
 }
 
 export function SandboxesPage() {

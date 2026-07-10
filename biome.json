@@ -4,11 +4,11 @@
     "includes": [
       "**",
       "!packages/*/drizzle",
-      "!packages/web/src/components/ui",
-      "!packages/web/src/hooks/use-mobile.ts",
-      "!packages/web/src/lib/utils.ts",
-      "!packages/web/src/shadcn.css",
-      "!packages/web/src/routeTree.gen.ts"
+      "!packages/console/src/components/ui",
+      "!packages/console/src/hooks/use-mobile.ts",
+      "!packages/console/src/lib/utils.ts",
+      "!packages/console/src/shadcn.css",
+      "!packages/console/src/routeTree.gen.ts"
     ]
   },
   "vcs": {

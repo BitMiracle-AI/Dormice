@@ -30,7 +30,7 @@ re-run on its own at any time.
 
 ## Web console
 
-The daemon serves a small web console at `http://127.0.0.1:3676/ui` —
+The daemon serves a small web console at `http://127.0.0.1:3676/console` —
 sign in with the API token once and it becomes an httpOnly session cookie;
 the token itself is never stored anywhere the page can read. The console
 shows every sandbox with its live lifecycle state (the same
@@ -44,7 +44,7 @@ is a choice you make explicitly, one of two ways:
 
 - **SSH tunnel** (private, zero setup):
   `ssh -L 3676:127.0.0.1:3676 root@host`, then open
-  `http://127.0.0.1:3676/ui`.
+  `http://127.0.0.1:3676/console`.
 - **Reverse proxy** for the console, the API, and the E2B surface at once —
   e.g. Caddy, which also handles TLS certificates automatically once you
   give it a domain:
@@ -97,7 +97,7 @@ pnpm monorepo:
 | `packages/server` | The daemon: Fastify + SQLite ledger + lifecycle engine |
 | `packages/sdk` | `@dormice/sdk` — TypeScript client for the native API |
 | `packages/cli` | `dormice` command-line tool (`dor` for short) |
-| `packages/web` | Web console: React SPA, served by the daemon at `/ui` |
+| `packages/console` | Web console: React SPA, served by the daemon at `/console` |
 | `e2e` | Black-box suite: boots the built daemon, drives it over the wire |
 
 ## Development

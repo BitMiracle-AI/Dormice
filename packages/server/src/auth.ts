@@ -28,7 +28,7 @@ export const CONSOLE_HEADER = 'x-dormice-console';
 
 function sessionHmac(apiToken: string, expiresAtSeconds: number): string {
   return createHmac('sha256', apiToken)
-    .update(`ui-session:${expiresAtSeconds}`)
+    .update(`console-session:${expiresAtSeconds}`)
     .digest('hex');
 }
 

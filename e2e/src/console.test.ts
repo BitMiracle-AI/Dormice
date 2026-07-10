@@ -1,14 +1,14 @@
 import { describe, expect, inject, it } from 'vitest';
 
 // The web console, black-box: plain fetch against the built daemon, the
-// same requests a browser would make. The daemon serves packages/web/dist
+// same requests a browser would make. The daemon serves packages/console/dist
 // (pnpm build ran before this suite), so this also proves the monorepo
 // path hop in main.ts survives the dist layout.
 
 const endpoint = () => inject('dormiceEndpoint');
 
 async function loginCookie(token: string): Promise<string> {
-  const res = await fetch(`${endpoint()}/ui/auth/login`, {
+  const res = await fetch(`${endpoint()}/console/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ token }),
@@ -23,25 +23,25 @@ async function loginCookie(token: string): Promise<string> {
 }
 
 describe('web console over a real daemon', () => {
-  it('serves the built SPA at /ui/, with assets under /ui/', async () => {
-    const res = await fetch(`${endpoint()}/ui/`);
+  it('serves the built SPA at /console/, with assets under /console/', async () => {
+    const res = await fetch(`${endpoint()}/console/`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
     const html = await res.text();
     expect(html).toContain('<title>Dormice</title>');
     // The base path is baked in at build time — a bare /assets reference
-    // would 404 behind the daemon's /ui prefix.
-    expect(html).toContain('/ui/assets/');
+    // would 404 behind the daemon's /console prefix.
+    expect(html).toContain('/console/assets/');
   });
 
   it('falls back to the SPA for client-side routes', async () => {
-    const res = await fetch(`${endpoint()}/ui/login`);
+    const res = await fetch(`${endpoint()}/console/login`);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('<title>Dormice</title>');
   });
 
   it('rejects a login with the wrong token', async () => {
-    const res = await fetch(`${endpoint()}/ui/auth/login`, {
+    const res = await fetch(`${endpoint()}/console/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ token: 'w'.repeat(64) }),

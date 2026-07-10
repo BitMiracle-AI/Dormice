@@ -7,9 +7,9 @@ import { queryClient } from '@/lib/queryClient';
 import { routeTree } from './routeTree.gen';
 import './index.css';
 
-// The daemon serves the console under /ui; the router lives there too so
-// server paths and client paths are the same strings everywhere.
-const router = createRouter({ routeTree, basepath: '/ui' });
+// The daemon serves the console under /console; the router lives there too
+// so server paths and client paths are the same strings everywhere.
+const router = createRouter({ routeTree, basepath: '/console' });
 
 declare module '@tanstack/react-router' {
   interface Register {
