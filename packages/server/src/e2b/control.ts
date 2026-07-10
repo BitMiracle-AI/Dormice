@@ -285,6 +285,39 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     return infoView(row, state);
   });
 
+  // The SDK sends start/end (unix seconds) to slice a metrics history; we
+  // keep none — the daemon is an observation window, not a monitoring
+  // system — so the answer is always one sample, taken now. loose() admits
+  // the query without acting on it.
+  app.get(
+    '/sandboxes/:id/metrics',
+    { schema: { querystring: z.object({}).loose() } },
+    async (request) => {
+      const { id } = request.params as { id: string };
+      const { row } = findLive(id);
+      // Physical stopped/archived: nothing is running to measure, and
+      // measuring must never wake a sandbox (observation is not activity —
+      // the same principle that keeps list from waking). [] is the honest
+      // answer, and a legal one to the SDK.
+      if (row.state !== 'active' && row.state !== 'frozen') return [];
+      const m = await executor.metrics(row.sandboxId);
+      const now = new Date();
+      return [
+        {
+          timestamp: now.toISOString(),
+          timestampUnix: Math.floor(now.getTime() / 1000),
+          cpuCount: m.cpuCount,
+          cpuUsedPct: m.cpuUsedPct,
+          memUsed: m.memUsedBytes,
+          memTotal: m.memTotalBytes,
+          memCache: m.memCacheBytes,
+          diskUsed: m.diskUsedBytes,
+          diskTotal: m.diskTotalBytes,
+        },
+      ];
+    },
+  );
+
   app.delete('/sandboxes/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
     // kill = release, for real: container, disk and row gone. Persistence

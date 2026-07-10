@@ -196,6 +196,26 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
+  it('getMetrics answers one live sample; a killed sandbox refuses', async () => {
+    const sbx = await Sandbox.create(connection());
+    try {
+      const metrics = await sbx.getMetrics();
+      expect(metrics).toHaveLength(1);
+      const m = metrics[0];
+      if (!m) throw new Error('unreachable');
+      expect(m.timestamp).toBeInstanceOf(Date);
+      expect(Math.abs(m.timestamp.getTime() - Date.now())).toBeLessThan(60_000);
+      expect(m.cpuCount).toBeGreaterThanOrEqual(1);
+      expect(m.memTotal).toBeGreaterThan(0);
+      expect(m.memUsed).toBeLessThanOrEqual(m.memTotal);
+      expect(m.diskTotal).toBeGreaterThan(0);
+      expect(m.diskUsed).toBeLessThanOrEqual(m.diskTotal);
+    } finally {
+      await sbx.kill();
+    }
+    await expect(sbx.getMetrics()).rejects.toThrow(/not found/i);
+  });
+
   it('kill destroys for real: gone from list, connect refuses, second kill is false', async () => {
     const sbx = await Sandbox.create(connection());
     await sbx.files.write('doomed.txt', 'will not survive');
@@ -592,6 +612,30 @@ describe.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
         // `bash -l -c` sources the profile; $HOME comes from the user entry.
         const result = await sbx.commands.run('echo $HOME');
         expect(result.stdout).toBe('/home/user\n');
+      } finally {
+        await sbx.kill();
+      }
+    });
+
+    it('metrics watch a real disk fill: dd 5 MiB and diskUsed grows', async () => {
+      const sbx = await Sandbox.create(connection());
+      try {
+        const before = (await sbx.getMetrics())[0];
+        if (!before) throw new Error('no baseline sample');
+        await sbx.commands.run(
+          'dd if=/dev/zero of=/home/user/fill.bin bs=1M count=5 conv=fsync',
+        );
+        // Re-read until the filesystem's accounting catches up.
+        let after = (await sbx.getMetrics())[0];
+        const deadline = Date.now() + 20_000;
+        while (
+          (after?.diskUsed ?? 0) <= before.diskUsed &&
+          Date.now() < deadline
+        ) {
+          await sleep(0.5);
+          after = (await sbx.getMetrics())[0];
+        }
+        expect(after?.diskUsed ?? 0).toBeGreaterThan(before.diskUsed);
       } finally {
         await sbx.kill();
       }

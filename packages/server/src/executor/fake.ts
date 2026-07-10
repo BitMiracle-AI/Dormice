@@ -19,6 +19,7 @@ import {
   NotAFileError,
   type PtySize,
   type SandboxEntry,
+  type SandboxMetrics,
   type WatchDirHandle,
   type WatchDirOptions,
   type WatchEvent,
@@ -354,6 +355,31 @@ export class FakeExecutor implements Executor {
   private closeUpstream(sandboxId: string): void {
     this.upstreams.get(sandboxId)?.close();
     this.upstreams.delete(sandboxId);
+  }
+
+  async metrics(sandboxId: string): Promise<SandboxMetrics> {
+    const actual = this.containers.get(sandboxId);
+    if (actual !== 'running' && actual !== 'paused') {
+      throw new Error(
+        `container ${sandboxId} is ${actual ?? 'absent'}, expected running or paused`,
+      );
+    }
+    // Disk usage is computed from the file table — the one number the
+    // contract can watch move (write a file, usage grows) on both
+    // executors; the rest are plausible constants in honest proportions.
+    let diskUsedBytes = 0;
+    for (const node of this.disk(sandboxId).values()) {
+      diskUsedBytes += node.type === 'file' ? node.content.length : 4096;
+    }
+    return {
+      cpuCount: 1,
+      cpuUsedPct: 0,
+      memUsedBytes: 64 * 1024 ** 2,
+      memTotalBytes: 2 * 1024 ** 3,
+      memCacheBytes: 0,
+      diskUsedBytes,
+      diskTotalBytes: 10 * 1024 ** 3,
+    };
   }
 
   async exec(sandboxId: string, opts: ExecOptions): Promise<ExecResult> {

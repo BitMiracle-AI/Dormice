@@ -167,6 +167,23 @@ export interface SandboxEntry {
 }
 
 /**
+ * A point-in-time resource reading of one sandbox — what the E2B surface's
+ * getMetrics reports. Numbers are observations, not promises: a runtime
+ * that cannot account for something reports 0, honestly.
+ */
+export interface SandboxMetrics {
+  /** Configured CPU allowance, same source as the control plane's info. */
+  cpuCount: number;
+  /** Percent of one CPU; can exceed 100 on a multi-CPU sandbox. */
+  cpuUsedPct: number;
+  memUsedBytes: number;
+  memTotalBytes: number;
+  memCacheBytes: number;
+  diskUsedBytes: number;
+  diskTotalBytes: number;
+}
+
+/**
  * The file-op error taxonomy, shared by both executors down to the message
  * (the contract exam holds them to it) and mapped to HTTP statuses by the
  * routes: not found -> 404, not a regular file / not a directory -> 400,
@@ -252,6 +269,15 @@ export interface Executor {
     sandboxId: string,
     port: number,
   ): Promise<{ host: string; port: number }>;
+  /**
+   * A point-in-time resource reading. Unlike the exec verbs it accepts a
+   * paused container too — reading cgroup accounting does not require the
+   * guest to run, and metrics must never wake a sandbox (observation is
+   * not activity, the same principle as listing). A stopped or absent
+   * container throws (`expected running or paused`): there is nothing
+   * running to measure — the route above answers [] for those on its own.
+   */
+  metrics(sandboxId: string): Promise<SandboxMetrics>;
   /**
    * Runs a shell command inside a running container and returns the fully
    * buffered result. Requires state `running` — a paused container cannot
