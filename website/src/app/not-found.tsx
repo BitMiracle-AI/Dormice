@@ -11,8 +11,14 @@ export default function NotFound() {
         The page you are looking for does not exist.
       </p>
       <div className="flex items-center gap-3">
-        <Button render={<Link href="/" />}>Home</Button>
-        <Button variant="outline" render={<Link href="/docs" />}>
+        <Button nativeButton={false} render={<Link href="/" />}>
+          Home
+        </Button>
+        <Button
+          variant="outline"
+          nativeButton={false}
+          render={<Link href="/docs" />}
+        >
           Docs
         </Button>
       </div>

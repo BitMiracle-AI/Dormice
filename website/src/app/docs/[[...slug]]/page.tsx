@@ -37,6 +37,7 @@ export default async function Page(props: PageProps) {
             <Button
               variant="ghost"
               className="text-muted-foreground"
+              nativeButton={false}
               render={<Link href={prev.href} />}
             >
               <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
@@ -49,6 +50,7 @@ export default async function Page(props: PageProps) {
             <Button
               variant="ghost"
               className="text-muted-foreground"
+              nativeButton={false}
               render={<Link href={next.href} />}
             >
               {next.title}

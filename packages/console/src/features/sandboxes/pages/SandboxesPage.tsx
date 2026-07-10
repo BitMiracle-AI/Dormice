@@ -48,7 +48,12 @@ export function SandboxesPage() {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" render={<Link to="/connect" />}>
+          <Button
+            variant="ghost"
+            size="sm"
+            nativeButton={false}
+            render={<Link to="/connect" />}
+          >
             Connect
           </Button>
           <CreateSandboxDialog />

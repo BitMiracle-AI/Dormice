@@ -49,7 +49,12 @@ export function SandboxDetailPage() {
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
-              <Button variant="outline" size="sm" render={<Link to="/" />}>
+              <Button
+                variant="outline"
+                size="sm"
+                nativeButton={false}
+                render={<Link to="/" />}
+              >
                 Back to sandboxes
               </Button>
             </EmptyContent>
@@ -66,6 +71,7 @@ export function SandboxDetailPage() {
           <Button
             variant="ghost"
             size="icon-sm"
+            nativeButton={false}
             render={<Link to="/" aria-label="Back to sandboxes" />}
           >
             <HugeiconsIcon icon={ArrowLeft01Icon} />
