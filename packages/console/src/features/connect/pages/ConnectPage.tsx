@@ -1,6 +1,5 @@
-import { ArrowLeft01Icon, Copy01Icon } from '@hugeicons/core-free-icons';
+import { Copy01Icon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { Link } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
@@ -38,11 +37,11 @@ function Snippet({ code }: { code: string }) {
         variant="ghost"
         size="icon-sm"
         className="absolute top-1.5 right-1.5"
-        aria-label="Copy to clipboard"
+        aria-label="复制到剪贴板"
         onClick={() =>
           copyText(code).then(
-            () => toast.success('Copied'),
-            () => toast.error('Copy failed — select the text manually'),
+            () => toast.success('已复制'),
+            () => toast.error('复制失败 — 请手动选中文本'),
           )
         }
       >
@@ -71,7 +70,7 @@ const sandbox = await Sandbox.create({
   apiKey: 'e2b_<your API token>',
   apiUrl: '${origin}/e2b/api',
   sandboxUrl: '${origin}/e2b/envd',
-  // Dormice extension: the same userKey always returns the same sandbox.
+  // Dormice 扩展:同一个 userKey 永远回到同一个沙箱。
   metadata: { userKey: 'my-project' },
 });
 
@@ -94,24 +93,14 @@ dor sandbox ls
 dor sandbox exec my-project 'uname -r'`;
 
   return (
-    <main className="mx-auto min-h-screen w-full max-w-3xl px-6 pb-10">
-      <header className="flex items-center gap-3 py-5">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          nativeButton={false}
-          render={<Link to="/" aria-label="Back to sandboxes" />}
-        >
-          <HugeiconsIcon icon={ArrowLeft01Icon} />
-        </Button>
-        <h1 className="text-lg font-semibold">Connect</h1>
-      </header>
-
+    <div className="mx-auto w-full max-w-3xl">
+      <div className="mb-1">
+        <h1 className="text-lg font-semibold">连接</h1>
+      </div>
       <p className="mb-6 text-sm text-muted-foreground">
-        This daemon is reachable at <code className="font-mono">{origin}</code>{' '}
-        — the address you are reading this page from. Every snippet needs the
-        daemon's API token; the console never stores it, so read it on the
-        daemon host:{' '}
+        这个 daemon 的地址是 <code className="font-mono">{origin}</code> —
+        就是你此刻打开本页用的地址。每段代码都需要 daemon 的 API token;
+        控制台从不保存它,去 daemon 主机上读:{' '}
         <code className="font-mono">
           grep ^DORMICE_API_TOKEN /etc/dormice/env
         </code>
@@ -122,9 +111,9 @@ dor sandbox exec my-project 'uname -r'`;
           <CardHeader>
             <CardTitle>E2B SDK</CardTitle>
             <CardDescription>
-              The official <code className="font-mono">e2b</code> package works
-              as-is — point its two URLs here and prefix your token with{' '}
-              <code className="font-mono">e2b_</code>. No other code changes.
+              官方 <code className="font-mono">e2b</code> 包原样可用 — 把两个
+              URL 指到这里,token 加 <code className="font-mono">e2b_</code>{' '}
+              前缀,别的代码一行不改。
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -134,11 +123,10 @@ dor sandbox exec my-project 'uname -r'`;
 
         <Card>
           <CardHeader>
-            <CardTitle>Native SDK</CardTitle>
+            <CardTitle>原生 SDK</CardTitle>
             <CardDescription>
-              <code className="font-mono">@dormice/sdk</code> speaks the
-              daemon's native RPC — acquire is idempotent by design. Not
-              published to npm yet; build it from the repository workspace.
+              <code className="font-mono">@dormice/sdk</code> 说 daemon 的 原生
+              RPC — acquire 天生幂等。尚未发布到 npm,从仓库 workspace 构建使用。
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -150,8 +138,8 @@ dor sandbox exec my-project 'uname -r'`;
           <CardHeader>
             <CardTitle>CLI</CardTitle>
             <CardDescription>
-              <code className="font-mono">dor</code> (installed alongside the
-              daemon by install.sh) reads these two environment variables.
+              <code className="font-mono">dor</code>(install.sh 随 daemon
+              一起装的)读这两个环境变量。
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -159,6 +147,6 @@ dor sandbox exec my-project 'uname -r'`;
           </CardContent>
         </Card>
       </div>
-    </main>
+    </div>
   );
 }

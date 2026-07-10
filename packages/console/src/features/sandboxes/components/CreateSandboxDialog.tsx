@@ -27,8 +27,8 @@ import {
 } from '@/components/ui/native-select';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
+import { useTemplates } from '@/features/templates/hooks/useTemplates';
 import { useAcquireSandbox } from '../hooks/useSandboxes';
-import { useTemplates } from '../hooks/useTemplates';
 
 /**
  * The console speaks the same verb as everyone else: acquire. Same key,
@@ -72,7 +72,7 @@ export function CreateSandboxDialog() {
       },
       {
         onSuccess: ({ sandbox }) => {
-          toast.success(`Sandbox ready for “${sandbox.userKey}”`);
+          toast.success(`「${sandbox.userKey}」的沙箱已就绪`);
           setOpen(false);
           reset();
         },
@@ -92,16 +92,16 @@ export function CreateSandboxDialog() {
         render={
           <Button size="sm">
             <HugeiconsIcon icon={Add01Icon} />
-            Create sandbox
+            创建沙箱
           </Button>
         }
       />
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Create a sandbox</DialogTitle>
+          <DialogTitle>创建沙箱</DialogTitle>
           <DialogDescription>
-            Acquire is idempotent: if this key already has a sandbox, you get
-            that one back and the policy below is ignored.
+            acquire 是幂等的:这个 key 已经有沙箱时,拿回的是原来那个,
+            下面的策略会被忽略。
           </DialogDescription>
         </DialogHeader>
         <form
@@ -112,7 +112,7 @@ export function CreateSandboxDialog() {
         >
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="create-user-key">User key</FieldLabel>
+              <FieldLabel htmlFor="create-user-key">userKey</FieldLabel>
               <Input
                 id="create-user-key"
                 value={userKey}
@@ -122,20 +122,20 @@ export function CreateSandboxDialog() {
                 className="font-mono"
               />
               <FieldDescription>
-                The caller-chosen identity acquire is idempotent on — the same
-                key always comes back to the same sandbox.
+                调用方自选的身份,acquire 对它幂等 — 同一个 key 永远回到
+                同一个沙箱。
               </FieldDescription>
             </Field>
             {templates.length > 0 && (
               <Field>
-                <FieldLabel htmlFor="create-template">Template</FieldLabel>
+                <FieldLabel htmlFor="create-template">模板</FieldLabel>
                 <NativeSelect
                   id="create-template"
                   className="w-full"
                   value={template}
                   onChange={(event) => setTemplate(event.target.value)}
                 >
-                  <NativeSelectOption value="">Base image</NativeSelectOption>
+                  <NativeSelectOption value="">基础镜像</NativeSelectOption>
                   {templates.map((t) => (
                     <NativeSelectOption key={t.name} value={t.name}>
                       {t.name} ({t.image})
@@ -143,14 +143,13 @@ export function CreateSandboxDialog() {
                   ))}
                 </NativeSelect>
                 <FieldDescription>
-                  Applied only when this key creates a new sandbox. Register
-                  templates with `dor template add`.
+                  只在这个 key 真正新建沙箱时生效;对已有沙箱静默不应用。
                 </FieldDescription>
               </Field>
             )}
             <Field>
               <FieldLabel htmlFor="create-freeze-after">
-                Freeze after idle (seconds)
+                空闲多久后冻结(秒)
               </FieldLabel>
               <Input
                 id="create-freeze-after"
@@ -158,11 +157,10 @@ export function CreateSandboxDialog() {
                 min={1}
                 value={freezeAfter}
                 onChange={(event) => setFreezeAfter(event.target.value)}
-                placeholder="600 (daemon default)"
+                placeholder="600(daemon 默认)"
               />
               <FieldDescription>
-                Idle time until active → frozen: memory squeezed to swap, ~50ms
-                to wake.
+                运行中 → 已冻结的空闲阈值:内存挤入 swap,唤醒约 50ms。
               </FieldDescription>
             </Field>
             <Field orientation="horizontal">
@@ -172,13 +170,13 @@ export function CreateSandboxDialog() {
                 onCheckedChange={setNeverStop}
               />
               <FieldLabel htmlFor="create-never-stop">
-                Never stop (resident agent)
+                永不停止(常驻 agent)
               </FieldLabel>
             </Field>
             {!neverStop && (
               <Field>
                 <FieldLabel htmlFor="create-stop-after">
-                  Stop after idle (seconds)
+                  空闲多久后停止(秒)
                 </FieldLabel>
                 <Input
                   id="create-stop-after"
@@ -186,11 +184,10 @@ export function CreateSandboxDialog() {
                   min={1}
                   value={stopAfter}
                   onChange={(event) => setStopAfter(event.target.value)}
-                  placeholder="259200 (daemon default)"
+                  placeholder="259200(daemon 默认)"
                 />
                 <FieldDescription>
-                  Idle time until frozen → stopped: only the disk stays, waking
-                  is a cold start.
+                  已冻结 → 已停止的空闲阈值:只留磁盘,唤醒是冷启动。
                 </FieldDescription>
               </Field>
             )}
@@ -204,7 +201,7 @@ export function CreateSandboxDialog() {
               disabled={userKey.length === 0 || mutation.isPending}
             >
               {mutation.isPending && <Spinner />}
-              Create
+              创建
             </Button>
           </DialogFooter>
         </form>

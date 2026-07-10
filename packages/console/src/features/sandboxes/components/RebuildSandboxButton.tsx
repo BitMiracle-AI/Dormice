@@ -26,7 +26,7 @@ export function RebuildSandboxButton({ userKey }: { userKey: string }) {
     mutation.mutate(userKey, {
       onSuccess: () =>
         toast.success(
-          `Rebuilt ${userKey} — /home/user kept; its next use starts on the current base image`,
+          `已重建 ${userKey} — /home/user 保留,下次使用跑在当前镜像上`,
         ),
       onError: (error) => toast.error(error.message),
     });
@@ -37,22 +37,21 @@ export function RebuildSandboxButton({ userKey }: { userKey: string }) {
         render={
           <Button variant="outline" size="sm" disabled={mutation.isPending}>
             {mutation.isPending && <Spinner />}
-            Rebuild
+            重建
           </Button>
         }
       />
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Rebuild “{userKey}”?</AlertDialogTitle>
+          <AlertDialogTitle>重建「{userKey}」?</AlertDialogTitle>
           <AlertDialogDescription>
-            Swaps the container so the next use starts on the daemon’s current
-            base image. Everything in /home/user is kept; running processes and
-            changes outside it are gone.
+            换壳保盘:下次使用跑在 daemon 当前的镜像上。/home/user 一字节
+            不丢;正在跑的进程和家目录之外的改动随旧壳蒸发。
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Keep it</AlertDialogCancel>
-          <AlertDialogAction onClick={rebuild}>Rebuild</AlertDialogAction>
+          <AlertDialogCancel>先留着</AlertDialogCancel>
+          <AlertDialogAction onClick={rebuild}>重建</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

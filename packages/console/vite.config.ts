@@ -29,6 +29,8 @@ export default defineConfig({
       '/acquireSandbox': 'http://127.0.0.1:3676',
       '/rebuildSandbox': 'http://127.0.0.1:3676',
       '/listTemplates': 'http://127.0.0.1:3676',
+      '/registerTemplate': 'http://127.0.0.1:3676',
+      '/removeTemplate': 'http://127.0.0.1:3676',
       '/getHostMetrics': 'http://127.0.0.1:3676',
       // The terminal speaks the envd surface directly, like the e2b SDK.
       '/e2b': 'http://127.0.0.1:3676',

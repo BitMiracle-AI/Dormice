@@ -31,7 +31,7 @@ export function ReleaseSandboxButton({
     mutation.mutate(userKey, {
       onSuccess: ({ released }) => {
         toast.success(
-          released ? `Released ${userKey}` : `${userKey} was already gone`,
+          released ? `已释放 ${userKey}` : `${userKey} 本来就不存在`,
         );
         onReleased?.();
       },
@@ -44,22 +44,22 @@ export function ReleaseSandboxButton({
         render={
           <Button variant="destructive" size="sm" disabled={mutation.isPending}>
             {mutation.isPending && <Spinner />}
-            Release
+            释放
           </Button>
         }
       />
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Release “{userKey}”?</AlertDialogTitle>
+          <AlertDialogTitle>释放「{userKey}」?</AlertDialogTitle>
           <AlertDialogDescription>
-            This destroys the sandbox and its disk. The key stays valid — the
-            next acquire starts from a blank sandbox.
+            沙箱连同磁盘一起销毁,不可恢复。key 依然有效 — 下次 acquire
+            会得到一个全新的空白沙箱。
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Keep it</AlertDialogCancel>
+          <AlertDialogCancel>先留着</AlertDialogCancel>
           <AlertDialogAction variant="destructive" onClick={release}>
-            Release
+            释放
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

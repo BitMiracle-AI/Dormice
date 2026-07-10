@@ -12,7 +12,12 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppTemplatesRouteImport } from './routes/_app/templates'
+import { Route as AppSettingsRouteImport } from './routes/_app/settings'
+import { Route as AppDoctorRouteImport } from './routes/_app/doctor'
 import { Route as AppConnectRouteImport } from './routes/_app/connect'
+import { Route as AppActivityRouteImport } from './routes/_app/activity'
+import { Route as AppSandboxesIndexRouteImport } from './routes/_app/sandboxes/index'
 import { Route as AppSandboxesUserKeyRouteImport } from './routes/_app/sandboxes/$userKey'
 
 const LoginRoute = LoginRouteImport.update({
@@ -29,9 +34,34 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppTemplatesRoute = AppTemplatesRouteImport.update({
+  id: '/templates',
+  path: '/templates',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsRoute = AppSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDoctorRoute = AppDoctorRouteImport.update({
+  id: '/doctor',
+  path: '/doctor',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppConnectRoute = AppConnectRouteImport.update({
   id: '/connect',
   path: '/connect',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppActivityRoute = AppActivityRouteImport.update({
+  id: '/activity',
+  path: '/activity',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSandboxesIndexRoute = AppSandboxesIndexRouteImport.update({
+  id: '/sandboxes/',
+  path: '/sandboxes/',
   getParentRoute: () => AppRoute,
 } as any)
 const AppSandboxesUserKeyRoute = AppSandboxesUserKeyRouteImport.update({
@@ -43,35 +73,73 @@ const AppSandboxesUserKeyRoute = AppSandboxesUserKeyRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
+  '/activity': typeof AppActivityRoute
   '/connect': typeof AppConnectRoute
+  '/doctor': typeof AppDoctorRoute
+  '/settings': typeof AppSettingsRoute
+  '/templates': typeof AppTemplatesRoute
   '/sandboxes/$userKey': typeof AppSandboxesUserKeyRoute
+  '/sandboxes/': typeof AppSandboxesIndexRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
+  '/activity': typeof AppActivityRoute
   '/connect': typeof AppConnectRoute
+  '/doctor': typeof AppDoctorRoute
+  '/settings': typeof AppSettingsRoute
+  '/templates': typeof AppTemplatesRoute
   '/': typeof AppIndexRoute
   '/sandboxes/$userKey': typeof AppSandboxesUserKeyRoute
+  '/sandboxes': typeof AppSandboxesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
+  '/_app/activity': typeof AppActivityRoute
   '/_app/connect': typeof AppConnectRoute
+  '/_app/doctor': typeof AppDoctorRoute
+  '/_app/settings': typeof AppSettingsRoute
+  '/_app/templates': typeof AppTemplatesRoute
   '/_app/': typeof AppIndexRoute
   '/_app/sandboxes/$userKey': typeof AppSandboxesUserKeyRoute
+  '/_app/sandboxes/': typeof AppSandboxesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/connect' | '/sandboxes/$userKey'
+  fullPaths:
+    | '/'
+    | '/login'
+    | '/activity'
+    | '/connect'
+    | '/doctor'
+    | '/settings'
+    | '/templates'
+    | '/sandboxes/$userKey'
+    | '/sandboxes/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/login' | '/connect' | '/' | '/sandboxes/$userKey'
+  to:
+    | '/login'
+    | '/activity'
+    | '/connect'
+    | '/doctor'
+    | '/settings'
+    | '/templates'
+    | '/'
+    | '/sandboxes/$userKey'
+    | '/sandboxes'
   id:
     | '__root__'
     | '/_app'
     | '/login'
+    | '/_app/activity'
     | '/_app/connect'
+    | '/_app/doctor'
+    | '/_app/settings'
+    | '/_app/templates'
     | '/_app/'
     | '/_app/sandboxes/$userKey'
+    | '/_app/sandboxes/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -102,11 +170,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/templates': {
+      id: '/_app/templates'
+      path: '/templates'
+      fullPath: '/templates'
+      preLoaderRoute: typeof AppTemplatesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings': {
+      id: '/_app/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/doctor': {
+      id: '/_app/doctor'
+      path: '/doctor'
+      fullPath: '/doctor'
+      preLoaderRoute: typeof AppDoctorRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/connect': {
       id: '/_app/connect'
       path: '/connect'
       fullPath: '/connect'
       preLoaderRoute: typeof AppConnectRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/activity': {
+      id: '/_app/activity'
+      path: '/activity'
+      fullPath: '/activity'
+      preLoaderRoute: typeof AppActivityRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/sandboxes/': {
+      id: '/_app/sandboxes/'
+      path: '/sandboxes'
+      fullPath: '/sandboxes/'
+      preLoaderRoute: typeof AppSandboxesIndexRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/sandboxes/$userKey': {
@@ -120,15 +223,25 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
+  AppActivityRoute: typeof AppActivityRoute
   AppConnectRoute: typeof AppConnectRoute
+  AppDoctorRoute: typeof AppDoctorRoute
+  AppSettingsRoute: typeof AppSettingsRoute
+  AppTemplatesRoute: typeof AppTemplatesRoute
   AppIndexRoute: typeof AppIndexRoute
   AppSandboxesUserKeyRoute: typeof AppSandboxesUserKeyRoute
+  AppSandboxesIndexRoute: typeof AppSandboxesIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppActivityRoute: AppActivityRoute,
   AppConnectRoute: AppConnectRoute,
+  AppDoctorRoute: AppDoctorRoute,
+  AppSettingsRoute: AppSettingsRoute,
+  AppTemplatesRoute: AppTemplatesRoute,
   AppIndexRoute: AppIndexRoute,
   AppSandboxesUserKeyRoute: AppSandboxesUserKeyRoute,
+  AppSandboxesIndexRoute: AppSandboxesIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
