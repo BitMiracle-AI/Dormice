@@ -1,6 +1,7 @@
-import defaultMdxComponents from 'fumadocs-ui/mdx';
 import type { MDXComponents } from 'mdx/types';
 
-export function getMDXComponents(components?: MDXComponents): MDXComponents {
-  return { ...defaultMdxComponents, ...components };
+// Required by @next/mdx: every compiled MDX module resolves its components
+// through this hook. Element overrides shared by all docs go here.
+export function useMDXComponents(components: MDXComponents): MDXComponents {
+  return { ...components };
 }

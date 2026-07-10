@@ -1,6 +1,6 @@
 import Link from 'next/link';
-
-const GITHUB_URL = 'https://github.com/BitMiracle-AI/Dormice';
+import { GITHUB_URL } from '@/components/site-header';
+import { Button } from '@/components/ui/button';
 
 const features = [
   {
@@ -49,29 +49,23 @@ export default function HomePage() {
       <h1 className="max-w-3xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
         The SQLite of agent sandboxes
       </h1>
-      <p className="mt-6 max-w-2xl text-lg text-fd-muted-foreground">
+      <p className="mt-6 max-w-2xl text-lg text-muted-foreground">
         A self-hosted sandbox platform for AI agents. One machine, sandboxes
         that live forever, idle costs nothing.
       </p>
       <div className="mt-8 flex items-center gap-3">
-        <Link
-          href="/docs"
-          className="rounded-full bg-fd-primary px-6 py-2.5 text-sm font-medium text-fd-primary-foreground transition-colors hover:bg-fd-primary/90"
-        >
+        <Button size="lg" render={<Link href="/docs" />}>
           Get started
-        </Link>
-        <a
-          href={GITHUB_URL}
-          className="rounded-full border px-6 py-2.5 text-sm font-medium transition-colors hover:bg-fd-accent"
-        >
+        </Button>
+        <Button size="lg" variant="outline" render={<a href={GITHUB_URL} />}>
           GitHub
-        </a>
+        </Button>
       </div>
-      <p className="mt-4 text-xs text-fd-muted-foreground">
+      <p className="mt-4 text-xs text-muted-foreground">
         Early development: works end to end against real infrastructure, not
         production-ready yet.
       </p>
-      <pre className="mt-10 max-w-full overflow-x-auto rounded-lg border bg-fd-card px-5 py-4 text-left text-sm">
+      <pre className="mt-10 max-w-full overflow-x-auto rounded-lg border bg-card px-5 py-4 text-left text-sm">
         <code>
           curl -fsSL
           https://raw.githubusercontent.com/BitMiracle-AI/Dormice/main/deploy/install.sh
@@ -80,11 +74,9 @@ export default function HomePage() {
       </pre>
       <div className="mt-16 grid w-full max-w-4xl gap-4 text-left sm:grid-cols-2">
         {features.map((feature) => (
-          <div key={feature.title} className="rounded-lg border bg-fd-card p-6">
+          <div key={feature.title} className="rounded-lg border bg-card p-6">
             <h2 className="font-medium">{feature.title}</h2>
-            <p className="mt-2 text-sm text-fd-muted-foreground">
-              {feature.body}
-            </p>
+            <p className="mt-2 text-sm text-muted-foreground">{feature.body}</p>
           </div>
         ))}
       </div>

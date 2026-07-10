@@ -1,6 +1,4 @@
-import { createMDX } from 'fumadocs-mdx/next';
-
-const withMDX = createMDX();
+import createMDX from '@next/mdx';
 
 /** @type {import('next').NextConfig} */
 const config = {
@@ -11,5 +9,29 @@ const config = {
   // A static export has no image-optimization server.
   images: { unoptimized: true },
 };
+
+const withMDX = createMDX({
+  options: {
+    // Plugins by package name, not imported functions: Turbopack requires
+    // loader options to be serializable.
+    remarkPlugins: [
+      ['remark-gfm'],
+      ['remark-frontmatter'],
+      ['remark-mdx-frontmatter'],
+    ],
+    rehypePlugins: [
+      ['rehype-slug'],
+      [
+        '@shikijs/rehype',
+        {
+          themes: { light: 'github-light', dark: 'github-dark' },
+          // Emit both palettes as CSS variables; global.css picks one per
+          // color scheme.
+          defaultColor: false,
+        },
+      ],
+    ],
+  },
+});
 
 export default withMDX(config);
