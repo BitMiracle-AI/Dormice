@@ -1191,6 +1191,15 @@ export class DockerExecutor implements Executor {
       if (isDockerApiError(err) && err.statusCode === 409) {
         throw new Error(`container ${sandboxId} already exists`);
       }
+      // Registration never checks image existence (the image may arrive
+      // later), so this is where a missing one honestly surfaces. Named
+      // here — dockerode's own 404 would otherwise leak out as this API's
+      // "sandbox not found" status.
+      if (isDockerApiError(err) && err.statusCode === 404) {
+        throw new Error(
+          `image ${image ?? this.opts.baseImage} is not on this host — docker pull or build it, then retry`,
+        );
+      }
       throw err;
     }
     await container.start();

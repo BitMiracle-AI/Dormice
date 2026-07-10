@@ -652,11 +652,15 @@ describe('official e2b SDK against the daemon', () => {
   it('creates from a registered template name; info reports it as templateId and name', async () => {
     // Registration is the operator's native verb; the official SDK then
     // consumes the name as its templateID — aliases are the same wire.
+    // The image must exist in docker mode; the base image serves both.
     const dormice = new Dormice({
       endpoint: inject('dormiceEndpoint'),
       token: inject('dormiceToken'),
     });
-    await dormice.registerTemplate('e2e-tpl', 'img:e2e-tpl');
+    await dormice.registerTemplate(
+      'e2e-tpl',
+      process.env.DORMICE_BASE_IMAGE ?? 'img:e2e-tpl',
+    );
     const sbx = await Sandbox.create('e2e-tpl', connection());
     try {
       const info = await sbx.getInfo();

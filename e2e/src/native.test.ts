@@ -297,7 +297,11 @@ describe('native API over a real daemon', () => {
   });
 
   it('templates: register, create from, removal guarded while in use', async () => {
-    await client().registerTemplate('native-tpl', 'img:native');
+    // In docker mode the image must actually exist — registration is only
+    // config; the fake plays any name. The daemon's own base image serves
+    // both: a real boot there, an arbitrary string here.
+    const image = process.env.DORMICE_BASE_IMAGE ?? 'img:native';
+    await client().registerTemplate('native-tpl', image);
     const created = await client().acquireSandbox('tpl-key', {
       template: 'native-tpl',
     });
@@ -317,6 +321,31 @@ describe('native API over a real daemon', () => {
       removed: true,
     });
   });
+
+  // Registration never checks the image; only a real engine can show what
+  // happens when the promise is broken at create time.
+  it.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
+    'a template whose image is missing fails create with a named, honest error',
+    async () => {
+      await client().registerTemplate('hollow-tpl', 'img:does-not-exist');
+      await expect(
+        client().acquireSandbox('hollow-key', { template: 'hollow-tpl' }),
+      ).rejects.toMatchObject({
+        name: 'DormiceApiError',
+        status: 500,
+        message: expect.stringMatching(
+          /image img:does-not-exist is not on this host/,
+        ),
+      });
+      // Nothing was created: the key is still free, the template removable.
+      expect(await client().releaseSandbox('hollow-key')).toEqual({
+        released: false,
+      });
+      expect(await client().removeTemplate('hollow-tpl')).toEqual({
+        removed: true,
+      });
+    },
+  );
 
   it('reading a file wakes a frozen sandbox, and the file survived the cold', async () => {
     await client().acquireSandbox('files-wake-key', {
