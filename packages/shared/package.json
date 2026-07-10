@@ -1,8 +1,29 @@
 {
   "name": "@dormice/shared",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Protocol types and schemas shared by the Dormice server, SDK, and WebUI",
+  "keywords": [
+    "dormice",
+    "sandbox",
+    "protocol",
+    "schemas",
+    "zod"
+  ],
   "license": "Apache-2.0",
+  "homepage": "https://github.com/BitMiracle-AI/Dormice#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BitMiracle-AI/Dormice.git",
+    "directory": "packages/shared"
+  },
+  "bugs": "https://github.com/BitMiracle-AI/Dormice/issues",
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
   "type": "module",
   "exports": {
     ".": {

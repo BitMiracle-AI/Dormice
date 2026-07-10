@@ -1,8 +1,29 @@
 {
   "name": "@dormice/cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Dormice command-line tool (dormice, or dor for short)",
+  "keywords": [
+    "dormice",
+    "sandbox",
+    "agent",
+    "cli",
+    "gvisor",
+    "docker"
+  ],
   "license": "Apache-2.0",
+  "homepage": "https://github.com/BitMiracle-AI/Dormice#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BitMiracle-AI/Dormice.git",
+    "directory": "packages/cli"
+  },
+  "bugs": "https://github.com/BitMiracle-AI/Dormice/issues",
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "bin": {
     "dormice": "./dist/main.js",
@@ -17,7 +38,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dormice/sdk": "workspace:*",
+    "@dormice/sdk": "workspace:^",
     "commander": "^14.0.0"
   },
   "devDependencies": {
