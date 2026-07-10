@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from '../app';
@@ -1218,5 +1219,250 @@ describe('E2B envd surface', () => {
       code: 'not_found',
       message: 'no such file: /home/user/nowhere',
     });
+  });
+});
+
+/**
+ * The signature exactly as the official SDK computes it (signature.ts in
+ * the e2b package) — deliberately re-implemented here instead of importing
+ * our signing.ts, so the test pins both ends of the wire independently.
+ */
+function sdkSignature(opts: {
+  path?: string;
+  operation: 'read' | 'write';
+  user?: string;
+  envdAccessToken: string;
+  expiration?: number;
+}): string {
+  const raw = [
+    opts.path ?? '',
+    opts.operation,
+    opts.user ?? '',
+    opts.envdAccessToken,
+    ...(opts.expiration === undefined ? [] : [String(opts.expiration)]),
+  ].join(':');
+  const hash = createHash('sha256').update(raw, 'utf8').digest('base64');
+  return `v1_${hash.replace(/=+$/, '')}`;
+}
+
+/** Writes a file through the envd surface — the signed tests' fixture pen. */
+async function putFile(
+  t: TestApp,
+  sandboxID: string,
+  path: string,
+  content: string,
+) {
+  const res = await t.app.inject({
+    method: 'POST',
+    url: `/e2b/envd/files?path=${encodeURIComponent(path)}`,
+    headers: {
+      ...envdHeaders(sandboxID),
+      'content-type': 'application/octet-stream',
+    },
+    payload: content,
+  });
+  expect(res.statusCode).toBe(200);
+}
+
+describe('signed file URLs at the daemon root', () => {
+  it('a bare signed GET /files downloads — the signature is auth AND identity', async () => {
+    const t = testApp();
+    const a = await createSandbox(t);
+    const b = await createSandbox(t);
+    // The same path in two sandboxes, different content: only the
+    // signature says which sandbox the URL speaks for.
+    await putFile(t, a.sandboxID, 'secret.txt', 'contents of A\n');
+    await putFile(t, b.sandboxID, 'secret.txt', 'contents of B\n');
+
+    const download = (token: string, expiration?: number) => {
+      const sig = sdkSignature({
+        path: 'secret.txt',
+        operation: 'read',
+        envdAccessToken: token,
+        ...(expiration === undefined ? {} : { expiration }),
+      });
+      const exp =
+        expiration === undefined ? '' : `&signature_expiration=${expiration}`;
+      // No headers at all — exactly what a browser hitting the URL sends.
+      return t.app.inject({
+        method: 'GET',
+        url: `/files?path=secret.txt&signature=${encodeURIComponent(sig)}${exp}`,
+      });
+    };
+
+    const fromA = await download(a.envdAccessToken);
+    expect(fromA.statusCode).toBe(200);
+    expect(fromA.body).toBe('contents of A\n');
+
+    // With a future expiration in the material — the second signing shape.
+    const exp = Math.floor(Date.now() / 1000) + 300;
+    const fromB = await download(b.envdAccessToken, exp);
+    expect(fromB.statusCode).toBe(200);
+    expect(fromB.body).toBe('contents of B\n');
+  });
+
+  it('signed uploads: multipart carries the path in the filename, octet-stream in the query', async () => {
+    const t = testApp();
+    const { sandboxID, envdAccessToken } = await createSandbox(t);
+
+    // uploadUrl without a path signs the empty string and sends no ?path=.
+    const multipartSig = sdkSignature({
+      operation: 'write',
+      envdAccessToken,
+    });
+    const boundary = 'dormice-signed-boundary';
+    const body = [
+      `--${boundary}`,
+      'Content-Disposition: form-data; name="file"; filename="signed/up.txt"',
+      'Content-Type: application/octet-stream',
+      '',
+      'through the signed door\n',
+      `--${boundary}--`,
+      '',
+    ].join('\r\n');
+    const up = await t.app.inject({
+      method: 'POST',
+      url: `/files?signature=${encodeURIComponent(multipartSig)}`,
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload: body,
+    });
+    expect(up.statusCode).toBe(200);
+    expect(up.json()).toEqual([
+      { name: 'up.txt', type: 'file', path: '/home/user/signed/up.txt' },
+    ]);
+
+    const octetSig = sdkSignature({
+      path: 'signed/oct.txt',
+      operation: 'write',
+      envdAccessToken,
+    });
+    const oct = await t.app.inject({
+      method: 'POST',
+      url: `/files?path=${encodeURIComponent('signed/oct.txt')}&signature=${encodeURIComponent(octetSig)}`,
+      headers: { 'content-type': 'application/octet-stream' },
+      payload: 'octets through the signed door\n',
+    });
+    expect(oct.statusCode).toBe(200);
+
+    // Both landed in the sandbox, readable through the envd surface.
+    const back = await t.app.inject({
+      method: 'GET',
+      url: '/e2b/envd/files?path=signed/oct.txt',
+      headers: envdHeaders(sandboxID),
+    });
+    expect(back.body).toBe('octets through the signed door\n');
+  });
+
+  it("refuses in real envd's order and words", async () => {
+    const t = testApp();
+    const { envdAccessToken } = await createSandbox(t);
+
+    const missing = await t.app.inject({ method: 'GET', url: '/files?path=x' });
+    expect(missing.statusCode).toBe(401);
+    expect(missing.json()).toEqual({
+      code: 'unauthenticated',
+      message: 'missing signature query parameter',
+    });
+
+    const wrong = await t.app.inject({
+      method: 'GET',
+      url: '/files?path=x&signature=v1_forged',
+    });
+    expect(wrong.statusCode).toBe(401);
+    expect(wrong.json().message).toBe('invalid signature');
+
+    // A valid signature whose material includes a past expiration: the
+    // match succeeds, the clock refuses.
+    const past = Math.floor(Date.now() / 1000) - 10;
+    const expiredSig = sdkSignature({
+      path: 'x',
+      operation: 'read',
+      envdAccessToken,
+      expiration: past,
+    });
+    const expired = await t.app.inject({
+      method: 'GET',
+      url: `/files?path=x&signature=${encodeURIComponent(expiredSig)}&signature_expiration=${past}`,
+    });
+    expect(expired.statusCode).toBe(401);
+    expect(expired.json().message).toBe('signature is already expired');
+
+    // A wrong signature that also claims a past expiration must say
+    // "invalid signature" — the signature check comes first, so a forger
+    // never learns whether their expiry was the problem.
+    const forgedExpired = await t.app.inject({
+      method: 'GET',
+      url: `/files?path=x&signature=v1_forged&signature_expiration=${past}`,
+    });
+    expect(forgedExpired.json().message).toBe('invalid signature');
+
+    // A read signature opens no write door: the operation is in the material.
+    const readSig = sdkSignature({
+      path: 'x',
+      operation: 'read',
+      envdAccessToken,
+    });
+    const misused = await t.app.inject({
+      method: 'POST',
+      url: `/files?path=x&signature=${encodeURIComponent(readSig)}`,
+      headers: { 'content-type': 'application/octet-stream' },
+      payload: 'nope',
+    });
+    expect(misused.statusCode).toBe(401);
+    expect(misused.json().message).toBe('invalid signature');
+
+    // The root door is signature-only: a header token belongs to
+    // /e2b/envd/files and buys nothing here.
+    const headerOnly = await t.app.inject({
+      method: 'GET',
+      url: '/files?path=x',
+      headers: { 'x-access-token': envdAccessToken },
+    });
+    expect(headerOnly.statusCode).toBe(401);
+    expect(headerOnly.json().message).toBe('missing signature query parameter');
+  });
+
+  it('a signed download wakes a frozen sandbox — autoResume through the bare door', async () => {
+    const t = testApp();
+    const { sandboxID, envdAccessToken } = await createSandbox(t, {
+      timeout: 86400,
+    });
+    await putFile(t, sandboxID, 'frozen.txt', 'still here\n');
+    const row = findBySandboxId(t.db, sandboxID);
+    const later = new Date(
+      Date.now() + ((row?.freezeAfterSeconds ?? 0) + 60) * 1000,
+    );
+    await scanOnce(t.db, t.executor, t.locks, later);
+    expect(t.executor.stateOf(sandboxID)).toBe('paused');
+
+    const sig = sdkSignature({
+      path: 'frozen.txt',
+      operation: 'read',
+      envdAccessToken,
+    });
+    const res = await t.app.inject({
+      method: 'GET',
+      url: `/files?path=frozen.txt&signature=${encodeURIComponent(sig)}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('still here\n');
+    expect(t.executor.stateOf(sandboxID)).toBe('running');
+  });
+
+  it("vets the signed username: only the image's users exist", async () => {
+    const t = testApp();
+    const { envdAccessToken } = await createSandbox(t);
+    const sig = sdkSignature({
+      path: 'x',
+      operation: 'read',
+      user: 'nobody',
+      envdAccessToken,
+    });
+    const res = await t.app.inject({
+      method: 'GET',
+      url: `/files?path=x&username=nobody&signature=${encodeURIComponent(sig)}`,
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().message).toBe("invalid username: 'nobody'");
   });
 });
