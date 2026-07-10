@@ -9,8 +9,7 @@ import {
   rm,
 } from 'node:fs/promises';
 import path from 'node:path';
-import type { Duplex } from 'node:stream';
-import { Writable } from 'node:stream';
+import type { Duplex, Writable } from 'node:stream';
 import {
   EXEC_OUTPUT_LIMIT_BYTES,
   FILE_SIZE_LIMIT_BYTES,
@@ -18,6 +17,32 @@ import {
 } from '@dormice/shared';
 import Docker from 'dockerode';
 import { execa } from 'execa';
+import {
+  ALREADY_EXISTS_EXIT,
+  entryFromFindRecord,
+  entryFromStatLine,
+  execStreamWrapper,
+  FILE_OP_TIMEOUT_SECONDS,
+  LIST_DIR_SCRIPT,
+  LIST_OUTPUT_LIMIT_BYTES,
+  MAKE_DIR_SCRIPT,
+  MOVE_SCRIPT,
+  NO_SUCH_FILE_EXIT,
+  NOT_A_DIR_EXIT,
+  NOT_A_FILE_EXIT,
+  PTY_WRAPPER,
+  parseInotifyLine,
+  READ_FILE_SCRIPT,
+  READ_FILE_STREAM_SCRIPT,
+  REMOVE_SCRIPT,
+  SIGNAL_SCRIPT,
+  STAT_SCRIPT,
+  STREAM_FILE_OP_TIMEOUT_SECONDS,
+  TOO_LARGE_EXIT,
+  WATCH_SCRIPT,
+  WRITE_FILE_SCRIPT,
+} from './docker-scripts';
+import { CallbackSink, CappedBuffer } from './docker-streams';
 import {
   type ContainerState,
   DiskFullError,
@@ -35,7 +60,6 @@ import {
   type SandboxEntry,
   type WatchDirHandle,
   type WatchDirOptions,
-  type WatchEvent,
 } from './executor';
 
 /**
@@ -65,239 +89,6 @@ export function containerName(sandboxId: string): string {
 }
 
 /**
- * In-container deadline for file operations, same mechanism as exec's
- * (host-side disconnects cannot kill an in-container process). Not a user
- * knob: 16 MiB on a local ext4 is subsecond work — this guard only exists
- * so a pathological target cannot hang the daemon's request forever.
- */
-const FILE_OP_TIMEOUT_SECONDS = 60;
-
-/**
- * The file-op scripts talk back through exit codes of our choosing — private
- * numbers between the daemon and its own script, no user command runs inside.
- * They map 1:1 onto the typed file errors both executors must throw.
- */
-const NO_SUCH_FILE_EXIT = 44;
-const NOT_A_FILE_EXIT = 45;
-const TOO_LARGE_EXIT = 46;
-
-/**
- * $1 = absolute path. Refuses a target that exists but is not a regular
- * file (directory, FIFO — `cat >` into a FIFO would block forever), creates
- * the parents, then streams stdin into the file. Runs as uid 1000, so
- * in-sandbox permissions apply honestly, and path resolution — symlinks
- * included — happens inside the container, where there is no host to
- * escape to.
- */
-const WRITE_FILE_SCRIPT = [
-  `[ ! -e "$1" ] || [ -f "$1" ] || exit ${NOT_A_FILE_EXIT}`,
-  'mkdir -p -- "$(dirname -- "$1")" && exec cat > "$1"',
-].join('\n');
-
-/** $1 = absolute path, $2 = size limit in bytes. Size gate before content: an over-limit file is refused, never truncated. */
-const READ_FILE_SCRIPT = [
-  `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
-  `[ -f "$1" ] || exit ${NOT_A_FILE_EXIT}`,
-  'size=$(stat -c %s -- "$1") || exit 1',
-  `[ "$size" -le "$2" ] || { echo "$size" >&2; exit ${TOO_LARGE_EXIT}; }`,
-  'exec cat -- "$1"',
-].join('\n');
-
-const NOT_A_DIR_EXIT = 47;
-const ALREADY_EXISTS_EXIT = 48;
-
-/**
- * Streaming file transfers have no size cap, so their in-container deadline
- * must fit a quota-sized file crawling to a slow client — generous, but
- * still a bound so a wedged transfer cannot hold an exec forever.
- */
-const STREAM_FILE_OP_TIMEOUT_SECONDS = 3600;
-
-/** Ceiling for one directory listing; past it the listing errors instead of silently losing entries. */
-const LIST_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
-
-/** $1 = absolute path. READ_FILE_SCRIPT without the size gate — the streaming read is the uncapped path. */
-const READ_FILE_STREAM_SCRIPT = [
-  `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
-  `[ -f "$1" ] || exit ${NOT_A_FILE_EXIT}`,
-  'exec cat -- "$1"',
-].join('\n');
-
-/**
- * $1 = absolute dir, $2 = depth. One NUL-terminated record per entry, tab
- * separated with the path last, so a path containing tabs still parses
- * (nothing else can contain a tab, and a path cannot contain a NUL).
- */
-const LIST_DIR_SCRIPT = [
-  `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
-  `[ -d "$1" ] || exit ${NOT_A_DIR_EXIT}`,
-  `exec find "$1" -mindepth 1 -maxdepth "$2" -printf '%y\\t%s\\t%T@\\t%m\\t%u\\t%g\\t%p\\0'`,
-].join('\n');
-
-/** $1 = absolute path. --printf, not -c: only --printf interprets \t. */
-const STAT_SCRIPT = [
-  `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
-  `exec stat --printf '%F\\t%s\\t%Y\\t%a\\t%U\\t%G' -- "$1"`,
-].join('\n');
-
-/** $1 = absolute path. Exists (whatever it is) -> "already there", else mkdir -p. */
-const MAKE_DIR_SCRIPT = [
-  `[ ! -e "$1" ] || exit ${ALREADY_EXISTS_EXIT}`,
-  'exec mkdir -p -- "$1"',
-].join('\n');
-
-/** $1 = source, $2 = destination. -T = rename(2) semantics: never "move into". */
-const MOVE_SCRIPT = [
-  `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
-  'exec mv -T -- "$1" "$2"',
-].join('\n');
-
-const REMOVE_SCRIPT = [
-  `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
-  'exec rm -rf -- "$1"',
-].join('\n');
-
-/**
- * A watcher may outlive any one request, but not the sandbox's day — the
- * same backstop as e2b-surface execs, physical cleanup only.
- */
-const WATCH_BACKSTOP_SECONDS = 24 * 60 * 60;
-
-/**
- * $1 = pidfile, $2 = recursive flag (`-r` or empty), $3 = watched dir.
- * The existence checks run in-script: one round trip, no gap for the path
- * to change under a separate stat. Readiness is inotifywait's own
- * "Watches established." on stderr — measured under gVisor 2026-07-10,
- * along with -r picking up directories created after the watch began.
- */
-const WATCH_SCRIPT = [
-  'echo "$$" > "$1"',
-  `[ -e "$3" ] || exit ${NO_SUCH_FILE_EXIT}`,
-  `[ -d "$3" ] || exit ${NOT_A_DIR_EXIT}`,
-  // $2 rides unquoted on purpose: empty must vanish, not become an argument.
-  `exec timeout --signal=KILL ${WATCH_BACKSTOP_SECONDS} inotifywait -m $2 -e create,modify,delete,move,attrib --format '%e|%w%f' -- "$3"`,
-].join('\n');
-
-/**
- * One inotifywait line -> wire events. A line reads `OPS|/abs/path` with
- * OPS comma-separated; `ISDIR` and anything unmapped fall through silently.
- * MOVED_FROM/MOVED_TO land as rename/create — fsnotify's reading, which is
- * what the E2B wire speaks. Events on the watched directory itself (empty
- * name) are dropped, like real envd's "." edge.
- */
-export function parseInotifyLine(line: string, base: string): WatchEvent[] {
-  const cut = line.indexOf('|');
-  if (cut === -1) return [];
-  const eventPath = line.slice(cut + 1);
-  const prefix = base === '/' ? '/' : `${base}/`;
-  if (!eventPath.startsWith(prefix) || eventPath.length === prefix.length) {
-    return [];
-  }
-  const name = eventPath.slice(prefix.length);
-  const events: WatchEvent[] = [];
-  for (const op of line.slice(0, cut).split(',')) {
-    const type =
-      op === 'CREATE' || op === 'MOVED_TO'
-        ? ('create' as const)
-        : op === 'MODIFY'
-          ? ('write' as const)
-          : op === 'DELETE'
-            ? ('remove' as const)
-            : op === 'MOVED_FROM'
-              ? ('rename' as const)
-              : op === 'ATTRIB'
-                ? ('chmod' as const)
-                : undefined;
-    if (type) events.push({ name, type });
-  }
-  return events;
-}
-
-/**
- * Wrapper every execStream command runs under, so the handle can signal it
- * later. $1 = pidfile, $2 = timeout seconds, $3 = the user's command.
- * The exec chain keeps the pid stable: the recorded $$ is the bash that
- * becomes `timeout`, and GNU timeout itself (without --foreground) calls
- * setpgid(0,0) — that same pid becomes a fresh process-group leader, so
- * one `kill -- -pid` reaps the command and all its descendants.
- * Deliberately NOT setsid --wait for the group: measured 2026-07-10,
- * setsid reports a signal-killed child as the raw signal number (9/15)
- * where the shell convention — and E2B — speak 128+N; timeout's own
- * signal propagation (it re-raises on itself) preserves 137/143.
- */
-function execStreamWrapper(loginShell: boolean): string {
-  const shell = loginShell ? 'bash -l -c' : 'bash -c';
-  return [
-    'echo "$$" > "$1"',
-    `exec timeout --signal=KILL "$2" ${shell} "$3"`,
-  ].join('\n');
-}
-
-/**
- * $1 = pidfile, $2 = signal name (SIGKILL/SIGTERM). The brief wait covers
- * the honest race of a signal arriving before the wrapper's first line has
- * written the pidfile. Group kill first; a leader that already died with
- * children lingering still gets the single-pid fallback.
- */
-const SIGNAL_SCRIPT = [
-  'for _ in $(seq 1 40); do [ -s "$1" ] && break; sleep 0.05; done',
-  'p=$(cat "$1") || exit 1',
-  '[ -n "$p" ] || exit 1',
-  'kill -s "$2" -- "-$p" 2>/dev/null || exec kill -s "$2" "$p"',
-].join('\n');
-
-/**
- * $1 = pidfile. The PTY session: an interactive login shell, nothing else.
- * Deliberately no timeout wrapper (GNU timeout puts the child in its own
- * process group, which wrecks interactive job control with SIGTTIN) and no
- * setsid (a Tty exec is born session leader holding the controlling
- * terminal; setsid would take the terminal away). The shell's own group is
- * what the pidfile kill reaps; foreground jobs follow the closing pty
- * master via SIGHUP. Lifetime is bounded by the sandbox's own.
- */
-const PTY_WRAPPER = ['echo "$$" > "$1"', 'exec bash -i -l'].join('\n');
-
-/** One `find -printf` record (see LIST_DIR_SCRIPT) -> entry. */
-function entryFromFindRecord(record: string): SandboxEntry {
-  const fields = record.split('\t');
-  const [kind = '', size = '', mtime = '', mode = '', owner = '', group = ''] =
-    fields;
-  // The path is everything after the sixth tab — its own tabs survive.
-  const path = fields.slice(6).join('\t');
-  return {
-    name: path.slice(path.lastIndexOf('/') + 1) || '/',
-    path,
-    type: kind === 'f' ? 'file' : kind === 'd' ? 'dir' : 'other',
-    sizeBytes: Number(size),
-    modifiedTime: new Date(Number(mtime) * 1000).toISOString(),
-    mode: Number.parseInt(mode, 8),
-    owner,
-    group,
-  };
-}
-
-/** One `stat --printf` line (see STAT_SCRIPT) -> entry. */
-function entryFromStatLine(resolved: string, line: string): SandboxEntry {
-  const [kind = '', size = '', mtime = '', mode = '', owner = '', group = ''] =
-    line.split('\t');
-  return {
-    name: resolved.slice(resolved.lastIndexOf('/') + 1) || '/',
-    path: resolved,
-    // %F says "regular file" or "regular empty file" — both are files.
-    type: kind.startsWith('regular')
-      ? 'file'
-      : kind === 'directory'
-        ? 'dir'
-        : 'other',
-    sizeBytes: Number(size),
-    modifiedTime: new Date(Number(mtime) * 1000).toISOString(),
-    mode: Number.parseInt(mode, 8),
-    owner,
-    group,
-  };
-}
-
-/**
  * Docker reports seven statuses; the executor's contract knows three. With
  * RestartPolicy "no" a container never restarts on its own, so everything
  * that is not running or paused is some flavor of "processes are dead,
@@ -314,71 +105,6 @@ export function assertInside(base: string, target: string): void {
   const rel = path.relative(path.resolve(base), path.resolve(target));
   if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error(`refusing to touch ${target}: outside ${base}`);
-  }
-}
-
-/**
- * A Writable that keeps the first `cap` bytes and drains the rest. Draining
- * is the point: if the sink stopped acknowledging chunks past the cap,
- * backpressure would wedge the exec stream and the command with it.
- */
-class CappedBuffer extends Writable {
-  private readonly chunks: Buffer[] = [];
-  private size = 0;
-  truncated = false;
-
-  constructor(private readonly cap: number) {
-    super();
-  }
-
-  override _write(
-    chunk: Buffer,
-    _encoding: BufferEncoding,
-    callback: () => void,
-  ): void {
-    const room = this.cap - this.size;
-    if (room > 0) {
-      const kept = chunk.length <= room ? chunk : chunk.subarray(0, room);
-      this.chunks.push(kept);
-      this.size += kept.length;
-    }
-    if (chunk.length > room) this.truncated = true;
-    callback();
-  }
-
-  bytes(): Buffer {
-    return Buffer.concat(this.chunks);
-  }
-
-  text(): string {
-    return this.bytes().toString('utf8');
-  }
-}
-
-/**
- * A Writable that hands each chunk to a callback — the streaming sink for
- * exec output and file downloads. When the callback returns a promise it is
- * awaited before the next chunk is accepted: that is how a slow consumer's
- * backpressure travels through demux all the way to the in-container writer.
- */
-class CallbackSink extends Writable {
-  constructor(
-    private readonly onChunk: (chunk: Buffer) => void | Promise<void>,
-  ) {
-    super();
-  }
-
-  override _write(
-    chunk: Buffer,
-    _encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ): void {
-    Promise.resolve()
-      .then(() => this.onChunk(chunk))
-      .then(
-        () => callback(),
-        (err) => callback(err instanceof Error ? err : new Error(String(err))),
-      );
   }
 }
 
