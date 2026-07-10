@@ -3,6 +3,7 @@
 // without installing @dormice/shared themselves.
 export * from '@dormice/shared';
 export {
+  type AcquireSandboxOptions,
   Dormice,
   DormiceApiError,
   type DormiceOptions,

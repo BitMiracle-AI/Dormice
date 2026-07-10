@@ -2,9 +2,16 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Docker from 'dockerode';
-import { describe } from 'vitest';
+import { afterAll, describe } from 'vitest';
 import { describeExecutorContract } from './contract';
 import { containerName, DockerExecutor } from './docker';
+
+/**
+ * The exam's second image name: the base image tagged under an alias.
+ * Physically identical to the base — the image chapter asks which *name*
+ * a shell records, not what is inside.
+ */
+const ALT_IMAGE = 'dormice-contract-alt:latest';
 
 /**
  * The real-machine half of the executor contract. Needs a Linux host with
@@ -34,6 +41,11 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
         pidsLimit: 256,
         reclaimTimeoutSeconds: 45,
       });
+      // Idempotent: re-tagging the same target is a no-op, and the tag is
+      // removed once after the whole file (afterAll below).
+      await new Docker()
+        .getImage(image)
+        .tag({ repo: 'dormice-contract-alt', tag: 'latest' });
       return {
         executor,
         // The prune analog: remove the container object straight through
@@ -43,11 +55,27 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
             .getContainer(containerName(sandboxId))
             .remove({ force: true });
         },
+        baseImage: image,
+        altImage: ALT_IMAGE,
+        imageOf: async (sandboxId: string) => {
+          const info = await new Docker()
+            .getContainer(containerName(sandboxId))
+            .inspect();
+          return info.Config.Image;
+        },
       };
     },
     // Real containers under gVisor take seconds per operation.
     { timeoutMs: 120_000 },
   );
+
+  afterAll(async () => {
+    try {
+      await new Docker().getImage(ALT_IMAGE).remove();
+    } catch {
+      // Never tagged (suite failed before makeSubject) — nothing to clean.
+    }
+  });
 } else {
   describe.skip('executor contract: DockerExecutor (set DORMICE_DOCKER_CONTRACT=1 and DORMICE_DOCKER_CONTRACT_IMAGE on a Linux docker host)', () => {});
 }

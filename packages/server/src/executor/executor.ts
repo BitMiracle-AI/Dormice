@@ -210,6 +210,16 @@ export class FileTooLargeError extends Error {}
 export class DiskFullError extends Error {}
 
 /**
+ * What a sandbox's shell is built from. Consulted only at the shell's birth
+ * — create(), and start()'s rebuild-from-surviving-disk path; an existing
+ * container keeps the image it was born with.
+ */
+export interface ShellOptions {
+  /** Image reference on this host; absent means the executor's configured base image. */
+  image?: string;
+}
+
+/**
  * The executor is where lifecycle decisions become physical reality:
  * containers created, paused, stopped. The daemon's decision logic (the
  * idle scanner, acquire's wake-ups) only ever talks to this interface, so
@@ -218,8 +228,12 @@ export class DiskFullError extends Error {}
  * a container runtime.
  */
 export interface Executor {
-  /** Brings a brand-new sandbox up to running. */
-  create(sandboxId: string): Promise<void>;
+  /**
+   * Brings a brand-new sandbox up to running. `image` picks what the shell
+   * boots from (a template's current image); absent means the executor's
+   * configured base image.
+   */
+  create(sandboxId: string, opts?: ShellOptions): Promise<void>;
   /** Running -> paused: stops consuming CPU, memory becomes reclaimable. */
   freeze(sandboxId: string): Promise<void>;
   /** Paused -> running. */
@@ -230,9 +244,11 @@ export interface Executor {
    * Stopped -> running again, from the kept disk. The disk is required; the
    * container object is not — if it was removed behind the daemon's back
    * (a `docker container prune` eats exited containers), a fresh container
-   * is rebuilt around the surviving disk.
+   * is rebuilt around the surviving disk. `image` applies only to that
+   * rebuild: an image is a property of the shell, fixed at the shell's
+   * birth — starting a container that already exists never changes it.
    */
-  start(sandboxId: string): Promise<void>;
+  start(sandboxId: string, opts?: ShellOptions): Promise<void>;
   /**
    * Removes the container and its disk for good, whatever state — or
    * whichever half of the pair — still exists. Throws only when both are
@@ -242,8 +258,9 @@ export interface Executor {
   /**
    * Removes the container object, whatever state, and keeps the disk —
    * rebuild's physical half. The next start() builds a fresh container from
-   * the surviving disk (and thus from the daemon's *current* base image);
-   * this is how a sandbox upgrades its shared layers without losing data.
+   * the surviving disk (and thus from the *current* image of the sandbox's
+   * template, or the daemon's current base image); this is how a sandbox
+   * upgrades its shared layers without losing data.
    * A container already gone is the goal state as long as the disk remains;
    * both absent throws, like destroy — the ledger and reality disagree.
    */

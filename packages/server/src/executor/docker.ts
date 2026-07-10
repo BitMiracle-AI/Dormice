@@ -60,6 +60,7 @@ import {
   type PtySize,
   type SandboxEntry,
   type SandboxMetrics,
+  type ShellOptions,
   type WatchDirHandle,
   type WatchDirOptions,
 } from './executor';
@@ -142,12 +143,12 @@ export class DockerExecutor implements Executor {
     this.docker = docker ?? new Docker({ socketPath: '/var/run/docker.sock' });
   }
 
-  async create(sandboxId: string): Promise<void> {
+  async create(sandboxId: string, opts?: ShellOptions): Promise<void> {
     if ((await this.inspect(sandboxId)) !== null) {
       throw new Error(`container ${sandboxId} already exists`);
     }
     await this.provisionDisk(sandboxId);
-    await this.launchContainer(sandboxId);
+    await this.launchContainer(sandboxId, opts?.image);
   }
 
   async freeze(sandboxId: string): Promise<void> {
@@ -180,7 +181,7 @@ export class DockerExecutor implements Executor {
     await container.wait({ condition: 'not-running' });
   }
 
-  async start(sandboxId: string): Promise<void> {
+  async start(sandboxId: string, opts?: ShellOptions): Promise<void> {
     const found = await this.inspect(sandboxId);
     if (found === null) {
       // The container object is gone — a routine `docker container prune`
@@ -190,7 +191,7 @@ export class DockerExecutor implements Executor {
         throw new Error(`disk ${sandboxId} is absent, cannot start`);
       }
       await this.ensureMounted(sandboxId);
-      await this.launchContainer(sandboxId);
+      await this.launchContainer(sandboxId, opts?.image);
       return;
     }
     const actual = containerStateFromDocker(found.status);
@@ -1154,14 +1155,18 @@ export class DockerExecutor implements Executor {
   /**
    * Creates and starts the sandbox's container around its already-mounted
    * disk — the shell half of a sandbox, shared by create() (first birth)
-   * and start() (rebuild after the container object was lost).
+   * and start() (rebuild after the container object was lost). The single
+   * point where an image becomes a container.
    */
-  private async launchContainer(sandboxId: string): Promise<void> {
+  private async launchContainer(
+    sandboxId: string,
+    image?: string,
+  ): Promise<void> {
     let container: Docker.Container;
     try {
       container = await this.docker.createContainer({
         name: containerName(sandboxId),
-        Image: this.opts.baseImage,
+        Image: image ?? this.opts.baseImage,
         Cmd: ['sleep', 'infinity'],
         Labels: { [SANDBOX_LABEL]: sandboxId },
         HostConfig: {

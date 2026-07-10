@@ -859,3 +859,136 @@ describe('POST /releaseSandbox', () => {
     expect(res.json()).toEqual({ released: false });
   });
 });
+
+describe('templates', () => {
+  it('registers, lists and requires auth like every native verb', async () => {
+    const { app } = testApp();
+    const anon = await app.inject({
+      method: 'POST',
+      url: '/registerTemplate',
+      payload: { name: 'py', image: 'img-a' },
+    });
+    expect(anon.statusCode).toBe(401);
+
+    const res = await rpc(app, '/registerTemplate', {
+      name: 'py',
+      image: 'img-a',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().template).toMatchObject({ name: 'py', image: 'img-a' });
+
+    const listed = await rpc(app, '/listTemplates');
+    expect(listed.json().templates).toMatchObject([
+      { name: 'py', image: 'img-a' },
+    ]);
+  });
+
+  it('re-registering re-points the name and keeps its birth date — the upgrade verb', async () => {
+    const { app } = testApp();
+    const first = (
+      await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' })
+    ).json().template;
+    const second = (
+      await rpc(app, '/registerTemplate', { name: 'py', image: 'img-b' })
+    ).json().template;
+    expect(second.image).toBe('img-b');
+    expect(second.createdAt).toBe(first.createdAt);
+    expect((await rpc(app, '/listTemplates')).json().templates).toHaveLength(1);
+  });
+
+  it("rejects a malformed name, and 'base' as reserved", async () => {
+    const { app } = testApp();
+    const bad = await rpc(app, '/registerTemplate', {
+      name: '-bad',
+      image: 'img',
+    });
+    expect(bad.statusCode).toBe(400);
+    const base = await rpc(app, '/registerTemplate', {
+      name: 'base',
+      image: 'img',
+    });
+    expect(base.statusCode).toBe(400);
+    expect(base.json().message).toMatch(/'base' is reserved/);
+  });
+
+  it('acquire with a template creates the sandbox from its image and records the name', async () => {
+    const { app, executor } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' });
+    const res = await acquire(app, { userKey: 'alice', template: 'py' });
+    expect(res.statusCode).toBe(200);
+    const sandbox = res.json().sandbox;
+    expect(sandbox.template).toBe('py');
+    // The physical half: the shell was actually born from the template's image.
+    expect(executor.imageOf(sandbox.sandboxId)).toBe('img-a');
+    // A template-less acquire stays on the base image, template null.
+    const plain = (await acquire(app, { userKey: 'bob' })).json().sandbox;
+    expect(plain.template).toBeNull();
+  });
+
+  it('rejects an unknown template with 400, on the wake path too', async () => {
+    const { app } = testApp();
+    const res = await acquire(app, { userKey: 'alice', template: 'ghost' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toBe(
+      "unknown template 'ghost' — register it first",
+    );
+    // Same answer when the key already has a sandbox: the caller's mistake
+    // deserves a 400 even when the value would not apply.
+    await acquire(app, { userKey: 'bob' });
+    const wake = await acquire(app, { userKey: 'bob', template: 'ghost' });
+    expect(wake.statusCode).toBe(400);
+  });
+
+  it('a valid template on an existing key is not applied — creation-time only', async () => {
+    const { app } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' });
+    const created = (await acquire(app, { userKey: 'alice' })).json().sandbox;
+    expect(created.template).toBeNull();
+    const again = (
+      await acquire(app, { userKey: 'alice', template: 'py' })
+    ).json().sandbox;
+    expect(again.sandboxId).toBe(created.sandboxId);
+    expect(again.template).toBeNull();
+  });
+
+  it('refuses to remove a template while sandboxes use it, naming the keys', async () => {
+    const { app } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' });
+    await acquire(app, { userKey: 'alice', template: 'py' });
+
+    const refused = await rpc(app, '/removeTemplate', { name: 'py' });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().message).toBe(
+      "template 'py' is used by 1 sandbox(es): alice — release them first",
+    );
+
+    await rpc(app, '/releaseSandbox', { userKey: 'alice' });
+    expect((await rpc(app, '/removeTemplate', { name: 'py' })).json()).toEqual({
+      removed: true,
+    });
+    // Idempotent on an unknown name, like releaseSandbox.
+    expect((await rpc(app, '/removeTemplate', { name: 'py' })).json()).toEqual({
+      removed: false,
+    });
+  });
+
+  it('re-point then rebuild moves the sandbox onto the new image — the upgrade front door', async () => {
+    const { app, executor } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const created = (
+      await acquire(app, { userKey: 'alice', template: 'py' })
+    ).json().sandbox;
+    expect(executor.imageOf(created.sandboxId)).toBe('img-v1');
+
+    // Operator builds a new image and re-points the name; the stock moves
+    // per sandbox, on its own rebuild — never behind its back.
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+    expect(executor.imageOf(created.sandboxId)).toBe('img-v1');
+
+    await rpc(app, '/rebuildSandbox', { userKey: 'alice' });
+    const woken = (await acquire(app, { userKey: 'alice' })).json().sandbox;
+    expect(woken.sandboxId).toBe(created.sandboxId);
+    // The rebuilt shell was born from the template's *current* image.
+    expect(executor.imageOf(created.sandboxId)).toBe('img-v2');
+  });
+});

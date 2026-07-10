@@ -1,6 +1,7 @@
 import type { Db } from './db/db';
 import { deleteSandbox, setPausedByUser, transition } from './db/ledger';
 import type { SandboxRow } from './db/schema';
+import { resolveImage } from './db/templates';
 import type { Executor } from './executor/executor';
 
 /**
@@ -51,10 +52,11 @@ export async function releaseSandbox(
  * Swap the shell, keep the body: the container is removed (whatever state),
  * the disk stays, and the ledger records `stopped` — the state whose wake
  * path builds a fresh container from the surviving disk, and therefore from
- * the daemon's *current* base image. This is how an existing sandbox picks
- * up new shared layers without losing a byte of /home/user. Already-stopped
- * rows skip the ledger write: removing a pruned-away container is a no-op
- * and stopped -> stopped is not a transition.
+ * the *current* image of the sandbox's template (or the daemon's current
+ * base image). This is how an existing sandbox picks up new shared layers
+ * without losing a byte of /home/user. Already-stopped rows skip the ledger
+ * write: removing a pruned-away container is a no-op and stopped -> stopped
+ * is not a transition.
  */
 export async function rebuildSandbox(
   db: Db,
@@ -81,7 +83,11 @@ export async function wakeSandbox(
       await executor.unfreeze(row.sandboxId);
       return awaken(db, row);
     case 'stopped':
-      await executor.start(row.sandboxId);
+      // If the container object was pruned away, start rebuilds the shell —
+      // from the template's current image, resolved here at wake time.
+      await executor.start(row.sandboxId, {
+        image: resolveImage(db, row.template),
+      });
       return awaken(db, row);
     case 'archived':
     case 'restoring':

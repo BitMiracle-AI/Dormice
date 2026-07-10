@@ -1,17 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe } from 'vitest';
-import type { ContainerState, Executor } from '../executor';
+import type { ContainerState, Executor, ShellOptions } from '../executor';
 import { entryTests } from './entries';
 import { execTests } from './exec';
 import { execStreamTests } from './exec-stream';
 import { fileTests } from './files';
+import { imageTests } from './image';
 import { lifecycleTests } from './lifecycle';
 import { metricsTests } from './metrics';
 import { watchTests } from './watch';
 
 /**
  * What a contract run needs beyond the executor itself: a way to stage the
- * one drift an executor cannot produce through its own verbs.
+ * one drift an executor cannot produce through its own verbs, and a window
+ * on which image a shell was born from.
  */
 export interface ContractSubject {
   executor: Executor;
@@ -23,6 +25,21 @@ export interface ContractSubject {
    * and "destroy takes the leftover disk" must hold on both implementations.
    */
   vanishContainer(sandboxId: string): Promise<void>;
+  /** The image shells boot from when create/start name none. */
+  baseImage: string;
+  /**
+   * A second image name that resolves on this subject — templates are named
+   * images, so the exam needs two names to tell apart. The docker subject
+   * tags its base image under an alias (physically identical, which is fine:
+   * the question is which name the shell records); the fake uses any string.
+   */
+  altImage: string;
+  /**
+   * The image the sandbox's current shell was born from. The fake reads its
+   * map; the docker subject inspects Config.Image. Throws when no shell
+   * exists — an image is a property of the shell.
+   */
+  imageOf(sandboxId: string): Promise<string>;
 }
 
 /**
@@ -35,7 +52,7 @@ export interface ContractContext {
   readonly subject: ContractSubject;
   timeoutMs: number;
   /** A fresh running sandbox, registered for after-test destruction. */
-  fresh(): Promise<string>;
+  fresh(opts?: ShellOptions): Promise<string>;
   /** Walks a fresh sandbox down to stopped: exited container plus disk. */
   freshStopped(): Promise<string>;
   stateOf(sandboxId: string): Promise<ContainerState | undefined>;
@@ -91,10 +108,10 @@ export function describeExecutorContract(
         return subject;
       },
       timeoutMs,
-      async fresh() {
+      async fresh(opts) {
         const sandboxId = randomUUID();
         created.push(sandboxId);
-        await executor.create(sandboxId);
+        await executor.create(sandboxId, opts);
         return sandboxId;
       },
       async freshStopped() {
@@ -118,6 +135,7 @@ export function describeExecutorContract(
     };
 
     lifecycleTests(ctx);
+    imageTests(ctx);
     execTests(ctx);
     execStreamTests(ctx);
     fileTests(ctx);

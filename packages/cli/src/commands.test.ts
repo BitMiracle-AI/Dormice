@@ -18,6 +18,9 @@ import {
   sandboxPush,
   sandboxRebuild,
   sandboxRelease,
+  templateAdd,
+  templateLs,
+  templateRm,
 } from './commands';
 
 const TOKEN = 'test-token-test-token-test-token';
@@ -174,6 +177,24 @@ describe('sandbox commands over real HTTP', () => {
     );
     expect(await sandboxRelease(client, 'carol')).toBe(
       'No sandbox for key "carol" — nothing to release.',
+    );
+  });
+});
+
+describe('template commands over real HTTP', () => {
+  it('add, ls and rm walk the registration life end to end', async () => {
+    expect(await templateLs(client)).toBe('No templates.');
+
+    expect(await templateAdd(client, 'py311', 'img:py311')).toBe(
+      'Registered template "py311" -> img:py311.',
+    );
+    const output = await templateLs(client);
+    expect(output.split('\n')[0]).toMatch(/^NAME\s{2,}IMAGE\s{2,}CREATED$/);
+    expect(output).toMatch(/py311\s{2,}img:py311/);
+
+    expect(await templateRm(client, 'py311')).toBe('Removed template "py311".');
+    expect(await templateRm(client, 'py311')).toBe(
+      'No template named "py311" — nothing to remove.',
     );
   });
 });

@@ -43,8 +43,7 @@ describe('native API over a real daemon', () => {
 
   it('stores a policy override, including null for never-archive', async () => {
     const res = await client().acquireSandbox('override-key', {
-      freezeAfterSeconds: 120,
-      archiveAfterSeconds: null,
+      policy: { freezeAfterSeconds: 120, archiveAfterSeconds: null },
     });
     expect(res.sandbox.policy).toEqual({
       ...DEFAULT_LIFECYCLE_POLICY,
@@ -55,7 +54,9 @@ describe('native API over a real daemon', () => {
 
   it('rejects a policy override that breaks the ordering rule', async () => {
     await expect(
-      client().acquireSandbox('bad-policy-key', { archiveAfterSeconds: 1 }),
+      client().acquireSandbox('bad-policy-key', {
+        policy: { archiveAfterSeconds: 1 },
+      }),
     ).rejects.toMatchObject({
       status: 400,
       message: expect.stringMatching(/stopAfterSeconds/),
@@ -174,9 +175,11 @@ describe('native API over a real daemon', () => {
     // dies against a paused container. Reverse-verified with the
     // heartbeat disabled.
     await client().acquireSandbox('exec-busy-key', {
-      freezeAfterSeconds: 1,
-      stopAfterSeconds: null,
-      archiveAfterSeconds: null,
+      policy: {
+        freezeAfterSeconds: 1,
+        stopAfterSeconds: null,
+        archiveAfterSeconds: null,
+      },
     });
     const result = await client().execCommand('exec-busy-key', 'sleep 3');
     expect(result.exitCode).toBe(0);
@@ -188,9 +191,11 @@ describe('native API over a real daemon', () => {
 
   it('exec wakes a frozen sandbox before running the command', async () => {
     await client().acquireSandbox('exec-wake-key', {
-      freezeAfterSeconds: 1,
-      stopAfterSeconds: null,
-      archiveAfterSeconds: null,
+      policy: {
+        freezeAfterSeconds: 1,
+        stopAfterSeconds: null,
+        archiveAfterSeconds: null,
+      },
     });
     // Watch it actually freeze from outside, on real wall-clock time.
     const deadline = Date.now() + 15_000;
@@ -220,9 +225,11 @@ describe('native API over a real daemon', () => {
 
   it('survives the cold cycle: idle -> frozen -> stopped -> re-acquire wakes it', async () => {
     const created = await client().acquireSandbox('sleeper-key', {
-      freezeAfterSeconds: 1,
-      stopAfterSeconds: 2,
-      archiveAfterSeconds: null,
+      policy: {
+        freezeAfterSeconds: 1,
+        stopAfterSeconds: 2,
+        archiveAfterSeconds: null,
+      },
     });
     expect(created.sandbox.state).toBe('active');
 
@@ -289,11 +296,35 @@ describe('native API over a real daemon', () => {
     });
   });
 
+  it('templates: register, create from, removal guarded while in use', async () => {
+    await client().registerTemplate('native-tpl', 'img:native');
+    const created = await client().acquireSandbox('tpl-key', {
+      template: 'native-tpl',
+    });
+    expect(created.sandbox.template).toBe('native-tpl');
+    const listed = (await client().listSandboxes()).find(
+      (s) => s.userKey === 'tpl-key',
+    );
+    expect(listed?.template).toBe('native-tpl');
+
+    await expect(client().removeTemplate('native-tpl')).rejects.toMatchObject({
+      name: 'DormiceApiError',
+      status: 409,
+      message: expect.stringMatching(/tpl-key/),
+    });
+    await client().releaseSandbox('tpl-key');
+    expect(await client().removeTemplate('native-tpl')).toEqual({
+      removed: true,
+    });
+  });
+
   it('reading a file wakes a frozen sandbox, and the file survived the cold', async () => {
     await client().acquireSandbox('files-wake-key', {
-      freezeAfterSeconds: 1,
-      stopAfterSeconds: null,
-      archiveAfterSeconds: null,
+      policy: {
+        freezeAfterSeconds: 1,
+        stopAfterSeconds: null,
+        archiveAfterSeconds: null,
+      },
     });
     await client().writeFiles('files-wake-key', [
       { path: 'keep.txt', content: 'still here' },

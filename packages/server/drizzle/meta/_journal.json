@@ -22,6 +22,13 @@
       "when": 1783592514453,
       "tag": "0002_e2b-columns",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1783681552934,
+      "tag": "0003_templates",
+      "breakpoints": true
     }
   ]
 }

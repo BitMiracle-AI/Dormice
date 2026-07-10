@@ -95,6 +95,20 @@ describe('dor CLI against a real daemon', () => {
     expect(pulled.stdout).toBe('through the CLI\n');
   });
 
+  it('template add, ls and rm run the registration life through the real binary', async () => {
+    const added = await cli('template', 'add', 'cli-tpl', 'img:cli');
+    expect(added.stdout).toContain('Registered template "cli-tpl" -> img:cli.');
+
+    const listed = await cli('template', 'ls');
+    expect(listed.stdout).toMatch(/NAME\s{2,}IMAGE\s{2,}CREATED/);
+    expect(listed.stdout).toMatch(/cli-tpl\s{2,}img:cli/);
+
+    const removed = await cli('template', 'rm', 'cli-tpl');
+    expect(removed.stdout).toContain('Removed template "cli-tpl".');
+    const again = await cli('template', 'rm', 'cli-tpl');
+    expect(again.stdout).toContain('nothing to remove');
+  });
+
   it('fails honestly when the environment is missing', async () => {
     await expect(
       run('node', [CLI, 'sandbox', 'ls'], {

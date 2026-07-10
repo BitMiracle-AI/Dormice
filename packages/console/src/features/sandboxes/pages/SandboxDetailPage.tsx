@@ -90,6 +90,7 @@ export function SandboxDetailPage() {
         <CardContent>
           <dl>
             <Row label="Sandbox ID">{sandbox.sandboxId}</Row>
+            <Row label="Template">{sandbox.template ?? 'base image'}</Row>
             <Row label="Node">{sandbox.nodeId}</Row>
             <Row label="Endpoint">{sandbox.endpoint}</Row>
             <Row label="Created">

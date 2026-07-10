@@ -31,6 +31,8 @@ export interface CreateSandboxInput {
   userKey: string;
   nodeId: string;
   policy: LifecyclePolicy;
+  /** Template the sandbox is created from; absent/null means the base image. */
+  template?: string | null;
   /** E2B-surface extras; native acquire never sets them. */
   e2b?: {
     /** JSON-serialized objects, stored verbatim. */
@@ -52,6 +54,7 @@ export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
     freezeAfterSeconds: input.policy.freezeAfterSeconds,
     stopAfterSeconds: input.policy.stopAfterSeconds,
     archiveAfterSeconds: input.policy.archiveAfterSeconds,
+    template: input.template ?? null,
     createdAt: now,
     lastActiveAt: now,
     metadata: input.e2b?.metadata ?? null,

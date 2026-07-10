@@ -18,6 +18,7 @@ import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
 import { consoleRoutes } from './routes/console';
 import { sandboxRoutes } from './routes/sandboxes';
+import { templateRoutes } from './routes/templates';
 import { createSandboxProxy } from './sandbox-proxy';
 
 export interface AppDeps {
@@ -133,6 +134,7 @@ export function buildApp({
   app.register(async (api) => {
     api.addHook('onRequest', requireApiAuth(config.DORMICE_API_TOKEN));
     await api.register(sandboxRoutes, { config, db, executor, locks });
+    await api.register(templateRoutes, { db });
   });
 
   // The web console: session endpoints (open — login carries the token

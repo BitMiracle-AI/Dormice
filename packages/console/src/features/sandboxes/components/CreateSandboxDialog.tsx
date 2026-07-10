@@ -21,9 +21,14 @@ import {
   FieldLabel,
 } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from '@/components/ui/native-select';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { useAcquireSandbox } from '../hooks/useSandboxes';
+import { useTemplates } from '../hooks/useTemplates';
 
 /**
  * The console speaks the same verb as everyone else: acquire. Same key,
@@ -37,13 +42,16 @@ import { useAcquireSandbox } from '../hooks/useSandboxes';
 export function CreateSandboxDialog() {
   const [open, setOpen] = useState(false);
   const [userKey, setUserKey] = useState('');
+  const [template, setTemplate] = useState('');
   const [freezeAfter, setFreezeAfter] = useState('');
   const [neverStop, setNeverStop] = useState(false);
   const [stopAfter, setStopAfter] = useState('');
   const mutation = useAcquireSandbox();
+  const templates = useTemplates().data?.templates ?? [];
 
   const reset = () => {
     setUserKey('');
+    setTemplate('');
     setFreezeAfter('');
     setNeverStop(false);
     setStopAfter('');
@@ -59,6 +67,7 @@ export function CreateSandboxDialog() {
     mutation.mutate(
       {
         userKey,
+        ...(template !== '' ? { template } : {}),
         ...(Object.keys(policy).length > 0 ? { policy } : {}),
       },
       {
@@ -117,6 +126,28 @@ export function CreateSandboxDialog() {
                 key always comes back to the same sandbox.
               </FieldDescription>
             </Field>
+            {templates.length > 0 && (
+              <Field>
+                <FieldLabel htmlFor="create-template">Template</FieldLabel>
+                <NativeSelect
+                  id="create-template"
+                  className="w-full"
+                  value={template}
+                  onChange={(event) => setTemplate(event.target.value)}
+                >
+                  <NativeSelectOption value="">Base image</NativeSelectOption>
+                  {templates.map((t) => (
+                    <NativeSelectOption key={t.name} value={t.name}>
+                      {t.name} ({t.image})
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                <FieldDescription>
+                  Applied only when this key creates a new sandbox. Register
+                  templates with `dor template add`.
+                </FieldDescription>
+              </Field>
+            )}
             <Field>
               <FieldLabel htmlFor="create-freeze-after">
                 Freeze after idle (seconds)

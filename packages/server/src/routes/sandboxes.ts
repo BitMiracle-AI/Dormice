@@ -30,6 +30,7 @@ import {
   touch,
 } from '../db/ledger';
 import type { SandboxRow } from '../db/schema';
+import { findTemplate, resolveImage } from '../db/templates';
 import { startExecHeartbeat } from '../exec-heartbeat';
 import {
   type Executor,
@@ -62,6 +63,7 @@ function toSandbox(row: SandboxRow, endpoint: string): Sandbox {
       stopAfterSeconds: row.stopAfterSeconds,
       archiveAfterSeconds: row.archiveAfterSeconds,
     },
+    template: row.template,
     createdAt: row.createdAt,
     lastActiveAt: row.lastActiveAt,
   };
@@ -84,11 +86,14 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   async function findOrCreate(
     userKey: string,
     policy: LifecyclePolicy,
+    template: string | null,
   ): Promise<SandboxRow> {
     const existing = findByUserKey(db, userKey);
     if (existing) {
       // Wake whatever cold state it is in (a single jump back to active),
       // then refresh the idle clock — an acquire is what "activity" means.
+      // A requested template is not applied: like policy, it takes effect
+      // only when this acquire creates the sandbox.
       const awake = await wakeSandbox(db, executor, existing);
       return touch(db, awake.sandboxId);
     }
@@ -112,12 +117,13 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     // alphabet is safe everywhere an id will land — Docker names, file
     // names, DNS labels.
     const sandboxId = randomUUID();
-    await executor.create(sandboxId);
+    await executor.create(sandboxId, { image: resolveImage(db, template) });
     return createSandbox(db, {
       sandboxId,
       userKey,
       nodeId: config.DORMICE_NODE_ID,
       policy,
+      template,
     });
   }
 
@@ -154,7 +160,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request, reply) => {
-      const { userKey, policy: override } = request.body;
+      const { userKey, policy: override, template } = request.body;
 
       // Validate the policy before taking the key's slot, so a queued
       // rejection can only come from the work itself, never from another
@@ -177,7 +183,18 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         throw error;
       }
 
-      const row = await locks.run(userKey, () => findOrCreate(userKey, policy));
+      // Same placement as the policy check: an unknown template is the
+      // caller's mistake and answers 400 before the slot, on the wake path
+      // too — never silently ignored.
+      if (template !== undefined && !findTemplate(db, template)) {
+        return reply.code(400).send({
+          message: `unknown template '${template}' — register it first`,
+        });
+      }
+
+      const row = await locks.run(userKey, () =>
+        findOrCreate(userKey, policy, template ?? null),
+      );
       return { status: 'ready' as const, sandbox: toSandbox(row, endpoint) };
     },
   );

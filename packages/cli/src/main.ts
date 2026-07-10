@@ -15,6 +15,9 @@ import {
   sandboxPush,
   sandboxRebuild,
   sandboxRelease,
+  templateAdd,
+  templateLs,
+  templateRm,
 } from './commands';
 import { realDoctorContext, runDoctor } from './doctor';
 
@@ -121,7 +124,7 @@ sandbox
 sandbox
   .command('rebuild')
   .description(
-    'Swap the container, keep /home/user — next use starts on the current base image',
+    "Swap the container, keep /home/user — next use starts on the template's current image (or the base image)",
   )
   .argument('<userKey>', 'the user key whose sandbox to rebuild')
   .action(async (userKey: string) => {
@@ -134,6 +137,38 @@ sandbox
   .argument('<userKey>', 'the user key whose sandbox to destroy')
   .action(async (userKey: string) => {
     console.log(await sandboxRelease(clientFromEnv(process.env), userKey));
+  });
+
+const template = program
+  .command('template')
+  .description('Name Docker images on the daemon host as sandbox templates');
+
+template
+  .command('add')
+  .description(
+    'Register (or re-point — that is the upgrade) a template name to an image on the daemon host',
+  )
+  .argument('<name>', 'template name; doubles as the E2B templateID')
+  .argument('<image>', 'Docker image reference, e.g. my-python:3.11')
+  .action(async (name: string, image: string) => {
+    console.log(await templateAdd(clientFromEnv(process.env), name, image));
+  });
+
+template
+  .command('ls')
+  .description('List every registered template')
+  .action(async () => {
+    console.log(await templateLs(clientFromEnv(process.env)));
+  });
+
+template
+  .command('rm')
+  .description(
+    'Remove a template registration (refused while sandboxes still use it; never removes the image)',
+  )
+  .argument('<name>', 'template name to remove')
+  .action(async (name: string) => {
+    console.log(await templateRm(clientFromEnv(process.env), name));
   });
 
 try {

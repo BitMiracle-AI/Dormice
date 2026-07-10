@@ -534,8 +534,7 @@ describe('official e2b SDK against the daemon', () => {
     // Native acquire sets the second-scale policy; the e2b face then joins
     // the same sandbox through the userKey extension.
     await dormice.acquireSandbox(userKey, {
-      freezeAfterSeconds: 1,
-      stopAfterSeconds: null,
+      policy: { freezeAfterSeconds: 1, stopAfterSeconds: null },
     });
     const sbx = await Sandbox.create({
       ...connection(),
@@ -648,6 +647,31 @@ describe('official e2b SDK against the daemon', () => {
     } finally {
       await first.kill();
     }
+  });
+
+  it('creates from a registered template name; info reports it as templateId and name', async () => {
+    // Registration is the operator's native verb; the official SDK then
+    // consumes the name as its templateID — aliases are the same wire.
+    const dormice = new Dormice({
+      endpoint: inject('dormiceEndpoint'),
+      token: inject('dormiceToken'),
+    });
+    await dormice.registerTemplate('e2e-tpl', 'img:e2e-tpl');
+    const sbx = await Sandbox.create('e2e-tpl', connection());
+    try {
+      const info = await sbx.getInfo();
+      expect(info.templateId).toBe('e2e-tpl');
+      expect(info.name).toBe('e2e-tpl');
+    } finally {
+      await sbx.kill();
+      await dormice.removeTemplate('e2e-tpl');
+    }
+  });
+
+  it('refuses an unregistered template name with the 404 the SDK can read', async () => {
+    await expect(
+      Sandbox.create('never-registered', connection()),
+    ).rejects.toThrow(/404: template 'never-registered' not found/);
   });
 });
 
@@ -820,6 +844,28 @@ describe.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
         await sbx.pty.kill(term.pid);
       } finally {
         await sbx.kill();
+      }
+    });
+
+    it('a registered template boots real containers through the table-hit path', async () => {
+      // The template points at the daemon's own base image under its
+      // registered name: resolution goes through the templates table (not
+      // the base-image sentinel), and the container must actually work.
+      const image = process.env.DORMICE_BASE_IMAGE;
+      if (!image) throw new Error('docker e2e requires DORMICE_BASE_IMAGE');
+      const dormice = new Dormice({
+        endpoint: inject('dormiceEndpoint'),
+        token: inject('dormiceToken'),
+      });
+      await dormice.registerTemplate('e2e-real-tpl', image);
+      const sbx = await Sandbox.create('e2e-real-tpl', connection());
+      try {
+        expect((await sbx.getInfo()).templateId).toBe('e2e-real-tpl');
+        const result = await sbx.commands.run('whoami');
+        expect(result.stdout).toBe('user\n');
+      } finally {
+        await sbx.kill();
+        await dormice.removeTemplate('e2e-real-tpl');
       }
     });
   },
