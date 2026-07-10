@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { SandboxesPage } from '@/features/sandboxes/pages/SandboxesPage';
+import { OverviewPage } from '@/features/overview/pages/OverviewPage';
 
 export const Route = createFileRoute('/_app/')({
-  component: SandboxesPage,
+  component: OverviewPage,
 });

@@ -95,7 +95,7 @@ export async function openPty(options: {
       const detail = (await res.json().catch(() => undefined)) as
         | { message?: string }
         | undefined;
-      throw new Error(detail?.message ?? `${rpc} failed with ${res.status}`);
+      throw new Error(detail?.message ?? `${rpc} 请求失败(${res.status})`);
     }
   }
 
@@ -119,7 +119,7 @@ export async function openPty(options: {
     const detail = (await res.json().catch(() => undefined)) as
       | { message?: string }
       | undefined;
-    throw new Error(detail?.message ?? `terminal failed with ${res.status}`);
+    throw new Error(detail?.message ?? `终端连接失败(${res.status})`);
   }
 
   let closed = false;
@@ -137,14 +137,14 @@ export async function openPty(options: {
     frame: StreamFrame,
   ): number | undefined => {
     if (flags & FLAG_END_STREAM) {
-      closeOnce(frame.error?.message ?? 'connection closed');
+      closeOnce(frame.error?.message ?? '连接已断开');
       return;
     }
     if (frame.event?.data?.pty) {
       callbacks.onData(fromBase64(frame.event.data.pty));
     }
     if (frame.event?.end) {
-      closeOnce(`shell exited (code ${frame.event.end.exitCode ?? '?'})`);
+      closeOnce(`shell 已退出(码 ${frame.event.end.exitCode ?? '?'})`);
     }
     return frame.event?.start?.pid;
   };
@@ -171,7 +171,7 @@ export async function openPty(options: {
       }
       const { done, value } = await reader.read();
       if (done) {
-        closeOnce('connection closed');
+        closeOnce('连接已断开');
         return undefined;
       }
       const grown = new Uint8Array(buffer.length + value.length);
@@ -190,7 +190,7 @@ export async function openPty(options: {
     closeOnce(error instanceof Error ? error.message : String(error));
   }
   if (pid === undefined) {
-    throw new Error('terminal did not start');
+    throw new Error('终端没有启动');
   }
   const startedPid = pid;
 
@@ -235,7 +235,7 @@ export async function openPty(options: {
         process: { pid: startedPid },
         signal: 'SIGNAL_SIGKILL',
       }).catch(() => undefined);
-      closeOnce('terminal closed');
+      closeOnce('终端已关闭');
     },
   };
 }

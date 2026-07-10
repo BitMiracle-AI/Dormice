@@ -1,7 +1,9 @@
 /**
- * Bytes in binary units, auto-compact: 512 B, 24.5 MiB, 1.02 TiB. Binary
- * because that is what the numbers physically are (disk images, meminfo) —
- * a 16 GiB swap must read as 16, not 17.2.
+ * 跨域的数字格式化(总览卡片、文件浏览器、指标面板共用)。
+ *
+ * 字节用二进制单位、自动收敛位数:512 B、24.5 MiB、1.02 TiB。用二进制
+ * 是因为这些数字物理上就是二进制的(磁盘镜像、meminfo)— 16 GiB 的
+ * swap 必须读作 16,不是 17.2。
  */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes)) return '—';
@@ -17,7 +19,7 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(digits)} ${units[unit]}`;
 }
 
-/** A used/total pair as a percentage, clamped into [0, 100]. */
+/** used/total 化成百分比,钳在 [0, 100]。 */
 export function pctOf(used: number, total: number): number {
   if (total <= 0) return 0;
   return Math.min(100, Math.max(0, (used / total) * 100));

@@ -1,6 +1,9 @@
-import { ArrowLeft01Icon } from '@hugeicons/core-free-icons';
-import { HugeiconsIcon } from '@hugeicons/react';
-import { Link, useNavigate, useParams } from '@tanstack/react-router';
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearch,
+} from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -11,12 +14,26 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from '@/components/ui/empty';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { MOCK_PAGES_ENABLED } from '@/lib/mock';
+import { FilesPanel } from '../components/FilesPanel';
+import { MetricsPanel } from '../components/MetricsPanel';
+import { ProcessesPanel } from '../components/ProcessesPanel';
 import { RebuildSandboxButton } from '../components/RebuildSandboxButton';
 import { ReleaseSandboxButton } from '../components/ReleaseSandboxButton';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { SandboxTerminalCard } from '../components/SandboxTerminal';
 import { formatDuration, since } from '../format';
 import { useSandbox } from '../hooks/useSandboxes';
+
+export const DETAIL_TABS = [
+  'overview',
+  'terminal',
+  'files',
+  'processes',
+  'metrics',
+] as const;
+export type DetailTab = (typeof DETAIL_TABS)[number];
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -28,54 +45,44 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * Everything /listSandboxes knows about one key. The list is the only read
- * the daemon offers, so this page selects from the same 2s-polled cache —
- * no second endpoint, no second truth.
+ * 一个沙箱的工作区。基础信息仍从 2 秒轮询的列表缓存里选(列表是 daemon
+ * 唯一的读,不发明第二个端点);文件/进程/终端走 envd 面 — 与官方 e2b
+ * SDK 同一条 wire。tab 记在 URL 里,刷新与分享都停在原面板。
  */
 export function SandboxDetailPage() {
   const { userKey } = useParams({ from: '/_app/sandboxes/$userKey' });
-  const navigate = useNavigate();
+  const { tab } = useSearch({ from: '/_app/sandboxes/$userKey' });
+  const navigate = useNavigate({ from: '/sandboxes/$userKey' });
   const { sandbox, isSuccess } = useSandbox(userKey);
 
   if (!sandbox) {
-    return (
-      <main className="mx-auto min-h-screen w-full max-w-3xl px-6 py-10">
-        {isSuccess && (
-          <Empty className="border border-dashed">
-            <EmptyHeader>
-              <EmptyTitle>No sandbox for “{userKey}”</EmptyTitle>
-              <EmptyDescription>
-                It may have been released — the key is free to acquire again.
-              </EmptyDescription>
-            </EmptyHeader>
-            <EmptyContent>
-              <Button
-                variant="outline"
-                size="sm"
-                nativeButton={false}
-                render={<Link to="/" />}
-              >
-                Back to sandboxes
-              </Button>
-            </EmptyContent>
-          </Empty>
-        )}
-      </main>
-    );
+    return isSuccess ? (
+      <Empty className="border border-dashed">
+        <EmptyHeader>
+          <EmptyTitle>没有叫「{userKey}」的沙箱</EmptyTitle>
+          <EmptyDescription>
+            可能已被释放 — 这个 key 依然有效,下次 acquire 会得到一个
+            全新的沙箱。
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button
+            variant="outline"
+            size="sm"
+            nativeButton={false}
+            render={<Link to="/sandboxes" />}
+          >
+            回到沙箱列表
+          </Button>
+        </EmptyContent>
+      </Empty>
+    ) : null;
   }
 
   return (
-    <main className="mx-auto min-h-screen w-full max-w-3xl px-6">
-      <header className="flex items-center justify-between py-5">
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            nativeButton={false}
-            render={<Link to="/" aria-label="Back to sandboxes" />}
-          >
-            <HugeiconsIcon icon={ArrowLeft01Icon} />
-          </Button>
           <h1 className="font-mono text-lg font-semibold">{sandbox.userKey}</h1>
           <SandboxStateBadge state={sandbox.state} />
         </div>
@@ -83,43 +90,77 @@ export function SandboxDetailPage() {
           <RebuildSandboxButton userKey={sandbox.userKey} />
           <ReleaseSandboxButton
             userKey={sandbox.userKey}
-            onReleased={() => navigate({ to: '/' })}
+            onReleased={() => navigate({ to: '/sandboxes' })}
           />
         </div>
-      </header>
-
-      <div className="mb-6">
-        <SandboxTerminalCard sandboxId={sandbox.sandboxId} />
       </div>
 
-      <Card>
-        <CardContent>
-          <dl>
-            <Row label="Sandbox ID">{sandbox.sandboxId}</Row>
-            <Row label="Template">{sandbox.template ?? 'base image'}</Row>
-            <Row label="Node">{sandbox.nodeId}</Row>
-            <Row label="Endpoint">{sandbox.endpoint}</Row>
-            <Row label="Created">
-              {new Date(sandbox.createdAt).toLocaleString()} ·{' '}
-              {since(sandbox.createdAt)} ago
-            </Row>
-            <Row label="Last active">{since(sandbox.lastActiveAt)} ago</Row>
-            <Row label="Freeze after">
-              {formatDuration(sandbox.policy.freezeAfterSeconds)} idle
-            </Row>
-            <Row label="Stop after">
-              {sandbox.policy.stopAfterSeconds === null
-                ? 'never (resident agent)'
-                : `${formatDuration(sandbox.policy.stopAfterSeconds)} idle`}
-            </Row>
-            <Row label="Archive after">
-              {sandbox.policy.archiveAfterSeconds === null
-                ? 'never'
-                : `${formatDuration(sandbox.policy.archiveAfterSeconds)} idle`}
-            </Row>
-          </dl>
-        </CardContent>
-      </Card>
-    </main>
+      <Tabs
+        value={tab}
+        onValueChange={(next) =>
+          navigate({
+            search: { tab: next as DetailTab },
+            replace: true,
+          })
+        }
+      >
+        <TabsList>
+          <TabsTrigger value="overview">概览</TabsTrigger>
+          <TabsTrigger value="terminal">终端</TabsTrigger>
+          <TabsTrigger value="files">文件</TabsTrigger>
+          <TabsTrigger value="processes">进程</TabsTrigger>
+          {MOCK_PAGES_ENABLED && (
+            <TabsTrigger value="metrics">指标</TabsTrigger>
+          )}
+        </TabsList>
+
+        <TabsContent value="overview">
+          <Card>
+            <CardContent>
+              <dl>
+                <Row label="沙箱 ID">{sandbox.sandboxId}</Row>
+                <Row label="模板">{sandbox.template ?? '基础镜像'}</Row>
+                <Row label="节点">{sandbox.nodeId}</Row>
+                <Row label="端点">{sandbox.endpoint}</Row>
+                <Row label="创建于">
+                  {new Date(sandbox.createdAt).toLocaleString()} ·{' '}
+                  {since(sandbox.createdAt)}前
+                </Row>
+                <Row label="最近活动">{since(sandbox.lastActiveAt)}前</Row>
+                <Row label="冻结阈值">
+                  空闲 {formatDuration(sandbox.policy.freezeAfterSeconds)}
+                </Row>
+                <Row label="停止阈值">
+                  {sandbox.policy.stopAfterSeconds === null
+                    ? '永不(常驻 agent)'
+                    : `空闲 ${formatDuration(sandbox.policy.stopAfterSeconds)}`}
+                </Row>
+                <Row label="归档阈值">
+                  {sandbox.policy.archiveAfterSeconds === null
+                    ? '永不'
+                    : `空闲 ${formatDuration(sandbox.policy.archiveAfterSeconds)}`}
+                </Row>
+              </dl>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="terminal">
+          <SandboxTerminalCard sandboxId={sandbox.sandboxId} />
+        </TabsContent>
+
+        <TabsContent value="files">
+          <FilesPanel sandbox={sandbox} />
+        </TabsContent>
+
+        <TabsContent value="processes">
+          <ProcessesPanel sandbox={sandbox} />
+        </TabsContent>
+
+        <TabsContent value="metrics">
+          <MetricsPanel sandbox={sandbox} />
+        </TabsContent>
+      </Tabs>
+    </>
   );
 }

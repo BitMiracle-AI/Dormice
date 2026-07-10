@@ -2,6 +2,7 @@ import type {
   AcquireRequest,
   AcquireResponse,
   HostMetricsResponse,
+  RegisterTemplateResponse,
   Sandbox,
   Template,
 } from '@dormice/shared';
@@ -88,6 +89,16 @@ export const getHostMetrics = () => rpc<HostMetricsResponse>('/getHostMetrics');
 
 export const listTemplates = () =>
   rpc<{ templates: Template[] }>('/listTemplates');
+
+// An upsert: re-registering a name points it at a new image — that IS the
+// template upgrade front door (then rebuild the sandboxes that should move).
+export const registerTemplate = (name: string, image: string) =>
+  rpc<RegisterTemplateResponse>('/registerTemplate', { name, image });
+
+// Refused with 409 while sandboxes still use the template — the daemon is
+// the arbiter and its message names the keys; the console just relays it.
+export const removeTemplate = (name: string) =>
+  rpc<{ removed: boolean }>('/removeTemplate', { name });
 
 export const acquireSandbox = (request: AcquireRequest) =>
   rpc<AcquireResponse>('/acquireSandbox', request);

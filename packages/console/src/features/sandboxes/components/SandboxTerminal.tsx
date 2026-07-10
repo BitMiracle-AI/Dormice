@@ -35,7 +35,7 @@ function LiveTerminal({ sandboxId }: { sandboxId: string }) {
     fit.fit();
     // Waking a stopped sandbox is a cold start — seconds, not ms. Say so
     // in the terminal itself instead of leaving a dead black box.
-    term.writeln('\x1b[2mconnecting — a sleeping sandbox wakes first…\x1b[0m');
+    term.writeln('\x1b[2m连接中 — 沉睡的沙箱会先被唤醒…\x1b[0m');
 
     let session: PtySession | undefined;
     let cancelled = false;
@@ -93,7 +93,7 @@ function LiveTerminal({ sandboxId }: { sandboxId: string }) {
               setGeneration((n) => n + 1);
             }}
           >
-            Reconnect
+            重新连接
           </Button>
         </div>
       )}
@@ -112,10 +112,10 @@ export function SandboxTerminalCard({ sandboxId }: { sandboxId: string }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Terminal</CardTitle>
+        <CardTitle>终端</CardTitle>
         <CardDescription>
-          An interactive bash inside the sandbox — opening it wakes a sleeping
-          sandbox, closing it lets the idle countdown resume.
+          沙箱里的交互式 bash — 打开会唤醒沉睡的沙箱,关掉后空闲倒计时
+          恢复。看这一页本身不会解冻任何东西。
         </CardDescription>
         <CardAction>
           <Button
@@ -123,7 +123,7 @@ export function SandboxTerminalCard({ sandboxId }: { sandboxId: string }) {
             size="sm"
             onClick={() => setOpen((value) => !value)}
           >
-            {open ? 'Close terminal' : 'Open terminal'}
+            {open ? '关闭终端' : '打开终端'}
           </Button>
         </CardAction>
       </CardHeader>

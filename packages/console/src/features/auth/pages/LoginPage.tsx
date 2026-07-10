@@ -38,7 +38,7 @@ export function LoginPage() {
         <CardHeader>
           <CardTitle className="text-2xl">Dormice</CardTitle>
           <CardDescription>
-            Paste the daemon's API token to open the console.
+            粘贴 daemon 的 API token 进入控制台。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -71,7 +71,7 @@ export function LoginPage() {
               className="w-full"
             >
               {mutation.isPending && <Spinner />}
-              Sign in
+              登录
             </Button>
           </form>
         </CardContent>

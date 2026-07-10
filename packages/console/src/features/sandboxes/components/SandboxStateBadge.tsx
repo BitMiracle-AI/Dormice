@@ -1,6 +1,7 @@
 import type { SandboxState } from '@dormice/shared';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { STATE_LABELS } from '../format';
 
 // Lifecycle rungs, coldest last — one hue per rung so the list reads at a
 // glance: green is paying for RAM, blue is parked in swap, grey is disk-only.
@@ -18,7 +19,7 @@ const STATE_STYLES: Record<SandboxState, string> = {
 export function SandboxStateBadge({ state }: { state: SandboxState }) {
   return (
     <Badge variant="outline" className={cn('font-medium', STATE_STYLES[state])}>
-      {state}
+      {STATE_LABELS[state]}
     </Badge>
   );
 }

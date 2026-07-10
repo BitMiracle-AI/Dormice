@@ -12,8 +12,9 @@ import type { ReactNode } from 'react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { STATE_LABELS } from '@/features/sandboxes/format';
+import { formatBytes, pctOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { formatBytes, pctOf } from '../format';
 import { useHostMetrics } from '../hooks/useHostMetrics';
 
 /**
@@ -98,7 +99,7 @@ function StateCounts({
             <span className="font-medium text-foreground">
               {byState[s.key]}
             </span>
-            {s.key}
+            {STATE_LABELS[s.key]}
           </span>
         ),
       )}
@@ -149,14 +150,14 @@ export function OverviewCards() {
           value={
             host.cpuUsedPct === null ? '—' : `${Math.round(host.cpuUsedPct)}%`
           }
-          hint={`${host.cpuCount} core${host.cpuCount === 1 ? '' : 's'}`}
+          hint={`${host.cpuCount} 核`}
           pct={host.cpuUsedPct}
         />
         <StatCard
           icon={RamMemoryIcon}
-          label="Memory"
+          label="内存"
           value={formatBytes(memUsed)}
-          hint={`of ${formatBytes(host.memTotalBytes)} · ${formatBytes(host.memAvailableBytes)} available`}
+          hint={`共 ${formatBytes(host.memTotalBytes)} · 可用 ${formatBytes(host.memAvailableBytes)}`}
           pct={pctOf(memUsed, host.memTotalBytes)}
         />
         {host.swap === null ? (
@@ -164,16 +165,16 @@ export function OverviewCards() {
             icon={SnowIcon}
             label="Swap"
             value="—"
-            hint="no reading on this platform"
+            hint="此平台读不到 swap"
           />
         ) : host.swap.totalBytes === 0 ? (
           <StatCard
             icon={SnowIcon}
             label="Swap"
-            value="none"
+            value="未配置"
             hint={
               <span className="text-amber-600 dark:text-amber-500">
-                freezing needs swap — see dor doctor
+                冻结依赖 swap — 见 dor doctor
               </span>
             }
           />
@@ -182,25 +183,25 @@ export function OverviewCards() {
             icon={SnowIcon}
             label="Swap"
             value={formatBytes(host.swap.usedBytes)}
-            hint={`of ${formatBytes(host.swap.totalBytes)} · frozen sandboxes live here`}
+            hint={`共 ${formatBytes(host.swap.totalBytes)} · 冻结的沙箱住在这里`}
             pct={pctOf(host.swap.usedBytes, host.swap.totalBytes)}
           />
         )}
         {dataDisk === null ? (
           <StatCard
             icon={HardDriveIcon}
-            label="Data disk"
+            label="数据盘"
             value="—"
-            hint="no data directory on this host"
+            hint="这台主机没有数据目录"
           />
         ) : (
           <StatCard
             icon={HardDriveIcon}
-            label="Data disk"
+            label="数据盘"
             value={formatBytes(dataDisk.usedBytes)}
             hint={
               <span title={dataDisk.path}>
-                {`of ${formatBytes(dataDisk.totalBytes)} · ${formatBytes(dataDisk.availableBytes)} free`}
+                {`共 ${formatBytes(dataDisk.totalBytes)} · 剩 ${formatBytes(dataDisk.availableBytes)}`}
               </span>
             }
             pct={pctOf(dataDisk.usedBytes, dataDisk.totalBytes)}
@@ -211,16 +212,16 @@ export function OverviewCards() {
       <div className="grid gap-4 md:grid-cols-2">
         <StatCard
           icon={PackageIcon}
-          label="Sandboxes"
+          label="沙箱"
           value={`${sandboxes.total} / ${sandboxes.maxSandboxes}`}
           hint={<StateCounts byState={sandboxes.byState} />}
           pct={pctOf(sandboxes.total, sandboxes.maxSandboxes)}
         />
         <StatCard
           icon={Database01Icon}
-          label="Sandbox disks"
+          label="沙箱磁盘"
           value={formatBytes(sandboxDisks.actualBytes)}
-          hint={`promised ${formatBytes(sandboxDisks.nominalBytes)} across ${sandboxDisks.count} disk${sandboxDisks.count === 1 ? '' : 's'} — sparse images only cost what they hold`}
+          hint={`${sandboxDisks.count} 块盘共许诺 ${formatBytes(sandboxDisks.nominalBytes)} — 稀疏镜像只为真实内容付费`}
           pct={pctOf(sandboxDisks.actualBytes, sandboxDisks.nominalBytes)}
         />
       </div>
