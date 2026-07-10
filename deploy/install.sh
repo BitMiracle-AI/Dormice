@@ -266,7 +266,11 @@ if [ "$MIRROR" = cn ]; then
 else
   pnpm install --frozen-lockfile
 fi
-pnpm build
+# Build only what a daemon host runs: the server (plus its workspace deps),
+# the CLI, and the console SPA. The website package is the project's Next.js
+# marketing site — building it here would cost minutes and import a frontend
+# toolchain's failure modes into an installer whose job is the daemon.
+pnpm --filter "@dormice/server..." --filter "@dormice/cli..." --filter "@dormice/console" build
 ln -sf "$INSTALL_DIR/packages/cli/dist/main.js" /usr/local/bin/dormice
 ln -sf "$INSTALL_DIR/packages/cli/dist/main.js" /usr/local/bin/dor
 note "built; \`dormice\` and \`dor\` linked into /usr/local/bin"
