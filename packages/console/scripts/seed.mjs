@@ -5,11 +5,14 @@
  * 原生 RPC,零依赖;沙箱状态的多样性(冻结/停止)靠 daemon 的空闲扫描
  * 器降温,所以 dev daemon 要把扫描间隔拧到 1 秒(见下)。
  *
- * 用法(fake 执行器即可,勿对生产 daemon 跑;token 要求 ≥32 字符):
+ * 用法(fake 执行器即可,勿对生产 daemon 跑;token 要求 ≥32 字符;
+ * server 包刻意没有 dev 脚本 — daemon 跑的永远是构建产物):
  *   0) export DORMICE_API_TOKEN=$(openssl rand -hex 32)
- *   1) DORMICE_SCAN_INTERVAL_SECONDS=1 pnpm --filter @dormice/server dev
- *   2) pnpm --filter @dormice/console seed
- *   3) pnpm --filter @dormice/console dev  →  http://localhost:5173/console
+ *   1) pnpm --filter @dormice/server... --filter @dormice/console... build
+ *   2) DORMICE_SCAN_INTERVAL_SECONDS=1 node packages/server/dist/main.js
+ *   3) pnpm --filter @dormice/console seed
+ *   4) 直接看:daemon 自己托管 http://127.0.0.1:3676/console(登录 token 即上面那个);
+ *      要改前端代码带热更新,才需要 pnpm --filter @dormice/console dev → http://localhost:5173/console
  *
  * 注:模板指向的镜像名在 fake 模式下随意;对 docker 执行器跑时镜像必须
  * 真的在宿主机上,否则用这些模板创建会得到点名的报错(那也是诚实)。
