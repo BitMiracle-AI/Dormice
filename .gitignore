@@ -42,3 +42,8 @@ coverage/
 
 # Logs
 *.log
+
+# Python e2e suite artifacts
+e2e/python/__pycache__/
+e2e/python/.pytest_cache/
+e2e/python/.venv/

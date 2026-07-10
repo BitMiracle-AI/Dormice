@@ -1,0 +1,5 @@
+# The official E2B Python SDK, pinned to the exact version this suite was
+# written against (same version number as the JS package the TS e2e uses —
+# the two SDKs release in lockstep). Bump deliberately, never implicitly.
+e2b==2.31.0
+pytest==8.4.1

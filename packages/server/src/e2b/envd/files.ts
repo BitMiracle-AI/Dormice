@@ -1,3 +1,4 @@
+import { createGunzip } from 'node:zlib';
 import { resolveSandboxPath } from '@dormice/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { touch } from '../../db/ledger';
@@ -170,7 +171,17 @@ export async function serveFileUpload(
       if (!query.path) {
         throw new E2bError(400, 'invalid_argument', 'missing path query');
       }
-      await writeOne(query.path, request.body as NodeJS.ReadableStream);
+      // The SDK's gzip option is a Content-Encoding on the whole body (it
+      // implies octet-stream). The sandbox must receive the decoded bytes —
+      // storing the gzip framing is delivering a corrupted file (measured
+      // 2026-07-10 under the Python SDK, whose write(gzip=True) uses this).
+      let content = request.body as NodeJS.ReadableStream;
+      if (request.headers['content-encoding'] === 'gzip') {
+        const gunzip = createGunzip();
+        content.pipe(gunzip);
+        content = gunzip;
+      }
+      await writeOne(query.path, content);
     }
     return await reply.code(200).send(written);
   } finally {

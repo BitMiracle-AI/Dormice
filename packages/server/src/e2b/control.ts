@@ -141,6 +141,11 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   function sessionView(row: SandboxRow) {
     return {
       sandboxID: row.sandboxId,
+      // The node identity. The JS SDK never reads this field, but the
+      // Python SDK's generated models hard-require it on every sandbox
+      // response — its absence is a KeyError before user code runs
+      // (measured 2026-07-10: the whole Python suite died on create).
+      clientID: row.nodeId,
       ...templateFields(row),
       envdVersion: ENVD_VERSION,
       envdAccessToken: mintEnvdToken(config.DORMICE_API_TOKEN, row.sandboxId),
@@ -152,6 +157,8 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   function infoView(row: SandboxRow, state: 'running' | 'paused') {
     return {
       sandboxID: row.sandboxId,
+      // Required by the Python SDK's models, like clientID above.
+      clientID: row.nodeId,
       ...templateFields(row),
       metadata: row.metadata ? JSON.parse(row.metadata) : {},
       state,
@@ -163,6 +170,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
       cpuCount: config.DORMICE_SANDBOX_CPUS,
       memoryMB: Math.round(config.DORMICE_SANDBOX_MEMORY_GB * 1024),
+      diskSizeMB: Math.round(config.DORMICE_SANDBOX_DISK_GB * 1024),
       envdVersion: ENVD_VERSION,
       ...domainField,
     };
