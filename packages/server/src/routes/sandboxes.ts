@@ -8,6 +8,8 @@ import {
   listSandboxesResponseSchema,
   readFileRequestSchema,
   readFileResponseSchema,
+  rebuildSandboxRequestSchema,
+  rebuildSandboxResponseSchema,
   releaseSandboxRequestSchema,
   releaseSandboxResponseSchema,
   resolveSandboxPath,
@@ -37,7 +39,7 @@ import {
 } from '../executor/executor';
 import { httpError } from '../http-error';
 import type { KeyedQueue } from '../keyed-queue';
-import { releaseSandbox, wakeSandbox } from '../lifecycle';
+import { rebuildSandbox, releaseSandbox, wakeSandbox } from '../lifecycle';
 import { resolvePolicy } from '../policy';
 
 export interface SandboxRoutesOptions {
@@ -309,6 +311,43 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           path: resolveSandboxPath(path),
           contentBase64: content.toString('base64'),
         };
+      });
+    },
+  );
+
+  app.post(
+    '/rebuildSandbox',
+    {
+      schema: {
+        body: rebuildSandboxRequestSchema,
+        response: { 200: rebuildSandboxResponseSchema },
+      },
+    },
+    async (request) => {
+      const { userKey } = request.body;
+      // The whole verb holds the key's slot, like the file verbs: seconds of
+      // executor work at worst, and the slot keeps the scanner and a
+      // concurrent release from moving the sandbox under our feet.
+      return locks.run(userKey, async () => {
+        const existing = findByUserKey(db, userKey);
+        if (!existing) {
+          // Not a creator and not a destroyer: an unknown key is a typo,
+          // not a goal state — same manners as exec.
+          throw httpError(
+            404,
+            `no sandbox for key "${userKey}" — acquire it first`,
+          );
+        }
+        if (existing.state === 'archived' || existing.state === 'restoring') {
+          // An archived sandbox has no container to swap; it already meets
+          // rebuild's promise (its next wake builds from the current image).
+          throw httpError(
+            409,
+            `sandbox for key "${userKey}" is ${existing.state} — it has no container to rebuild`,
+          );
+        }
+        const row = await rebuildSandbox(db, executor, existing);
+        return { sandbox: toSandbox(row, endpoint) };
       });
     },
   );

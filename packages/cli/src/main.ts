@@ -13,6 +13,7 @@ import {
   sandboxLs,
   sandboxPull,
   sandboxPush,
+  sandboxRebuild,
   sandboxRelease,
 } from './commands';
 import { realDoctorContext, runDoctor } from './doctor';
@@ -115,6 +116,16 @@ sandbox
     }
     await writeFile(localPath, result.content);
     console.log(pullSavedMessage(result, localPath));
+  });
+
+sandbox
+  .command('rebuild')
+  .description(
+    'Swap the container, keep /home/user — next use starts on the current base image',
+  )
+  .argument('<userKey>', 'the user key whose sandbox to rebuild')
+  .action(async (userKey: string) => {
+    console.log(await sandboxRebuild(clientFromEnv(process.env), userKey));
   });
 
 sandbox

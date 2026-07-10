@@ -3,6 +3,7 @@ export * from './exec';
 export * from './files';
 export * from './list';
 export * from './policy';
+export * from './rebuild';
 export * from './release';
 export * from './sandbox';
 export * from './states';

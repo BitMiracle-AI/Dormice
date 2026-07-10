@@ -96,6 +96,54 @@ describe('native API over a real daemon', () => {
     expect(again.sandbox.sandboxId).not.toBe(created.sandbox.sandboxId);
   });
 
+  it('rebuilds a sandbox: shell swapped, /home/user kept, same key wakes it', async () => {
+    const created = await client().acquireSandbox('rebuild-key');
+    await client().writeFiles('rebuild-key', [
+      { path: 'keep.txt', content: 'still here' },
+    ]);
+
+    const { sandbox } = await client().rebuildSandbox('rebuild-key');
+    expect(sandbox.sandboxId).toBe(created.sandbox.sandboxId);
+    expect(sandbox.state).toBe('stopped');
+
+    // The wake after a rebuild is a cold start into a fresh container; the
+    // disk — and with it the file — must have survived the swap.
+    const again = await client().acquireSandbox('rebuild-key');
+    expect(again.sandbox.sandboxId).toBe(created.sandbox.sandboxId);
+    const read = await client().readFile('rebuild-key', 'keep.txt');
+    expect(new TextDecoder().decode(read.content)).toBe('still here');
+
+    await expect(client().rebuildSandbox('nobody-key')).rejects.toMatchObject({
+      name: 'DormiceApiError',
+      status: 404,
+    });
+    await client().releaseSandbox('rebuild-key');
+  });
+
+  // The fake's files hang off the disk, so only a real container can show
+  // the other half of rebuild's promise: the container layer resets.
+  it.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
+    'rebuild resets the container layer: /tmp evaporates, /home/user stays',
+    async () => {
+      await client().acquireSandbox('rebuild-layers-key');
+      await client().execCommand(
+        'rebuild-layers-key',
+        'touch /tmp/ephemeral && echo kept > ~/kept.txt',
+      );
+
+      await client().rebuildSandbox('rebuild-layers-key');
+
+      const check = await client().execCommand(
+        'rebuild-layers-key',
+        'ls /tmp/ephemeral; cat ~/kept.txt',
+      );
+      expect(check.stdout).toContain('kept');
+      expect(check.stdout).not.toContain('ephemeral');
+      expect(check.stderr).toMatch(/No such file/);
+      await client().releaseSandbox('rebuild-layers-key');
+    },
+  );
+
   it('runs a command in the sandbox and returns the buffered result', async () => {
     await client().acquireSandbox('exec-key');
     const result = await client().execCommand('exec-key', 'echo hi');

@@ -285,6 +285,20 @@ export class FakeExecutor implements Executor {
     }
   }
 
+  async removeContainer(sandboxId: string): Promise<void> {
+    // Any state goes; an already-gone container is the goal state as long
+    // as the disk remains. Both absent is destroy's same complaint: the
+    // ledger points at nothing. The disk — and with it the files — stays
+    // untouched: that is the entire point of the verb.
+    const hadContainer = this.containers.delete(sandboxId);
+    if (!hadContainer && !this.disks.has(sandboxId)) {
+      throw new Error(`container ${sandboxId} is absent, cannot remove`);
+    }
+    // The container's death takes every process and watcher with it, same
+    // physics as stop and vanish.
+    this.killProcesses(sandboxId);
+  }
+
   async listContainers(): Promise<Map<string, ContainerState>> {
     // A copy: reality is observed, not handed out by reference.
     return new Map(this.containers);

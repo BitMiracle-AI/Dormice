@@ -246,6 +246,27 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
     });
   });
 
+  it('rebuilds a sandbox: same id, state stopped, data intact after re-acquire', async () => {
+    const created = await client.acquireSandbox('grace');
+    const id = created.sandbox.sandboxId;
+    await client.writeFiles('grace', [{ path: 'keep.txt', content: 'body' }]);
+
+    const { sandbox } = await client.rebuildSandbox('grace');
+    expect(sandbox.sandboxId).toBe(id);
+    expect(sandbox.state).toBe('stopped');
+    expect(executor.stateOf(id)).toBeUndefined();
+
+    const again = await client.acquireSandbox('grace');
+    expect(again.sandbox.sandboxId).toBe(id);
+    const read = await client.readFile('grace', 'keep.txt');
+    expect(new TextDecoder().decode(read.content)).toBe('body');
+
+    await expect(client.rebuildSandbox('no-such-key')).rejects.toMatchObject({
+      name: 'DormiceApiError',
+      status: 404,
+    });
+  });
+
   it('releases a sandbox and reports idempotently', async () => {
     const created = await client.acquireSandbox('frank');
     expect(await client.releaseSandbox('frank')).toEqual({ released: true });

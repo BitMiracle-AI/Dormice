@@ -207,6 +207,60 @@ export function describeExecutorContract(
     );
 
     it(
+      'removeContainer swaps the shell: container gone, disk kept, start rebuilds with data intact',
+      async () => {
+        const id = await fresh();
+        await executor.writeFiles(id, [
+          { path: 'keep.txt', content: Buffer.from('survives the rebuild') },
+        ]);
+
+        await executor.removeContainer(id);
+        expect(await stateOf(id)).toBeUndefined();
+        expect(await executor.listDisks()).toContain(id);
+
+        await executor.start(id);
+        expect(await stateOf(id)).toBe('running');
+        expect((await executor.readFile(id, 'keep.txt')).toString()).toBe(
+          'survives the rebuild',
+        );
+      },
+      timeoutMs,
+    );
+
+    it(
+      'removeContainer takes the container down from any state',
+      async () => {
+        const paused = await fresh();
+        await executor.freeze(paused);
+        await executor.removeContainer(paused);
+        expect(await stateOf(paused)).toBeUndefined();
+        expect(await executor.listDisks()).toContain(paused);
+
+        const stopped = await freshStopped();
+        await executor.removeContainer(stopped);
+        expect(await stateOf(stopped)).toBeUndefined();
+        expect(await executor.listDisks()).toContain(stopped);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'removeContainer: an absent container is the goal state beside a disk, a complaint without one',
+      async () => {
+        const id = await freshStopped();
+        await subject.vanishContainer(id);
+        // Pruned behind the daemon's back — removing it again is a no-op.
+        await executor.removeContainer(id);
+        expect(await executor.listDisks()).toContain(id);
+
+        await expect(executor.removeContainer(randomUUID())).rejects.toThrow(
+          /absent, cannot remove/,
+        );
+      },
+      timeoutMs,
+    );
+
+    it(
       'the disk lives with the container: born on create, kept through stop, gone on destroy',
       async () => {
         const id = await fresh();

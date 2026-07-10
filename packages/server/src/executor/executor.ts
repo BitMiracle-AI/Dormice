@@ -214,6 +214,15 @@ export interface Executor {
    */
   destroy(sandboxId: string): Promise<void>;
   /**
+   * Removes the container object, whatever state, and keeps the disk —
+   * rebuild's physical half. The next start() builds a fresh container from
+   * the surviving disk (and thus from the daemon's *current* base image);
+   * this is how a sandbox upgrades its shared layers without losing data.
+   * A container already gone is the goal state as long as the disk remains;
+   * both absent throws, like destroy — the ledger and reality disagree.
+   */
+  removeContainer(sandboxId: string): Promise<void>;
+  /**
    * Every container this executor knows about, with its observed state.
    * The reconciler's window into reality — the read the ledger is checked
    * against at startup and on every heartbeat tick.

@@ -59,15 +59,15 @@ describe('ledger', () => {
     expect(transition(db, sandboxId, 'active').state).toBe('active');
   });
 
-  it('rejects skipping rungs on the way down', () => {
+  it('rejects skipping rungs on the way down, except rebuild', () => {
     const db = testDb();
     const { sandboxId } = create(db);
-    expect(() => transition(db, sandboxId, 'stopped')).toThrow(
-      /illegal transition/,
-    );
     expect(() => transition(db, sandboxId, 'archived')).toThrow(
       /illegal transition/,
     );
+    // The one legal two-rung move: rebuild removes a running container
+    // outright, with no paused moment in between to record.
+    expect(transition(db, sandboxId, 'stopped').state).toBe('stopped');
   });
 
   it('rejects waking an archived sandbox without going through restoring', () => {

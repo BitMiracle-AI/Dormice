@@ -4,16 +4,18 @@ import type { Db } from './db';
 import { type SandboxRow, sandboxes } from './schema';
 
 /**
- * The lifecycle state machine. A sandbox only ever moves one rung colder at
- * a time; waking up is a single jump back to active. Everything the idle
- * scanner and acquire() are allowed to do is this table — it is the single
- * arbiter for state changes, enforced in transition().
+ * The lifecycle state machine. The idle scanner only ever moves one rung
+ * colder at a time; waking up is a single jump back to active. The one
+ * two-rung move is active -> stopped: rebuild removes a running container
+ * outright (the shell is swapped, the disk stays), and there is no paused
+ * moment in between to record. This table is the single arbiter for state
+ * changes, enforced in transition().
  */
 export const ALLOWED_TRANSITIONS: Record<
   SandboxState,
   readonly SandboxState[]
 > = {
-  active: ['frozen'],
+  active: ['frozen', 'stopped'],
   frozen: ['active', 'stopped'],
   stopped: ['active', 'archived'],
   archived: ['restoring'],

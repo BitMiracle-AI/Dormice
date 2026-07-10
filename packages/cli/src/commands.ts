@@ -137,6 +137,22 @@ export function pullSavedMessage(
   return `Pulled ${printable(result.path)} -> ${localPath} (${result.content.length} bytes).`;
 }
 
+/**
+ * `dor sandbox rebuild <userKey>`: swap the sandbox's container, keep its
+ * disk. /home/user survives; everything else resets onto the daemon's
+ * current base image at the next use.
+ */
+export async function sandboxRebuild(
+  client: Dormice,
+  userKey: string,
+): Promise<string> {
+  const { sandbox } = await client.rebuildSandbox(userKey);
+  return (
+    `Rebuilt the sandbox for key "${printable(userKey)}" — /home/user kept, ` +
+    `now ${sandbox.state}; its next use starts on the current base image.`
+  );
+}
+
 /** `dor sandbox release <userKey>`: destroy the sandbox behind a key, idempotently. */
 export async function sandboxRelease(
   client: Dormice,

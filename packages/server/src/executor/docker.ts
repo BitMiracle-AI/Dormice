@@ -489,12 +489,36 @@ export class DockerExecutor implements Executor {
       await this.teardownDisk(sandboxId);
       return;
     }
+    await this.takeContainerDown(found);
+    await this.teardownDisk(sandboxId);
+  }
+
+  async removeContainer(sandboxId: string): Promise<void> {
+    const found = await this.inspect(sandboxId);
+    if (found === null) {
+      // Already gone is the goal state — but only alongside a surviving
+      // disk. Both absent means the ledger points at nothing, worth hearing
+      // (destroy's contract, same message shape).
+      if (!(await this.diskExists(sandboxId))) {
+        throw new Error(`container ${sandboxId} is absent, cannot remove`);
+      }
+      return;
+    }
+    await this.takeContainerDown(found);
+  }
+
+  /**
+   * Walks a container down from any state and removes it, ourselves instead
+   * of leaning on remove's force-kill: dockerd cannot deliver a signal into
+   * a paused gVisor sandbox and burns a hard-coded 10s wait before
+   * escalating (measured 2026-07-09, sometimes erroring "PID is zombie").
+   * Unpause so the kill lands, then wait for the actual exit before removing.
+   */
+  private async takeContainerDown(found: {
+    id: string;
+    status: string;
+  }): Promise<void> {
     const container = this.docker.getContainer(found.id);
-    // Walk the container down ourselves instead of leaning on remove's
-    // force-kill: dockerd cannot deliver a signal into a paused gVisor
-    // sandbox and burns a hard-coded 10s wait before escalating (measured
-    // 2026-07-09, sometimes erroring "PID is zombie"). Unpause so the kill
-    // lands, then wait for the actual exit before removing.
     if (found.status === 'paused') {
       await container.unpause();
     }
@@ -508,7 +532,6 @@ export class DockerExecutor implements Executor {
       await container.wait({ condition: 'not-running' });
     }
     await container.remove({ force: true });
-    await this.teardownDisk(sandboxId);
   }
 
   async listContainers(): Promise<Map<string, ContainerState>> {
