@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from '../app';
 import { loadConfig } from '../config';
@@ -230,6 +231,46 @@ describe('E2B control plane', () => {
     const endInMs = Date.parse(info.endAt) - Date.now();
     expect(endInMs).toBeGreaterThan(590_000);
     expect(endInMs).toBeLessThan(610_000);
+  });
+
+  it('info views carry every field the Python SDK hard-requires', async () => {
+    // The JS SDK tolerates missing fields; the Python SDK's generated
+    // models KeyError on them before user code runs (measured 2026-07-10:
+    // absent clientID/diskSizeMB killed its whole suite at create). This
+    // pins the full required set in the CI-run suite.
+    const t = testApp();
+    const create = await control(t, 'POST', '/sandboxes', {
+      templateID: 'base',
+    });
+    expect(create.statusCode).toBe(201);
+    const session = create.json();
+    expect(session.clientID).toBe('node-test');
+    expect(session.sandboxID).toBeDefined();
+    expect(session.templateID).toBeDefined();
+    expect(session.envdVersion).toBeDefined();
+
+    const info = (
+      await control(t, 'GET', `/sandboxes/${session.sandboxID}`)
+    ).json();
+    for (const field of [
+      'clientID',
+      'cpuCount',
+      'diskSizeMB',
+      'endAt',
+      'envdVersion',
+      'memoryMB',
+      'sandboxID',
+      'startedAt',
+      'state',
+      'templateID',
+    ]) {
+      expect(info[field], `info.${field}`).toBeDefined();
+    }
+    expect(info.diskSizeMB).toBe(10 * 1024);
+
+    const listed = (await control(t, 'GET', '/v2/sandboxes')).json();
+    expect(listed[0].clientID).toBe('node-test');
+    expect(listed[0].diskSizeMB).toBe(10 * 1024);
   });
 
   it('kill destroys for real: container, disk, row — and 404s after', async () => {
@@ -573,6 +614,33 @@ describe('E2B envd surface', () => {
     expect(res.json()).toEqual([
       { name: 'raw.bin', type: 'file', path: '/home/user/raw.bin' },
     ]);
+  });
+
+  it('decodes a gzip content-encoding on octet-stream uploads', async () => {
+    // The SDK's write(gzip=true) compresses the whole body; storing the
+    // gzip framing would deliver a corrupted file (measured 2026-07-10
+    // under the Python SDK, the option's main user).
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const plain = 'compressible '.repeat(64);
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/e2b/envd/files?path=zipped.txt&username=user',
+      headers: {
+        ...envdHeaders(sandboxID),
+        'content-type': 'application/octet-stream',
+        'content-encoding': 'gzip',
+      },
+      payload: gzipSync(Buffer.from(plain)),
+    });
+    expect(res.statusCode).toBe(200);
+
+    const down = await t.app.inject({
+      method: 'GET',
+      url: '/e2b/envd/files?path=zipped.txt&username=user',
+      headers: envdHeaders(sandboxID),
+    });
+    expect(down.body).toBe(plain);
   });
 
   it('speaks the filesystem service: Stat, ListDir, MakeDir, Move, Remove', async () => {
