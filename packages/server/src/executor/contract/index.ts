@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe } from 'vitest';
 import type { ContainerState, Executor } from '../executor';
 import { entryTests } from './entries';
 import { execTests } from './exec';
-import { execStreamTests } from './execStream';
+import { execStreamTests } from './exec-stream';
 import { fileTests } from './files';
 import { lifecycleTests } from './lifecycle';
 import { watchTests } from './watch';
