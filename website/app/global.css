@@ -1,0 +1,7 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+/* Tell Tailwind where fumadocs-ui's class names live (path is relative to
+ * this file; the package is symlinked by pnpm, Tailwind follows it). */
+@source "../node_modules/fumadocs-ui/dist/**/*.js";

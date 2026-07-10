@@ -1,0 +1,44 @@
+---
+title: What is Dormice?
+description: A self-hosted sandbox platform for AI agents — one machine, sandboxes that live forever, idle costs nothing.
+---
+
+Cloud sandbox platforms charge for every second a sandbox exists, so their
+sandboxes are disposable. Dormice inverts that: you run it on a machine you
+already pay for, and sandboxes are **permanent** — they just get cheaper to
+keep the longer they sit idle.
+
+- **`acquireSandbox(userKey)` is the entire mental model.** Idempotent: the
+  same key always comes back to the same sandbox, whatever state it was in.
+  No sandbox → create; frozen → wake; stopped → start; archived → restore.
+- **Idle is free.** Sandboxes cool down on their own —
+  `active → frozen → stopped → archived` — one rung at a time, and any
+  acquire brings them back. Measured on real hardware: freezing takes an
+  idle sandbox holding 1 GiB down to ~5 MiB of resident memory, and waking
+  it takes ~50 ms.
+- **Deploys like a single binary.** One daemon, one SQLite ledger, one
+  port. No Kubernetes, no external database.
+- **E2B compatible.** The official `e2b` SDK works against Dormice by
+  changing two URLs — see [E2B compatibility](/docs/e2b-compatibility).
+
+## How it works
+
+The daemon keeps a SQLite ledger of sandboxes and drives Docker + gVisor to
+match it. Each sandbox is a gVisor container with its own disk-quota volume;
+freezing suspends its processes and squeezes their memory out to swap, so an
+idle sandbox costs a few megabytes of RAM and wakes in about 50 ms with all
+its processes still running.
+
+Because the disk — not the container — is the sandbox's body, a sandbox
+survives anything short of an explicit release: the daemon restarts, the
+host reboots, even `docker container prune` eating the container object.
+
+## Status
+
+Early development. The daemon, its lifecycle engine, the SDK, the CLI, the
+web console, the real Docker + gVisor executor, and the E2B-compatible API
+work end to end and pass a black-box test suite against real
+infrastructure. Nothing here is ready for production yet.
+
+Next steps: [Installation](/docs/installation), then the
+[Quick start](/docs/quickstart).

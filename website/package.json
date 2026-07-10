@@ -1,0 +1,32 @@
+{
+  "name": "@dormice/website",
+  "version": "0.0.0",
+  "description": "Dormice website and documentation: Next.js static export, deployable as plain files",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "NEXT_TELEMETRY_DISABLED=1 next build",
+    "dev": "NEXT_TELEMETRY_DISABLED=1 next dev",
+    "postinstall": "fumadocs-mdx",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fumadocs-core": "^16.11.1",
+    "fumadocs-mdx": "^15.1.0",
+    "fumadocs-ui": "^16.11.1",
+    "next": "^16.2.10",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.2",
+    "@types/mdx": "^2.0.14",
+    "@types/node": "^26.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "postcss": "^8.5.16",
+    "tailwindcss": "^4.3.2",
+    "typescript": "^6.0.3"
+  }
+}

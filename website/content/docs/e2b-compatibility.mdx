@@ -1,0 +1,53 @@
+---
+title: E2B compatibility
+description: The official e2b SDK runs against Dormice by changing two URLs.
+---
+
+The daemon speaks the E2B protocol on two prefixes (`/e2b/api`,
+`/e2b/envd`). The **official `e2b` package** — unmodified, straight from
+npm — runs against Dormice with two URLs and an API-key prefix; migrating
+an application is configuration, not code:
+
+```ts
+import { Sandbox } from 'e2b';
+
+const sbx = await Sandbox.create({
+  apiKey: `e2b_${process.env.DORMICE_API_TOKEN}`,
+  apiUrl: 'http://127.0.0.1:3676/e2b/api',
+  sandboxUrl: 'http://127.0.0.1:3676/e2b/envd',
+});
+```
+
+Everything below is exercised by the black-box e2e suite *through the
+official package*, and has passed against a real Docker + gVisor daemon:
+
+| Surface | Notes |
+| --- | --- |
+| `Sandbox.create` / `connect` / `kill` / `list` | `list` filters by state and metadata, and paginates |
+| Timeouts | `timeoutMs` and `setTimeout()` are real absolute deadlines; `lifecycle: { onTimeout: 'pause' }` parks the sandbox instead of killing it |
+| `pause()` / resume | explicit pause; `connect` revives it, files intact |
+| `commands.run` | live streaming (`onStdout` / `onStderr`), background + `connect` / `disconnect`, `sendStdin`, `kill`, `list`, per-command `envs`, `user: 'root'`; a non-zero exit raises the SDK's own `CommandExitError` |
+| `pty.*` | `create` / `sendInput` / `resize` / `kill` — a real interactive bash |
+| `files` read / write | text or bytes, streamed, no artificial size cap — the disk quota is the cap |
+| `uploadUrl()` / `downloadUrl()` | signed URLs: expiry enforced, a tampered signature is a 401 |
+| `files.list` / `exists` / `makeDir` / `rename` / `remove` | typed errors match the SDK's expectations |
+| `files.watchDir` | streamed events, and the polling watcher API the Python sync SDK uses |
+| `getHost(port)` | port proxy with wake-on-traffic (set `DORMICE_SANDBOX_DOMAIN`) |
+| `getMetrics()` | one live sample; observing never wakes a frozen sandbox |
+
+## Deliberate deltas from the hosted product
+
+- **No template builds.** Every sandbox runs the daemon's single base
+  image (`DORMICE_BASE_IMAGE`); the `template` argument is accepted and
+  ignored.
+- **Freezing keeps processes.** A frozen sandbox's processes suspend and
+  resume mid-flight — any touch wakes the sandbox in ~50 ms.
+- **Permanence stays the default.** Sandboxes created through the E2B
+  surface get real deadlines, as E2B semantics demand; deadlines are never
+  imposed on natively created sandboxes.
+- **`metadata.userKey`** turns `Sandbox.create` into Dormice's idempotent
+  acquire: the same key returns the same sandbox instead of a new one.
+- **Not implemented**, answered with an honest `unimplemented` on the
+  wire: `Process/StreamInput` (the JS SDK never calls it) and xattr-based
+  file metadata. The daemon reports envd `0.6.1`, so the SDK itself gates
+  those features client-side.

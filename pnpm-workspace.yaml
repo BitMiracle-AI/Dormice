@@ -1,9 +1,11 @@
 # Workspace members: every directory under packages/ is a package; e2e is its
 # own package — the black-box suite that boots the built daemon and drives it
-# over the wire (the E2B compatibility suite will join it when that layer lands)
+# over the wire (the E2B compatibility suite will join it when that layer lands);
+# website is the public site (Next.js static export), never published to npm
 packages:
   - packages/*
   - e2e
+  - website
 
 # Supply-chain defense: a newly published npm version must be at least 24 hours
 # (1440 minutes) old before it can be installed — poisoned releases are usually
