@@ -16,6 +16,7 @@ import {
   sandboxLs,
   sandboxPull,
   sandboxPush,
+  sandboxRebuild,
   sandboxRelease,
 } from './commands';
 
@@ -152,6 +153,18 @@ describe('sandbox commands over real HTTP', () => {
       'Pulled /home/user/data.bin -> local.bin (4 bytes).',
     );
     await client.releaseSandbox('puller');
+  });
+
+  it('rebuild reports the swap and surfaces the 404 for an unknown key', async () => {
+    await client.acquireSandbox('rebuilder');
+    expect(await sandboxRebuild(client, 'rebuilder')).toBe(
+      'Rebuilt the sandbox for key "rebuilder" — /home/user kept, now stopped; ' +
+        'its next use starts on the current base image.',
+    );
+    await expect(sandboxRebuild(client, 'nobody')).rejects.toThrow(
+      /acquire it first/,
+    );
+    await client.releaseSandbox('rebuilder');
   });
 
   it('release reports both outcomes of the idempotent destroy', async () => {

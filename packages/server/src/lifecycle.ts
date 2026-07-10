@@ -47,6 +47,27 @@ export async function releaseSandbox(
   deleteSandbox(db, sandboxId);
 }
 
+/**
+ * Swap the shell, keep the body: the container is removed (whatever state),
+ * the disk stays, and the ledger records `stopped` — the state whose wake
+ * path builds a fresh container from the surviving disk, and therefore from
+ * the daemon's *current* base image. This is how an existing sandbox picks
+ * up new shared layers without losing a byte of /home/user. Already-stopped
+ * rows skip the ledger write: removing a pruned-away container is a no-op
+ * and stopped -> stopped is not a transition.
+ */
+export async function rebuildSandbox(
+  db: Db,
+  executor: Executor,
+  row: SandboxRow,
+): Promise<SandboxRow> {
+  await executor.removeContainer(row.sandboxId);
+  if (row.state === 'stopped') {
+    return row;
+  }
+  return transition(db, row.sandboxId, 'stopped');
+}
+
 /** Brings a sandbox in any cold state back to active. No-op when already active. */
 export async function wakeSandbox(
   db: Db,

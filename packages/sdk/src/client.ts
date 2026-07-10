@@ -6,8 +6,10 @@ import {
   execCommandResponseSchema,
   type LifecyclePolicyOverride,
   listSandboxesResponseSchema,
+  type RebuildSandboxResponse,
   type ReleaseSandboxResponse,
   readFileResponseSchema,
+  rebuildSandboxResponseSchema,
   releaseSandboxResponseSchema,
   type Sandbox,
   type WriteFilesResponse,
@@ -99,6 +101,19 @@ export class Dormice {
   async listSandboxes(): Promise<Sandbox[]> {
     const data = await this.rpc('listSandboxes', {});
     return listSandboxesResponseSchema.parse(data).sandboxes;
+  }
+
+  /**
+   * Swaps the sandbox's container while keeping its disk: /home/user is
+   * untouched, and the next use builds a fresh container from the daemon's
+   * current base image — how an existing sandbox picks up new shared layers
+   * (anything outside /home/user is reset). The sandbox is left `stopped`;
+   * the next acquire or exec wakes it, paying one cold start. Unknown key:
+   * 404 — rebuild is not a creator.
+   */
+  async rebuildSandbox(userKey: string): Promise<RebuildSandboxResponse> {
+    const data = await this.rpc('rebuildSandbox', { userKey });
+    return rebuildSandboxResponseSchema.parse(data);
   }
 
   /**

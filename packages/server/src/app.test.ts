@@ -749,6 +749,74 @@ describe('POST /listSandboxes', () => {
   });
 });
 
+describe('POST /rebuildSandbox', () => {
+  it('swaps the container, keeps the disk, and the same key wakes with its data', async () => {
+    const { app, executor } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const id = created.sandbox.sandboxId;
+    await rpc(app, '/writeFiles', {
+      userKey: 'alice',
+      files: [
+        {
+          path: 'keep.txt',
+          contentBase64: Buffer.from('survives').toString('base64'),
+        },
+      ],
+    });
+
+    const res = await rpc(app, '/rebuildSandbox', { userKey: 'alice' });
+    expect(res.statusCode).toBe(200);
+    // The shell is gone, the row stays, the state says so honestly.
+    expect(res.json().sandbox).toMatchObject({
+      sandboxId: id,
+      state: 'stopped',
+    });
+    expect(executor.stateOf(id)).toBeUndefined();
+
+    // The same key comes back to the same sandbox — rebuilt shell, same body.
+    const again = (await acquire(app, { userKey: 'alice' })).json();
+    expect(again.sandbox.sandboxId).toBe(id);
+    const read = await rpc(app, '/readFile', {
+      userKey: 'alice',
+      path: 'keep.txt',
+    });
+    expect(Buffer.from(read.json().contentBase64, 'base64').toString()).toBe(
+      'survives',
+    );
+  });
+
+  it('rebuilds a frozen sandbox too, and again while already stopped', async () => {
+    const { app, db, executor, locks } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(
+        created.sandbox.lastActiveAt,
+        DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+      ),
+    );
+    expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
+
+    const res = await rpc(app, '/rebuildSandbox', { userKey: 'alice' });
+    expect(res.json().sandbox.state).toBe('stopped');
+
+    // A second rebuild finds no container — the goal state, not an error.
+    const again = await rpc(app, '/rebuildSandbox', { userKey: 'alice' });
+    expect(again.statusCode).toBe(200);
+    expect(again.json().sandbox.state).toBe('stopped');
+  });
+
+  it('answers 404 for an unknown key — rebuild is not a creator', async () => {
+    const res = await rpc(testApp().app, '/rebuildSandbox', {
+      userKey: 'nobody',
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toMatch(/acquire it first/);
+  });
+});
+
 describe('POST /releaseSandbox', () => {
   it('destroys the container and forgets the key', async () => {
     const { app, executor } = testApp();

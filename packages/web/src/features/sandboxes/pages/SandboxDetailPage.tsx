@@ -11,6 +11,7 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from '@/components/ui/empty';
+import { RebuildSandboxButton } from '../components/RebuildSandboxButton';
 import { ReleaseSandboxButton } from '../components/ReleaseSandboxButton';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { SandboxTerminalCard } from '../components/SandboxTerminal';
@@ -72,10 +73,13 @@ export function SandboxDetailPage() {
           <h1 className="font-mono text-lg font-semibold">{sandbox.userKey}</h1>
           <SandboxStateBadge state={sandbox.state} />
         </div>
-        <ReleaseSandboxButton
-          userKey={sandbox.userKey}
-          onReleased={() => navigate({ to: '/' })}
-        />
+        <div className="flex items-center gap-2">
+          <RebuildSandboxButton userKey={sandbox.userKey} />
+          <ReleaseSandboxButton
+            userKey={sandbox.userKey}
+            onReleased={() => navigate({ to: '/' })}
+          />
+        </div>
       </header>
 
       <div className="mb-6">

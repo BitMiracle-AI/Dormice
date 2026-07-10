@@ -1,6 +1,11 @@
 import type { AcquireRequest } from '@dormice/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { acquireSandbox, listSandboxes, releaseSandbox } from '@/lib/api';
+import {
+  acquireSandbox,
+  listSandboxes,
+  rebuildSandbox,
+  releaseSandbox,
+} from '@/lib/api';
 
 /**
  * One entity, one file: every sandbox query and mutation lives here.
@@ -32,6 +37,14 @@ export function useAcquireSandbox() {
   return useMutation({
     mutationFn: (request: AcquireRequest) => acquireSandbox(request),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
+  });
+}
+
+export function useRebuildSandbox() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (userKey: string) => rebuildSandbox(userKey),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
   });
 }
 
