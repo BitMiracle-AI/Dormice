@@ -9,9 +9,10 @@
       "!packages/console/src/lib/utils.ts",
       "!packages/console/src/shadcn.css",
       "!packages/console/src/routeTree.gen.ts",
-      "!website/components/ui",
-      "!website/lib/utils.ts",
-      "!website/app/shadcn.css"
+      "!website/src/components/ui",
+      "!website/src/hooks/use-mobile.ts",
+      "!website/src/lib/utils.ts",
+      "!website/src/app/shadcn.css"
     ]
   },
   "vcs": {

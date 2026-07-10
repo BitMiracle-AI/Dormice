@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { type DocsNavItem, DocsSidebar } from '@/components/docs-sidebar';
+import { type DocsNavItem, DocsSidebar } from '@/components/docs/DocsSidebar';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -20,10 +20,11 @@ export function DocsMobileNav({ items }: { items: DocsNavItem[] }) {
         Menu
       </SheetTrigger>
       <SheetContent side="left">
-        <SheetHeader>
+        {/* The visible label comes from the menu's own group label. */}
+        <SheetHeader className="sr-only">
           <SheetTitle>Documentation</SheetTitle>
         </SheetHeader>
-        <div className="px-4">
+        <div className="px-2">
           <DocsSidebar items={items} onNavigate={() => setOpen(false)} />
         </div>
       </SheetContent>

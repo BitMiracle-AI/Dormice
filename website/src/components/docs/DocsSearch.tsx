@@ -11,6 +11,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
+import { Kbd } from '@/components/ui/kbd';
 
 export interface SearchItem {
   href: string;
@@ -45,9 +46,7 @@ export function DocsSearch({ items }: { items: SearchItem[] }) {
         onClick={() => setOpen(true)}
       >
         Search docs…
-        <kbd className="rounded border bg-muted px-1 font-sans text-[0.7rem] text-muted-foreground">
-          ⌘K
-        </kbd>
+        <Kbd>⌘K</Kbd>
       </Button>
       <CommandDialog
         open={open}

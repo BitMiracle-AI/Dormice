@@ -1,10 +1,12 @@
 import type { MDXProps } from 'mdx/types';
 import type { JSX } from 'react';
-import * as e2bCompatibility from '@/content/docs/e2b-compatibility.mdx';
-import * as indexDoc from '@/content/docs/index.mdx';
-import * as installation from '@/content/docs/installation.mdx';
-import meta from '@/content/docs/meta.json';
-import * as quickstart from '@/content/docs/quickstart.mdx';
+// Relative imports: content/ lives beside src/ on purpose — it is authored
+// content, not source, and stays portable across doc-shell rewrites.
+import * as e2bCompatibility from '../../content/docs/e2b-compatibility.mdx';
+import * as indexDoc from '../../content/docs/index.mdx';
+import * as installation from '../../content/docs/installation.mdx';
+import meta from '../../content/docs/meta.json';
+import * as quickstart from '../../content/docs/quickstart.mdx';
 
 // Server-only registry of every doc. MDX renders as server components, so
 // importing them all here costs the client nothing — pages ship as HTML.
@@ -36,7 +38,7 @@ export const docs: DocEntry[] = meta.pages.map((name) => {
   const mod = modules[name];
   if (!mod) {
     throw new Error(
-      `content/docs/meta.json lists "${name}" but lib/docs.ts does not import it`,
+      `content/docs/meta.json lists "${name}" but src/lib/docs.ts does not import it`,
     );
   }
   const slug = name === 'index' ? '' : name;
@@ -51,7 +53,7 @@ export const docs: DocEntry[] = meta.pages.map((name) => {
 for (const name of Object.keys(modules)) {
   if (!meta.pages.includes(name)) {
     throw new Error(
-      `lib/docs.ts imports "${name}" but content/docs/meta.json does not list it`,
+      `src/lib/docs.ts imports "${name}" but content/docs/meta.json does not list it`,
     );
   }
 }

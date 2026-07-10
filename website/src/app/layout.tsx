@@ -1,17 +1,18 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { SiteHeader } from '@/components/site-header';
-import { ThemeProvider } from '@/components/theme-provider';
+import { SiteFooter } from '@/components/SiteFooter';
+import { SiteHeader } from '@/components/SiteHeader';
+import { ThemeProvider } from '@/components/ThemeProvider';
 import { docs } from '@/lib/docs';
+import { SITE_DESCRIPTION, SITE_TITLE } from '@/lib/site';
 import './global.css';
 
 export const metadata: Metadata = {
   title: {
-    default: 'Dormice — the SQLite of agent sandboxes',
+    default: SITE_TITLE,
     template: '%s | Dormice',
   },
-  description:
-    'A self-hosted sandbox platform for AI agents. One machine, sandboxes that live forever, idle costs nothing.',
+  description: SITE_DESCRIPTION,
 };
 
 export default function Layout({ children }: { children: ReactNode }) {
@@ -27,6 +28,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         <ThemeProvider>
           <SiteHeader searchItems={searchItems} />
           {children}
+          <SiteFooter />
         </ThemeProvider>
       </body>
     </html>
