@@ -175,6 +175,54 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
+  it('signed URLs from the SDK work bare over fetch: download, upload, refusals', async () => {
+    const sbx = await Sandbox.create(connection());
+    try {
+      await sbx.files.write('signed/hello.txt', 'signed content\n');
+
+      // The URL the SDK actually builds (new URL('/files', sandboxUrl)
+      // strips the /e2b/envd prefix — this test is what pins that reality).
+      const url = await sbx.downloadUrl('signed/hello.txt', {
+        useSignatureExpiration: 300,
+      });
+      const res = await fetch(url);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('signed content\n');
+
+      // Tampering with the signature closes the door.
+      const forged = new URL(url);
+      forged.searchParams.set('signature', 'v1_forged');
+      expect((await fetch(forged)).status).toBe(401);
+
+      // An expired signature closes it too, by name.
+      const expiredUrl = await sbx.downloadUrl('signed/hello.txt', {
+        useSignatureExpiration: -10,
+      });
+      const expired = await fetch(expiredUrl);
+      expect(expired.status).toBe(401);
+      expect(((await expired.json()) as { message: string }).message).toBe(
+        'signature is already expired',
+      );
+
+      // Upload the way the docs show: FormData against uploadUrl, the
+      // part's filename carrying the destination path.
+      const uploadUrl = await sbx.uploadUrl();
+      const form = new FormData();
+      form.append(
+        'file',
+        new Blob(['uploaded via signed url\n']),
+        'signed/up.txt',
+      );
+      const up = await fetch(uploadUrl, { method: 'POST', body: form });
+      expect(up.status).toBe(200);
+      expect(await sbx.files.read('signed/up.txt')).toBe(
+        'uploaded via signed url\n',
+      );
+    } finally {
+      await sbx.kill();
+    }
+  });
+
   it('reports info, appears in list, and can be found by metadata', async () => {
     const sbx = await Sandbox.create({
       ...connection(),
