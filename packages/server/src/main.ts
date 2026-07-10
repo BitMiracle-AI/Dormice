@@ -69,11 +69,13 @@ const locks = new KeyedQueue();
 
 // The web console ships beside the server in the monorepo; this file sits
 // one level under packages/server both as src/main.ts and as dist/main.js,
-// so the relative hop to packages/web/dist is the same either way. A
+// so the relative hop to packages/console/dist is the same either way. A
 // missing dist is loud but not fatal: the API works without the console.
-const webDistDir = fileURLToPath(new URL('../../web/dist', import.meta.url));
-if (!existsSync(webDistDir)) {
-  log.warn(`web console not found at ${webDistDir} — /ui disabled`);
+const consoleDistDir = fileURLToPath(
+  new URL('../../console/dist', import.meta.url),
+);
+if (!existsSync(consoleDistDir)) {
+  log.warn(`web console not found at ${consoleDistDir} — /console disabled`);
 }
 
 const app = buildApp({
@@ -82,7 +84,7 @@ const app = buildApp({
   executor,
   locks,
   logger: log,
-  webDistDir: existsSync(webDistDir) ? webDistDir : undefined,
+  consoleDistDir: existsSync(consoleDistDir) ? consoleDistDir : undefined,
 });
 
 // Before trusting the pairing of this ledger and this reality, check it:

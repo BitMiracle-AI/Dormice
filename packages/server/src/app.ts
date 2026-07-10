@@ -16,8 +16,8 @@ import { ProcessTable } from './e2b/process-table';
 import { WatcherTable } from './e2b/watcher-table';
 import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
+import { consoleRoutes } from './routes/console';
 import { sandboxRoutes } from './routes/sandboxes';
-import { uiRoutes } from './routes/ui';
 import { createSandboxProxy } from './sandbox-proxy';
 
 export interface AppDeps {
@@ -38,9 +38,10 @@ export interface AppDeps {
   logger?: boolean | Logger;
   /**
    * Where the built web console lives; main.ts resolves the monorepo
-   * layout, tests inject a fixture. Absent means /ui answers an honest 404.
+   * layout, tests inject a fixture. Absent means /console answers an
+   * honest 404.
    */
-  webDistDir?: string;
+  consoleDistDir?: string;
 }
 
 /**
@@ -58,7 +59,7 @@ export function buildApp({
   executor,
   locks,
   logger = true,
-  webDistDir,
+  consoleDistDir,
 }: AppDeps) {
   // Always a pino instance (booleans are normalized into one): two fastify()
   // call shapes would give the instance two different types.
@@ -126,7 +127,7 @@ export function buildApp({
   );
 
   // Cookie parsing app-wide: the auth arbiter reads the console's session
-  // cookie on the native routes, the /ui surface mints and clears it.
+  // cookie on the native routes, the /console surface mints and clears it.
   app.register(fastifyCookie);
 
   app.register(async (api) => {
@@ -136,8 +137,8 @@ export function buildApp({
 
   // The web console: session endpoints (open — login carries the token
   // itself) and the static SPA. Its API calls go through the routes above.
-  app.register(async (ui) => {
-    await ui.register(uiRoutes, { config, webDistDir });
+  app.register(async (scope) => {
+    await scope.register(consoleRoutes, { config, consoleDistDir });
   });
 
   // The E2B compatibility surface lives beside the native API with its own

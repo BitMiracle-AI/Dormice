@@ -29,7 +29,7 @@ function interceptUnauthorized(): void {
   if (!hasSessionMarker()) return;
   clearSessionMarker();
   const here = window.location.pathname + window.location.search;
-  window.location.href = `/ui/login?redirect=${encodeURIComponent(here)}`;
+  window.location.href = `/console/login?redirect=${encodeURIComponent(here)}`;
 }
 
 async function rpc<T>(
@@ -64,10 +64,14 @@ async function rpc<T>(
 // Login's own 401 means "wrong token", a form error to show in place — the
 // interceptor is for sessions dying mid-flight, not for failed sign-ins.
 export const login = (token: string) =>
-  rpc<{ loggedIn: true }>('/ui/auth/login', { token }, { intercept401: false });
+  rpc<{ loggedIn: true }>(
+    '/console/auth/login',
+    { token },
+    { intercept401: false },
+  );
 
 export const logout = () =>
-  rpc<{ loggedIn: false }>('/ui/auth/logout', {}, { intercept401: false });
+  rpc<{ loggedIn: false }>('/console/auth/logout', {}, { intercept401: false });
 
 export const listSandboxes = () =>
   rpc<{ sandboxes: Sandbox[] }>('/listSandboxes');
@@ -86,4 +90,4 @@ export const rebuildSandbox = (userKey: string) =>
 // The terminal's key: trades the session cookie for one sandbox's envd
 // access token, so the browser can speak to the envd surface directly.
 export const mintEnvdToken = (sandboxId: string) =>
-  rpc<{ envdAccessToken: string }>('/ui/envdToken', { sandboxId });
+  rpc<{ envdAccessToken: string }>('/console/envdToken', { sandboxId });

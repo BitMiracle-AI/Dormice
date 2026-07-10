@@ -20,7 +20,7 @@ import { KeyedQueue } from '../keyed-queue';
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
 
-function testApp(webDistDir?: string) {
+function testApp(consoleDistDir?: string) {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
   const config = loadConfig({
@@ -33,13 +33,13 @@ function testApp(webDistDir?: string) {
     executor: new FakeExecutor(),
     locks: new KeyedQueue(),
     logger: false,
-    webDistDir,
+    consoleDistDir,
   });
 }
 
 /** A minimal built console: an index.html and one hashed asset. */
 function fixtureDist(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'dormice-webdist-'));
+  const dir = mkdtempSync(join(tmpdir(), 'dormice-consoledist-'));
   writeFileSync(join(dir, 'index.html'), '<html>dormice console</html>');
   mkdirSync(join(dir, 'assets'));
   writeFileSync(join(dir, 'assets', 'app-abc123.js'), 'console.log("ui")');
@@ -49,7 +49,7 @@ function fixtureDist(): string {
 async function login(app: ReturnType<typeof testApp>, token = TOKEN) {
   return app.inject({
     method: 'POST',
-    url: '/ui/auth/login',
+    url: '/console/auth/login',
     payload: { token },
   });
 }
@@ -87,7 +87,7 @@ describe('session mint/verify', () => {
   });
 });
 
-describe('POST /ui/auth/login', () => {
+describe('POST /console/auth/login', () => {
   it('rejects a wrong token without setting a cookie', async () => {
     const res = await login(testApp(), 'wrong-token-wrong-token-wrong-tk');
     expect(res.statusCode).toBe(401);
@@ -160,7 +160,7 @@ describe('cookie-authenticated API access', () => {
   });
 });
 
-describe('POST /ui/envdToken', () => {
+describe('POST /console/envdToken', () => {
   async function mint(
     app: ReturnType<typeof testApp>,
     cookieValue: string,
@@ -168,7 +168,7 @@ describe('POST /ui/envdToken', () => {
   ) {
     return app.inject({
       method: 'POST',
-      url: '/ui/envdToken',
+      url: '/console/envdToken',
       cookies: { [SESSION_COOKIE]: cookieValue },
       headers,
       payload: { sandboxId: 'sb-terminal' },
@@ -199,11 +199,11 @@ describe('POST /ui/envdToken', () => {
   });
 });
 
-describe('POST /ui/auth/logout', () => {
+describe('POST /console/auth/logout', () => {
   it('clears the session cookie', async () => {
     const res = await testApp().inject({
       method: 'POST',
-      url: '/ui/auth/logout',
+      url: '/console/auth/logout',
     });
     expect(res.statusCode).toBe(200);
     const cookie = sessionCookie(res);
@@ -211,28 +211,31 @@ describe('POST /ui/auth/logout', () => {
   });
 });
 
-describe('static console at /ui', () => {
+describe('static console at /console', () => {
   it('serves index.html and assets from the injected dist', async () => {
     const app = testApp(fixtureDist());
-    const index = await app.inject({ method: 'GET', url: '/ui/' });
+    const index = await app.inject({ method: 'GET', url: '/console/' });
     expect(index.statusCode).toBe(200);
     expect(index.body).toContain('dormice console');
     const asset = await app.inject({
       method: 'GET',
-      url: '/ui/assets/app-abc123.js',
+      url: '/console/assets/app-abc123.js',
     });
     expect(asset.statusCode).toBe(200);
   });
 
   it('falls back to index.html for client-side routes (SPA)', async () => {
     const app = testApp(fixtureDist());
-    const res = await app.inject({ method: 'GET', url: '/ui/sandboxes/deep' });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/console/sandboxes/deep',
+    });
     expect(res.statusCode).toBe(200);
     expect(res.body).toContain('dormice console');
   });
 
   it('answers an honest 404 when the console is not built', async () => {
-    const res = await testApp().inject({ method: 'GET', url: '/ui' });
+    const res = await testApp().inject({ method: 'GET', url: '/console' });
     expect(res.statusCode).toBe(404);
     expect(res.json().message).toContain('pnpm build');
   });

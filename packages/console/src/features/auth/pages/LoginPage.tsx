@@ -28,7 +28,7 @@ export function LoginPage() {
     mutationFn: login,
     onSuccess: () => {
       setSessionMarker();
-      window.location.href = redirect ?? '/ui/';
+      window.location.href = redirect ?? '/console/';
     },
   });
 

@@ -11,14 +11,14 @@ import {
 import type { Config } from '../config';
 import { mintEnvdToken } from '../e2b/protocol';
 
-export interface UiRoutesOptions {
+export interface ConsoleRoutesOptions {
   config: Config;
   /**
-   * Where the built web console lives (packages/web/dist). Injected so
+   * Where the built web console lives (packages/console/dist). Injected so
    * tests point it at a fixture and embedders can omit it; absent means
-   * /ui answers an honest 404 instead of guessing at paths.
+   * /console answers an honest 404 instead of guessing at paths.
    */
-  webDistDir?: string;
+  consoleDistDir?: string;
 }
 
 // No Secure flag: the daemon speaks plain http on 127.0.0.1 by design, and
@@ -34,12 +34,11 @@ const COOKIE_OPTIONS = {
  * Everything else the console does goes through the native RPC routes with
  * the session cookie — same routes, same truth as the SDK and CLI.
  */
-export const uiRoutes: FastifyPluginAsyncZod<UiRoutesOptions> = async (
-  app,
-  { config, webDistDir },
-) => {
+export const consoleRoutes: FastifyPluginAsyncZod<
+  ConsoleRoutesOptions
+> = async (app, { config, consoleDistDir }) => {
   app.post(
-    '/ui/auth/login',
+    '/console/auth/login',
     {
       schema: {
         body: z.object({ token: z.string() }),
@@ -63,7 +62,7 @@ export const uiRoutes: FastifyPluginAsyncZod<UiRoutesOptions> = async (
   );
 
   app.post(
-    '/ui/auth/logout',
+    '/console/auth/logout',
     {
       schema: {
         response: { 200: z.object({ loggedIn: z.literal(false) }) },
@@ -83,7 +82,7 @@ export const uiRoutes: FastifyPluginAsyncZod<UiRoutesOptions> = async (
   // header. Minting is stateless on purpose (like the token itself): a
   // made-up sandboxId yields a token that opens nothing.
   app.post(
-    '/ui/envdToken',
+    '/console/envdToken',
     {
       onRequest: requireApiAuth(config.DORMICE_API_TOKEN),
       schema: {
@@ -101,14 +100,14 @@ export const uiRoutes: FastifyPluginAsyncZod<UiRoutesOptions> = async (
     }),
   );
 
-  if (webDistDir) {
+  if (consoleDistDir) {
     await app.register(
-      async (ui) => {
-        await ui.register(fastifyStatic, { root: webDistDir });
-        // SPA fallback: the router owns paths under /ui, so any GET that
-        // matches no file is a client-side route — serve the app and let
-        // it resolve. Everything else keeps the honest 404.
-        ui.setNotFoundHandler((request, reply) => {
+      async (scope) => {
+        await scope.register(fastifyStatic, { root: consoleDistDir });
+        // SPA fallback: the router owns paths under /console, so any GET
+        // that matches no file is a client-side route — serve the app and
+        // let it resolve. Everything else keeps the honest 404.
+        scope.setNotFoundHandler((request, reply) => {
           if (request.method === 'GET') {
             return reply.sendFile('index.html');
           }
@@ -117,13 +116,13 @@ export const uiRoutes: FastifyPluginAsyncZod<UiRoutesOptions> = async (
           });
         });
       },
-      { prefix: '/ui' },
+      { prefix: '/console' },
     );
   } else {
-    app.get('/ui', async (_request, reply) =>
+    app.get('/console', async (_request, reply) =>
       reply.code(404).send({
         message:
-          'web console not available: packages/web/dist was not found at startup — run `pnpm build` first',
+          'web console not available: packages/console/dist was not found at startup — run `pnpm build` first',
       }),
     );
   }
