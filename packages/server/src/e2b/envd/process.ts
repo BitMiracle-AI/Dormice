@@ -18,6 +18,8 @@ import {
   rawWriter,
   sandboxIdOf,
   streamError,
+  usernameOf,
+  vetUsername,
   wireDeadlineMs,
 } from './shared';
 
@@ -237,6 +239,15 @@ export function registerProcessRoutes(
           : 'only shell commands are supported: expected /bin/bash [-l] -c <command>',
       );
     }
+    // Identity rides the Basic auth header (SDK: user option); vetted here,
+    // in the streaming dialect, before anything wakes.
+    let user: string | undefined;
+    try {
+      user = vetUsername(usernameOf(request));
+    } catch (error) {
+      const e = error as { code: string | number; message: string };
+      return streamError(reply, String(e.code), e.message);
+    }
     const row = await ctx.wakeForStream(request, reply);
     if (!row) return;
 
@@ -260,6 +271,7 @@ export function registerProcessRoutes(
           timeoutSeconds: MAX_EXEC_SECONDS,
           stdin: message.stdin === true,
           cwd: proc.cwd,
+          user,
           // Sandbox-level envs underneath, per-command envs on top.
           env: { ...sandboxEnvs, ...(proc.envs ?? {}) },
         },

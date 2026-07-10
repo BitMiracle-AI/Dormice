@@ -17,6 +17,13 @@ export interface ExecOptions {
   /** Working directory inside the sandbox; defaults to the image's /home/user. */
   cwd?: string;
   env?: Record<string, string>;
+  /**
+   * Unix user the command runs as; defaults to 'user' (uid 1000). The
+   * executor passes the name through to the runtime verbatim — which names
+   * are allowed is the wire layer's decision, not modeled here. In-sandbox
+   * root is contained by gVisor exactly like any other sandbox code.
+   */
+  user?: string;
 }
 
 export interface ExecResult {
@@ -69,6 +76,8 @@ export interface ExecStreamOptions {
    * sendStdin, the size through resizePty.
    */
   pty?: PtySize;
+  /** Same as ExecOptions.user; applies to PTY sessions too. */
+  user?: string;
   /**
    * Called with each output chunk as it arrives. No cap: nothing accumulates
    * server-side. A returned promise MAY be awaited before the next chunk
@@ -306,15 +315,23 @@ export interface Executor {
    * never the host's; this is why file I/O goes through the container and
    * not through the host-side mount. No size check here: the protocol
    * schema is the single write-cap adjudicator.
+   *
+   * Every file verb takes a trailing optional `user` — the identity the
+   * in-container operation runs as (ExecOptions.user's rules): ownership of
+   * written files and permission outcomes follow it. Absent means 'user'.
    */
-  writeFiles(sandboxId: string, files: FileToWrite[]): Promise<void>;
+  writeFiles(
+    sandboxId: string,
+    files: FileToWrite[],
+    user?: string,
+  ): Promise<void>;
   /**
    * Returns one file's bytes. Requires state `running`. Throws the typed
    * file errors above; a file over FILE_SIZE_LIMIT_BYTES is refused, never
    * truncated — a truncated file is a corrupt file. The read cap lives here
    * and not in the schema because only the executor can observe the size.
    */
-  readFile(sandboxId: string, path: string): Promise<Buffer>;
+  readFile(sandboxId: string, path: string, user?: string): Promise<Buffer>;
   /**
    * Streams one file's bytes through the callback, uncapped — nothing
    * accumulates server-side, so the disk quota is the only ceiling (the E2B
@@ -327,6 +344,7 @@ export interface Executor {
     sandboxId: string,
     path: string,
     onChunk: (chunk: Buffer) => void | Promise<void>,
+    user?: string,
   ): Promise<void>;
   /**
    * Streams content into one file, uncapped, parents created, overwriting —
@@ -337,6 +355,7 @@ export interface Executor {
     sandboxId: string,
     path: string,
     content: NodeJS.ReadableStream,
+    user?: string,
   ): Promise<void>;
   /**
    * Entries under a directory, depth ≥ 1 levels down, sorted by path.
@@ -347,28 +366,38 @@ export interface Executor {
     sandboxId: string,
     path: string,
     depth: number,
+    user?: string,
   ): Promise<SandboxEntry[]>;
   /** One path's entry. FileNotFoundError when nothing is there. */
-  statEntry(sandboxId: string, path: string): Promise<SandboxEntry>;
+  statEntry(
+    sandboxId: string,
+    path: string,
+    user?: string,
+  ): Promise<SandboxEntry>;
   /**
    * mkdir -p. True when created; false when the path already exists —
    * whatever it is: claiming "created" over an existing file would be a lie,
    * and the caller's next stat tells the truth either way.
    */
-  makeDir(sandboxId: string, path: string): Promise<boolean>;
+  makeDir(sandboxId: string, path: string, user?: string): Promise<boolean>;
   /**
    * rename(2) semantics (`mv -T`): an existing destination file is
    * replaced, a destination directory is not merged into. The source must
    * exist (FileNotFoundError); parents of the destination are not created.
    * Returns the destination's entry.
    */
-  move(sandboxId: string, from: string, to: string): Promise<SandboxEntry>;
+  move(
+    sandboxId: string,
+    from: string,
+    to: string,
+    user?: string,
+  ): Promise<SandboxEntry>;
   /**
    * rm -rf: file or directory tree. FileNotFoundError when nothing is there
    * — removing nothing is a caller's confusion worth reporting, not a goal
    * state (unlike removeDisk, whose caller is reconciliation).
    */
-  remove(sandboxId: string, path: string): Promise<void>;
+  remove(sandboxId: string, path: string, user?: string): Promise<void>;
   /**
    * Starts watching a directory for filesystem events. The path must exist
    * (FileNotFoundError) and be a directory (NotADirectoryError) — checked
@@ -378,6 +407,8 @@ export interface Executor {
    * events cannot be missed while frozen — the disk only changes from
    * inside, and anything that reaches inside wakes the sandbox first.
    * Lifetime is bounded by the sandbox's own 24h exec backstop.
+   * Deliberately no user option (a v1 narrowing): the watcher runs as
+   * 'user', and watching a root-only subtree refuses honestly.
    */
   watchDir(sandboxId: string, opts: WatchDirOptions): Promise<WatchDirHandle>;
 }

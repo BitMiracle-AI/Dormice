@@ -375,6 +375,7 @@ export class DockerExecutor implements Executor {
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
       workingDir: opts.cwd,
       env: opts.env,
+      user: opts.user,
     });
     return {
       exitCode: run.exitCode,
@@ -423,6 +424,7 @@ export class DockerExecutor implements Executor {
       stdin: opts.stdin ? 'open' : undefined,
       workingDir: opts.cwd,
       env: opts.env,
+      user: opts.user,
     });
     let finished = false;
     const done = started.wait().then((exitCode) => {
@@ -461,7 +463,7 @@ export class DockerExecutor implements Executor {
         if (finished) {
           throw new Error('process already exited');
         }
-        await this.signalProcess(container, sandboxId, pidfile, sig);
+        await this.signalProcess(container, sandboxId, pidfile, sig, opts.user);
       },
       resizePty: async () => {
         throw new Error('process has no PTY');
@@ -469,16 +471,22 @@ export class DockerExecutor implements Executor {
     };
   }
 
-  /** Delivers a signal to an execStream'd process group via its pidfile. */
+  /**
+   * Delivers a signal to an execStream'd process group via its pidfile —
+   * as the same user the process runs as: uid 1000 cannot signal a root
+   * process group, and root needs no help signaling anyone.
+   */
   private async signalProcess(
     container: Docker.Container,
     sandboxId: string,
     pidfile: string,
     sig: 'SIGTERM' | 'SIGKILL',
+    user?: string,
   ): Promise<void> {
     const run = await this.runInContainer(container, sandboxId, {
       cmd: ['bash', '-c', SIGNAL_SCRIPT, 'bash', pidfile, sig],
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
+      user,
     });
     if (run.exitCode !== 0) {
       throw new Error(
@@ -509,7 +517,8 @@ export class DockerExecutor implements Executor {
       Env: opts.env
         ? Object.entries(opts.env).map(([key, value]) => `${key}=${value}`)
         : undefined,
-      User: 'user',
+      // The PTY twin of startInContainer's identity point.
+      User: opts.user ?? 'user',
     });
     const stream = await exec.start({ hijack: true, stdin: true, Tty: true });
     stream.pipe(new CallbackSink(opts.onStdout));
@@ -547,7 +556,7 @@ export class DockerExecutor implements Executor {
         if (finishedFlag) {
           throw new Error('process already exited');
         }
-        await this.signalProcess(container, sandboxId, pidfile, sig);
+        await this.signalProcess(container, sandboxId, pidfile, sig, opts.user);
       },
       resizePty: async (next) => {
         await exec.resize({ h: next.rows, w: next.cols });
@@ -583,7 +592,11 @@ export class DockerExecutor implements Executor {
     return info.ExitCode;
   }
 
-  async writeFiles(sandboxId: string, files: FileToWrite[]): Promise<void> {
+  async writeFiles(
+    sandboxId: string,
+    files: FileToWrite[],
+    user?: string,
+  ): Promise<void> {
     const containerId = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
     // In array order, failing fast — the batch saves round-trips, it is not
@@ -603,6 +616,7 @@ export class DockerExecutor implements Executor {
         ],
         outputCap: EXEC_OUTPUT_LIMIT_BYTES,
         stdin: file.content,
+        user,
       });
       if (run.exitCode === NOT_A_FILE_EXIT) {
         throw new NotAFileError(`not a regular file: ${path}`);
@@ -615,7 +629,11 @@ export class DockerExecutor implements Executor {
     }
   }
 
-  async readFile(sandboxId: string, path: string): Promise<Buffer> {
+  async readFile(
+    sandboxId: string,
+    path: string,
+    user?: string,
+  ): Promise<Buffer> {
     const resolved = resolveSandboxPath(path);
     const containerId = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
@@ -632,6 +650,7 @@ export class DockerExecutor implements Executor {
         String(FILE_SIZE_LIMIT_BYTES),
       ],
       outputCap: FILE_SIZE_LIMIT_BYTES,
+      user,
     });
     if (run.exitCode === NO_SUCH_FILE_EXIT) {
       throw new FileNotFoundError(`no such file: ${resolved}`);
@@ -664,6 +683,7 @@ export class DockerExecutor implements Executor {
     sandboxId: string,
     path: string,
     onChunk: (chunk: Buffer) => void | Promise<void>,
+    user?: string,
   ): Promise<void> {
     const resolved = resolveSandboxPath(path);
     const containerId = await this.expectState(sandboxId, 'running');
@@ -682,6 +702,7 @@ export class DockerExecutor implements Executor {
       ],
       stdout: new CallbackSink(onChunk),
       stderr,
+      user,
     });
     const exitCode = await started.wait();
     if (exitCode === NO_SUCH_FILE_EXIT) {
@@ -701,6 +722,7 @@ export class DockerExecutor implements Executor {
     sandboxId: string,
     path: string,
     content: NodeJS.ReadableStream,
+    user?: string,
   ): Promise<void> {
     const resolved = resolveSandboxPath(path);
     const containerId = await this.expectState(sandboxId, 'running');
@@ -718,6 +740,7 @@ export class DockerExecutor implements Executor {
       ],
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
       stdin: content,
+      user,
     });
     if (run.exitCode === NOT_A_FILE_EXIT) {
       throw new NotAFileError(`not a regular file: ${resolved}`);
@@ -737,6 +760,7 @@ export class DockerExecutor implements Executor {
     sandboxId: string,
     path: string,
     depth: number,
+    user?: string,
   ): Promise<SandboxEntry[]> {
     const resolved = resolveSandboxPath(path);
     const containerId = await this.expectState(sandboxId, 'running');
@@ -754,6 +778,7 @@ export class DockerExecutor implements Executor {
         String(depth),
       ],
       outputCap: LIST_OUTPUT_LIMIT_BYTES,
+      user,
     });
     if (run.exitCode === NO_SUCH_FILE_EXIT) {
       throw new FileNotFoundError(`no such file: ${resolved}`);
@@ -781,7 +806,11 @@ export class DockerExecutor implements Executor {
       .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   }
 
-  async statEntry(sandboxId: string, path: string): Promise<SandboxEntry> {
+  async statEntry(
+    sandboxId: string,
+    path: string,
+    user?: string,
+  ): Promise<SandboxEntry> {
     const resolved = resolveSandboxPath(path);
     const containerId = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
@@ -797,6 +826,7 @@ export class DockerExecutor implements Executor {
         resolved,
       ],
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
+      user,
     });
     if (run.exitCode === NO_SUCH_FILE_EXIT) {
       throw new FileNotFoundError(`no such file: ${resolved}`);
@@ -809,7 +839,11 @@ export class DockerExecutor implements Executor {
     return entryFromStatLine(resolved, run.stdout.text());
   }
 
-  async makeDir(sandboxId: string, path: string): Promise<boolean> {
+  async makeDir(
+    sandboxId: string,
+    path: string,
+    user?: string,
+  ): Promise<boolean> {
     const resolved = resolveSandboxPath(path);
     const containerId = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
@@ -825,6 +859,7 @@ export class DockerExecutor implements Executor {
         resolved,
       ],
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
+      user,
     });
     if (run.exitCode === ALREADY_EXISTS_EXIT) {
       return false;
@@ -841,6 +876,7 @@ export class DockerExecutor implements Executor {
     sandboxId: string,
     from: string,
     to: string,
+    user?: string,
   ): Promise<SandboxEntry> {
     const source = resolveSandboxPath(from);
     const destination = resolveSandboxPath(to);
@@ -859,6 +895,7 @@ export class DockerExecutor implements Executor {
         destination,
       ],
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
+      user,
     });
     if (run.exitCode === NO_SUCH_FILE_EXIT) {
       throw new FileNotFoundError(`no such file: ${source}`);
@@ -868,10 +905,10 @@ export class DockerExecutor implements Executor {
         `moving ${source} to ${destination} in ${sandboxId} failed (exit ${run.exitCode}): ${run.stderr.text().trim()}`,
       );
     }
-    return this.statEntry(sandboxId, destination);
+    return this.statEntry(sandboxId, destination, user);
   }
 
-  async remove(sandboxId: string, path: string): Promise<void> {
+  async remove(sandboxId: string, path: string, user?: string): Promise<void> {
     const resolved = resolveSandboxPath(path);
     const containerId = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
@@ -887,6 +924,7 @@ export class DockerExecutor implements Executor {
         resolved,
       ],
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
+      user,
     });
     if (run.exitCode === NO_SUCH_FILE_EXIT) {
       throw new FileNotFoundError(`no such file: ${resolved}`);
@@ -1010,6 +1048,7 @@ export class DockerExecutor implements Executor {
       stdin?: Buffer | NodeJS.ReadableStream;
       workingDir?: string;
       env?: Record<string, string>;
+      user?: string;
     },
   ): Promise<{ exitCode: number; stdout: CappedBuffer; stderr: CappedBuffer }> {
     const stdout = new CappedBuffer(spec.outputCap);
@@ -1021,6 +1060,7 @@ export class DockerExecutor implements Executor {
       stdin: spec.stdin,
       workingDir: spec.workingDir,
       env: spec.env,
+      user: spec.user,
     });
     return { exitCode: await started.wait(), stdout, stderr };
   }
@@ -1051,6 +1091,7 @@ export class DockerExecutor implements Executor {
       stdin?: Buffer | NodeJS.ReadableStream | 'open';
       workingDir?: string;
       env?: Record<string, string>;
+      user?: string;
     },
   ): Promise<{ wait: () => Promise<number>; stdinStream?: Duplex }> {
     const exec = await container.exec({
@@ -1062,7 +1103,10 @@ export class DockerExecutor implements Executor {
       Env: spec.env
         ? Object.entries(spec.env).map(([key, value]) => `${key}=${value}`)
         : undefined,
-      User: 'user',
+      // One of the two physical points where identity is decided (the PTY
+      // exec is the other). Root here is root inside gVisor's guest kernel,
+      // nothing more.
+      User: spec.user ?? 'user',
     });
     const stream = await exec.start(
       spec.stdin !== undefined ? { hijack: true, stdin: true } : {},

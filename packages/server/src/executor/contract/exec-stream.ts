@@ -276,6 +276,55 @@ export function execStreamTests(ctx: ContractContext) {
     );
 
     it(
+      "execStream with user:'root' streams as root; a root process can be signaled",
+      async () => {
+        const id = await ctx.fresh();
+        const seen: string[] = [];
+        const handle = await ctx.executor.execStream(id, {
+          command: 'whoami; sleep 30',
+          timeoutSeconds: 60,
+          user: 'root',
+          onStdout: (c) => {
+            seen.push(c.toString('utf8'));
+          },
+          onStderr: () => {},
+        });
+        await ctx.until(() => seen.join('').includes('root\n'));
+        // The signal path must run as the process's own user: uid 1000
+        // cannot deliver a SIGKILL into a root process group.
+        await handle.signal('SIGKILL');
+        const { exitCode } = await handle.wait();
+        expect(exitCode).toBe(137);
+      },
+      timeoutMs,
+    );
+
+    it(
+      "a PTY with user:'root' is a root shell",
+      async () => {
+        const id = await ctx.fresh();
+        const seen: string[] = [];
+        const handle = await ctx.executor.execStream(id, {
+          timeoutSeconds: 60,
+          pty: { cols: 80, rows: 24 },
+          user: 'root',
+          env: { TERM: 'xterm-256color', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' },
+          onStdout: (c) => {
+            seen.push(c.toString('utf8'));
+          },
+          onStderr: () => {},
+        });
+        // `id`, not `whoami`: a root prompt already contains "root", while
+        // "uid=0" can only come from the command actually running as root.
+        await handle.sendStdin(Buffer.from('id\r'));
+        await ctx.until(() => seen.join('').includes('uid=0'));
+        await handle.sendStdin(Buffer.from('exit\r'));
+        await handle.wait();
+      },
+      timeoutMs,
+    );
+
+    it(
       'resizePty changes what stty size reports',
       async () => {
         const id = await ctx.fresh();

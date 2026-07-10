@@ -150,5 +150,43 @@ export function execTests(ctx: ContractContext) {
       },
       timeoutMs,
     );
+
+    it(
+      'exec runs as user (uid 1000) unless told otherwise',
+      async () => {
+        const id = await ctx.fresh();
+        const who = await ctx.executor.exec(id, {
+          command: 'whoami',
+          timeoutSeconds: 30,
+        });
+        expect(who.stdout).toBe('user\n');
+        const uid = await ctx.executor.exec(id, {
+          command: 'id -u',
+          timeoutSeconds: 30,
+        });
+        expect(uid.stdout).toBe('1000\n');
+      },
+      timeoutMs,
+    );
+
+    it(
+      "exec with user:'root' runs as uid 0",
+      async () => {
+        const id = await ctx.fresh();
+        const who = await ctx.executor.exec(id, {
+          command: 'whoami',
+          timeoutSeconds: 30,
+          user: 'root',
+        });
+        expect(who.stdout).toBe('root\n');
+        const uid = await ctx.executor.exec(id, {
+          command: 'id -u',
+          timeoutSeconds: 30,
+          user: 'root',
+        });
+        expect(uid.stdout).toBe('0\n');
+      },
+      timeoutMs,
+    );
   });
 }

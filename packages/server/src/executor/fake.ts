@@ -390,6 +390,7 @@ export class FakeExecutor implements Executor {
       timeoutSeconds: opts.timeoutSeconds,
       cwd: opts.cwd,
       env: opts.env,
+      user: opts.user,
       onStdout: (chunk) => stdout.push(chunk),
       onStderr: (chunk) => stderr.push(chunk),
     });
@@ -450,7 +451,16 @@ export class FakeExecutor implements Executor {
       try {
         const run = opts.pty
           ? ptySession(opts, emit, io)
-          : interpret({ ...opts, command: command as string }, emit, io);
+          : interpret(
+              {
+                command: command as string,
+                cwd: opts.cwd,
+                env: opts.env,
+                user: opts.user,
+              },
+              emit,
+              io,
+            );
         return {
           exitCode: await Promise.race([run, deadline, killed]),
         };
@@ -571,6 +581,12 @@ export class FakeExecutor implements Executor {
     };
   }
 
+  // The file verbs deliberately omit the interface's trailing `user`
+  // parameter (fewer params is structurally sound TS): the fake models no
+  // permission system, so identity could change nothing here. It reaches
+  // the pocket interpreter's identity verbs only; real permission outcomes
+  // (root reading /root, ownership of written files) are the docker
+  // executor's physics, pinned by the docker-only e2e questions.
   async writeFiles(sandboxId: string, files: FileToWrite[]): Promise<void> {
     this.expect(sandboxId, 'running');
     const disk = this.disk(sandboxId);
@@ -842,7 +858,7 @@ interface Emit {
  * escape sequences, so the contract asserts with contains, never equals.
  */
 async function ptySession(
-  opts: { cwd?: string; env?: Record<string, string> },
+  opts: { cwd?: string; env?: Record<string, string>; user?: string },
   emit: Emit,
   io: FakeProcessIO,
 ): Promise<number> {
@@ -867,7 +883,7 @@ async function ptySession(
         continue;
       }
       await interpret(
-        { command: commandLine, cwd: opts.cwd, env: opts.env },
+        { command: commandLine, cwd: opts.cwd, env: opts.env, user: opts.user },
         merged,
         io,
       );
@@ -876,16 +892,22 @@ async function ptySession(
 }
 
 /**
- * A pocket bash: the seven verbs plus `;` sequencing — exactly what the
- * contract exam and the e2e suite need to exercise exec through the same
- * questions the real executor answers, nothing more. Each verb's output is
- * its own live chunk (the contract's streaming questions time the gaps).
- * Not a shell — an unknown verb gets bash's honest 127 and, like bash, the
- * sequence carries on; `exit` ends it. If the real bash's wording ever
- * proves different on the test machine, this string yields: reality wins.
+ * A pocket bash: the identity-aware verbs plus `;` sequencing — exactly
+ * what the contract exam and the e2e suite need to exercise exec through
+ * the same questions the real executor answers, nothing more. Each verb's
+ * output is its own live chunk (the contract's streaming questions time the
+ * gaps). Not a shell — an unknown verb gets bash's honest 127 and, like
+ * bash, the sequence carries on; `exit` ends it. If the real bash's wording
+ * ever proves different on the test machine, this string yields: reality
+ * wins.
  */
 async function interpret(
-  opts: { command: string; cwd?: string; env?: Record<string, string> },
+  opts: {
+    command: string;
+    cwd?: string;
+    env?: Record<string, string>;
+    user?: string;
+  },
   emit: Emit,
   io: FakeProcessIO,
 ): Promise<number> {
@@ -902,7 +924,7 @@ async function interpret(
 
 async function interpretVerb(
   command: string,
-  opts: { cwd?: string; env?: Record<string, string> },
+  opts: { cwd?: string; env?: Record<string, string>; user?: string },
   emit: Emit,
   io: FakeProcessIO,
 ): Promise<number> {
@@ -931,6 +953,25 @@ async function interpretVerb(
   }
   if (command === 'pwd') {
     emit.stdout(`${opts.cwd ?? '/home/user'}\n`);
+    return 0;
+  }
+  // The identity verbs answer from the exec's user option — the fake's
+  // window into who a command runs as (the real image has exactly these
+  // two users; permission outcomes are the real executor's business).
+  if (command === 'whoami') {
+    emit.stdout(`${opts.user ?? 'user'}\n`);
+    return 0;
+  }
+  if (command === 'id -u') {
+    emit.stdout(opts.user === 'root' ? '0\n' : '1000\n');
+    return 0;
+  }
+  if (command === 'id') {
+    emit.stdout(
+      opts.user === 'root'
+        ? 'uid=0(root) gid=0(root) groups=0(root)\n'
+        : 'uid=1000(user) gid=1000(user) groups=1000(user)\n',
+    );
     return 0;
   }
   const envKey = command.match(/^printenv (\w+)$/)?.[1];

@@ -2,7 +2,12 @@ import { resolveSandboxPath } from '@dormice/shared';
 import type { FastifyInstance } from 'fastify';
 import type { SandboxEntry } from '../../executor/executor';
 import { connectError } from '../protocol';
-import { type EnvdContext, sandboxIdOf } from './shared';
+import {
+  type EnvdContext,
+  sandboxIdOf,
+  usernameOf,
+  vetUsername,
+} from './shared';
 
 /** SandboxEntry -> proto3-JSON EntryInfo (int64 size travels as a string). */
 export function entryInfoJson(entry: SandboxEntry) {
@@ -49,8 +54,9 @@ export function registerFilesystemRoutes(
   app.post('/filesystem.Filesystem/Stat', async (request) => {
     const body = request.body as { path?: string };
     if (!body.path) throw connectError('invalid_argument', 'missing path');
+    const user = vetUsername(usernameOf(request));
     const entry = await ctx.inSlot(sandboxIdOf(request), (row) =>
-      executor.statEntry(row.sandboxId, body.path as string),
+      executor.statEntry(row.sandboxId, body.path as string, user),
     );
     return { entry: entryInfoJson(entry) };
   });
@@ -62,8 +68,9 @@ export function registerFilesystemRoutes(
     if (depth < 1) {
       throw connectError('invalid_argument', 'depth should be at least one');
     }
+    const user = vetUsername(usernameOf(request));
     const entries = await ctx.inSlot(sandboxIdOf(request), (row) =>
-      executor.listDir(row.sandboxId, body.path as string, depth),
+      executor.listDir(row.sandboxId, body.path as string, depth, user),
     );
     return { entries: entries.map(entryInfoJson) };
   });
@@ -71,10 +78,12 @@ export function registerFilesystemRoutes(
   app.post('/filesystem.Filesystem/MakeDir', async (request) => {
     const body = request.body as { path?: string };
     if (!body.path) throw connectError('invalid_argument', 'missing path');
+    const user = vetUsername(usernameOf(request));
     const entry = await ctx.inSlot(sandboxIdOf(request), async (row) => {
       const created = await executor.makeDir(
         row.sandboxId,
         body.path as string,
+        user,
       );
       if (!created) {
         // The SDK reads already_exists as makeDir() === false.
@@ -83,7 +92,7 @@ export function registerFilesystemRoutes(
           `already exists: ${resolveSandboxPath(body.path as string)}`,
         );
       }
-      return executor.statEntry(row.sandboxId, body.path as string);
+      return executor.statEntry(row.sandboxId, body.path as string, user);
     });
     return { entry: entryInfoJson(entry) };
   });
@@ -93,11 +102,13 @@ export function registerFilesystemRoutes(
     if (!body.source || !body.destination) {
       throw connectError('invalid_argument', 'missing source or destination');
     }
+    const user = vetUsername(usernameOf(request));
     const entry = await ctx.inSlot(sandboxIdOf(request), (row) =>
       executor.move(
         row.sandboxId,
         body.source as string,
         body.destination as string,
+        user,
       ),
     );
     return { entry: entryInfoJson(entry) };
@@ -106,8 +117,9 @@ export function registerFilesystemRoutes(
   app.post('/filesystem.Filesystem/Remove', async (request) => {
     const body = request.body as { path?: string };
     if (!body.path) throw connectError('invalid_argument', 'missing path');
+    const user = vetUsername(usernameOf(request));
     await ctx.inSlot(sandboxIdOf(request), (row) =>
-      executor.remove(row.sandboxId, body.path as string),
+      executor.remove(row.sandboxId, body.path as string, user),
     );
     return {};
   });
