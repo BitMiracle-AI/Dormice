@@ -1,0 +1,59 @@
+---
+title: Quick start
+description: Acquire a sandbox, run commands, move files — with the SDK, curl, or the CLI.
+---
+
+`@dormice/sdk` is the native TypeScript client. (Not on npm yet — the
+first release is queued; inside the repo, `pnpm build` produces it.)
+
+```ts
+import { Dormice } from '@dormice/sdk';
+
+const client = new Dormice({
+  endpoint: 'http://127.0.0.1:3676',
+  token: process.env.DORMICE_API_TOKEN!,
+});
+
+// One key, one sandbox — created, woken or restarted as needed.
+// stopAfterSeconds: null makes it a resident agent: it may freeze when
+// idle (~50 ms to wake) but never cold-starts.
+await client.acquireSandbox('my-agent', { stopAfterSeconds: null });
+
+const result = await client.execCommand('my-agent', 'python3 -c "print(6 * 7)"');
+console.log(result.exitCode, result.stdout); // 0 42
+
+await client.writeFiles('my-agent', [
+  { path: 'notes.txt', content: 'survives freeze and stop' },
+]);
+
+await client.releaseSandbox('my-agent'); // destroy — the only verb that loses data
+```
+
+## The wire is plain HTTP
+
+Every operation is an RPC route named after the SDK method
+(`POST /acquireSandbox`, `POST /execCommand`, …), authenticated with
+`Authorization: Bearer` and your API token, so `curl` works where the SDK
+doesn't reach:
+
+```sh
+curl -X POST http://127.0.0.1:3676/listSandboxes \
+  -H "Authorization: Bearer $DORMICE_API_TOKEN" \
+  -H "content-type: application/json" -d '{}'
+```
+
+## The CLI
+
+The `dor` command (long form: `dormice`) covers the operator side. It
+connects with the `DORMICE_ENDPOINT` and `DORMICE_API_TOKEN` environment
+variables:
+
+```sh
+dor sandbox ls                        # every sandbox, with lifecycle state
+dor sandbox exec my-agent 'uname -r'  # run a command, exit code passes through
+dor sandbox push my-agent ./data.csv  # copy a file in…
+dor sandbox pull my-agent notes.txt   # …and out
+dor sandbox rebuild my-agent          # fresh container, /home/user kept
+dor sandbox release my-agent          # destroy
+dor doctor                            # can this machine run sandboxes?
+```

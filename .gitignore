@@ -1,10 +1,11 @@
 # ── Internal development files, never committed ──
 # CLAUDE.md carries private cross-references; RULES/ and docs/ are internal
 # conventions and decision records. Public-facing docs (README, SECURITY.md, …)
-# are separate deliverables written on their own.
+# are separate deliverables written on their own. Anchored to the repo root:
+# an unanchored docs/ would swallow website/content/docs/ too.
 CLAUDE.md
-RULES/
-docs/
+/RULES/
+/docs/
 
 # Scratch code for verification and research (see RULES/临时代码.md):
 # deleted when done, and a public repo's history is append-only — one
@@ -22,6 +23,12 @@ temp/
 node_modules/
 dist/
 *.tsbuildinfo
+
+# website (Next.js) build artifacts and generated files
+website/.next/
+website/out/
+website/.source/
+website/next-env.d.ts
 
 # Runtime data (SQLite ledger, sandbox volumes)
 data/
