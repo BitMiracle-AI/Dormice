@@ -1,8 +1,31 @@
 {
   "name": "@dormice/sdk",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "TypeScript SDK for Dormice sandboxes",
+  "keywords": [
+    "dormice",
+    "sandbox",
+    "agent",
+    "ai",
+    "e2b",
+    "gvisor",
+    "docker"
+  ],
   "license": "Apache-2.0",
+  "homepage": "https://github.com/BitMiracle-AI/Dormice#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BitMiracle-AI/Dormice.git",
+    "directory": "packages/sdk"
+  },
+  "bugs": "https://github.com/BitMiracle-AI/Dormice/issues",
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
   "type": "module",
   "exports": {
     ".": {
@@ -19,7 +42,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dormice/shared": "workspace:*",
+    "@dormice/shared": "workspace:^",
     "undici": "^8.7.0"
   },
   "devDependencies": {

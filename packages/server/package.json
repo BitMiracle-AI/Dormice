@@ -1,6 +1,7 @@
 {
   "name": "@dormice/server",
   "version": "0.0.0",
+  "private": true,
   "description": "Dormice daemon: sandbox lifecycle over Docker + gVisor, SQLite ledger",
   "license": "Apache-2.0",
   "type": "module",
