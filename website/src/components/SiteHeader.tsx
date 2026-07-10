@@ -18,6 +18,7 @@ export function SiteHeader({ searchItems }: { searchItems: SearchItem[] }) {
             variant="ghost"
             size="sm"
             className="text-muted-foreground"
+            nativeButton={false}
             render={<Link href="/docs" />}
           >
             Docs
@@ -28,6 +29,7 @@ export function SiteHeader({ searchItems }: { searchItems: SearchItem[] }) {
           <Button
             variant="ghost"
             size="icon"
+            nativeButton={false}
             render={<a href={GITHUB_URL} aria-label="GitHub" />}
           >
             <HugeiconsIcon icon={GithubIcon} />

@@ -15,10 +15,15 @@ export function Hero() {
         that live forever, idle costs nothing.
       </p>
       <div className="mt-8 flex items-center gap-3">
-        <Button size="lg" render={<Link href="/docs" />}>
+        <Button size="lg" nativeButton={false} render={<Link href="/docs" />}>
           Get started
         </Button>
-        <Button size="lg" variant="outline" render={<a href={GITHUB_URL} />}>
+        <Button
+          size="lg"
+          variant="outline"
+          nativeButton={false}
+          render={<a href={GITHUB_URL} />}
+        >
           GitHub
         </Button>
       </div>

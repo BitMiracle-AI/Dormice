@@ -99,6 +99,7 @@ dor sandbox exec my-project 'uname -r'`;
         <Button
           variant="ghost"
           size="icon-sm"
+          nativeButton={false}
           render={<Link to="/" aria-label="Back to sandboxes" />}
         >
           <HugeiconsIcon icon={ArrowLeft01Icon} />
