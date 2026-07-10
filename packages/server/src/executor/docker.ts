@@ -7,6 +7,7 @@ import {
   readdir,
   readFile,
   rm,
+  stat,
   statfs,
 } from 'node:fs/promises';
 import path from 'node:path';
@@ -47,6 +48,7 @@ import { CallbackSink, CappedBuffer } from './docker-streams';
 import {
   type ContainerState,
   DiskFullError,
+  type DiskUsage,
   type ExecOptions,
   type ExecResult,
   type ExecStreamHandle,
@@ -296,6 +298,39 @@ export class DockerExecutor implements Executor {
     // Idempotent by contract: teardown already treats "nothing mounted"
     // and "no such file" as the goal state.
     await this.teardownDisk(sandboxId);
+  }
+
+  async diskUsage(): Promise<DiskUsage> {
+    const disksDir = path.join(this.opts.dataDir, 'disks');
+    let entries: string[];
+    try {
+      entries = await readdir(disksDir);
+    } catch (err) {
+      // No disks directory yet — no sandbox has ever been created here.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { count: 0, nominalBytes: 0, actualBytes: 0 };
+      }
+      throw err;
+    }
+    const usage: DiskUsage = { count: 0, nominalBytes: 0, actualBytes: 0 };
+    for (const name of entries) {
+      if (!name.endsWith('.img')) continue;
+      let s: Awaited<ReturnType<typeof stat>>;
+      try {
+        s = await stat(path.join(disksDir, name));
+      } catch (err) {
+        // Torn down by a concurrent release between readdir and stat —
+        // a snapshot simply does not count what is no longer there.
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw err;
+      }
+      usage.count += 1;
+      // size is what truncate promised; blocks (always 512-byte units) is
+      // what the sparse image really occupies. Their gap is the overcommit.
+      usage.nominalBytes += s.size;
+      usage.actualBytes += s.blocks * 512;
+    }
+    return usage;
   }
 
   async resolvePortTarget(

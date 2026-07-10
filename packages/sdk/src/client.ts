@@ -4,6 +4,8 @@ import {
   DEFAULT_EXEC_TIMEOUT_SECONDS,
   type ExecCommandResponse,
   execCommandResponseSchema,
+  type HostMetricsResponse,
+  hostMetricsResponseSchema,
   type LifecyclePolicyOverride,
   listSandboxesResponseSchema,
   listTemplatesResponseSchema,
@@ -126,6 +128,18 @@ export class Dormice {
   async listSandboxes(): Promise<Sandbox[]> {
     const data = await this.rpc('listSandboxes', {});
     return listSandboxesResponseSchema.parse(data).sandboxes;
+  }
+
+  /**
+   * The daemon host's own health in one snapshot: CPU, memory and swap
+   * (the freeze mechanism's fuel), the data disk, ledger aggregates, and
+   * what the sparse sandbox disks nominally promise versus actually occupy.
+   * Pure observation — never wakes a sandbox. Readings the platform cannot
+   * produce come back null, never invented.
+   */
+  async getHostMetrics(): Promise<HostMetricsResponse> {
+    const data = await this.rpc('getHostMetrics', {});
+    return hostMetricsResponseSchema.parse(data);
   }
 
   /**

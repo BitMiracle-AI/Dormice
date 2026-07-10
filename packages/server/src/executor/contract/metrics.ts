@@ -83,4 +83,76 @@ export function metricsTests(ctx: ContractContext) {
       timeoutMs,
     );
   });
+
+  describe('diskUsage', () => {
+    it(
+      'starts at zero and counts each disk once',
+      async () => {
+        expect(await ctx.executor.diskUsage()).toEqual({
+          count: 0,
+          nominalBytes: 0,
+          actualBytes: 0,
+        });
+        const first = await ctx.fresh();
+        const one = await ctx.executor.diskUsage();
+        expect(one.count).toBe(1);
+        expect(one.nominalBytes).toBeGreaterThan(0);
+        await ctx.fresh();
+        const two = await ctx.executor.diskUsage();
+        expect(two.count).toBe(2);
+        // Every disk is promised the same size, so two disks cost exactly
+        // twice the nominal — an invariant that holds whatever the size is.
+        expect(two.nominalBytes).toBe(2 * one.nominalBytes);
+        await ctx.executor.destroy(first);
+        expect((await ctx.executor.diskUsage()).count).toBe(1);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'a fresh disk occupies far less than its nominal size — sparseness is the overcommit',
+      async () => {
+        await ctx.fresh();
+        const usage = await ctx.executor.diskUsage();
+        expect(usage.actualBytes).toBeGreaterThan(0);
+        expect(usage.actualBytes).toBeLessThan(usage.nominalBytes);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'actual usage grows after writing a file',
+      async () => {
+        const id = await ctx.fresh();
+        const before = await ctx.executor.diskUsage();
+        await ctx.executor.writeFiles(id, [
+          { path: 'usage-blob.bin', content: Buffer.alloc(2 * 1024 ** 2, 7) },
+        ]);
+        // Same patience as the metrics growth test: ext4 may settle the
+        // sparse image's newly allocated blocks a beat after the write.
+        let after = await ctx.executor.diskUsage();
+        const deadline = Date.now() + timeoutMs - 1_000;
+        while (
+          after.actualBytes <= before.actualBytes &&
+          Date.now() < deadline
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          after = await ctx.executor.diskUsage();
+        }
+        expect(after.actualBytes).toBeGreaterThan(before.actualBytes);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'a stopped sandbox and a vanished container still count — the disk is the body',
+      async () => {
+        const id = await ctx.freshStopped();
+        expect((await ctx.executor.diskUsage()).count).toBe(1);
+        await ctx.subject.vanishContainer(id);
+        expect((await ctx.executor.diskUsage()).count).toBe(1);
+      },
+      timeoutMs,
+    );
+  });
 }

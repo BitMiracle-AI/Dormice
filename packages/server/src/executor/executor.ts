@@ -193,6 +193,19 @@ export interface SandboxMetrics {
 }
 
 /**
+ * What every sandbox disk on this host adds up to — the host-level
+ * complement to SandboxMetrics' per-sandbox view. Nominal is the summed
+ * promised sizes; actual is what the sparse images really occupy. The gap
+ * is the disk overcommit, and watching it is the only cap there is.
+ */
+export interface DiskUsage {
+  /** Disk images present, with or without a container — disks are the bodies. */
+  count: number;
+  nominalBytes: number;
+  actualBytes: number;
+}
+
+/**
  * The file-op error taxonomy, shared by both executors down to the message
  * (the contract exam holds them to it) and mapped to HTTP statuses by the
  * routes: not found -> 404, not a regular file / not a directory -> 400,
@@ -304,6 +317,13 @@ export interface Executor {
    * running to measure — the route above answers [] for those on its own.
    */
   metrics(sandboxId: string): Promise<SandboxMetrics>;
+  /**
+   * Every sandbox disk on this host, summed: how many, what they were
+   * promised, what they actually occupy. A snapshot like listDisks —
+   * a disk torn down mid-scan is simply not counted. Never touches disk
+   * contents and never wakes anything: observation is not activity.
+   */
+  diskUsage(): Promise<DiskUsage>;
   /**
    * Runs a shell command inside a running container and returns the fully
    * buffered result. Requires state `running` — a paused container cannot

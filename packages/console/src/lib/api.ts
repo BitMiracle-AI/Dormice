@@ -1,6 +1,7 @@
 import type {
   AcquireRequest,
   AcquireResponse,
+  HostMetricsResponse,
   Sandbox,
   Template,
 } from '@dormice/shared';
@@ -80,6 +81,10 @@ export const logout = () =>
 
 export const listSandboxes = () =>
   rpc<{ sandboxes: Sandbox[] }>('/listSandboxes');
+
+// The host-level observation window: machine health plus fleet aggregates.
+// Pure observation — the daemon wakes nothing to answer it.
+export const getHostMetrics = () => rpc<HostMetricsResponse>('/getHostMetrics');
 
 export const listTemplates = () =>
   rpc<{ templates: Template[] }>('/listTemplates');

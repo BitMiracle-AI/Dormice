@@ -18,6 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { OverviewCards } from '@/features/overview/components/OverviewCards';
 import { logout } from '@/lib/api';
 import { clearSessionMarker } from '@/lib/session';
 import { CreateSandboxDialog } from '../components/CreateSandboxDialog';
@@ -62,6 +63,10 @@ export function SandboxesPage() {
           </Button>
         </div>
       </header>
+
+      <div className="mb-6">
+        <OverviewCards />
+      </div>
 
       {query.isError && (
         <Alert variant="destructive" className="mb-4">

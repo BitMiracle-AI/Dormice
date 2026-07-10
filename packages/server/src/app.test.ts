@@ -1,7 +1,9 @@
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_LIFECYCLE_POLICY,
   FILE_SIZE_LIMIT_BYTES,
+  hostMetricsResponseSchema,
 } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app';
@@ -990,5 +992,82 @@ describe('templates', () => {
     expect(woken.sandboxId).toBe(created.sandboxId);
     // The rebuilt shell was born from the template's *current* image.
     expect(executor.imageOf(created.sandboxId)).toBe('img-v2');
+  });
+});
+
+describe('POST /getHostMetrics', () => {
+  it('sits behind the token like every API verb', async () => {
+    const res = await testApp().app.inject({
+      method: 'POST',
+      url: '/getHostMetrics',
+      payload: {},
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('answers a schema-valid snapshot with honest host readings', async () => {
+    // tmpdir() exists on every platform, so the data-disk reading is real.
+    const { app } = testApp(new FakeExecutor(), {
+      DORMICE_DATA_DIR: tmpdir(),
+    });
+    const res = await rpc(app, '/getHostMetrics');
+    expect(res.statusCode).toBe(200);
+    const body = hostMetricsResponseSchema.parse(res.json());
+    expect(body.host.cpuCount).toBeGreaterThan(0);
+    expect(body.host.memTotalBytes).toBeGreaterThan(0);
+    expect(body.host.memAvailableBytes).toBeGreaterThan(0);
+    expect(body.dataDisk?.path).toBe(tmpdir());
+    expect(body.dataDisk?.totalBytes).toBeGreaterThan(0);
+    expect(body.sandboxes).toEqual({
+      total: 0,
+      maxSandboxes: 100,
+      byState: { active: 0, frozen: 0, stopped: 0, archived: 0, restoring: 0 },
+    });
+    expect(body.sandboxDisks).toEqual({
+      count: 0,
+      nominalBytes: 0,
+      actualBytes: 0,
+    });
+  });
+
+  it('reports a missing data dir as null — absent, not invented', async () => {
+    const { app } = testApp(new FakeExecutor(), {
+      DORMICE_DATA_DIR: '/no/such/dormice-data',
+    });
+    const res = await rpc(app, '/getHostMetrics');
+    expect(res.statusCode).toBe(200);
+    expect(res.json().dataDisk).toBeNull();
+  });
+
+  it('aggregates follow the ledger, and observing changes nothing', async () => {
+    const { app, db, executor, locks } = testApp();
+    // alice freezes after 60s, bob keeps the 600s default: time-traveling
+    // to alice+60 freezes exactly one of them.
+    const created = (
+      await acquire(app, {
+        userKey: 'alice',
+        policy: { freezeAfterSeconds: 60 },
+      })
+    ).json();
+    await acquire(app, { userKey: 'bob' });
+
+    let body = (await rpc(app, '/getHostMetrics')).json();
+    expect(body.sandboxes.total).toBe(2);
+    expect(body.sandboxes.byState.active).toBe(2);
+    expect(body.sandboxDisks.count).toBe(2);
+    expect(body.sandboxDisks.nominalBytes).toBeGreaterThan(0);
+    expect(body.sandboxDisks.actualBytes).toBeGreaterThan(0);
+
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(created.sandbox.lastActiveAt, 60),
+    );
+    body = (await rpc(app, '/getHostMetrics')).json();
+    expect(body.sandboxes.byState.active).toBe(1);
+    expect(body.sandboxes.byState.frozen).toBe(1);
+    // Observation is not activity: reading metrics woke nothing.
+    expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
   });
 });

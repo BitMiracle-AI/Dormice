@@ -1,6 +1,7 @@
 export * from './acquire';
 export * from './exec';
 export * from './files';
+export * from './host';
 export * from './list';
 export * from './policy';
 export * from './rebuild';
