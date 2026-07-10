@@ -17,6 +17,7 @@ import { WatcherTable } from './e2b/watcher-table';
 import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
 import { consoleRoutes } from './routes/console';
+import { hostRoutes } from './routes/host';
 import { sandboxRoutes } from './routes/sandboxes';
 import { templateRoutes } from './routes/templates';
 import { createSandboxProxy } from './sandbox-proxy';
@@ -135,6 +136,7 @@ export function buildApp({
     api.addHook('onRequest', requireApiAuth(config.DORMICE_API_TOKEN));
     await api.register(sandboxRoutes, { config, db, executor, locks });
     await api.register(templateRoutes, { db });
+    await api.register(hostRoutes, { config, db, executor });
   });
 
   // The web console: session endpoints (open — login carries the token

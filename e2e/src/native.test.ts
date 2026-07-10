@@ -380,4 +380,23 @@ describe('native API over a real daemon', () => {
     );
     expect(observed?.state).toBe('active');
   });
+
+  it('reports host metrics: the machine and the fleet in one snapshot', async () => {
+    await client().acquireSandbox('host-metrics-key');
+    // The SDK already validates the response against the shared schema;
+    // assertions stay >= because other test files share this daemon.
+    const metrics = await client().getHostMetrics();
+    expect(metrics.host.cpuCount).toBeGreaterThan(0);
+    expect(metrics.host.memTotalBytes).toBeGreaterThan(0);
+    expect(metrics.sandboxes.total).toBeGreaterThanOrEqual(1);
+    expect(metrics.sandboxes.maxSandboxes).toBeGreaterThan(0);
+    expect(metrics.sandboxDisks.count).toBeGreaterThanOrEqual(1);
+    expect(metrics.sandboxDisks.actualBytes).toBeGreaterThan(0);
+    // Disks are sparse: the fleet is promised more than it occupies —
+    // the overcommit this window exists to watch.
+    expect(metrics.sandboxDisks.nominalBytes).toBeGreaterThan(
+      metrics.sandboxDisks.actualBytes,
+    );
+    await client().releaseSandbox('host-metrics-key');
+  });
 });

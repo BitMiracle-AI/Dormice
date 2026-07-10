@@ -157,6 +157,19 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
     expect(erin?.state).toBe('active');
   });
 
+  it('reads host metrics: real host numbers, ledger aggregates in step', async () => {
+    await client.acquireSandbox('metrics-watcher');
+    const metrics = await client.getHostMetrics();
+    expect(metrics.host.cpuCount).toBeGreaterThan(0);
+    expect(metrics.host.memTotalBytes).toBeGreaterThan(0);
+    const listed = await client.listSandboxes();
+    expect(metrics.sandboxes.total).toBe(listed.length);
+    expect(metrics.sandboxDisks.count).toBeGreaterThanOrEqual(1);
+    expect(metrics.sandboxDisks.nominalBytes).toBeGreaterThan(
+      metrics.sandboxDisks.actualBytes,
+    );
+  });
+
   it('runs a command in the sandbox and returns the buffered result', async () => {
     await client.acquireSandbox('grace');
     const result = await client.execCommand('grace', 'echo hi');

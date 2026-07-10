@@ -7,6 +7,7 @@ import {
 } from '@dormice/shared';
 import {
   type ContainerState,
+  type DiskUsage,
   type ExecOptions,
   type ExecResult,
   type ExecStreamHandle,
@@ -28,6 +29,9 @@ import {
 
 /** The image the fake's shells boot from when no other image is asked for. */
 export const FAKE_BASE_IMAGE = 'fake-base';
+
+/** The fake disk's promised size — metrics' diskTotalBytes and diskUsage's nominal, one number. */
+const FAKE_DISK_NOMINAL_BYTES = 10 * 1024 ** 3;
 
 /**
  * Directories every real sandbox is born with, with the owner and mode
@@ -62,6 +66,19 @@ function seededDisk(): Map<string, FakeNode> {
       { type: 'dir' as const, modifiedTime: now },
     ]),
   );
+}
+
+/**
+ * Disk usage computed from the file table — the one number the contract
+ * can watch move (write a file, usage grows) on both executors. Shared by
+ * metrics (one sandbox) and diskUsage (every disk on the host).
+ */
+function diskUsedBytes(files: Map<string, FakeNode>): number {
+  let used = 0;
+  for (const node of files.values()) {
+    used += node.type === 'file' ? node.content.length : 4096;
+  }
+  return used;
 }
 
 /**
@@ -387,21 +404,29 @@ export class FakeExecutor implements Executor {
         `container ${sandboxId} is ${actual ?? 'absent'}, expected running or paused`,
       );
     }
-    // Disk usage is computed from the file table — the one number the
-    // contract can watch move (write a file, usage grows) on both
-    // executors; the rest are plausible constants in honest proportions.
-    let diskUsedBytes = 0;
-    for (const node of this.disk(sandboxId).values()) {
-      diskUsedBytes += node.type === 'file' ? node.content.length : 4096;
-    }
     return {
       cpuCount: 1,
       cpuUsedPct: 0,
       memUsedBytes: 64 * 1024 ** 2,
       memTotalBytes: 2 * 1024 ** 3,
       memCacheBytes: 0,
-      diskUsedBytes,
-      diskTotalBytes: 10 * 1024 ** 3,
+      diskUsedBytes: diskUsedBytes(this.disk(sandboxId)),
+      diskTotalBytes: FAKE_DISK_NOMINAL_BYTES,
+    };
+  }
+
+  async diskUsage(): Promise<DiskUsage> {
+    // Keyed off the disks set, not containers: a stopped or vanished shell
+    // still has a disk, and the disk is what costs the host.
+    let actualBytes = 0;
+    for (const sandboxId of this.disks) {
+      const files = this.fs.get(sandboxId);
+      if (files) actualBytes += diskUsedBytes(files);
+    }
+    return {
+      count: this.disks.size,
+      nominalBytes: this.disks.size * FAKE_DISK_NOMINAL_BYTES,
+      actualBytes,
     };
   }
 
