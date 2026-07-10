@@ -27,7 +27,6 @@ dist/
 # website (Next.js) build artifacts and generated files
 website/.next/
 website/out/
-website/.source/
 website/next-env.d.ts
 
 # Runtime data (SQLite ledger, sandbox volumes)

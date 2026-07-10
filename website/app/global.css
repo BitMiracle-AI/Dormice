@@ -1,7 +1,26 @@
-@import "tailwindcss";
-@import "fumadocs-ui/css/neutral.css";
-@import "fumadocs-ui/css/preset.css";
+/* Style entry: imports plus project-level styling. app/shadcn.css is owned
+   by the shadcn CLI (rewritten wholesale by `shadcn apply`) — custom styles
+   live here, never there. */
+@import "./shadcn.css";
+@plugin "@tailwindcss/typography";
 
-/* Tell Tailwind where fumadocs-ui's class names live (path is relative to
- * this file; the package is symlinked by pnpm, Tailwind follows it). */
-@source "../node_modules/fumadocs-ui/dist/**/*.js";
+/* Shiki emits both themes as CSS variables (defaultColor: false in
+   next.config.mjs) — these rules pick the palette per color scheme. */
+.shiki,
+.shiki span {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+}
+
+.dark .shiki,
+.dark .shiki span {
+  color: var(--shiki-dark);
+  background-color: var(--shiki-dark-bg);
+}
+
+/* Code blocks: shiki owns the colors, typography owns the rest — keep the
+   prose theme from painting its own background over shiki's. */
+.prose pre {
+  @apply rounded-lg border p-4;
+  background-color: unset;
+}
