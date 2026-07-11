@@ -26,7 +26,11 @@
     },
     {
       "title": "Reference",
-      "pages": ["configuration"]
+      "pages": ["configuration", "cli", "http-api", "console"]
+    },
+    {
+      "title": "Operations",
+      "pages": ["doctor", "upgrading", "troubleshooting"]
     }
   ]
 }

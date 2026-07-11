@@ -1,0 +1,68 @@
+---
+title: Upgrading
+description: Re-running the installer is the upgrade — what survives, what restarts, and how sandbox images move.
+---
+
+The installer is idempotent: every step checks before it acts, and a
+step whose outcome is already in place says `[skip]` and touches
+nothing. **Re-running it is the upgrade** — it pulls the latest code,
+rebuilds the daemon, CLI and console, restarts the service, and proves
+the result by running `dor doctor` again:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/BitMiracle-AI/Dormice/main/deploy/install.sh | bash
+```
+
+Use the `curl | bash` form for upgrades. If you instead run a local copy
+(`bash /opt/dormice/deploy/install.sh`), know that its `git pull`
+updates the script file mid-run while bash keeps executing the *old*
+bytes — measured on a real upgrade. Run a local copy twice, or just
+pipe from the repo.
+
+## What survives an upgrade
+
+- **Your configuration.** `/etc/dormice/env` is never touched once it
+  exists — the API token is never rotated, and the recorded
+  `DORMICE_BASE_IMAGE` is kept (delete the file to regenerate).
+- **The ledger and every disk.** Everything under `/var/lib/dormice`
+  stays; schema migrations run forward automatically when the new
+  daemon boots — there is no manual migration step.
+- **The sandboxes.** A daemon restart does not touch containers: active
+  ones keep running, frozen ones stay frozen. The daemon is crash-only
+  by design — before it starts listening it reconciles the ledger
+  against what Docker actually shows, so restarting it is always safe.
+
+Two honest footnotes. The E2B process and watcher tables live in daemon
+memory: processes started over that surface keep running inside their
+containers across a restart, but the fresh daemon no longer lists them
+([details](/docs/e2b-differences)). And the pinned toolchain (Node,
+gVisor) is only *installed* when missing — an already-present gVisor is
+kept as-is, not upgraded.
+
+## Upgrading sandbox images
+
+The daemon upgrade above changes no sandbox's image — images move on a
+separate, per-sandbox path, because a container swap is visible to
+whoever is using the sandbox and should happen on your schedule:
+
+```sh
+docker build -t dormice-base:NEW -f images/Dockerfile images/
+# point DORMICE_BASE_IMAGE at the new tag in /etc/dormice/env, then:
+systemctl restart dormice
+dor sandbox rebuild <userKey>   # per sandbox, when it suits you
+```
+
+[Rebuild](/docs/persistence#rebuild-new-shell-same-body) swaps the
+container and keeps `/home/user` — nothing under it is lost. Sandboxes
+created from a [template](/docs/templates) follow the same rhythm with
+`dor template add` re-pointing the name first. Sandboxes you never
+rebuild simply keep running on the image they were born with.
+
+## When something looks wrong afterwards
+
+The installer refuses to call itself done until the daemon answers
+`/healthz` and `dor doctor` passes. If it stops early, the step that
+failed prints what it found; fix that and re-run — it continues from
+where it left off. The daemon's own story is in
+`journalctl -u dormice -f`, and [troubleshooting](/docs/troubleshooting)
+collects the failures that have actually happened.

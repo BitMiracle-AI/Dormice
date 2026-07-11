@@ -4,11 +4,15 @@ import type { JSX } from 'react';
 // content, not source, and stays portable across doc-shell rewrites.
 import * as architecture from '../../content/docs/architecture.mdx';
 import * as archiving from '../../content/docs/archiving.mdx';
+import * as cli from '../../content/docs/cli.mdx';
 import * as commands from '../../content/docs/commands.mdx';
 import * as configuration from '../../content/docs/configuration.mdx';
+import * as consoleDoc from '../../content/docs/console.mdx';
+import * as doctor from '../../content/docs/doctor.mdx';
 import * as e2bDifferences from '../../content/docs/e2b-differences.mdx';
 import * as e2bSdks from '../../content/docs/e2b-sdks.mdx';
 import * as files from '../../content/docs/files.mdx';
+import * as httpApi from '../../content/docs/http-api.mdx';
 import * as indexDoc from '../../content/docs/index.mdx';
 import * as installation from '../../content/docs/installation.mdx';
 import * as lifecycle from '../../content/docs/lifecycle.mdx';
@@ -19,6 +23,8 @@ import * as ports from '../../content/docs/ports.mdx';
 import * as quickstart from '../../content/docs/quickstart.mdx';
 import * as residentAgents from '../../content/docs/resident-agents.mdx';
 import * as templates from '../../content/docs/templates.mdx';
+import * as troubleshooting from '../../content/docs/troubleshooting.mdx';
+import * as upgrading from '../../content/docs/upgrading.mdx';
 
 // Server-only registry of every doc. MDX renders as server components, so
 // importing them all here costs the client nothing — pages ship as HTML.
@@ -48,6 +54,12 @@ const modules: Record<string, DocModule> = {
   'e2b-sdks': e2bSdks,
   'e2b-differences': e2bDifferences,
   configuration,
+  cli,
+  'http-api': httpApi,
+  console: consoleDoc,
+  doctor,
+  upgrading,
+  troubleshooting,
 };
 
 export interface DocEntry {

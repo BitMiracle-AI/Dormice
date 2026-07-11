@@ -1,0 +1,77 @@
+---
+title: Web console
+description: The daemon serves its own UI at /console — sign in once, watch everything, wake nothing by accident.
+---
+
+The daemon hosts a web console at `http://127.0.0.1:3676/console` — same
+process, same port, nothing extra to run. It is an observation window
+with hands: everything it shows comes from the same API documented in
+this section, and it follows the same rule the API does — **watching
+never wakes a sandbox; using does, and only behind an explicit click**.
+
+(The console UI is currently Chinese-language.)
+
+## Signing in
+
+Paste the API token once. The browser trades it for an `httpOnly` session
+cookie (valid 7 days) and never stores the token anywhere page
+JavaScript can read — a script injected into the console cannot steal
+your long-term credential. Sessions are derived from the API token, so
+rotating the token signs every browser out at once.
+
+## Overview
+
+The "is this machine healthy" page: CPU, memory, **swap** and the **data
+disk** as first-class cards — swap filling up means "idle is free" is
+ending, and a full data disk is the real capacity ceiling. Below them,
+sandbox counts by lifecycle state and the sandbox-disk overcommit figure
+(promised vs actually occupied — the same numbers as
+[`getHostMetrics`](/docs/metrics)). Usage bars turn amber at 75% and red
+at 90%; a host without swap gets an amber warning pointing at
+`dor doctor`.
+
+## Sandboxes
+
+The live list — every sandbox with its state, polled every 2 seconds,
+with search, a state filter, and multi-select batch release. Creating a
+sandbox from here is exactly `acquireSandbox`: user key, the lifecycle
+knobs (including the never-stop [resident-agent
+switch](/docs/resident-agents)), and a template dropdown when templates
+are registered.
+
+A sandbox's detail page is a workspace with four tabs:
+
+- **Overview** — identity, policy thresholds, last activity; release and
+  [rebuild](/docs/persistence#rebuild-new-shell-same-body) buttons, each
+  behind a confirmation dialog.
+- **Terminal** — a real interactive shell, kept behind an explicit
+  "open" button because opening one *wakes* the sandbox. The browser
+  speaks the same wire the official E2B SDK does — the console did not
+  grow a second terminal protocol. Closing the terminal kills its shell
+  rather than leaving an orphan behind.
+- **Files** — browse, upload, download, rename, delete under
+  `/home/user`. File operations wake the sandbox too, so a cold sandbox
+  shows an explicit "open" gate first.
+- **Processes** — the E2B process table, polled without waking (a
+  stopped sandbox honestly shows none).
+
+## Templates
+
+Register a name for an image, re-register to re-point it — the console's
+form is the same [upgrade front door](/docs/templates) as
+`dor template add`. Deleting a template a sandbox still uses is refused
+with the daemon's own message naming the sandboxes.
+
+## Connect
+
+Copy-paste snippets for the SDK, the official E2B packages, and curl,
+pre-filled with the endpoint the browser itself is using. The API token
+is never displayed — the console traded it for a cookie at sign-in and
+cannot read it back; fetch it from the daemon host
+(`grep ^DORMICE_API_TOKEN /etc/dormice/env`).
+
+## What you will not find
+
+Development builds show extra preview pages backed by sample data,
+clearly badged; a production build hides them entirely. The rule: a real
+deployment must never render a fake all-green health report.
