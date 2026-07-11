@@ -1,0 +1,52 @@
+name: Bug report
+description: Something behaves wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: >
+        What did you do, what did you expect, and what happened instead?
+        Exact commands and exact error output beat descriptions.
+      placeholder: |
+        1. ...
+        2. ...
+        Expected: ...
+        Got: ...
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: dor doctor output
+      description: >
+        Run `dor doctor` on the host and paste the full output — most
+        host-related problems are diagnosed straight from it. If your
+        report does not involve a running daemon (an SDK-only problem,
+        say), write "not applicable" and why.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: How you run Dormice.
+      placeholder: |
+        Installed via: install.sh | from source
+        Dormice version/commit: ...
+        OS: Ubuntu 24.04 | macOS (fake executor) | ...
+        Executor: docker | fake
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Daemon logs (if relevant)
+      description: >
+        `journalctl -u dormice -n 200` on an install.sh host, or the
+        daemon's stdout. Redact your API token if it appears.
+      render: text
+    validations:
+      required: false

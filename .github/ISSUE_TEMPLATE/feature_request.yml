@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose an improvement or a new capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What are you trying to do that Dormice makes hard or impossible
+        today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: >
+        If you have a shape in mind. Note that "When Dormice is the
+        wrong tool" in the README lists a few things that are out of
+        scope by design.
+    validations:
+      required: false
