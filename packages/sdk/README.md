@@ -45,13 +45,17 @@ lifecycle policy is set at creation: `freezeAfterSeconds`, `stopAfterSeconds`
 
 | Method | What it does |
 | --- | --- |
-| `acquireSandbox(userKey, policy?)` | Create or wake the sandbox behind a key (idempotent) |
+| `acquireSandbox(userKey, { policy?, template? })` | Create or wake the sandbox behind a key (idempotent); both options apply only when this call creates it |
 | `listSandboxes()` | Every sandbox with its current lifecycle state |
 | `execCommand(userKey, command, opts?)` | Run a shell command; buffered stdout/stderr and the real exit code |
 | `writeFiles(userKey, files)` | Write files onto the sandbox disk (relative paths land under `/home/user`) |
 | `readFile(userKey, path)` | Read a file back as bytes |
-| `rebuildSandbox(userKey)` | Swap the container, keep `/home/user` — next use starts on the daemon's current base image |
+| `rebuildSandbox(userKey)` | Swap the container, keep `/home/user` — next use starts on the current image of its template (or the base image) |
 | `releaseSandbox(userKey)` | Destroy the sandbox (idempotent) |
+| `registerTemplate(name, image)` | Name a Docker image on the host as a template (an upsert — re-register to upgrade) |
+| `listTemplates()` | Every registered template |
+| `removeTemplate(name)` | Remove a template's registration; refused (409) while sandboxes use it |
+| `getHostMetrics()` | One snapshot of the host: CPU, memory, swap, data disk, sandbox disks, ledger totals |
 
 A non-zero exit code is a result, not an error. API failures throw
 `DormiceApiError` carrying the HTTP status and the daemon's message.

@@ -40,6 +40,15 @@ importers:
         specifier: workspace:*
         version: link:../packages/server
 
+  examples:
+    dependencies:
+      '@dormice/sdk':
+        specifier: workspace:*
+        version: link:../packages/sdk
+      e2b:
+        specifier: ^2.31.0
+        version: 2.31.0
+
   packages/cli:
     dependencies:
       '@dormice/sdk':
