@@ -19,10 +19,15 @@ export interface SearchItem {
   description: string;
 }
 
+export interface SearchGroup {
+  title: string;
+  items: SearchItem[];
+}
+
 // Search over doc titles and descriptions, fully client-side — the honest
 // size for a docs set this small. Grow it into a real text index when the
 // page count earns it.
-export function DocsSearch({ items }: { items: SearchItem[] }) {
+export function DocsSearch({ groups }: { groups: SearchGroup[] }) {
   const [open, setOpen] = useState(false);
   const router = useRouter();
 
@@ -57,25 +62,27 @@ export function DocsSearch({ items }: { items: SearchItem[] }) {
         <CommandInput placeholder="Search documentation…" />
         <CommandList>
           <CommandEmpty>No results found.</CommandEmpty>
-          <CommandGroup heading="Documentation">
-            {items.map((item) => (
-              <CommandItem
-                key={item.href}
-                value={`${item.title} ${item.description}`}
-                onSelect={() => {
-                  setOpen(false);
-                  router.push(item.href);
-                }}
-              >
-                <div className="flex flex-col gap-0.5">
-                  <span>{item.title}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {item.description}
-                  </span>
-                </div>
-              </CommandItem>
-            ))}
-          </CommandGroup>
+          {groups.map((group) => (
+            <CommandGroup key={group.title} heading={group.title}>
+              {group.items.map((item) => (
+                <CommandItem
+                  key={item.href}
+                  value={`${item.title} ${item.description}`}
+                  onSelect={() => {
+                    setOpen(false);
+                    router.push(item.href);
+                  }}
+                >
+                  <div className="flex flex-col gap-0.5">
+                    <span>{item.title}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {item.description}
+                    </span>
+                  </div>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          ))}
         </CommandList>
       </CommandDialog>
     </>

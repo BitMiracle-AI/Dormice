@@ -16,34 +16,43 @@ export interface DocsNavItem {
   title: string;
 }
 
+export interface DocsNavGroup {
+  title: string;
+  items: DocsNavItem[];
+}
+
 // Menu content only — it must live inside a <SidebarProvider> (the docs
 // layout provides one; the mobile Sheet sits inside the same provider).
 export function DocsSidebar({
-  items,
+  groups,
   onNavigate,
 }: {
-  items: DocsNavItem[];
+  groups: DocsNavGroup[];
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
 
   return (
-    <SidebarGroup>
-      <SidebarGroupLabel>Documentation</SidebarGroupLabel>
-      <SidebarGroupContent>
-        <SidebarMenu>
-          {items.map((item) => (
-            <SidebarMenuItem key={item.href}>
-              <SidebarMenuButton
-                isActive={pathname === item.href}
-                render={<Link href={item.href} onClick={onNavigate} />}
-              >
-                {item.title}
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          ))}
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
+    <>
+      {groups.map((group) => (
+        <SidebarGroup key={group.title}>
+          <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {group.items.map((item) => (
+                <SidebarMenuItem key={item.href}>
+                  <SidebarMenuButton
+                    isActive={pathname === item.href}
+                    render={<Link href={item.href} onClick={onNavigate} />}
+                  >
+                    {item.title}
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      ))}
+    </>
   );
 }
