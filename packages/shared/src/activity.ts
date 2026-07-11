@@ -1,0 +1,60 @@
+import { z } from 'zod';
+
+/**
+ * listActivity() — the ledger's recent history: who was created, cooled,
+ * woken, destroyed, and what reconciliation repaired. Events come from the
+ * daemon's own actors (lifecycle moves, the idle scanner, the reconciler,
+ * the archiver) and live in a bounded ring in SQLite — the newest N are
+ * kept, older ones fall off. This is an explanation window, not an audit
+ * log and not a monitoring system: it answers "why is my sandbox stopped",
+ * not "prove nobody touched it".
+ */
+export const ACTIVITY_KINDS = [
+  'created',
+  'woken',
+  'frozen',
+  'stopped',
+  'rebuilt',
+  'released',
+  /** An E2B deadline with the kill action passed: destroyed, disk and all. */
+  'expired-killed',
+  'archived',
+  'restore-started',
+  'restored',
+  'restore-failed',
+  /** The reconciler corrected the ledger (or reality) to match the other. */
+  'reconciled',
+  'daemon-started',
+] as const;
+
+export const activityKindSchema = z.enum(ACTIVITY_KINDS);
+export type ActivityKind = z.infer<typeof activityKindSchema>;
+
+export const activityEventSchema = z.object({
+  /** Ring position; monotonically increasing, newest is largest. */
+  id: z.number().int(),
+  /** ISO 8601 UTC. */
+  at: z.string(),
+  kind: activityKindSchema,
+  /** Null for events with no owning sandbox (orphan sweeps, daemon start). */
+  userKey: z.string().nullable(),
+  sandboxId: z.string().nullable(),
+  /** One short line of context: which actor, which threshold, what was repaired. */
+  detail: z.string(),
+});
+
+export type ActivityEvent = z.infer<typeof activityEventSchema>;
+
+export const listActivityRequestSchema = z.object({
+  /** Newest-first page size; the ring never holds more than its bound anyway. */
+  limit: z.number().int().min(1).max(1000).default(200),
+});
+
+export type ListActivityRequest = z.input<typeof listActivityRequestSchema>;
+
+export const listActivityResponseSchema = z.object({
+  /** Newest first. */
+  events: z.array(activityEventSchema),
+});
+
+export type ListActivityResponse = z.infer<typeof listActivityResponseSchema>;

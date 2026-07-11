@@ -1,4 +1,5 @@
 import { type ArchiveStore, objectKey } from './archive/store';
+import { recordActivity } from './db/activity';
 import type { Db } from './db/db';
 import {
   deleteSandbox,
@@ -21,22 +22,44 @@ import type { Executor } from './executor/executor';
  * reconciler's job, not something every caller hedges against.
  */
 
+/**
+ * The lifecycle verbs also feed the activity ring here, after the ledger
+ * write — history is recorded where reality and ledger already move
+ * together, so no caller can forget it. `cause` is the caller's one line of
+ * context ("who did this and why"); the default names the bare move.
+ */
 export async function freezeSandbox(
   db: Db,
   executor: Executor,
   sandboxId: string,
+  cause?: string,
 ): Promise<SandboxRow> {
   await executor.freeze(sandboxId);
-  return transition(db, sandboxId, 'frozen');
+  const row = transition(db, sandboxId, 'frozen');
+  recordActivity(db, {
+    kind: 'frozen',
+    userKey: row.userKey,
+    sandboxId,
+    detail: cause ?? 'memory squeezed into swap',
+  });
+  return row;
 }
 
 export async function stopSandbox(
   db: Db,
   executor: Executor,
   sandboxId: string,
+  cause?: string,
 ): Promise<SandboxRow> {
   await executor.stop(sandboxId);
-  return transition(db, sandboxId, 'stopped');
+  const row = transition(db, sandboxId, 'stopped');
+  recordActivity(db, {
+    kind: 'stopped',
+    userKey: row.userKey,
+    sandboxId,
+    detail: cause ?? 'container torn down, disk kept',
+  });
+  return row;
 }
 
 /**
@@ -57,6 +80,10 @@ export async function releaseSandbox(
   executor: Executor,
   sandboxId: string,
   store: ArchiveStore | null,
+  activity: { kind: 'released' | 'expired-killed'; cause: string } = {
+    kind: 'released',
+    cause: 'via releaseSandbox',
+  },
 ): Promise<void> {
   const row = findBySandboxId(db, sandboxId);
   if (row?.state === 'archived') {
@@ -67,10 +94,24 @@ export async function releaseSandbox(
     }
     await store.delete(objectKey(sandboxId));
     deleteSandbox(db, sandboxId);
+    recordActivity(db, {
+      kind: activity.kind,
+      userKey: row.userKey,
+      sandboxId,
+      detail: `${activity.cause}; archive object deleted`,
+    });
     return;
   }
   await executor.destroy(sandboxId);
   deleteSandbox(db, sandboxId);
+  if (row) {
+    recordActivity(db, {
+      kind: activity.kind,
+      userKey: row.userKey,
+      sandboxId,
+      detail: activity.cause,
+    });
+  }
 }
 
 /**
@@ -89,6 +130,13 @@ export async function rebuildSandbox(
   row: SandboxRow,
 ): Promise<SandboxRow> {
   await executor.removeContainer(row.sandboxId);
+  recordActivity(db, {
+    kind: 'rebuilt',
+    userKey: row.userKey,
+    sandboxId: row.sandboxId,
+    detail:
+      'shell removed, disk kept — next wake builds from the current image',
+  });
   if (row.state === 'stopped') {
     return row;
   }
@@ -106,14 +154,14 @@ export async function wakeSandbox(
       return row;
     case 'frozen':
       await executor.unfreeze(row.sandboxId);
-      return awaken(db, row);
+      return awaken(db, row, 'from frozen (memory back out of swap)');
     case 'stopped':
       // If the container object was pruned away, start rebuilds the shell —
       // from the template's current image, resolved here at wake time.
       await executor.start(row.sandboxId, {
         image: resolveImage(db, row.template),
       });
-      return awaken(db, row);
+      return awaken(db, row, 'cold start from the surviving disk');
     case 'archived':
     case 'restoring':
       // Every legitimate path branches to the archiver before landing here
@@ -130,9 +178,16 @@ export async function wakeSandbox(
  * so any explicit E2B pause mark is cleared along with the transition —
  * ledger honesty, not an E2B-surface concern leaking in.
  */
-function awaken(db: Db, row: SandboxRow): SandboxRow {
+function awaken(db: Db, row: SandboxRow, how: string): SandboxRow {
   if (row.pausedByUser) {
     setPausedByUser(db, row.sandboxId, false);
   }
-  return { ...transition(db, row.sandboxId, 'active'), pausedByUser: false };
+  const awake = transition(db, row.sandboxId, 'active');
+  recordActivity(db, {
+    kind: 'woken',
+    userKey: row.userKey,
+    sandboxId: row.sandboxId,
+    detail: how,
+  });
+  return { ...awake, pausedByUser: false };
 }

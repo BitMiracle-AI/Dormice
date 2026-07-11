@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/native-select';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
+import { useConfig } from '@/features/settings/hooks/useConfig';
 import { useTemplates } from '@/features/templates/hooks/useTemplates';
 import { useAcquireSandbox } from '../hooks/useSandboxes';
 
@@ -35,9 +36,11 @@ import { useAcquireSandbox } from '../hooks/useSandboxes';
  * same sandbox — "creating" an existing key just returns it (the policy
  * override only applies when the acquire actually creates).
  *
- * The two policy knobs are optional; empty means the daemon's default.
- * Archive has no knob here on purpose: there is no archiver yet, so the
- * only honest value is the default (never).
+ * The policy knobs are optional; empty means the daemon's default. The
+ * archive knob only exists when the daemon says archiving is available
+ * (getConfig's adjudication) — an unconfigured feature stays honestly
+ * absent. A never-stop sandbox never reaches stopped, so its archive knob
+ * disappears too.
  */
 export function CreateSandboxDialog() {
   const [open, setOpen] = useState(false);
@@ -46,8 +49,11 @@ export function CreateSandboxDialog() {
   const [freezeAfter, setFreezeAfter] = useState('');
   const [neverStop, setNeverStop] = useState(false);
   const [stopAfter, setStopAfter] = useState('');
+  const [neverArchive, setNeverArchive] = useState(false);
+  const [archiveAfter, setArchiveAfter] = useState('');
   const mutation = useAcquireSandbox();
   const templates = useTemplates().data?.templates ?? [];
+  const archive = useConfig().data?.archive;
 
   const reset = () => {
     setUserKey('');
@@ -55,6 +61,8 @@ export function CreateSandboxDialog() {
     setFreezeAfter('');
     setNeverStop(false);
     setStopAfter('');
+    setNeverArchive(false);
+    setArchiveAfter('');
     mutation.reset();
   };
 
@@ -63,6 +71,11 @@ export function CreateSandboxDialog() {
     if (freezeAfter !== '') policy.freezeAfterSeconds = Number(freezeAfter);
     if (neverStop) policy.stopAfterSeconds = null;
     else if (stopAfter !== '') policy.stopAfterSeconds = Number(stopAfter);
+    if (archive?.enabled && !neverStop) {
+      if (neverArchive) policy.archiveAfterSeconds = null;
+      else if (archiveAfter !== '')
+        policy.archiveAfterSeconds = Number(archiveAfter);
+    }
 
     mutation.mutate(
       {
@@ -190,6 +203,39 @@ export function CreateSandboxDialog() {
                   已冻结 → 已停止的空闲阈值:只留磁盘,唤醒是冷启动。
                 </FieldDescription>
               </Field>
+            )}
+            {archive?.enabled && !neverStop && (
+              <>
+                <Field orientation="horizontal">
+                  <Switch
+                    id="create-never-archive"
+                    checked={neverArchive}
+                    onCheckedChange={setNeverArchive}
+                  />
+                  <FieldLabel htmlFor="create-never-archive">
+                    永不归档
+                  </FieldLabel>
+                </Field>
+                {!neverArchive && (
+                  <Field>
+                    <FieldLabel htmlFor="create-archive-after">
+                      空闲多久后归档(秒)
+                    </FieldLabel>
+                    <Input
+                      id="create-archive-after"
+                      type="number"
+                      min={1}
+                      value={archiveAfter}
+                      onChange={(event) => setArchiveAfter(event.target.value)}
+                      placeholder={`${archive.defaultSeconds ?? ''}(daemon 默认)`}
+                    />
+                    <FieldDescription>
+                      已停止 → 已归档:磁盘压缩上传 S3,本地零占用;
+                      唤醒要下载解压,慢但有真进度。
+                    </FieldDescription>
+                  </Field>
+                )}
+              </>
             )}
             {mutation.isError && (
               <FieldError>{mutation.error.message}</FieldError>

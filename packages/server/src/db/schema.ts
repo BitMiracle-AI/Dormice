@@ -1,4 +1,4 @@
-import { SANDBOX_STATES } from '@dormice/shared';
+import { ACTIVITY_KINDS, SANDBOX_STATES } from '@dormice/shared';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 /**
@@ -66,3 +66,25 @@ export const templates = sqliteTable('templates', {
 });
 
 export type TemplateRow = typeof templates.$inferSelect;
+
+/**
+ * The activity ring: the ledger's recent history, one row per lifecycle
+ * event (created, cooled, woken, destroyed, repaired). Bounded by count —
+ * recordActivity prunes past the newest N — so it answers "what just
+ * happened" without ever becoming a second database to babysit. The
+ * autoincrement id is the ring position AND the newest-first sort key;
+ * unlike sandbox ids it never leaves this machine, so the UUID rule does
+ * not apply.
+ */
+export const activity = sqliteTable('activity', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  /** ISO 8601 UTC. */
+  at: text('at').notNull(),
+  kind: text('kind', { enum: ACTIVITY_KINDS }).notNull(),
+  /** Null for events with no owning sandbox (orphan sweeps, daemon start). */
+  userKey: text('user_key'),
+  sandboxId: text('sandbox_id'),
+  detail: text('detail').notNull(),
+});
+
+export type ActivityRow = typeof activity.$inferSelect;

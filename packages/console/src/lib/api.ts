@@ -1,7 +1,10 @@
 import type {
   AcquireRequest,
   AcquireResponse,
+  GetConfigResponse,
+  GetSandboxMetricsResponse,
   HostMetricsResponse,
+  ListActivityResponse,
   RegisterTemplateResponse,
   Sandbox,
   Template,
@@ -86,6 +89,19 @@ export const listSandboxes = () =>
 // The host-level observation window: machine health plus fleet aggregates.
 // Pure observation — the daemon wakes nothing to answer it.
 export const getHostMetrics = () => rpc<HostMetricsResponse>('/getHostMetrics');
+
+// One sandbox's point-in-time reading. Same principle: a frozen sandbox is
+// measured as it sleeps, a stopped one answers sample: null — never woken.
+export const getSandboxMetrics = (userKey: string) =>
+  rpc<GetSandboxMetricsResponse>('/getSandboxMetrics', { userKey });
+
+// The ledger's recent history, newest first — a bounded ring, not an audit
+// log. The daemon records at the moves themselves; this only reads.
+export const listActivity = () => rpc<ListActivityResponse>('/listActivity');
+
+// Effective configuration, read-only. Secrets come back as "set", never as
+// their value; archive.enabled is the daemon's own adjudication.
+export const getConfig = () => rpc<GetConfigResponse>('/getConfig');
 
 export const listTemplates = () =>
   rpc<{ templates: Template[] }>('/listTemplates');

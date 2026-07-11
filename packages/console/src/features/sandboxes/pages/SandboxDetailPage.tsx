@@ -15,12 +15,12 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { MOCK_PAGES_ENABLED } from '@/lib/mock';
 import { FilesPanel } from '../components/FilesPanel';
 import { MetricsPanel } from '../components/MetricsPanel';
 import { ProcessesPanel } from '../components/ProcessesPanel';
 import { RebuildSandboxButton } from '../components/RebuildSandboxButton';
 import { ReleaseSandboxButton } from '../components/ReleaseSandboxButton';
+import { RestoreCard } from '../components/RestoreCard';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { SandboxTerminalCard } from '../components/SandboxTerminal';
 import { formatDuration, since } from '../format';
@@ -95,6 +95,10 @@ export function SandboxDetailPage() {
         </div>
       </div>
 
+      {(sandbox.state === 'archived' || sandbox.state === 'restoring') && (
+        <RestoreCard sandbox={sandbox} />
+      )}
+
       <Tabs
         value={tab}
         onValueChange={(next) =>
@@ -109,9 +113,7 @@ export function SandboxDetailPage() {
           <TabsTrigger value="terminal">终端</TabsTrigger>
           <TabsTrigger value="files">文件</TabsTrigger>
           <TabsTrigger value="processes">进程</TabsTrigger>
-          {MOCK_PAGES_ENABLED && (
-            <TabsTrigger value="metrics">指标</TabsTrigger>
-          )}
+          <TabsTrigger value="metrics">指标</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">

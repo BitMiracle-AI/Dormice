@@ -4,6 +4,8 @@ import {
   acquireResponseSchema,
   execCommandRequestSchema,
   execCommandResponseSchema,
+  getSandboxMetricsRequestSchema,
+  getSandboxMetricsResponseSchema,
   type LifecyclePolicy,
   listSandboxesResponseSchema,
   readFileRequestSchema,
@@ -279,6 +281,36 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     async () => ({
       sandboxes: listSandboxes(db).map((row) => toSandbox(row, endpoint)),
     }),
+  );
+
+  // One sandbox's point-in-time resource reading — the native twin of the
+  // E2B metrics endpoint, same rules: a single sample (no history kept),
+  // and observation never wakes anything. A frozen sandbox is measured as
+  // it sleeps (its cgroup accounting stays readable); with no running
+  // container there is nothing to measure and the answer is an honest null.
+  app.post(
+    '/getSandboxMetrics',
+    {
+      schema: {
+        body: getSandboxMetricsRequestSchema,
+        response: { 200: getSandboxMetricsResponseSchema },
+      },
+    },
+    async (request) => {
+      const { userKey } = request.body;
+      const row = findByUserKey(db, userKey);
+      if (!row) {
+        throw httpError(
+          404,
+          `no sandbox for key "${userKey}" — acquire it first`,
+        );
+      }
+      if (row.state !== 'active' && row.state !== 'frozen') {
+        return { sample: null };
+      }
+      const m = await executor.metrics(row.sandboxId);
+      return { sample: { timestamp: new Date().toISOString(), ...m } };
+    },
   );
 
   app.post(

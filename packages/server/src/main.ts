@@ -6,6 +6,7 @@ import { buildApp } from './app';
 import { Archiver } from './archive/archiver';
 import { S3Store } from './archive/s3-store';
 import { type Config, loadConfig, s3Settings } from './config';
+import { recordActivity } from './db/activity';
 import { migrateDb, openDb } from './db/db';
 import { listSandboxes } from './db/ledger';
 import { acquireSingleWriterLock } from './db/lock';
@@ -133,6 +134,13 @@ if (refusal !== null) {
 // listen, so no request ever observes one.
 const repaired = await reconcile(db, executor, locks, undefined, archiver);
 app.log.info(repaired, 'startup reconcile');
+recordActivity(db, {
+  kind: 'daemon-started',
+  detail:
+    `executor ${config.DORMICE_EXECUTOR}; startup reconcile: ` +
+    `${repaired.repairedStates} states repaired, ${repaired.deletedRows} rows deleted, ` +
+    `${repaired.destroyedOrphans} orphan containers destroyed, ${repaired.removedDisks} disks removed`,
+});
 
 // Red line: the daemon binds to loopback only, and the host is deliberately
 // not configurable — a knob would be one typo away from 0.0.0.0. Exposing

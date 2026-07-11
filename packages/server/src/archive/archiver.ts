@@ -1,5 +1,6 @@
 import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { recordActivity } from '../db/activity';
 import type { Db } from '../db/db';
 import {
   findBySandboxId,
@@ -109,9 +110,14 @@ export class Archiver {
     } finally {
       await rm(tmp, { force: true });
     }
-    this.log(
-      `archived ${row.sandboxId} in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`,
-    );
+    const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+    recordActivity(this.db, {
+      kind: 'archived',
+      userKey: row.userKey,
+      sandboxId: row.sandboxId,
+      detail: `disk shipped to S3 in ${seconds}s; local copy freed`,
+    });
+    this.log(`archived ${row.sandboxId} in ${seconds}s`);
   }
 
   /**
@@ -128,6 +134,12 @@ export class Archiver {
       );
     }
     transition(this.db, row.sandboxId, 'restoring');
+    recordActivity(this.db, {
+      kind: 'restore-started',
+      userKey: row.userKey,
+      sandboxId: row.sandboxId,
+      detail: 'restore from S3 began',
+    });
     const progress: RestoreProgress = { phase: 'downloading', percent: 0 };
     const done = this.runRestore(row.sandboxId, row.userKey, progress).finally(
       () => {
@@ -224,6 +236,12 @@ export class Archiver {
         }
         transition(this.db, sandboxId, 'active');
         touch(this.db, sandboxId);
+        recordActivity(this.db, {
+          kind: 'restored',
+          userKey,
+          sandboxId,
+          detail: 'disk back from S3, sandbox active; archive object deleted',
+        });
       });
       // The object's job is done — the disk is local again, so from here
       // "an object exists" means "the row is archived", and release never
@@ -239,6 +257,14 @@ export class Archiver {
         const fresh = findBySandboxId(this.db, sandboxId);
         if (fresh?.state === 'restoring') {
           transition(this.db, sandboxId, 'archived');
+          recordActivity(this.db, {
+            kind: 'restore-failed',
+            userKey,
+            sandboxId,
+            detail: `back to archived, S3 object intact — ${
+              err instanceof Error ? err.message : String(err)
+            }`.slice(0, 300),
+          });
         }
       });
       throw err;

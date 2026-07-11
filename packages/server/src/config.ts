@@ -156,6 +156,54 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 }
 
 /**
+ * Every knob the daemon has, in display order, with its secrecy flag — the
+ * single adjudication of "what getConfig reports". A Record over keyof
+ * Config so the compiler refuses a new env variable until it is listed
+ * here too: a knob that exists but is invisible would be a silent lie.
+ */
+export const CONFIG_KEYS: Record<keyof Config, { sensitive: boolean }> = {
+  DORMICE_PORT: { sensitive: false },
+  DORMICE_DB_PATH: { sensitive: false },
+  DORMICE_NODE_ID: { sensitive: false },
+  DORMICE_API_TOKEN: { sensitive: true },
+  DORMICE_EXECUTOR: { sensitive: false },
+  DORMICE_BASE_IMAGE: { sensitive: false },
+  DORMICE_DATA_DIR: { sensitive: false },
+  DORMICE_MAX_SANDBOXES: { sensitive: false },
+  DORMICE_SCAN_INTERVAL_SECONDS: { sensitive: false },
+  DORMICE_SANDBOX_DISK_GB: { sensitive: false },
+  DORMICE_SANDBOX_CPUS: { sensitive: false },
+  DORMICE_SANDBOX_MEMORY_GB: { sensitive: false },
+  DORMICE_SANDBOX_PIDS_LIMIT: { sensitive: false },
+  DORMICE_RECLAIM_TIMEOUT_SECONDS: { sensitive: false },
+  DORMICE_SANDBOX_DOMAIN: { sensitive: false },
+  DORMICE_S3_ENDPOINT: { sensitive: false },
+  DORMICE_S3_BUCKET: { sensitive: false },
+  DORMICE_S3_ACCESS_KEY_ID: { sensitive: true },
+  DORMICE_S3_SECRET_ACCESS_KEY: { sensitive: true },
+  DORMICE_S3_REGION: { sensitive: false },
+  DORMICE_S3_FORCE_PATH_STYLE: { sensitive: false },
+};
+
+export type ConfigSources = Record<keyof Config, 'env' | 'default'>;
+
+/**
+ * Which knobs the operator set explicitly versus which fell back to
+ * defaults. Read off the raw environment at load time — the parsed config
+ * cannot tell the two apart once defaults are applied.
+ */
+export function configSources(
+  env: NodeJS.ProcessEnv = process.env,
+): ConfigSources {
+  return Object.fromEntries(
+    (Object.keys(CONFIG_KEYS) as Array<keyof Config>).map((key) => [
+      key,
+      env[key] !== undefined ? 'env' : 'default',
+    ]),
+  ) as ConfigSources;
+}
+
+/**
  * The single adjudicator of "is the archiver configured": null unless the
  * whole S3 set is present (a partial set never gets past the schema). What
  * hangs off this one answer: whether an Archiver is built at boot, whether

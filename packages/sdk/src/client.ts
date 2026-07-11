@@ -1,12 +1,17 @@
 import {
   type AcquireResponse,
+  type ActivityEvent,
   acquireResponseSchema,
   DEFAULT_EXEC_TIMEOUT_SECONDS,
   type ExecCommandResponse,
   execCommandResponseSchema,
+  type GetConfigResponse,
+  getConfigResponseSchema,
+  getSandboxMetricsResponseSchema,
   type HostMetricsResponse,
   hostMetricsResponseSchema,
   type LifecyclePolicyOverride,
+  listActivityResponseSchema,
   listSandboxesResponseSchema,
   listTemplatesResponseSchema,
   type RebuildSandboxResponse,
@@ -19,6 +24,7 @@ import {
   releaseSandboxResponseSchema,
   removeTemplateResponseSchema,
   type Sandbox,
+  type SandboxMetricsSample,
   type Template,
   type WriteFilesResponse,
   writeFilesResponseSchema,
@@ -140,6 +146,42 @@ export class Dormice {
   async getHostMetrics(): Promise<HostMetricsResponse> {
     const data = await this.rpc('getHostMetrics', {});
     return hostMetricsResponseSchema.parse(data);
+  }
+
+  /**
+   * One sandbox's point-in-time resource reading (CPU, memory, disk) — a
+   * single sample, the daemon keeps no history. Observation never wakes:
+   * a frozen sandbox is measured as it sleeps, and with no running
+   * container (stopped, archived, restoring) the sample is null.
+   */
+  async getSandboxMetrics(
+    userKey: string,
+  ): Promise<SandboxMetricsSample | null> {
+    const data = await this.rpc('getSandboxMetrics', { userKey });
+    return getSandboxMetricsResponseSchema.parse(data).sample;
+  }
+
+  /**
+   * The daemon's recent history, newest first: who was created, cooled,
+   * woken, destroyed, and what reconciliation repaired. A bounded ring —
+   * an explanation window, not an audit log.
+   */
+  async listActivity(options?: { limit?: number }): Promise<ActivityEvent[]> {
+    const data = await this.rpc('listActivity', {
+      limit: options?.limit,
+    });
+    return listActivityResponseSchema.parse(data).events;
+  }
+
+  /**
+   * The daemon's effective configuration, read-only: every knob, the value
+   * in force, and whether it came from the environment or a default.
+   * Secrets are reported as present-or-absent only. `archive.enabled` is
+   * the daemon's own adjudication of whether archiving is available.
+   */
+  async getConfig(): Promise<GetConfigResponse> {
+    const data = await this.rpc('getConfig', {});
+    return getConfigResponseSchema.parse(data);
   }
 
   /**
