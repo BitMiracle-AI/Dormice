@@ -17,7 +17,7 @@ const client = new Dormice({
 // One key, one sandbox — created, woken or restarted as needed.
 // stopAfterSeconds: null makes it a resident agent: it may freeze when
 // idle (~50 ms to wake) but never cold-starts.
-await client.acquireSandbox('my-agent', { stopAfterSeconds: null });
+await client.acquireSandbox('my-agent', { policy: { stopAfterSeconds: null } });
 
 const result = await client.execCommand('my-agent', 'python3 -c "print(6 * 7)"');
 console.log(result.exitCode, result.stdout); // 0 42

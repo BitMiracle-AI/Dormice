@@ -47,8 +47,10 @@ Overrides are passed at acquire time and validated as a merged whole:
 
 ```ts
 await client.acquireSandbox('my-agent', {
-  freezeAfterSeconds: 60,        // freeze aggressively
-  stopAfterSeconds: 7 * 86400,   // a week to cold storage
+  policy: {
+    freezeAfterSeconds: 60,      // freeze aggressively
+    stopAfterSeconds: 7 * 86400, // a week to cold storage
+  },
 });
 ```
 
@@ -70,7 +72,7 @@ Three rules worth knowing:
 The setting for a long-lived agent's sandbox:
 
 ```ts
-await client.acquireSandbox('my-agent', { stopAfterSeconds: null });
+await client.acquireSandbox('my-agent', { policy: { stopAfterSeconds: null } });
 ```
 
 It parks at **frozen** forever — memory in swap, a few MiB of RAM, ~50 ms
