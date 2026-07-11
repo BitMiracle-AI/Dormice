@@ -1,10 +1,12 @@
 # Workspace members: every directory under packages/ is a package; e2e is its
 # own package — the black-box suite that boots the built daemon and drives it
 # over the wire (the E2B compatibility suite will join it when that layer lands);
-# website is the public site (Next.js static export), never published to npm
+# examples holds runnable demos linked against the local build; website is the
+# public site (Next.js static export). Neither is ever published to npm
 packages:
   - packages/*
   - e2e
+  - examples
   - website
 
 # Supply-chain defense: a newly published npm version must be at least 24 hours

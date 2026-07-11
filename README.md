@@ -47,7 +47,7 @@ const client = new Dormice({
 // One key, one sandbox — created, woken or restarted as needed.
 // stopAfterSeconds: null makes it a resident agent: it may freeze when
 // idle (~50 ms to wake) but never cold-starts.
-await client.acquireSandbox('my-agent', { stopAfterSeconds: null });
+await client.acquireSandbox('my-agent', { policy: { stopAfterSeconds: null } });
 
 const result = await client.execCommand('my-agent', 'python3 -c "print(6 * 7)"');
 console.log(result.exitCode, result.stdout); // 0 42
@@ -63,7 +63,8 @@ The wire is plain HTTP RPC (`POST /acquireSandbox`, `POST /execCommand`, …),
 so `curl` works where the SDK doesn't reach, and the `dor` CLI covers the
 operator side: `dor sandbox ls / exec / push / pull / rebuild / release`,
 plus `dor doctor`. The full native surface is documented in
-[`packages/sdk`](packages/sdk/README.md).
+[`packages/sdk`](packages/sdk/README.md), and runnable versions of these
+flows live in [`examples/`](examples/).
 
 ## E2B compatibility
 
@@ -228,6 +229,7 @@ pnpm monorepo:
 | `packages/cli` | `dormice` command-line tool (`dor` for short) |
 | `packages/console` | Web console: React SPA, served by the daemon at `/console` |
 | `e2e` | Black-box suite: boots the built daemon, drives it over the wire |
+| `examples` | Runnable demos: the native SDK, the official `e2b` package, a resident agent |
 
 ## Development
 

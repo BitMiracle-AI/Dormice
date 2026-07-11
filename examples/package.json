@@ -1,0 +1,15 @@
+{
+  "name": "@dormice/examples",
+  "version": "0.0.0",
+  "description": "Runnable examples: the native SDK, the official e2b package, a resident agent",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dormice/sdk": "workspace:*",
+    "e2b": "^2.31.0"
+  }
+}

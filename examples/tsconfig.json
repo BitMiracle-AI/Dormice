@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // The examples are plain .mjs so `node <file>` runs them with zero build
+    // step; checkJs keeps them honest in CI — an example that drifts from the
+    // SDK fails typecheck instead of rotting silently.
+    "allowJs": true,
+    "checkJs": true
+  },
+  "include": ["*.mjs"]
+}
