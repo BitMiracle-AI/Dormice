@@ -1,0 +1,66 @@
+---
+title: Moving files
+description: writeFiles and readFile move files through JSON — 16 MiB per file, honest refusals past that, and streaming alternatives when you need more.
+---
+
+Native file transfer is two verbs. Both wake a cold sandbox first; paths
+are absolute, or relative to `/home/user`:
+
+```ts
+await client.writeFiles('my-agent', [
+  { path: 'config.json', content: JSON.stringify(config) }, // string → UTF-8
+  { path: 'data/input.bin', content: bytes },               // Uint8Array, as-is
+]);
+
+const file = await client.readFile('my-agent', 'results/out.csv');
+const text = new TextDecoder().decode(file.content);
+```
+
+Parent directories are created as needed; existing files are overwritten.
+The CLI moves single files:
+
+```sh
+dor sandbox push my-agent ./data.csv            # → /home/user/data.csv
+dor sandbox push my-agent ./data.csv inputs/d.csv
+dor sandbox pull my-agent results/out.csv out.csv
+dor sandbox pull my-agent results/out.csv       # no local path: raw bytes to stdout
+```
+
+## A batch saves round-trips — it is not a transaction
+
+`writeFiles` writes in array order and fails fast: on an error, the files
+earlier in the array are already written. Splitting a big upload into
+several calls loses nothing — writes are per-file independent.
+
+## The 16 MiB cap, and what to do past it
+
+Content crosses the wire as base64 inside JSON and is buffered in daemon
+memory, so each file is capped at 16 MiB, write and read alike (a
+`writeFiles` batch tops out at 48 MiB of request body). The refusals are
+honest:
+
+- Reading a file over the cap is a **413 naming the file's actual size** —
+  never a truncated file. Unlike exec output, where a capped log still
+  informs, a truncated file is simply a corrupt file.
+- Missing file: 404. A directory or other non-regular file: 400.
+
+Bigger files are not this protocol's job:
+
+- **Fetch from inside the sandbox.** `execCommand` with `curl` or `wget`
+  (both in the stock image) downloads at full speed without routing bytes
+  through the daemon's JSON layer.
+- **Use the E2B files surface.** `files.read` / `files.write` stream with
+  no artificial cap — the disk quota is the cap — and
+  `uploadUrl()` / `downloadUrl()` mint signed URLs a bare browser or curl
+  can use, no headers required. See
+  [Using the official E2B SDKs](/docs/e2b-sdks).
+
+## Every byte moves through the container
+
+File verbs execute *inside* the sandbox, streamed through an in-container
+process — never as host-side writes into the disk image. The disk's
+contents belong to the sandbox, so a hostile symlink planted there must
+have nothing to escape to; resolved inside the container, it can only
+point at the container's own root. Ownership lands on the sandbox user
+(uid 1000) naturally. See [Architecture](/docs/architecture) for the
+boundary this preserves.

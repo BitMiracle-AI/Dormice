@@ -1,0 +1,83 @@
+---
+title: Running commands
+description: execCommand is a buffered shell round-trip — honest exit codes, timeouts enforced inside the container, output capped at 1 MiB per stream.
+---
+
+The native surface has one command verb: `execCommand(userKey, command)`.
+It wakes the sandbox if it is cold, runs the command as `bash -c` inside
+the container (as the sandbox's non-root user, uid 1000), waits, and
+returns the whole result at once:
+
+```ts
+const result = await client.execCommand('my-agent', 'python3 --version');
+result.exitCode;        // 0
+result.stdout;          // 'Python 3.12.…\n'
+result.stderr;          // ''
+result.stdoutTruncated; // false — see "Output is capped" below
+```
+
+The same verb from the CLI, where stdout and stderr pass through to your
+own streams and the exit code becomes `dor`'s own:
+
+```sh
+dor sandbox exec my-agent 'uname -r'
+dor sandbox exec my-agent 'npm ci && npm test' -t 3600
+```
+
+## A non-zero exit is a result, not an error
+
+`execCommand` resolves with `exitCode: 1` — it does not throw. Errors are
+reserved for the protocol failing (no sandbox behind the key: 404, never
+silently created; sandbox mid-restore: 409), not for your command doing
+what commands do.
+
+## Timeouts are enforced inside the container
+
+`timeoutSeconds` (default 300, ceiling 86400) arms a
+`timeout --signal=KILL` around your command *inside* the sandbox; on
+expiry the command dies with exit 137 like any SIGKILLed process. Inside
+on purpose: dropping the HTTP request cannot reach a process on the other
+side of the container boundary, so a host-side deadline would report a
+kill without performing one.
+
+There is deliberately no `timedOut` flag in the response: 137 is also what
+an in-sandbox OOM kill looks like, and the daemon cannot tell the two
+apart — so it does not pretend to.
+
+The SDK derives its HTTP deadline from the same `timeoutSeconds` (plus
+slack for the wake and the round-trip), so a long-running command is never
+cut short by the client-wide `timeoutMs`.
+
+## A running command is activity
+
+While a command runs, the sandbox's idle clock keeps resetting — the idle
+scanner never freezes a sandbox mid-command, even one that legitimately
+runs for hours.
+
+## Output is capped at 1 MiB per stream
+
+The buffered protocol holds the whole result in daemon memory, so stdout
+and stderr are each capped at 1 MiB. Truncation is reported
+(`stdoutTruncated` / `stderrTruncated`), never silent. A capped log still
+informs; for bulk output, write to a file and [read it out](/docs/files)
+instead of routing bytes through stdout.
+
+## Working directory and environment
+
+```ts
+await client.execCommand('my-agent', 'env | sort', {
+  cwd: '/home/user/project',
+  env: { NODE_ENV: 'test' },
+});
+```
+
+`cwd` defaults to `/home/user` — the same base relative file paths
+resolve against.
+
+## When buffered is the wrong shape
+
+`execCommand` is deliberately simple: one request, one finished result.
+For live streaming output, processes that outlive the request, stdin, or
+an interactive terminal, use the E2B surface — `commands.run` streams,
+backgrounds, and reconnects, and `pty.*` is a real interactive bash. See
+[Using the official E2B SDKs](/docs/e2b-sdks).

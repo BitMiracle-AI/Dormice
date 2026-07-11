@@ -9,6 +9,18 @@
       "pages": ["lifecycle", "persistence", "architecture"]
     },
     {
+      "title": "Guides",
+      "pages": [
+        "commands",
+        "files",
+        "templates",
+        "resident-agents",
+        "ports",
+        "archiving",
+        "metrics"
+      ]
+    },
+    {
       "title": "E2B compatibility",
       "pages": ["e2b-sdks", "e2b-differences"]
     },

@@ -1,0 +1,82 @@
+---
+title: Archiving to S3
+description: The last rung of the lifecycle — idle disks pack to tar.zst in any S3-compatible bucket, and acquire restores them with honest progress.
+---
+
+Frozen costs a few MiB of RAM; stopped costs only disk. Archiving takes
+the last step: the sandbox's disk is packed with `tar` + `zstd` and
+shipped to an S3-compatible bucket, and the host keeps **nothing**. A
+machine with a modest disk can hold a long tail of dormant sandboxes for
+the price of object storage.
+
+Set the four `DORMICE_S3_*` variables
+([reference](/docs/configuration#archiver-s3)) — AWS, Cloudflare R2,
+MinIO, anything S3-compatible — and stopped sandboxes archive after 7
+more idle days by default, tunable per sandbox:
+
+```ts
+await client.acquireSandbox('user-42', {
+  policy: {
+    stopAfterSeconds: 3600,         // an hour idle → cold storage
+    archiveAfterSeconds: 7 * 86400, // a week idle → the bucket
+  },
+});
+```
+
+Without the S3 variables, archiving is honestly absent: sandboxes park at
+stopped forever, and a policy asking to archive is refused at acquire
+time — never stored as a promise the daemon cannot keep.
+
+## Restore: non-blocking, with real progress
+
+`acquireSandbox` on an archived key starts the restore and answers
+immediately — a slow wake is honest, never a silent multi-minute hang:
+
+```ts
+let res = await client.acquireSandbox('user-42');
+while (res.status === 'restoring') {
+  console.log(res.progress.phase, `${res.progress.percent}%`); // downloading | extracting
+  await new Promise((r) => setTimeout(r, 1000));
+  res = await client.acquireSandbox('user-42');
+}
+```
+
+Progress is measured, not invented: download percent against the
+object's actual size, extraction percent against bytes fed to `tar`.
+While a restore runs, command and file verbs answer 409 pointing back at
+acquire, and release is refused too (the one exception to its
+idempotence — destroying a disk mid-rebuild would race the restore).
+
+The E2B surface has no `restoring` concept, so there `connect` / `create`
+simply block until the sandbox is ready — faithful E2B semantics.
+
+The whole loop is verified end to end against MinIO: sandbox idles down
+to archived, the bucket object appears and the local disk is freed;
+re-acquire reports `restoring { downloading }`, flips to `ready`, and the
+files come back byte-identical.
+
+## Crash-safe by ordering, not by ceremony
+
+The archiver holds one invariant: **the local disk is deleted only after
+the upload is confirmed and recorded.** A crash anywhere between the
+steps leaves either a stopped sandbox (the retry re-archives to the same
+object key, an idempotent overwrite) or an archived one — never a sandbox
+whose only copy is a half-written object. A failed restore deletes its
+half-built disk and returns the row to archived; the object was never
+touched, so the retry is clean.
+
+One object per sandbox (`disks/<sandboxId>.tar.zst`). A successful
+restore deletes the object; releasing an archived sandbox deletes it too
+— nothing leaks in the bucket. And if you unset the S3 variables while
+sandboxes sit archived, touching one answers a 503 naming the missing
+variables.
+
+## The trade, in plain terms
+
+Archiving converts disk money into wake-up time: a stopped sandbox
+cold-starts in seconds, an archived one needs a download and an unpack
+first — proportional to how much the sandbox actually wrote. Two knobs
+frame it: raise `archiveAfterSeconds` to keep sandboxes on disk longer,
+or set it `null` for sandboxes that must never wait. As a bonus, a
+restore builds its disk at the *current* size setting and boots the
+*current* image — [restore is also an upgrade](/docs/persistence#restore-is-also-an-upgrade).

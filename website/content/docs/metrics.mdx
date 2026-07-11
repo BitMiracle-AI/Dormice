@@ -1,0 +1,72 @@
+---
+title: Metrics
+description: Two observation windows — one per sandbox, one for the host — and neither ever wakes anything.
+---
+
+Dormice ships observation windows, deliberately not a monitoring system:
+each call answers "how are things *right now*" with a single snapshot.
+For history, trends, and alerting, point a real monitoring stack at the
+box.
+
+One rule governs both windows: **observation never wakes a sandbox and
+never resets its idle clock** — the same principle as listing
+([what counts as activity](/docs/lifecycle#what-counts-as-activity)).
+Watching a fleet of frozen sandboxes from a dashboard keeps them exactly
+as cheap as ignoring them.
+
+## Per sandbox: `getMetrics()` (E2B surface)
+
+The official SDK's `getMetrics()` returns an array with one live sample —
+CPU count and usage, memory, and disk:
+
+```ts
+const [m] = await sbx.getMetrics();
+m.memUsed;  // bytes
+m.memTotal;
+m.diskUsed; // real occupancy of the sandbox's disk
+m.diskTotal;
+```
+
+- A **frozen** sandbox is readable without waking it — its resource
+  accounting is still there, and reading is not activity.
+- A **stopped** sandbox answers an empty array: no container, honestly no
+  sample — never zeros pretending to be measurements.
+- The SDK's `start` / `end` range parameters are accepted and ignored —
+  there is no metrics history to query, only now.
+
+## The host: `getHostMetrics()` (native surface)
+
+The operator's question — *is this machine okay, and what do the
+sandboxes collectively cost it?* — in one call:
+
+```ts
+const m = await client.getHostMetrics();
+```
+
+Four sections:
+
+- **`host`** — CPU (computed as the delta between your calls, so the
+  first call after a daemon start honestly answers `null` rather than a
+  made-up zero), memory as `MemAvailable` (what could still be allocated
+  without swapping — the naive "free" number cries wolf on any healthy
+  Linux box), and **swap**, which is the freeze mechanism's fuel: frozen
+  sandboxes live there, and a full swap means "idle is free" stops being
+  true. `swap.totalBytes: 0` is a real reading of a machine with no swap
+  configured; `null` means the platform offers no reading at all.
+- **`dataDisk`** — the filesystem holding `DORMICE_DATA_DIR`, where
+  sandbox disks live. This is the real capacity ceiling: past it, even
+  the ledger cannot write.
+- **`sandboxes`** — ledger aggregates: total, the `DORMICE_MAX_SANDBOXES`
+  cap, and a count per lifecycle state.
+- **`sandboxDisks`** — what the sparse disk images *promise* (nominal)
+  versus what they *occupy* (actual). The gap is your disk overcommit,
+  and this number is its only cap — nothing else stops a hundred 10 GB
+  promises on a 200 GB disk, which is fine exactly as long as you watch
+  it. Measured on the test host: a sandbox promising 10 GiB actually
+  occupied 68 MiB.
+
+The web console's Overview page renders exactly this snapshot — CPU,
+memory, swap, and the data disk side by side, sandbox states, and the
+overcommit meter — refreshed every few seconds. Readings a platform
+cannot produce come back `null`, never invented; the console shows an
+amber hint (pointing at `dor doctor`) instead of a fake number.
