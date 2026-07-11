@@ -337,3 +337,38 @@ describe('templates over real HTTP', () => {
     });
   });
 });
+
+describe('the observability verbs over real HTTP', () => {
+  it('getConfig reports the knobs and withholds the token', async () => {
+    // Source attribution is asserted server-side with injected sources;
+    // this test app reads the real process.env, which proves nothing here.
+    const config = await client.getConfig();
+    const token = config.entries.find((e) => e.key === 'DORMICE_API_TOKEN');
+    expect(token).toMatchObject({ value: null, redacted: true });
+    const port = config.entries.find((e) => e.key === 'DORMICE_PORT');
+    expect(port).toMatchObject({ value: '3676' });
+    expect(config.archive.enabled).toBe(false);
+  });
+
+  it('getSandboxMetrics answers a sample for a live sandbox and 404s an unknown key', async () => {
+    await client.acquireSandbox('metrics-sdk');
+    const sample = await client.getSandboxMetrics('metrics-sdk');
+    expect(sample?.memTotalBytes).toBeGreaterThan(0);
+    await client.releaseSandbox('metrics-sdk');
+
+    await expect(
+      client.getSandboxMetrics('metrics-nobody'),
+    ).rejects.toMatchObject({
+      name: 'DormiceApiError',
+      status: 404,
+    });
+  });
+
+  it('listActivity tells the story just written, newest first', async () => {
+    await client.acquireSandbox('story-sdk');
+    await client.releaseSandbox('story-sdk');
+    const log = await client.listActivity({ limit: 10 });
+    const mine = log.filter((e) => e.userKey === 'story-sdk');
+    expect(mine.map((e) => e.kind)).toEqual(['released', 'created']);
+  });
+});

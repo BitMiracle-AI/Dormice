@@ -405,3 +405,41 @@ describe('native API over a real daemon', () => {
     await client().releaseSandbox('host-metrics-key');
   });
 });
+
+describe('the observability verbs over a real daemon', () => {
+  it('getConfig reports effective knobs and never leaks the token', async () => {
+    const config = await client().getConfig();
+    const token = config.entries.find((e) => e.key === 'DORMICE_API_TOKEN');
+    expect(token).toMatchObject({ value: null, redacted: true });
+    // Black-box secrecy: the real token appears nowhere in the response.
+    expect(JSON.stringify(config)).not.toContain(inject('dormiceToken'));
+    // The exam daemon runs with miniS3 configured, so the daemon's own
+    // adjudication says archiving is live, with the one-week default.
+    expect(config.archive).toEqual({
+      enabled: true,
+      defaultSeconds: 7 * 24 * 60 * 60,
+    });
+  });
+
+  it('getSandboxMetrics samples a live sandbox and 404s after release', async () => {
+    await client().acquireSandbox('obs-metrics-key');
+    const sample = await client().getSandboxMetrics('obs-metrics-key');
+    expect(sample).not.toBeNull();
+    expect(sample?.memTotalBytes).toBeGreaterThan(0);
+    expect(sample?.diskTotalBytes).toBeGreaterThan(0);
+
+    await client().releaseSandbox('obs-metrics-key');
+    await expect(
+      client().getSandboxMetrics('obs-metrics-key'),
+    ).rejects.toMatchObject({ name: 'DormiceApiError', status: 404 });
+  });
+
+  it("listActivity tells one sandbox's story, newest first", async () => {
+    await client().acquireSandbox('obs-story-key');
+    await client().releaseSandbox('obs-story-key');
+    const events = await client().listActivity({ limit: 500 });
+    const mine = events.filter((e) => e.userKey === 'obs-story-key');
+    expect(mine.map((e) => e.kind)).toEqual(['released', 'created']);
+    expect(mine[1]?.detail).toContain('acquireSandbox');
+  });
+});

@@ -142,21 +142,37 @@ export async function scanOnce(
             executor,
             fresh.sandboxId,
             archiver?.store ?? null,
+            { kind: 'expired-killed', cause: 'E2B deadline (kill) reached' },
           );
           result.expiredKilled += 1;
           return;
         }
         if (deadline === 'pause') {
-          await freezeSandbox(db, executor, fresh.sandboxId);
+          await freezeSandbox(
+            db,
+            executor,
+            fresh.sandboxId,
+            'E2B deadline reached (pause)',
+          );
           result.frozen += 1;
           return;
         }
         const freshDue = dueTransition(fresh, now);
         if (freshDue === 'freeze') {
-          await freezeSandbox(db, executor, fresh.sandboxId);
+          await freezeSandbox(
+            db,
+            executor,
+            fresh.sandboxId,
+            `idle ${fresh.freezeAfterSeconds}s reached — memory squeezed into swap (scanner)`,
+          );
           result.frozen += 1;
         } else if (freshDue === 'stop') {
-          await stopSandbox(db, executor, fresh.sandboxId);
+          await stopSandbox(
+            db,
+            executor,
+            fresh.sandboxId,
+            `idle ${fresh.stopAfterSeconds}s reached — container torn down, disk kept (scanner)`,
+          );
           result.stopped += 1;
         }
       });

@@ -1,5 +1,6 @@
 import type { LifecyclePolicy, SandboxState } from '@dormice/shared';
 import { count, eq } from 'drizzle-orm';
+import { recordActivity } from './activity';
 import type { Db } from './db';
 import { type SandboxRow, sandboxes } from './schema';
 
@@ -66,6 +67,15 @@ export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
     pausedByUser: false,
   };
   db.insert(sandboxes).values(row).run();
+  // The one place every creation passes through, whichever face asked.
+  recordActivity(db, {
+    kind: 'created',
+    userKey: row.userKey,
+    sandboxId: row.sandboxId,
+    detail: `${input.e2b ? 'via E2B create' : 'via acquireSandbox'}${
+      input.template ? `, template ${input.template}` : ''
+    }`,
+  });
   return row;
 }
 

@@ -51,9 +51,9 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
   {
     label: '运维',
     items: [
-      { to: '/activity', label: '活动', icon: Activity01Icon, mock: true },
+      { to: '/activity', label: '活动', icon: Activity01Icon },
       { to: '/doctor', label: '体检', icon: StethoscopeIcon, mock: true },
-      { to: '/settings', label: '设置', icon: Settings01Icon, mock: true },
+      { to: '/settings', label: '设置', icon: Settings01Icon },
     ],
   },
   {

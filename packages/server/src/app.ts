@@ -10,7 +10,7 @@ import { type Logger, pino } from 'pino';
 import { z } from 'zod';
 import type { Archiver } from './archive/archiver';
 import { requireApiAuth } from './auth';
-import type { Config } from './config';
+import { type Config, type ConfigSources, configSources } from './config';
 import type { Db } from './db/db';
 import { registerE2bCompat } from './e2b';
 import { ProcessTable } from './e2b/process-table';
@@ -18,6 +18,8 @@ import { WatcherTable } from './e2b/watcher-table';
 import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
 import { ARCHIVE_DEFAULT_SECONDS } from './policy';
+import { activityRoutes } from './routes/activity';
+import { configRoutes } from './routes/config';
 import { consoleRoutes } from './routes/console';
 import { hostRoutes } from './routes/host';
 import { sandboxRoutes } from './routes/sandboxes';
@@ -54,6 +56,12 @@ export interface AppDeps {
    * honestly absent, never half-present).
    */
   archiver?: Archiver;
+  /**
+   * Which knobs came from the environment versus defaults, for getConfig.
+   * Defaults to reading process.env — right for the daemon; tests that
+   * assert on sources inject a fixed map instead of trusting the shell.
+   */
+  sources?: ConfigSources;
 }
 
 /**
@@ -73,6 +81,7 @@ export function buildApp({
   logger = true,
   consoleDistDir,
   archiver,
+  sources = configSources(),
 }: AppDeps) {
   // The archive default is adjudicated once, here, by the archiver's
   // presence: with one, new sandboxes archive after a week of idleness;
@@ -159,6 +168,12 @@ export function buildApp({
     });
     await api.register(templateRoutes, { db });
     await api.register(hostRoutes, { config, db, executor });
+    await api.register(activityRoutes, { db });
+    await api.register(configRoutes, {
+      config,
+      sources,
+      archiveDefaultSeconds,
+    });
   });
 
   // The web console: session endpoints (open — login carries the token

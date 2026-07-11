@@ -294,6 +294,10 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
             executor,
             existing.sandboxId,
             archiver?.store ?? null,
+            {
+              kind: 'released',
+              cause: 'protocol-dead row reaped by E2B create',
+            },
           );
         }
 
@@ -418,6 +422,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         executor,
         fresh.sandboxId,
         archiver?.store ?? null,
+        { kind: 'released', cause: 'via E2B kill' },
       );
     });
     return reply.code(204).send();
@@ -458,12 +463,22 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         if (!fresh) throw notFound(id);
         let current = fresh;
         if (current.state === 'active') {
-          current = await freezeSandbox(db, executor, current.sandboxId);
+          current = await freezeSandbox(
+            db,
+            executor,
+            current.sandboxId,
+            'paused via E2B',
+          );
         }
         // keepMemory:false maps to stopped: filesystem only, cold boot on
         // resume — physically exactly what E2B promises for it.
         if (request.body?.memory === false && current.state === 'frozen') {
-          await stopSandbox(db, executor, current.sandboxId);
+          await stopSandbox(
+            db,
+            executor,
+            current.sandboxId,
+            'paused via E2B (memory discarded)',
+          );
         }
         setPausedByUser(db, fresh.sandboxId, true);
       });

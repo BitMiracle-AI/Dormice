@@ -5,7 +5,6 @@ import {
   RamMemoryIcon,
 } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon, type HugeiconsProps } from '@hugeicons/react';
-import { SampleDataBadge } from '@/components/SampleDataBadge';
 import { Card, CardContent } from '@/components/ui/card';
 import {
   Empty,
@@ -13,34 +12,11 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from '@/components/ui/empty';
+import { Spinner } from '@/components/ui/spinner';
 import { formatBytes, pctOf } from '@/lib/format';
-import { MOCK_PAGES_ENABLED } from '@/lib/mock';
 import { cn } from '@/lib/utils';
-
-/**
- * 提案中的 wire 形状:原生 POST /getSandboxMetrics { userKey } 的响应。
- * 单次快照,与 getHostMetrics/E2B getMetrics 同一原则 — 观察窗不是监控
- * 系统;执行器的 metrics() 动词已经存在,服务端落地时这个类型进 shared。
- */
-interface SandboxMetricsSample {
-  timestamp: string;
-  cpuCount: number;
-  cpuUsedPct: number;
-  memUsedBytes: number;
-  memTotalBytes: number;
-  diskUsedBytes: number;
-  diskTotalBytes: number;
-}
-
-const SAMPLE: SandboxMetricsSample = {
-  timestamp: new Date().toISOString(),
-  cpuCount: 2,
-  cpuUsedPct: 23.4,
-  memUsedBytes: 412 * 1024 * 1024,
-  memTotalBytes: 2 * 1024 * 1024 * 1024,
-  diskUsedBytes: 68.2 * 1024 * 1024,
-  diskTotalBytes: 10 * 1024 * 1024 * 1024,
-};
+import { since } from '../format';
+import { useSandboxMetrics } from '../hooks/useSandboxes';
 
 function Meter({ pct }: { pct: number }) {
   const clamped = Math.min(100, Math.max(0, pct));
@@ -89,19 +65,41 @@ function MetricCard({
 }
 
 /**
- * 单沙箱指标。控制台走 cookie,而 E2B 的 metrics 端点只认 API key,
- * 浏览器刻意拿不到 — 所以这一面要等原生 /getSandboxMetrics 动词落地,
- * 眼下先用示例数据把版式定下来(执行器侧 metrics() 已经存在,缺的只是
- * 一个原生路由)。
+ * 单沙箱指标:5 秒一拍的单次快照(观察窗不是监控系统)。观察不唤醒 —
+ * 冻结的沙箱睡着也能读(cgroup 记账还在),停了的沙箱没有容器可测,
+ * daemon 答 null,这里出空态而不是把它吵醒。
  */
-export function MetricsPanel(_props: { sandbox: Sandbox }) {
-  if (!MOCK_PAGES_ENABLED) {
+export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
+  const { data, isPending, isError, error } = useSandboxMetrics(
+    sandbox.userKey,
+  );
+
+  if (isPending) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Spinner /> 读取指标…
+      </div>
+    );
+  }
+  if (isError) {
     return (
       <Empty className="border border-dashed">
         <EmptyHeader>
-          <EmptyTitle>尚未接入</EmptyTitle>
+          <EmptyTitle>读取失败</EmptyTitle>
+          <EmptyDescription>{error.message}</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+  const sample = data.sample;
+  if (sample === null) {
+    return (
+      <Empty className="border border-dashed">
+        <EmptyHeader>
+          <EmptyTitle>没有运行中的容器可测</EmptyTitle>
           <EmptyDescription>
-            单沙箱指标等原生 getSandboxMetrics 动词落地后可用。
+            沙箱现在没有活着的容器(已停止/已归档)。观察不唤醒 —
+            打开终端或执行命令才会把它叫醒。
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -110,36 +108,32 @@ export function MetricsPanel(_props: { sandbox: Sandbox }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <SampleDataBadge />
-        <span className="text-sm text-muted-foreground">
-          版式预览 — 接入原生 getSandboxMetrics 后换真数据(单次快照,
-          观察不唤醒)。
-        </span>
-      </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <MetricCard
           icon={CpuIcon}
           label="CPU"
-          value={`${Math.round(SAMPLE.cpuUsedPct)}%`}
-          hint={`${SAMPLE.cpuCount} 核`}
-          pct={SAMPLE.cpuUsedPct}
+          value={`${Math.round(sample.cpuUsedPct)}%`}
+          hint={`${sample.cpuCount} 核 · 百分比按单核计`}
+          pct={sample.cpuUsedPct / sample.cpuCount}
         />
         <MetricCard
           icon={RamMemoryIcon}
           label="内存"
-          value={formatBytes(SAMPLE.memUsedBytes)}
-          hint={`共 ${formatBytes(SAMPLE.memTotalBytes)}`}
-          pct={pctOf(SAMPLE.memUsedBytes, SAMPLE.memTotalBytes)}
+          value={formatBytes(sample.memUsedBytes)}
+          hint={`共 ${formatBytes(sample.memTotalBytes)} · 缓存 ${formatBytes(sample.memCacheBytes)}`}
+          pct={pctOf(sample.memUsedBytes, sample.memTotalBytes)}
         />
         <MetricCard
           icon={HardDriveIcon}
           label="磁盘"
-          value={formatBytes(SAMPLE.diskUsedBytes)}
-          hint={`名义 ${formatBytes(SAMPLE.diskTotalBytes)} — 稀疏镜像只为真实内容付费`}
-          pct={pctOf(SAMPLE.diskUsedBytes, SAMPLE.diskTotalBytes)}
+          value={formatBytes(sample.diskUsedBytes)}
+          hint={`名义 ${formatBytes(sample.diskTotalBytes)} — 稀疏镜像只为真实内容付费`}
+          pct={pctOf(sample.diskUsedBytes, sample.diskTotalBytes)}
         />
       </div>
+      <p className="text-xs text-muted-foreground">
+        单次快照,5 秒刷新;本次读数取自 {since(sample.timestamp)}前。
+      </p>
     </div>
   );
 }
