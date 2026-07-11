@@ -15,7 +15,7 @@
 #     the code and repairs drift, and never rotates your API token.
 #   - Loud. Every step prints what it found and what it did.
 #   - Verified. The install has not succeeded until `dor doctor` says so —
-#     the same 19 checks, including the three real-container probes.
+#     the same battery of checks, including the real-container probes.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 

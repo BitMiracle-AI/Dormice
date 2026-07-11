@@ -1,0 +1,92 @@
+---
+title: dor doctor
+description: Read-only host checks, one by one — what each verifies, why it exists, and what fix it names.
+---
+
+`dor doctor` answers one question: **can this host run the Dormice
+daemon?** Every check encodes a fact measured on real hardware — a pit
+someone actually fell into — not a hypothesis. Three disciplines shape
+it:
+
+- **Read-only.** Doctor names the fix but never applies it. Fixing is
+  [the installer's](/docs/installation) job.
+- **Effective values, not config files.** Some clouds ship
+  `vm.swappiness=0` in their own sysctl.d file, so "our config file
+  exists" proves nothing — doctor reads `/proc/sys/vm/swappiness` live.
+- **No silent downloads.** A missing image is reported with build
+  instructions; doctor never runs `docker pull` behind your back.
+
+Checks are gated: when a prerequisite fails, dependents report *skip*
+with the blocker's name instead of piling on noise. Any failure exits 1;
+warnings don't affect the exit code. `--quick` skips the probes that
+start a real container.
+
+## Platform
+
+- **operating system** — Linux, full stop: loop mounts, cgroups and
+  gVisor exist nowhere else.
+- **Node.js version** — 22 or newer.
+- **running as root** — loop mounts, `mkfs` and cgroup writes need uid 0.
+- **cgroup v2 memory controller** — freezing works by writing
+  `memory.reclaim`, a cgroup v2 file (default on Ubuntu 22.04+).
+
+## Docker
+
+- **Docker daemon** — dockerd answers.
+- **gVisor runtime (runsc)** — registered as a Docker runtime; without
+  it sandboxes would share the host kernel.
+- **inter-container traffic off** — `"icc": false` in
+  `/etc/docker/daemon.json`, or one sandbox can port-scan another.
+- **container log rotation** — unbounded stdout logs fill the disk over
+  months of a long-lived sandbox's life.
+
+## Memory (the freeze fuel)
+
+- **swap present** — freezing pushes sandbox memory to swap; measured
+  without it: 0 bytes reclaimed.
+- **vm.swappiness = 100** — below 100 the kernel refuses to swap the
+  shmem-backed memory gVisor holds sandboxes in; measured at the default
+  60: 0 bytes reclaimed. This is the check that reads the live value.
+
+## Network containment
+
+- **cloud metadata firewall** — `DROP` rules in the `DOCKER-USER` chain
+  for `169.254.0.0/16` and `100.100.100.200`; without them a sandbox can
+  steal cloud credentials from the metadata service.
+- **firewall rules persisted** — *warn*: rules living only in memory
+  silently vanish on reboot.
+
+## Configuration
+
+- **DORMICE_API_TOKEN** — set and at least 32 characters (the daemon
+  refuses to start without it).
+- **S3 archive configuration** — three honest states: none set (skipped —
+  archiver off, sandboxes park at stopped), all four set (pass), or a
+  partial set (fail, naming the missing variables — the daemon refuses a
+  half-configured archiver anyway).
+- **zstd available** — the archiver shells out to `tar -I zstd` on the
+  host at every archive and restore.
+- **base image available** — present locally; the fix names
+  `images/Dockerfile`, and doctor never pulls.
+- **docker-mode paths absolute** — a relative `DORMICE_DB_PATH` depends
+  on the start directory, and a wrong start directory opens an *empty
+  ledger next to real sandboxes* — the exact mismatch the daemon's
+  startup guard exists to refuse.
+- **free disk space** — *warn* under 10 GiB for the data directory: past
+  full, even the ledger cannot write.
+
+## Probes (start a real sandbox container)
+
+- **gVisor fake kernel** — `uname -r` inside must report a gVisor
+  kernel; a real kernel version means isolation is not happening.
+- **metadata blocked inside** — the probe tries to reach the metadata
+  service *from inside a sandbox* and must find it blocked. The
+  firewall check above reads rules; this one tests reality.
+- **image runs as uid 1000** — sandboxes must not run as root, even
+  behind gVisor.
+- **image has inotify-tools** — *warn*: without `inotifywait`, E2B
+  directory watching honestly refuses to start; everything else works.
+
+When all of this passes, the machine can run the daemon — that is the
+installer's definition of success too: it ends by running doctor and
+believing the answer.
