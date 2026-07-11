@@ -1,5 +1,8 @@
 # Dormice
 
+[![CI](https://github.com/BitMiracle-AI/Dormice/actions/workflows/ci.yml/badge.svg)](https://github.com/BitMiracle-AI/Dormice/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 **The SQLite of agent sandboxes** — a self-hosted sandbox platform for AI agents. One machine, sandboxes that live forever, idle costs nothing.
 
 > **Status: early development.** The daemon, its lifecycle engine, the SDK, the CLI, the web console, the real Docker + gVisor executor, the S3 archiver, and the E2B-compatible API work end to end — the full create → freeze → stop → archive → restore cycle, command execution, file I/O, and the official `e2b` SDK against real infrastructure. Nothing here is ready for production yet.

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/BitMiracle-AI/Dormice/security/advisories/new
+    about: Private channel — never report a vulnerability in a public issue.
