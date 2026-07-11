@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { type DocsNavItem, DocsSidebar } from '@/components/docs/DocsSidebar';
+import { type DocsNavGroup, DocsSidebar } from '@/components/docs/DocsSidebar';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -11,7 +11,7 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 
-export function DocsMobileNav({ items }: { items: DocsNavItem[] }) {
+export function DocsMobileNav({ groups }: { groups: DocsNavGroup[] }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -20,12 +20,12 @@ export function DocsMobileNav({ items }: { items: DocsNavItem[] }) {
         Menu
       </SheetTrigger>
       <SheetContent side="left">
-        {/* The visible label comes from the menu's own group label. */}
+        {/* The visible labels come from the menu's own group labels. */}
         <SheetHeader className="sr-only">
           <SheetTitle>Documentation</SheetTitle>
         </SheetHeader>
-        <div className="px-2">
-          <DocsSidebar items={items} onNavigate={() => setOpen(false)} />
+        <div className="overflow-y-auto px-2">
+          <DocsSidebar groups={groups} onNavigate={() => setOpen(false)} />
         </div>
       </SheetContent>
     </Sheet>

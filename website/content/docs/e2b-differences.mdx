@@ -1,25 +1,11 @@
 ---
-title: E2B compatibility
-description: The official e2b SDK runs against Dormice by changing two URLs.
+title: Capabilities & differences
+description: What of the E2B surface is implemented — verified through the official SDK — and where Dormice deliberately diverges.
 ---
 
-The daemon speaks the E2B protocol on two prefixes (`/e2b/api`,
-`/e2b/envd`). The **official `e2b` package** — unmodified, straight from
-npm — runs against Dormice with two URLs and an API-key prefix; migrating
-an application is configuration, not code:
-
-```ts
-import { Sandbox } from 'e2b';
-
-const sbx = await Sandbox.create({
-  apiKey: `e2b_${process.env.DORMICE_API_TOKEN}`,
-  apiUrl: 'http://127.0.0.1:3676/e2b/api',
-  sandboxUrl: 'http://127.0.0.1:3676/e2b/envd',
-});
-```
-
 Everything below is exercised by the black-box e2e suite *through the
-official package*, and has passed against a real Docker + gVisor daemon:
+official `e2b` package*, and has passed against a real Docker + gVisor
+daemon:
 
 | Surface | Notes |
 | --- | --- |
@@ -34,20 +20,34 @@ official package*, and has passed against a real Docker + gVisor daemon:
 | `files.watchDir` | streamed events, and the polling watcher API the Python sync SDK uses |
 | `getHost(port)` | port proxy with wake-on-traffic (set `DORMICE_SANDBOX_DOMAIN`) |
 | `getMetrics()` | one live sample; observing never wakes a frozen sandbox |
+| Templates by name | `Sandbox.create('name')` resolves a registered template; an unregistered name is an honest 404 |
 
 ## Deliberate deltas from the hosted product
 
-- **No template builds.** Every sandbox runs the daemon's single base
-  image (`DORMICE_BASE_IMAGE`); the `template` argument is accepted and
-  ignored.
+- **No template builds.** Templates are named images: build one with
+  docker, register it with `dor template add`, and `Sandbox.create('name')`
+  resolves it. The hosted product's build pipeline (`e2b template build`)
+  is not implemented.
 - **Freezing keeps processes.** A frozen sandbox's processes suspend and
   resume mid-flight — any touch wakes the sandbox in ~50 ms.
 - **Permanence stays the default.** Sandboxes created through the E2B
-  surface get real deadlines, as E2B semantics demand; deadlines are never
-  imposed on natively created sandboxes.
+  surface get real deadlines, as E2B semantics demand; deadlines are
+  never imposed on natively created sandboxes.
 - **`metadata.userKey`** turns `Sandbox.create` into Dormice's idempotent
-  acquire: the same key returns the same sandbox instead of a new one.
-- **Not implemented**, answered with an honest `unimplemented` on the
-  wire: `Process/StreamInput` (the JS SDK never calls it) and xattr-based
-  file metadata. The daemon reports envd `0.6.1`, so the SDK itself gates
-  those features client-side.
+  acquire — see [Using the official E2B SDKs](/docs/e2b-sdks).
+- **One domain, not one subdomain per sandbox.** The SDK addresses
+  sandboxes through a header on a single endpoint, so no wildcard DNS is
+  needed for the API itself — only `getHost()` preview URLs want a
+  wildcard domain (`DORMICE_SANDBOX_DOMAIN`).
+
+## Not implemented
+
+Answered with an honest `unimplemented` on the wire, never silently
+swallowed:
+
+- `Process/StreamInput` (the JS SDK never calls it — `sendStdin` covers
+  the real path)
+- xattr-based file metadata
+
+The daemon reports envd `0.6.1`, so the SDK gates these client-side
+before they ever reach the wire.

@@ -1,0 +1,70 @@
+---
+title: The disk is the sandbox
+description: /home/user lives on its own disk, and that disk — not the container — is what Dormice keeps alive.
+---
+
+Every sandbox owns a disk: a sparse image file on the host
+(`DORMICE_SANDBOX_DISK_GB`, default 10 GB), formatted ext4 and mounted at
+`/home/user`. The container around it is a shell — replaceable machinery.
+That gives Dormice one contract worth memorizing:
+
+> **What lives in `/home/user` survives everything short of an explicit
+> release. Everything outside it is container state, and containers may
+> vanish at any time.**
+
+## What survives
+
+All of these are exercised by the test suite against a real Docker +
+gVisor host:
+
+- **Freeze / stop / wake cycles** — files ride through every lifecycle
+  transition.
+- **The daemon restarting, the host rebooting** — the daemon reconciles
+  its ledger against reality at boot, and the next wake re-attaches the
+  disk (a reboot drops loop mounts; starting a sandbox repairs its own).
+- **`docker container prune`** eating the container object — a stopped
+  sandbox is an exited container plus a disk, and prune eats exited
+  containers. The next acquire rebuilds a container *from the surviving
+  disk*: same sandbox ID, `/home/user` intact.
+- **Out-of-memory** — a sandbox that hits its memory cap
+  (`DORMICE_SANDBOX_MEMORY_GB`, default 2 GB) is killed as a whole by
+  gVisor, exit code 137. The reconciler records it stopped; the same key
+  acquires it right back, files intact.
+- **Archive → restore** — the disk round-trips through S3 as a
+  `tar.zst` and comes back byte-for-byte.
+
+## What does not
+
+- **`releaseSandbox`** — the only verb that loses data, by design.
+- **Everything outside `/home/user`** whenever the container is replaced
+  (rebuild, prune, OOM): `/tmp`, packages installed at runtime outside the
+  home directory, running processes. If it matters, keep it in
+  `/home/user`.
+
+## The quota is physical
+
+The disk file is simply that big. A sandbox that fills its disk gets
+`ENOSPC` from its own filesystem — there is no accounting layer to game,
+and the host's disk stays healthy. The image is sparse: a 10 GB promise
+occupies only what has actually been written, so disk is overcommitted by
+default and `getHostMetrics` reports both the promised and the real total.
+
+## Rebuild: new shell, same body
+
+`rebuildSandbox` (SDK), `dor sandbox rebuild` (CLI), or the Rebuild button
+in the console tears the container down — in any state — and keeps the
+disk. The next wake builds a fresh container from the daemon's *current*
+base image (or the sandbox's template's current image), with `/home/user`
+carried over untouched.
+
+That makes rebuild the upgrade path: update the image, re-register the
+template, rebuild the sandbox — its files never move. Rebuild deliberately
+does not wake the sandbox afterwards; the cold start bills to whoever
+actually comes back for it.
+
+## Restore is also an upgrade
+
+An archived sandbox's restore builds a **new** disk at the current
+`DORMICE_SANDBOX_DISK_GB` and unpacks into it, then boots from the current
+image. Grow the disk setting while a sandbox sits in the bucket and it
+comes back bigger — for free.

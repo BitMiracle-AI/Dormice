@@ -1,3 +1,20 @@
 {
-  "pages": ["index", "installation", "quickstart", "e2b-compatibility"]
+  "groups": [
+    {
+      "title": "Getting started",
+      "pages": ["index", "installation", "quickstart"]
+    },
+    {
+      "title": "Concepts",
+      "pages": ["lifecycle", "persistence", "architecture"]
+    },
+    {
+      "title": "E2B compatibility",
+      "pages": ["e2b-sdks", "e2b-differences"]
+    },
+    {
+      "title": "Reference",
+      "pages": ["configuration"]
+    }
+  ]
 }

@@ -1,0 +1,102 @@
+---
+title: Sandbox lifecycle
+description: Four states, three knobs — sandboxes cool down on their own, and any acquire brings them back.
+---
+
+A sandbox is always in one of four states. Idle time moves it down the
+ladder one rung at a time; `acquireSandbox` brings it back from any rung.
+The colder the state, the cheaper it is to keep — and the longer the wake.
+
+```text
+active ── idle ──▶ frozen ── idle ──▶ stopped ── idle ──▶ archived
+  ~full RAM         ~5 MiB RAM         disk only            S3 only
+                    wakes in ~50 ms    cold start (seconds)  restore (download)
+```
+
+- **active** — the container is running, normally.
+- **frozen** — every process is suspended mid-flight and its memory
+  squeezed out to swap. Measured on real hardware: an idle sandbox holding
+  1 GiB drops to about 5 MiB resident, and wakes in about 50 ms with all
+  its processes still running, exactly where they were.
+- **stopped** — the container is shut down; only the disk remains. Waking
+  is a cold start: a fresh boot from the surviving disk, seconds rather
+  than milliseconds. Processes do not survive this step — files do.
+- **archived** — the disk itself is packed with `tar` + `zstd` and shipped
+  to an S3-compatible bucket; nothing remains on the host. Only exists
+  when the archiver is configured (`DORMICE_S3_*`). Waking downloads and
+  unpacks; `acquireSandbox` reports `{ status: 'restoring', progress }`
+  immediately and flips to `ready` when the disk is back — a slow wake is
+  honest, never a silent hang.
+
+A background scanner sweeps the ledger every `DORMICE_SCAN_INTERVAL_SECONDS`
+(default 60) and demotes each idle sandbox at most one rung per sweep.
+
+## The three knobs
+
+Each sandbox carries a lifecycle policy — three thresholds, all counting
+seconds since the sandbox's last activity, all points on the same clock
+(hence the ordering rule freeze ≤ stop ≤ archive):
+
+| Knob | Default | `null` means |
+| --- | --- | --- |
+| `freezeAfterSeconds` | 10 minutes | — (freezing is always on) |
+| `stopAfterSeconds` | 3 days | never stop |
+| `archiveAfterSeconds` | 7 days when S3 is configured, otherwise never | never archive |
+
+Overrides are passed at acquire time and validated as a merged whole:
+
+```ts
+await client.acquireSandbox('my-agent', {
+  freezeAfterSeconds: 60,        // freeze aggressively
+  stopAfterSeconds: 7 * 86400,   // a week to cold storage
+});
+```
+
+Three rules worth knowing:
+
+- **Policy is fixed at creation.** An override sent while acquiring an
+  *existing* sandbox is not applied — the sandbox keeps the policy it was
+  born with. (An invalid override is still rejected with a 400.)
+- **Archiving requires stopping.** Only a stopped sandbox can archive, so
+  `archiveAfterSeconds` needs a non-null `stopAfterSeconds` — and on a
+  daemon with no S3 configured, a policy asking to archive is refused
+  outright rather than silently stored.
+- **Defaults yield to your explicit values.** Push `stopAfterSeconds`
+  past the 7-day archive default and the archive threshold follows it
+  instead of turning your legal override into an ordering error.
+
+## Resident agents: `stopAfterSeconds: null`
+
+The setting for a long-lived agent's sandbox:
+
+```ts
+await client.acquireSandbox('my-agent', { stopAfterSeconds: null });
+```
+
+It parks at **frozen** forever — memory in swap, a few MiB of RAM, ~50 ms
+from any touch — and never decays to a cold boot. Its processes are never
+killed by idleness; they suspend and resume mid-flight, indefinitely.
+
+## What counts as activity
+
+Running commands, file operations, and `acquireSandbox` reset the idle
+clock. A long-running command keeps its sandbox alive for as long as it
+runs.
+
+Observation deliberately does not count: `listSandboxes`, sandbox metrics,
+and the console's list and detail views never wake a frozen sandbox and
+never reset its clock. Watching is free — using is what keeps a sandbox
+warm.
+
+## E2B deadlines are a separate clock
+
+Sandboxes created through the [E2B surface](/docs/e2b-sdks) additionally
+carry an absolute deadline (`timeoutMs`), because E2B semantics demand
+one: at the deadline the sandbox is killed — or parked, with
+`lifecycle: { onTimeout: 'pause' }`. Activity does not extend a deadline;
+only `create`, `connect`, and `setTimeout()` do. The deadline rule runs
+before the idle rules above.
+
+Natively created sandboxes never get a deadline — permanence is the
+native default, and the E2B compatibility layer never imposes deadlines
+on sandboxes it does not own.

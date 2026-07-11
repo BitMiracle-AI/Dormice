@@ -1,12 +1,12 @@
 import { GithubIcon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import Link from 'next/link';
-import { DocsSearch, type SearchItem } from '@/components/docs/DocsSearch';
+import { DocsSearch, type SearchGroup } from '@/components/docs/DocsSearch';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button } from '@/components/ui/button';
 import { GITHUB_URL } from '@/lib/site';
 
-export function SiteHeader({ searchItems }: { searchItems: SearchItem[] }) {
+export function SiteHeader({ searchGroups }: { searchGroups: SearchGroup[] }) {
   return (
     <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur">
       <div className="mx-auto flex h-14 w-full max-w-6xl items-center px-4">
@@ -25,7 +25,7 @@ export function SiteHeader({ searchItems }: { searchItems: SearchItem[] }) {
           </Button>
         </nav>
         <div className="ml-auto flex items-center gap-1">
-          <DocsSearch items={searchItems} />
+          <DocsSearch groups={searchGroups} />
           <Button
             variant="ghost"
             size="icon"

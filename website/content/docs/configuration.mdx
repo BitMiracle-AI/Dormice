@@ -1,0 +1,84 @@
+---
+title: Configuration
+description: Every environment variable the daemon reads, with defaults — validated once at startup, failing loudly.
+---
+
+All daemon configuration comes from `DORMICE_*` environment variables,
+validated once at startup: a bad value refuses to boot with a named error
+instead of surfacing later as confusing runtime behavior. Everything has
+a default except the API token and, in docker mode, the base image.
+
+On a host set up by `install.sh`, the variables live in
+`/etc/dormice/env` (loaded by the systemd unit); edit the file and
+`systemctl restart dormice`.
+
+## Core
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DORMICE_API_TOKEN` | — **(required)** | Bearer token for the native API, and (with an `e2b_` prefix) the E2B API key. At least 32 characters; generate with `openssl rand -hex 32`. Keep it hex: the official Python e2b SDK validates `e2b_[0-9a-f]+` client-side before any request leaves the machine. |
+| `DORMICE_PORT` | `3676` | The one port everything is served on: native API, E2B surface, web console. Always bound to 127.0.0.1 — there is deliberately no host knob. |
+| `DORMICE_DB_PATH` | `data/dormice.db` | Where the SQLite ledger lives. Must be an **absolute path** in docker mode — a relative path depends on the start directory, and a wrong start directory means an empty ledger facing real sandboxes. |
+| `DORMICE_NODE_ID` | `node-1` | Identifies this machine in the ledger. Single-machine today; the field keeps the ledger shardable later. |
+
+## Executor
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DORMICE_EXECUTOR` | `fake` | What drives reality: `fake` is an in-memory executor so a bare `pnpm dev` works on any machine (development, tests); `docker` runs real gVisor sandboxes and needs a prepared Linux host — see [Installation](/docs/installation). |
+| `DORMICE_BASE_IMAGE` | — | The image sandboxes boot from. **Required in docker mode**; `install.sh` builds one and records it here. |
+| `DORMICE_DATA_DIR` | `/var/lib/dormice` | Sandbox disk images and their mount points (docker mode). Must be an absolute path in docker mode. |
+
+## Per-sandbox resources
+
+Applied when the container (or disk) is created, so existing sandboxes
+keep what they were born with. A rebuild replaces the container and picks
+up current CPU/memory/pids values — but keeps the disk, so a changed disk
+size only applies to new sandboxes and restores from archive.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DORMICE_SANDBOX_DISK_GB` | `10` | Size of each sandbox's disk image. The quota is physical — the file is simply that big — and sparse, so unwritten space costs nothing. |
+| `DORMICE_SANDBOX_CPUS` | `1` | CPU limit per sandbox. |
+| `DORMICE_SANDBOX_MEMORY_GB` | `2` | Memory cap per sandbox. A sandbox that hits it is killed as a whole by gVisor (exit 137) and parks at stopped — files intact, next acquire revives it. |
+| `DORMICE_SANDBOX_PIDS_LIMIT` | `512` | Fork-bomb ceiling per sandbox. |
+
+## Lifecycle engine
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DORMICE_SCAN_INTERVAL_SECONDS` | `60` | How often the idle scanner sweeps the ledger. Each sweep demotes an idle sandbox at most one rung — see [Sandbox lifecycle](/docs/lifecycle). |
+| `DORMICE_MAX_SANDBOXES` | `100` | How many sandboxes may exist at once. Past the cap, *creation* answers an honest 429; wakes of existing sandboxes are never blocked. The binding resource is disk — a full host cannot even write its ledger. |
+| `DORMICE_RECLAIM_TIMEOUT_SECONDS` | `45` | Upper bound on the memory-reclaim step of a freeze. Hitting it is expected on stubborn tails, not a failure. |
+
+## Sandbox network
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DORMICE_SANDBOX_DOMAIN` | — | The wildcard domain behind the E2B SDK's `getHost(port)`: set it (a bare hostname like `sbx.example.com`) and responses carry it, the SDK builds `<port>-<sandboxId>.<domain>` URLs, and requests arriving with such a `Host` header are proxied into the sandbox — frozen sandboxes wake on traffic. You point `*.<domain>` DNS plus a TLS-terminating reverse proxy at the daemon. Unset, the feature is honestly absent. |
+
+## Archiver (S3)
+
+The four core variables come as a set: with none of them, archiving is
+honestly absent — sandboxes park at stopped forever, and a policy asking
+to archive is refused. Set all four and stopped sandboxes take the last
+step down after 7 idle days (tunable per sandbox). A partial set refuses
+to boot, naming the missing variables.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DORMICE_S3_ENDPOINT` | — | Full URL including scheme (MinIO speaks http, the clouds https). Any S3-compatible store: AWS, Cloudflare R2, MinIO, Alibaba OSS in S3-compat mode. |
+| `DORMICE_S3_BUCKET` | — | The bucket. Must already exist. |
+| `DORMICE_S3_ACCESS_KEY_ID` | — | Credentials. |
+| `DORMICE_S3_SECRET_ACCESS_KEY` | — | Credentials. |
+| `DORMICE_S3_REGION` | `us-east-1` | Region, if your store cares. |
+| `DORMICE_S3_FORCE_PATH_STYLE` | `false` | Path-style addressing: MinIO needs `true`; the clouds route by subdomain. |
+
+## Client-side variables
+
+The `dor` CLI (and nothing else) reads two variables to find the daemon:
+
+| Variable | What it does |
+| --- | --- |
+| `DORMICE_ENDPOINT` | The daemon's base URL, e.g. `http://127.0.0.1:3676`. |
+| `DORMICE_API_TOKEN` | The same token the daemon was configured with. |

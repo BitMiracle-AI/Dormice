@@ -6,10 +6,16 @@ import {
   SidebarContent,
   SidebarProvider,
 } from '@/components/ui/sidebar';
-import { docs } from '@/lib/docs';
+import { docGroups } from '@/lib/docs';
 
 export default function Layout({ children }: { children: ReactNode }) {
-  const items = docs.map(({ href, title }) => ({ href, title }));
+  const groups = docGroups.map((group) => ({
+    title: group.title,
+    items: group.entries.map((entry) => ({
+      href: entry.href,
+      title: entry.title,
+    })),
+  }));
 
   return (
     // The provider defaults to a full-viewport app shell (min-h-svh); this
@@ -20,12 +26,12 @@ export default function Layout({ children }: { children: ReactNode }) {
         className="sticky top-14 hidden h-[calc(100svh-3.5rem)] w-52 shrink-0 self-start border-r bg-transparent md:flex"
       >
         <SidebarContent className="py-4">
-          <DocsSidebar items={items} />
+          <DocsSidebar groups={groups} />
         </SidebarContent>
       </Sidebar>
       <div className="min-w-0 flex-1 md:pl-8">
         <div className="border-b py-3 md:hidden">
-          <DocsMobileNav items={items} />
+          <DocsMobileNav groups={groups} />
         </div>
         {children}
       </div>
