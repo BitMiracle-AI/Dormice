@@ -352,7 +352,7 @@ if command -v caddy >/dev/null; then
 	}
 }
 EOF
-    note "wrote $CADDYFILE (plain HTTP on :80 — bind a domain in the console's settings page for HTTPS)"
+    note "wrote $CADDYFILE (plain HTTP on :80 — bind domains in the console's domains page for HTTPS)"
     INGRESS_FILE_READY=1
   elif grep -q 'Managed by Dormice' "$CADDYFILE"; then
     note "[skip] $CADDYFILE is managed by Dormice — left to the daemon"
@@ -421,8 +421,8 @@ fi
 # knob up too. The knob is what turns on web domain binding in the console.
 if [ -n "$INGRESS_FILE_READY" ] && ! grep -q '^DORMICE_INGRESS_FILE=' "$ENV_FILE"; then
   {
-    echo '# The Caddy config file the daemon owns: enables binding a domain (and'
-    echo '# getting HTTPS) from the console settings page.'
+    echo '# The Caddy config file the daemon owns: enables binding domains (and'
+    echo '# getting HTTPS) from the console domains page.'
     echo "DORMICE_INGRESS_FILE=$CADDYFILE"
   } >>"$ENV_FILE"
   note "added DORMICE_INGRESS_FILE=$CADDYFILE to $ENV_FILE"
@@ -460,5 +460,5 @@ printf '  CLI:         export DORMICE_ENDPOINT=http://127.0.0.1:%s DORMICE_API_T
 printf '  The daemon listens on 127.0.0.1 only, by design — exposing it is a reverse proxy'"'"'s job.\n'
 if [ "$(systemctl is-active caddy 2>/dev/null)" = active ]; then
   printf '  console:     http://<this-host-ip>/console (Caddy on :80 — open your cloud firewall for 80/443,\n'
-  printf '               then bind a domain in the settings page for automatic HTTPS)\n'
+  printf '               then bind domains in the domains page for automatic HTTPS)\n'
 fi
