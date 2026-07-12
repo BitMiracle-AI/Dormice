@@ -4,6 +4,7 @@ export * from './config';
 export * from './exec';
 export * from './files';
 export * from './host';
+export * from './ingress';
 export * from './list';
 export * from './metrics';
 export * from './policy';

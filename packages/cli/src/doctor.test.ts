@@ -51,6 +51,8 @@ function fakeHost(
     '/proc/meminfo': 'MemTotal: 30000000 kB\nSwapTotal: 16777212 kB',
     '/proc/sys/vm/swappiness': '100\n',
     '/etc/iptables/rules.v4': IPTABLES_GOOD,
+    '/etc/caddy/Caddyfile':
+      '# Managed by Dormice — setIngress rewrites this file.\n\n:80 {\n\treverse_proxy 127.0.0.1:3676\n}\n',
     ...overrides.files,
   };
   const commands: Record<string, RunResult> = {
@@ -69,6 +71,8 @@ function fakeHost(
     [`docker run --rm --runtime=runsc ${IMAGE} bash -c command -v inotifywait || echo MISSING`]:
       ok('/usr/bin/inotifywait\n'),
     'zstd --version': ok('zstd command line interface v1.5.5\n'),
+    'caddy version': ok('v2.10.0 h1:fakehash\n'),
+    'systemctl is-active caddy': ok('active\n'),
     ...overrides.commands,
   };
   const calls: string[] = [];
@@ -86,6 +90,7 @@ function fakeHost(
       DORMICE_S3_BUCKET: 'dormice-archive',
       DORMICE_S3_ACCESS_KEY_ID: 'minio-user',
       DORMICE_S3_SECRET_ACCESS_KEY: 'minio-secret',
+      DORMICE_INGRESS_FILE: '/etc/caddy/Caddyfile',
     },
     calls,
     run: async (cmd, args) => {
@@ -349,6 +354,68 @@ describe('container probes', () => {
     expect(results['probe-image-user']).toMatchObject({
       status: 'fail',
       detail: expect.stringContaining('uid 0'),
+    });
+  });
+});
+
+describe('the ingress check', () => {
+  it('skips when the daemon manages no proxy', async () => {
+    const ctx = fakeHost({ env: { DORMICE_API_TOKEN: TOKEN } });
+    const { results } = await runDoctor(ctx, { quick: true });
+    expect(results.ingress).toMatchObject({
+      status: 'skip',
+      detail: expect.stringContaining('DORMICE_INGRESS_FILE'),
+    });
+  });
+
+  it('fails when the knob is set but caddy is missing or stopped', async () => {
+    const noBinary = await runDoctor(
+      fakeHost({ commands: { 'caddy version': boom('not found') } }),
+      { quick: true },
+    );
+    expect(noBinary.results.ingress).toMatchObject({
+      status: 'fail',
+      detail: expect.stringContaining('caddy binary is missing'),
+    });
+
+    const stopped = await runDoctor(
+      fakeHost({ commands: { 'systemctl is-active caddy': boom('inactive') } }),
+      { quick: true },
+    );
+    expect(stopped.results.ingress).toMatchObject({
+      status: 'fail',
+      fix: expect.stringContaining('systemctl start caddy'),
+    });
+  });
+
+  it('warns on a config file Dormice does not own', async () => {
+    const { results } = await runDoctor(
+      fakeHost({
+        files: {
+          '/etc/caddy/Caddyfile': 'example.org {\n\trespond "mine"\n}\n',
+        },
+      }),
+      { quick: true },
+    );
+    expect(results.ingress).toMatchObject({
+      status: 'warn',
+      detail: expect.stringContaining('not written by Dormice'),
+    });
+  });
+
+  it('reports the bound domain from the managed file', async () => {
+    const { results } = await runDoctor(
+      fakeHost({
+        files: {
+          '/etc/caddy/Caddyfile':
+            '# Managed by Dormice — setIngress rewrites this file.\n\nconsole.example.com {\n\treverse_proxy 127.0.0.1:3676\n}\n\n:80 {\n\treverse_proxy 127.0.0.1:3676\n}\n',
+        },
+      }),
+      { quick: true },
+    );
+    expect(results.ingress).toMatchObject({
+      status: 'pass',
+      detail: expect.stringContaining('domain console.example.com'),
     });
   });
 });

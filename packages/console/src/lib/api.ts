@@ -2,11 +2,13 @@ import type {
   AcquireRequest,
   AcquireResponse,
   GetConfigResponse,
+  GetIngressResponse,
   GetSandboxMetricsResponse,
   HostMetricsResponse,
   ListActivityResponse,
   RegisterTemplateResponse,
   Sandbox,
+  SetIngressResponse,
   Template,
 } from '@dormice/shared';
 import { clearSessionMarker, hasSessionMarker } from './session';
@@ -102,6 +104,16 @@ export const listActivity = () => rpc<ListActivityResponse>('/listActivity');
 // Effective configuration, read-only. Secrets come back as "set", never as
 // their value; archive.enabled is the daemon's own adjudication.
 export const getConfig = () => rpc<GetConfigResponse>('/getConfig');
+
+// The daemon's front door: whether it manages a reverse proxy config, the
+// bound domain, and live probes (DNS record, certificate actually served).
+export const getIngress = () => rpc<GetIngressResponse>('/getIngress');
+
+// Bind (or clear, with null) the console domain. Returns once the proxy
+// accepted the config; the certificate converges afterwards — poll
+// getIngress and show the honest probes.
+export const setIngress = (domain: string | null) =>
+  rpc<SetIngressResponse>('/setIngress', { domain });
 
 export const listTemplates = () =>
   rpc<{ templates: Template[] }>('/listTemplates');

@@ -6,7 +6,9 @@ import {
   type ExecCommandResponse,
   execCommandResponseSchema,
   type GetConfigResponse,
+  type GetIngressResponse,
   getConfigResponseSchema,
+  getIngressResponseSchema,
   getSandboxMetricsResponseSchema,
   type HostMetricsResponse,
   hostMetricsResponseSchema,
@@ -25,6 +27,8 @@ import {
   removeTemplateResponseSchema,
   type Sandbox,
   type SandboxMetricsSample,
+  type SetIngressResponse,
+  setIngressResponseSchema,
   type Template,
   type WriteFilesResponse,
   writeFilesResponseSchema,
@@ -182,6 +186,29 @@ export class Dormice {
   async getConfig(): Promise<GetConfigResponse> {
     const data = await this.rpc('getConfig', {});
     return getConfigResponseSchema.parse(data);
+  }
+
+  /**
+   * The daemon's managed front door (the reverse proxy in front of it):
+   * whether one is managed at all, the bound domain, and live probes — what
+   * the domain resolves to and whether the proxy serves a valid certificate
+   * for it. Probes are measured at request time, never cached.
+   */
+  async getIngress(): Promise<GetIngressResponse> {
+    const data = await this.rpc('getIngress', {});
+    return getIngressResponseSchema.parse(data);
+  }
+
+  /**
+   * Binds a domain to the daemon's front door (null unbinds): the managed
+   * Caddy config is rewritten and reloaded, and Caddy obtains the TLS
+   * certificate on its own. Returns as soon as the proxy accepted the
+   * config — poll getIngress to watch DNS and the certificate converge.
+   * Refused (400) when the daemon manages no proxy.
+   */
+  async setIngress(domain: string | null): Promise<SetIngressResponse> {
+    const data = await this.rpc('setIngress', { domain });
+    return setIngressResponseSchema.parse(data);
   }
 
   /**

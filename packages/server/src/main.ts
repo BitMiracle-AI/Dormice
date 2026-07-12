@@ -13,6 +13,7 @@ import { acquireSingleWriterLock } from './db/lock';
 import { DockerExecutor } from './executor/docker';
 import type { Executor } from './executor/executor';
 import { FakeExecutor } from './executor/fake';
+import { Ingress } from './ingress';
 import { KeyedQueue } from './keyed-queue';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
@@ -91,6 +92,23 @@ if (s3 !== null) {
   log.info('archiver disabled: DORMICE_S3_* not configured');
 }
 
+// The managed front door exists exactly when its file knob is set (the
+// archiver's rule). The file itself is the source of truth for the bound
+// domain — nothing to reconcile at boot, Caddy is already running it.
+let ingress: Ingress | undefined;
+if (config.DORMICE_INGRESS_FILE) {
+  ingress = new Ingress({
+    filePath: config.DORMICE_INGRESS_FILE,
+    upstreamPort: config.DORMICE_PORT,
+    reloadCommand: config.DORMICE_INGRESS_RELOAD_CMD,
+  });
+  log.info(
+    `ingress managed at ${config.DORMICE_INGRESS_FILE}: ${ingress.domain() ?? 'no domain bound (IP access only)'}`,
+  );
+} else {
+  log.info('ingress not managed: DORMICE_INGRESS_FILE not configured');
+}
+
 // The web console ships beside the server in the monorepo; this file sits
 // one level under packages/server both as src/main.ts and as dist/main.js,
 // so the relative hop to packages/console/dist is the same either way. A
@@ -110,6 +128,7 @@ const app = buildApp({
   logger: log,
   consoleDistDir: existsSync(consoleDistDir) ? consoleDistDir : undefined,
   archiver,
+  ingress,
 });
 
 // Before trusting the pairing of this ledger and this reality, check it:
