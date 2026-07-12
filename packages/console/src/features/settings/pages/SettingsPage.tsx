@@ -16,6 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatDuration } from '@/features/sandboxes/format';
+import { IngressCard } from '../components/IngressCard';
 import { useConfig } from '../hooks/useConfig';
 
 /**
@@ -41,6 +42,10 @@ const KEY_HINTS: Record<string, string> = {
   DORMICE_RECLAIM_TIMEOUT_SECONDS: '冻结时挤内存进 swap 的最长等待',
   DORMICE_SANDBOX_DOMAIN:
     '端口预览泛域名(getHost);不配则响应里诚实缺席,代理层不启用',
+  DORMICE_INGRESS_FILE:
+    'daemon 接管的 Caddy 配置文件;配了才能在上方卡片里网页绑定域名',
+  DORMICE_INGRESS_RELOAD_CMD:
+    '改完代理配置后的重载命令;不配默认 caddy reload 托管文件本身',
   DORMICE_S3_ENDPOINT: '归档对象存储的地址;四件套齐了归档才启用',
   DORMICE_S3_BUCKET: '归档桶名',
   DORMICE_S3_ACCESS_KEY_ID: '归档存储的 Access Key(只报已设置)',
@@ -99,6 +104,8 @@ export function SettingsPage() {
           。
         </p>
       </div>
+
+      <IngressCard />
 
       <div className="overflow-x-auto rounded-lg border">
         <Table>

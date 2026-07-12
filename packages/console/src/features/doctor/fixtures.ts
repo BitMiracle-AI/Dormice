@@ -1,8 +1,8 @@
 /**
  * 提案中的 wire 形状:POST /runDoctor 的响应(daemon 内跑 CLI 同一套
  * 只读检查,规则单一来源在 packages/cli/src/doctor.ts)。检查 ID 与真
- * doctor 一比一 — 版式对着真实的 20 项设计,不发明假检查。落地时类型
- * 进 shared,本文件只剩删除。
+ * doctor 一比一,不发明假检查(总数以 doctor.ts 跑出来的为准,会随检查
+ * 增长)。落地时类型进 shared,本文件只剩删除。
  */
 export type DoctorStatus = 'pass' | 'warn' | 'fail' | 'skip';
 
@@ -104,6 +104,24 @@ export const SAMPLE_DOCTOR: DoctorReport = {
       title: 'DORMICE_API_TOKEN 已配置',
       status: 'pass',
       detail: '存在且非空(不显示内容)',
+    },
+    {
+      id: 's3-config',
+      title: 'S3 归档配置',
+      status: 'skip',
+      detail: 'DORMICE_S3_* 未配置 — 归档器关闭,沙箱永远停在 stopped',
+    },
+    {
+      id: 'zstd',
+      title: 'zstd 可用',
+      status: 'skip',
+      detail: '归档器关闭时不需要 host 侧 tar + zstd',
+    },
+    {
+      id: 'ingress',
+      title: '接入层(Caddy)',
+      status: 'pass',
+      detail: 'caddy v2.10.0 active;未绑定域名(IP 访问)',
     },
     {
       id: 'base-image',

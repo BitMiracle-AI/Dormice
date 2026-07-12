@@ -16,12 +16,14 @@ import { registerE2bCompat } from './e2b';
 import { ProcessTable } from './e2b/process-table';
 import { WatcherTable } from './e2b/watcher-table';
 import type { Executor } from './executor/executor';
+import type { Ingress } from './ingress';
 import type { KeyedQueue } from './keyed-queue';
 import { ARCHIVE_DEFAULT_SECONDS } from './policy';
 import { activityRoutes } from './routes/activity';
 import { configRoutes } from './routes/config';
 import { consoleRoutes } from './routes/console';
 import { hostRoutes } from './routes/host';
+import { ingressRoutes } from './routes/ingress';
 import { sandboxRoutes } from './routes/sandboxes';
 import { templateRoutes } from './routes/templates';
 import { createSandboxProxy } from './sandbox-proxy';
@@ -57,6 +59,12 @@ export interface AppDeps {
    */
   archiver?: Archiver;
   /**
+   * The managed reverse-proxy front door, present exactly when
+   * DORMICE_INGRESS_FILE is set (same rule as the archiver). Absent,
+   * getIngress answers { managed: false } and setIngress refuses.
+   */
+  ingress?: Ingress;
+  /**
    * Which knobs came from the environment versus defaults, for getConfig.
    * Defaults to reading process.env — right for the daemon; tests that
    * assert on sources inject a fixed map instead of trusting the shell.
@@ -81,6 +89,7 @@ export function buildApp({
   logger = true,
   consoleDistDir,
   archiver,
+  ingress,
   sources = configSources(),
 }: AppDeps) {
   // The archive default is adjudicated once, here, by the archiver's
@@ -169,6 +178,7 @@ export function buildApp({
     await api.register(templateRoutes, { db });
     await api.register(hostRoutes, { config, db, executor });
     await api.register(activityRoutes, { db });
+    await api.register(ingressRoutes, { db, ingress });
     await api.register(configRoutes, {
       config,
       sources,

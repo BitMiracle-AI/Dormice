@@ -25,6 +25,8 @@ export const ACTIVITY_KINDS = [
   /** The reconciler corrected the ledger (or reality) to match the other. */
   'reconciled',
   'daemon-started',
+  /** An operator bound or cleared the console domain through setIngress. */
+  'ingress-updated',
 ] as const;
 
 export const activityKindSchema = z.enum(ACTIVITY_KINDS);

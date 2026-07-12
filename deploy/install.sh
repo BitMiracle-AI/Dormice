@@ -309,6 +309,83 @@ else
   note "built $base_image from images/Dockerfile"
 fi
 
+# ---- ingress (Caddy reverse proxy) -------------------------------------------
+# The daemon binds 127.0.0.1 by design; Caddy on :80 is what makes
+# http://<host-ip>/console reachable from a browser. The Caddyfile below is
+# also what the daemon rewrites when the operator binds a domain in the
+# console (setIngress) — Caddy then obtains and renews the TLS certificate
+# on its own. Pinned binary with checksum, same posture as gVisor.
+log 'ingress (Caddy reverse proxy)'
+CADDY_VERSION=2.10.0
+CADDY_SHA512=626682d623ca04356ab3c9a93a82386cfde6d8243b11f2d0eea9e97ba630c7ada62373401e96b72c6690c98ae8dd004d61fafe477f5249690d5cb251ebbfd2d9
+CADDYFILE=/etc/caddy/Caddyfile
+if command -v caddy >/dev/null; then
+  note "[skip] caddy is installed ($(caddy version | cut -d' ' -f1))"
+elif ss -ltnH 'sport = :80' 2>/dev/null | grep -q .; then
+  # Another server owns port 80: never fight it. The operator keeps their
+  # proxy (point it at 127.0.0.1:$PORT); web domain binding stays off.
+  note "port 80 is already in use and caddy is not installed — skipping the ingress layer"
+  note "point your own reverse proxy at 127.0.0.1:$PORT; the console's domain binding stays disabled"
+else
+  caddy_url="https://github.com/caddyserver/caddy/releases/download/v$CADDY_VERSION/caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
+  [ "$MIRROR" = cn ] && caddy_url="https://ghfast.top/$caddy_url"
+  curl -fsSL -o /tmp/caddy.tar.gz "$caddy_url"
+  echo "$CADDY_SHA512  /tmp/caddy.tar.gz" | sha512sum -c - >/dev/null
+  tar -C /tmp -xzf /tmp/caddy.tar.gz caddy
+  install -m 755 /tmp/caddy /usr/local/bin/caddy
+  rm -f /tmp/caddy.tar.gz /tmp/caddy
+  note "installed caddy v$CADDY_VERSION to /usr/local/bin"
+fi
+INGRESS_FILE_READY=''
+if command -v caddy >/dev/null; then
+  mkdir -p /etc/caddy
+  if [ ! -f "$CADDYFILE" ]; then
+    # The marker below is the ownership contract: the daemon refuses to
+    # rewrite a Caddyfile that lacks it. Kept in sync by hand with
+    # packages/server/src/ingress.ts.
+    cat >"$CADDYFILE" <<EOF
+# Managed by Dormice — setIngress rewrites this file.
+
+:80 {
+	reverse_proxy 127.0.0.1:$PORT {
+		flush_interval -1
+	}
+}
+EOF
+    note "wrote $CADDYFILE (plain HTTP on :80 — bind a domain in the console's settings page for HTTPS)"
+    INGRESS_FILE_READY=1
+  elif grep -q 'Managed by Dormice' "$CADDYFILE"; then
+    note "[skip] $CADDYFILE is managed by Dormice — left to the daemon"
+    INGRESS_FILE_READY=1
+  else
+    note "$CADDYFILE exists but was not written by Dormice — left untouched; domain binding will refuse to overwrite it"
+    INGRESS_FILE_READY=1
+  fi
+  if [ ! -f /etc/systemd/system/caddy.service ]; then
+    cat >/etc/systemd/system/caddy.service <<EOF
+[Unit]
+Description=Caddy reverse proxy for Dormice
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/caddy run --config $CADDYFILE
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    note 'wrote /etc/systemd/system/caddy.service'
+  fi
+  systemctl enable caddy >/dev/null 2>&1
+  if [ "$(systemctl is-active caddy)" != active ]; then
+    systemctl start caddy
+    note 'started caddy'
+  else
+    note '[skip] caddy is running'
+  fi
+fi
+
 # ---- daemon configuration ----------------------------------------------------
 log "daemon configuration ($ENV_FILE)"
 install -d -m 700 "$DATA_DIR"
@@ -339,6 +416,16 @@ DORMICE_DATA_DIR=$DATA_DIR
 EOF
   chmod 600 "$ENV_FILE"
   note "wrote $ENV_FILE (mode 600) with a fresh API token"
+fi
+# Appended outside the create-once block so an upgrade re-run picks the
+# knob up too. The knob is what turns on web domain binding in the console.
+if [ -n "$INGRESS_FILE_READY" ] && ! grep -q '^DORMICE_INGRESS_FILE=' "$ENV_FILE"; then
+  {
+    echo '# The Caddy config file the daemon owns: enables binding a domain (and'
+    echo '# getting HTTPS) from the console settings page.'
+    echo "DORMICE_INGRESS_FILE=$CADDYFILE"
+  } >>"$ENV_FILE"
+  note "added DORMICE_INGRESS_FILE=$CADDYFILE to $ENV_FILE"
 fi
 
 # ---- systemd service ---------------------------------------------------------
@@ -371,3 +458,7 @@ printf '  API token:   grep ^DORMICE_API_TOKEN %s\n' "$ENV_FILE"
 printf '  daemon logs: journalctl -u dormice -f\n'
 printf '  CLI:         export DORMICE_ENDPOINT=http://127.0.0.1:%s DORMICE_API_TOKEN=<token>; dor sandbox ls\n' "$PORT"
 printf '  The daemon listens on 127.0.0.1 only, by design — exposing it is a reverse proxy'"'"'s job.\n'
+if [ "$(systemctl is-active caddy 2>/dev/null)" = active ]; then
+  printf '  console:     http://<this-host-ip>/console (Caddy on :80 — open your cloud firewall for 80/443,\n'
+  printf '               then bind a domain in the settings page for automatic HTTPS)\n'
+fi

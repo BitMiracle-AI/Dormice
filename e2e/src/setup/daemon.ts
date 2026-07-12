@@ -12,6 +12,8 @@ declare module 'vitest' {
   export interface ProvidedContext {
     dormiceEndpoint: string;
     dormiceToken: string;
+    /** The Caddy config file the exam daemon owns — an operator-visible artifact. */
+    dormiceIngressFile: string;
   }
 }
 
@@ -87,6 +89,11 @@ export default async function setup(project: TestProject) {
       DORMICE_S3_ACCESS_KEY_ID: 'e2e-key',
       DORMICE_S3_SECRET_ACCESS_KEY: 'e2e-secret',
       DORMICE_S3_FORCE_PATH_STYLE: 'true',
+      // A managed ingress so the domain-binding verbs run black-box. The
+      // reload command is a no-op: the exam grades what the daemon writes
+      // and answers, not Caddy — Caddy's side is real-machine acceptance.
+      DORMICE_INGRESS_FILE: join(dataDir, 'Caddyfile'),
+      DORMICE_INGRESS_RELOAD_CMD: 'true',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -120,6 +127,7 @@ export default async function setup(project: TestProject) {
 
   project.provide('dormiceEndpoint', endpoint);
   project.provide('dormiceToken', token);
+  project.provide('dormiceIngressFile', join(dataDir, 'Caddyfile'));
 
   return async () => {
     child.kill();

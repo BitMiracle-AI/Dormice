@@ -400,6 +400,52 @@ const CHECKS: DoctorCheck[] = [
     },
   },
   {
+    id: 'ingress',
+    title: 'ingress (Caddy)',
+    run: async (ctx) => {
+      const file = ctx.env.DORMICE_INGRESS_FILE;
+      if (!file) {
+        return skip(
+          'DORMICE_INGRESS_FILE not set — the daemon manages no reverse proxy; bind domains by editing your proxy config directly',
+        );
+      }
+      const caddy = await ctx.run('caddy', ['version']);
+      if (!caddy.ok) {
+        return fail(
+          'DORMICE_INGRESS_FILE is set but the caddy binary is missing — setIngress cannot reload anything',
+          're-run install.sh (it installs Caddy), or unset DORMICE_INGRESS_FILE',
+        );
+      }
+      const active = await ctx.run('systemctl', ['is-active', 'caddy']);
+      if (!active.ok) {
+        return fail(
+          'the caddy service is not active — nothing proxies the outside world to the daemon',
+          'systemctl start caddy (and `journalctl -u caddy` for why it stopped)',
+        );
+      }
+      const content = await ctx.readTextFile(file);
+      if (content === undefined) {
+        // Not a failure: setIngress creates the file on the first bind.
+        return warn(`${file} does not exist yet — created on the first bind`);
+      }
+      if (!content.includes('Managed by Dormice')) {
+        return warn(
+          `${file} was not written by Dormice — setIngress refuses to overwrite it, so web domain binding is effectively off`,
+          'move your config elsewhere and re-run install.sh, or point DORMICE_INGRESS_FILE at a file the daemon may own',
+        );
+      }
+      // The generated shape puts site addresses at column 0; the first
+      // non-:80 one is the bound domain.
+      const domain = content
+        .split('\n')
+        .map((line) => /^([^\s#:{][^\s{]*)\s*\{/.exec(line)?.[1])
+        .find((match) => match !== undefined);
+      return pass(
+        `caddy ${caddy.stdout.trim().split(' ')[0]} active; ${domain ? `domain ${domain}` : 'no domain bound (IP access only)'}`,
+      );
+    },
+  },
+  {
     id: 'base-image',
     title: 'base image available',
     needs: ['docker-daemon'],

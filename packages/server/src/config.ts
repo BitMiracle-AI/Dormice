@@ -75,6 +75,29 @@ const envSchema = z.object({
     )
     .optional(),
   /**
+   * The Caddy config file the daemon owns — the switch for web-based domain
+   * binding (setIngress rewrites the file, reloads Caddy, Caddy handles the
+   * certificate). install.sh sets it when it installs Caddy. Unset, the
+   * daemon never touches any proxy config and setIngress is refused — the
+   * feature is honestly absent (the SANDBOX_DOMAIN precedent). Absolute:
+   * a system file must not move with the start directory.
+   */
+  DORMICE_INGRESS_FILE: z
+    .string()
+    .refine(isAbsolute, {
+      error:
+        'DORMICE_INGRESS_FILE must be an absolute path, e.g. /etc/caddy/Caddyfile',
+    })
+    .optional(),
+  /**
+   * How the daemon tells the running proxy to re-read its config after a
+   * bind. Defaults to `caddy reload --config <DORMICE_INGRESS_FILE>` —
+   * right when the daemon owns the whole Caddyfile; an operator whose own
+   * Caddyfile imports a Dormice-owned fragment points this at the outer
+   * file instead.
+   */
+  DORMICE_INGRESS_RELOAD_CMD: z.string().min(1).optional(),
+  /**
    * The S3-compatible object store behind the archiver (AWS, R2, MinIO,
    * OSS in S3-compat mode). The four core variables come as a set: with
    * none of them, archiving is honestly absent — sandboxes park at stopped
@@ -177,6 +200,8 @@ export const CONFIG_KEYS: Record<keyof Config, { sensitive: boolean }> = {
   DORMICE_SANDBOX_PIDS_LIMIT: { sensitive: false },
   DORMICE_RECLAIM_TIMEOUT_SECONDS: { sensitive: false },
   DORMICE_SANDBOX_DOMAIN: { sensitive: false },
+  DORMICE_INGRESS_FILE: { sensitive: false },
+  DORMICE_INGRESS_RELOAD_CMD: { sensitive: false },
   DORMICE_S3_ENDPOINT: { sensitive: false },
   DORMICE_S3_BUCKET: { sensitive: false },
   DORMICE_S3_ACCESS_KEY_ID: { sensitive: true },
