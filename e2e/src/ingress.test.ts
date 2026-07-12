@@ -19,44 +19,57 @@ function client() {
 }
 
 describe('ingress domain binding over a real daemon', () => {
-  it('walks bind → status → rebind → clear, with the file telling the same story', async () => {
+  it('walks bind → add → status → drop → clear, with the file telling the same story', async () => {
     const file = inject('dormiceIngressFile');
 
     // Managed but unbound: the daemon has a file knob, nothing written yet.
     const before = await client().getIngress();
-    expect(before).toMatchObject({ managed: true, domain: null, probe: null });
+    expect(before).toEqual({ managed: true, domains: [] });
 
     // Bind. The exam domain has no DNS record — binding must still be
     // accepted (write the intent, let the probes report reality honestly).
-    const bound = await client().setIngress('console.dormice-e2e.test');
-    expect(bound).toEqual({ domain: 'console.dormice-e2e.test' });
+    const bound = await client().setIngress(['console.dormice-e2e.test']);
+    expect(bound).toEqual({ domains: ['console.dormice-e2e.test'] });
+
+    // Add a second: send the full set (set semantics, not a patch).
+    await client().setIngress([
+      'console.dormice-e2e.test',
+      'api.dormice-e2e.test',
+    ]);
     const content = readFileSync(file, 'utf8');
     expect(content).toContain('# Managed by Dormice');
     expect(content).toContain('console.dormice-e2e.test {');
+    expect(content).toContain('api.dormice-e2e.test {');
     expect(content).toContain(':80 {'); // the no-lockout catch-all
 
-    // Status carries live probes; on a record-less domain they are honest
-    // reds/empties, never invented greens.
+    // Status carries live probes per domain; on record-less domains they
+    // are honest reds/empties, never invented greens.
     const status = await client().getIngress();
     expect(status.managed).toBe(true);
-    expect(status.domain).toBe('console.dormice-e2e.test');
-    expect(status.probe).not.toBeNull();
-    expect(status.probe?.tlsOk).toBe(false);
+    expect(status.domains.map((d) => d.domain)).toEqual([
+      'console.dormice-e2e.test',
+      'api.dormice-e2e.test',
+    ]);
+    for (const { probe } of status.domains) {
+      expect(probe.tlsOk).toBe(false);
+    }
 
-    // Rebind replaces the site; clear falls back to IP-only.
-    await client().setIngress('other.dormice-e2e.test');
+    // Drop one: the remaining set survives, the dropped site is gone.
+    await client().setIngress(['api.dormice-e2e.test']);
     expect(readFileSync(file, 'utf8')).not.toContain(
       'console.dormice-e2e.test',
     );
-    const cleared = await client().setIngress(null);
-    expect(cleared).toEqual({ domain: null });
-    expect((await client().getIngress()).domain).toBeNull();
+
+    // Clear falls back to IP-only.
+    const cleared = await client().setIngress([]);
+    expect(cleared).toEqual({ domains: [] });
+    expect((await client().getIngress()).domains).toEqual([]);
     expect(readFileSync(file, 'utf8')).not.toContain('dormice-e2e.test');
   });
 
   it('rejects a domain with a scheme, names the shape it wants', async () => {
     await expect(
-      client().setIngress('https://console.example.com'),
+      client().setIngress(['https://console.example.com']),
     ).rejects.toMatchObject({
       status: 400,
       message: expect.stringContaining('bare hostname'),
@@ -68,7 +81,7 @@ describe('ingress domain binding over a real daemon', () => {
     const ours = readFileSync(file, 'utf8');
     writeFileSync(file, ':80 {\n\trespond "hand-edited"\n}\n');
     await expect(
-      client().setIngress('console.dormice-e2e.test'),
+      client().setIngress(['console.dormice-e2e.test']),
     ).rejects.toMatchObject({
       status: 409,
       message: expect.stringContaining('not written by Dormice'),
@@ -76,12 +89,12 @@ describe('ingress domain binding over a real daemon', () => {
     // The operator's hand-edited file is untouched by the refusal.
     expect(readFileSync(file, 'utf8')).toContain('hand-edited');
     writeFileSync(file, ours);
-    expect((await client().getIngress()).domain).toBeNull();
+    expect((await client().getIngress()).domains).toEqual([]);
   });
 
   it('records binds in the activity window', async () => {
-    await client().setIngress('activity.dormice-e2e.test');
-    await client().setIngress(null);
+    await client().setIngress(['activity.dormice-e2e.test']);
+    await client().setIngress([]);
     const events = await client().listActivity();
     const details = events
       .filter((event) => event.kind === 'ingress-updated')

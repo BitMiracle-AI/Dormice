@@ -105,15 +105,16 @@ export const listActivity = () => rpc<ListActivityResponse>('/listActivity');
 // their value; archive.enabled is the daemon's own adjudication.
 export const getConfig = () => rpc<GetConfigResponse>('/getConfig');
 
-// The daemon's front door: whether it manages a reverse proxy config, the
-// bound domain, and live probes (DNS record, certificate actually served).
+// The daemon's front door: whether it manages a reverse proxy config, and
+// every bound domain with live probes (DNS record, certificate served).
 export const getIngress = () => rpc<GetIngressResponse>('/getIngress');
 
-// Bind (or clear, with null) the console domain. Returns once the proxy
-// accepted the config; the certificate converges afterwards — poll
-// getIngress and show the honest probes.
-export const setIngress = (domain: string | null) =>
-  rpc<SetIngressResponse>('/setIngress', { domain });
+// Set the full console domain list (set semantics: send the list you want,
+// empty clears everything). Returns once the proxy accepted the config; the
+// certificates converge afterwards — poll getIngress and show the honest
+// probes.
+export const setIngress = (domains: string[]) =>
+  rpc<SetIngressResponse>('/setIngress', { domains });
 
 export const listTemplates = () =>
   rpc<{ templates: Template[] }>('/listTemplates');

@@ -403,19 +403,21 @@ describe('the ingress check', () => {
     });
   });
 
-  it('reports the bound domain from the managed file', async () => {
+  it('reports every bound domain from the managed file', async () => {
     const { results } = await runDoctor(
       fakeHost({
         files: {
           '/etc/caddy/Caddyfile':
-            '# Managed by Dormice — setIngress rewrites this file.\n\nconsole.example.com {\n\treverse_proxy 127.0.0.1:3676\n}\n\n:80 {\n\treverse_proxy 127.0.0.1:3676\n}\n',
+            '# Managed by Dormice — setIngress rewrites this file.\n\nconsole.example.com {\n\treverse_proxy 127.0.0.1:3676\n}\n\napi.example.com {\n\treverse_proxy 127.0.0.1:3676\n}\n\n:80 {\n\treverse_proxy 127.0.0.1:3676\n}\n',
         },
       }),
       { quick: true },
     );
     expect(results.ingress).toMatchObject({
       status: 'pass',
-      detail: expect.stringContaining('domain console.example.com'),
+      detail: expect.stringContaining(
+        'domains console.example.com, api.example.com',
+      ),
     });
   });
 });

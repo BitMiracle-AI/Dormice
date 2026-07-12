@@ -3,14 +3,15 @@ import { z } from 'zod';
 /**
  * getIngress()/setIngress() — the daemon's own front door. When the daemon
  * manages a Caddy config file (DORMICE_INGRESS_FILE), setIngress rewrites it
- * with a domain site block and reloads Caddy; Caddy then obtains and renews
- * the TLS certificate on its own (ACME). The daemon itself keeps binding
- * 127.0.0.1 — what these verbs manage is the reverse proxy in front of it.
+ * with one site block per bound domain and reloads Caddy; Caddy then obtains
+ * and renews each TLS certificate on its own (ACME). The daemon itself keeps
+ * binding 127.0.0.1 — what these verbs manage is the reverse proxy in front
+ * of it.
  *
  * There is no stored state besides the config file: the file is the single
- * source of truth, and getIngress reads it back plus probes reality (DNS,
- * the certificate actually served) so a browser can watch a bind converge
- * with honest progress instead of a spinner.
+ * source of truth, and getIngress reads it back plus probes reality per
+ * domain (DNS, the certificate actually served) so a browser can watch each
+ * bind converge with honest progress instead of a spinner.
  */
 
 /** Same shape rule as DORMICE_SANDBOX_DOMAIN: a bare hostname. */
@@ -22,18 +23,24 @@ export const ingressDomainSchema = z
   });
 
 export const setIngressRequestSchema = z.object({
-  /** Null unbinds: the proxy goes back to plain-HTTP IP access only. */
-  domain: ingressDomainSchema.nullable(),
+  /**
+   * The full set of domains to serve — set semantics, not a patch: the
+   * proxy config is rewritten to exactly this list (adding and removing are
+   * both "send the list you want"). Empty = back to plain-HTTP IP access
+   * only. Hostnames are case-insensitive; the daemon lowercases and dedups.
+   */
+  domains: z.array(ingressDomainSchema),
 });
 
 export type SetIngressRequest = z.infer<typeof setIngressRequestSchema>;
 
 export const setIngressResponseSchema = z.object({
   /**
-   * The domain now written into the proxy config. Certificate issuance
-   * happens after this returns — poll getIngress to watch it converge.
+   * The domains now written into the proxy config (normalized). Certificate
+   * issuance happens after this returns — poll getIngress to watch each one
+   * converge.
    */
-  domain: z.string().nullable(),
+  domains: z.array(z.string()),
 });
 
 export type SetIngressResponse = z.infer<typeof setIngressResponseSchema>;
@@ -61,6 +68,13 @@ export const ingressProbeSchema = z.object({
 
 export type IngressProbe = z.infer<typeof ingressProbeSchema>;
 
+export const ingressDomainStatusSchema = z.object({
+  domain: z.string(),
+  probe: ingressProbeSchema,
+});
+
+export type IngressDomainStatus = z.infer<typeof ingressDomainStatusSchema>;
+
 export const getIngressResponseSchema = z.object({
   /**
    * Whether this daemon manages a proxy config at all
@@ -68,9 +82,8 @@ export const getIngressResponseSchema = z.object({
    * absent; binding attempts are refused with the reason.
    */
   managed: z.boolean(),
-  domain: z.string().nullable(),
-  /** Null unless a domain is bound. */
-  probe: ingressProbeSchema.nullable(),
+  /** Every bound domain with its live probes; empty when none are bound. */
+  domains: z.array(ingressDomainStatusSchema),
 });
 
 export type GetIngressResponse = z.infer<typeof getIngressResponseSchema>;

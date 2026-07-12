@@ -46,29 +46,46 @@ function testIngress(
 }
 
 describe('Ingress file round-trip', () => {
-  it('binds a domain: marker, domain site, :80 catch-all — and reads it back', async () => {
+  it('binds domains: marker, one site each, :80 catch-all — and reads them back in order', async () => {
     const { ingress, filePath, reloads } = testIngress();
-    await ingress.setDomain('console.example.com');
+    await ingress.setDomains(['console.example.com', 'api.example.com']);
     const content = readFileSync(filePath, 'utf8');
     expect(content.startsWith('# Managed by Dormice')).toBe(true);
     expect(content).toContain('console.example.com {');
+    expect(content).toContain('api.example.com {');
     // The no-lockout guarantee: IP access survives every bind.
     expect(content).toContain(':80 {');
     expect(content).toContain('reverse_proxy 127.0.0.1:3676');
     expect(content).toContain('flush_interval -1');
-    expect(ingress.domain()).toBe('console.example.com');
+    expect(ingress.domains()).toEqual([
+      'console.example.com',
+      'api.example.com',
+    ]);
     expect(reloads).toHaveLength(1);
   });
 
-  it('clears back to IP-only, and reports null before any file exists', async () => {
+  it('lowercases and dedups: hostnames are case-insensitive, the file decides once', async () => {
+    const { ingress } = testIngress();
+    await ingress.setDomains([
+      'Console.Example.COM',
+      'console.example.com',
+      'api.example.com',
+    ]);
+    expect(ingress.domains()).toEqual([
+      'console.example.com',
+      'api.example.com',
+    ]);
+  });
+
+  it('clears back to IP-only, and reports empty before any file exists', async () => {
     const { ingress, filePath } = testIngress();
-    expect(ingress.domain()).toBeNull();
-    await ingress.setDomain('console.example.com');
-    await ingress.setDomain(null);
+    expect(ingress.domains()).toEqual([]);
+    await ingress.setDomains(['console.example.com']);
+    await ingress.setDomains([]);
     const content = readFileSync(filePath, 'utf8');
     expect(content).not.toContain('example.com');
     expect(content).toContain(':80 {');
-    expect(ingress.domain()).toBeNull();
+    expect(ingress.domains()).toEqual([]);
   });
 
   it('defaults the reload command to caddy reload against its own file', async () => {
@@ -82,7 +99,7 @@ describe('Ingress file round-trip', () => {
         return { ok: true, stderr: '' };
       },
     });
-    await ingress.setDomain(null);
+    await ingress.setDomains([]);
     expect(reloads).toEqual([
       `caddy reload --config ${filePath} --adapter caddyfile`,
     ]);
@@ -103,13 +120,13 @@ describe('Ingress file round-trip', () => {
       },
     });
     await Promise.all([
-      ingress.setDomain('a.example.com'),
-      ingress.setDomain('b.example.com'),
+      ingress.setDomains(['a.example.com']),
+      ingress.setDomains(['b.example.com']),
     ]);
     // Each reload observed the file its own write produced — the second
     // write waited for the first reload instead of racing it.
     expect(order).toEqual(['reload:a', 'reload:b']);
-    expect(ingress.domain()).toBe('b.example.com');
+    expect(ingress.domains()).toEqual(['b.example.com']);
   });
 });
 
@@ -118,22 +135,22 @@ describe('Ingress refusals and rollback', () => {
     const filePath = tmpFile();
     writeFileSync(filePath, 'example.org {\n\trespond "mine"\n}\n');
     const { ingress } = testIngress({ filePath });
-    await expect(ingress.setDomain('console.example.com')).rejects.toThrow(
+    await expect(ingress.setDomains(['console.example.com'])).rejects.toThrow(
       /not written by Dormice/,
     );
-    // The foreign file is untouched, and not ours to report a domain from.
+    // The foreign file is untouched, and not ours to report domains from.
     expect(readFileSync(filePath, 'utf8')).toContain('respond "mine"');
-    expect(ingress.domain()).toBeNull();
+    expect(ingress.domains()).toEqual([]);
   });
 
   it('restores the previous file when the reload fails', async () => {
     const { ingress, filePath } = testIngress();
-    await ingress.setDomain('good.example.com');
+    await ingress.setDomains(['good.example.com']);
     const { ingress: failing } = testIngress({
       filePath,
       runCommand: async () => ({ ok: false, stderr: 'adapting config: no' }),
     });
-    await expect(failing.setDomain('bad.example.com')).rejects.toThrow(
+    await expect(failing.setDomains(['bad.example.com'])).rejects.toThrow(
       /adapting config: no/,
     );
     expect(readFileSync(filePath, 'utf8')).toContain('good.example.com');
@@ -143,7 +160,7 @@ describe('Ingress refusals and rollback', () => {
     const { ingress, filePath } = testIngress({
       runCommand: async () => ({ ok: false, stderr: 'caddy not running' }),
     });
-    await expect(ingress.setDomain('x.example.com')).rejects.toThrow(
+    await expect(ingress.setDomains(['x.example.com'])).rejects.toThrow(
       /caddy not running/,
     );
     expect(existsSync(filePath)).toBe(false);
@@ -181,57 +198,72 @@ describe('ingress routes', () => {
     expect(get.statusCode).toBe(200);
     expect(getIngressResponseSchema.parse(get.json())).toEqual({
       managed: false,
-      domain: null,
-      probe: null,
+      domains: [],
     });
-    const set = await rpc(app, '/setIngress', { domain: 'a.example.com' });
+    const set = await rpc(app, '/setIngress', {
+      domains: ['a.example.com'],
+    });
     expect(set.statusCode).toBe(400);
     expect(set.json().message).toContain('DORMICE_INGRESS_FILE');
   });
 
-  it('binds, probes, records activity, clears', async () => {
+  it('binds two, probes each, drops one, records the diffs, clears', async () => {
     const { ingress } = testIngress();
     const app = testApp(ingress);
 
     const set = await rpc(app, '/setIngress', {
-      domain: 'console.example.com',
+      domains: ['console.example.com', 'api.example.com'],
     });
     expect(set.statusCode).toBe(200);
-    expect(set.json()).toEqual({ domain: 'console.example.com' });
+    expect(set.json()).toEqual({
+      domains: ['console.example.com', 'api.example.com'],
+    });
 
     const get = await rpc(app, '/getIngress');
     const status = getIngressResponseSchema.parse(get.json());
+    const probe = {
+      dnsAddresses: ['1.2.3.4'],
+      dnsError: null,
+      tlsOk: true,
+      tlsError: null,
+    };
     expect(status).toEqual({
       managed: true,
-      domain: 'console.example.com',
-      probe: {
-        dnsAddresses: ['1.2.3.4'],
-        dnsError: null,
-        tlsOk: true,
-        tlsError: null,
-      },
+      domains: [
+        { domain: 'console.example.com', probe },
+        { domain: 'api.example.com', probe },
+      ],
     });
 
-    const cleared = await rpc(app, '/setIngress', { domain: null });
+    const dropped = await rpc(app, '/setIngress', {
+      domains: ['api.example.com'],
+    });
+    expect(dropped.json()).toEqual({ domains: ['api.example.com'] });
+
+    const cleared = await rpc(app, '/setIngress', { domains: [] });
     expect(cleared.statusCode).toBe(200);
-    expect(cleared.json()).toEqual({ domain: null });
+    expect(cleared.json()).toEqual({ domains: [] });
 
     const activity = await rpc(app, '/listActivity');
-    const kinds = (
+    const details = (
       activity.json().events as Array<{ kind: string; detail: string }>
     )
       .filter((event) => event.kind === 'ingress-updated')
       .map((event) => event.detail);
-    expect(kinds).toHaveLength(2);
-    expect(kinds[1]).toContain('console.example.com');
-    expect(kinds[0]).toContain('cleared');
+    // Newest first: clear, drop, the double bind.
+    expect(details).toHaveLength(3);
+    expect(details[2]).toContain('bound console.example.com');
+    expect(details[2]).toContain('bound api.example.com');
+    expect(details[1]).toContain('unbound console.example.com');
+    expect(details[1]).toContain('now serving api.example.com');
+    expect(details[0]).toContain('plain-HTTP IP access only');
   });
 
   it('rejects a domain with a scheme at the schema gate', async () => {
     const { ingress } = testIngress();
     const app = testApp(ingress);
     const res = await rpc(app, '/setIngress', {
-      domain: 'https://console.example.com',
+      domains: ['https://console.example.com'],
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().message).toContain('bare hostname');
@@ -242,7 +274,7 @@ describe('ingress routes', () => {
     writeFileSync(filePath, 'someone-elses-site {\n}\n');
     const foreign = testApp(testIngress({ filePath }).ingress);
     const refused = await rpc(foreign, '/setIngress', {
-      domain: 'a.example.com',
+      domains: ['a.example.com'],
     });
     expect(refused.statusCode).toBe(409);
     expect(refused.json().message).toContain('not written by Dormice');
@@ -253,7 +285,7 @@ describe('ingress routes', () => {
       }).ingress,
     );
     const failed = await rpc(broken, '/setIngress', {
-      domain: 'a.example.com',
+      domains: ['a.example.com'],
     });
     expect(failed.statusCode).toBe(500);
     expect(failed.json().message).toContain('connection refused');

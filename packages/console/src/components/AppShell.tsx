@@ -20,6 +20,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   sandboxes: '沙箱',
   templates: '模板',
   activity: '活动',
+  domains: '域名',
   doctor: '体检',
   settings: '设置',
   connect: '连接',

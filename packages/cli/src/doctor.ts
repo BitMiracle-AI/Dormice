@@ -434,14 +434,18 @@ const CHECKS: DoctorCheck[] = [
           'move your config elsewhere and re-run install.sh, or point DORMICE_INGRESS_FILE at a file the daemon may own',
         );
       }
-      // The generated shape puts site addresses at column 0; the first
-      // non-:80 one is the bound domain.
-      const domain = content
+      // The generated shape puts site addresses at column 0; every
+      // non-:80 one is a bound domain.
+      const domains = content
         .split('\n')
         .map((line) => /^([^\s#:{][^\s{]*)\s*\{/.exec(line)?.[1])
-        .find((match) => match !== undefined);
+        .filter((match) => match !== undefined);
       return pass(
-        `caddy ${caddy.stdout.trim().split(' ')[0]} active; ${domain ? `domain ${domain}` : 'no domain bound (IP access only)'}`,
+        `caddy ${caddy.stdout.trim().split(' ')[0]} active; ${
+          domains.length
+            ? `domain${domains.length > 1 ? 's' : ''} ${domains.join(', ')}`
+            : 'no domain bound (IP access only)'
+        }`,
       );
     },
   },

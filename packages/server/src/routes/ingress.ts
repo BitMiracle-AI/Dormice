@@ -31,10 +31,7 @@ export const ingressRoutes: FastifyPluginAsyncZod<
         response: { 200: getIngressResponseSchema },
       },
     },
-    async () =>
-      ingress
-        ? ingress.status()
-        : { managed: false, domain: null, probe: null },
+    async () => (ingress ? ingress.status() : { managed: false, domains: [] }),
   );
 
   app.post(
@@ -52,9 +49,9 @@ export const ingressRoutes: FastifyPluginAsyncZod<
           'this daemon manages no reverse proxy — set DORMICE_INGRESS_FILE (install.sh sets up Caddy and points it at /etc/caddy/Caddyfile), or configure your proxy directly',
         );
       }
-      const { domain } = request.body;
+      const previous = ingress.domains();
       try {
-        await ingress.setDomain(domain);
+        await ingress.setDomains(request.body.domains);
       } catch (error) {
         if (error instanceof UnmanagedIngressFileError) {
           throw httpError(409, error.message);
@@ -64,13 +61,24 @@ export const ingressRoutes: FastifyPluginAsyncZod<
           error instanceof Error ? error.message : String(error),
         );
       }
+      // The file (not the request) is the truth to report and to log:
+      // read back what setDomains actually wrote (lowercased, deduped).
+      const domains = ingress.domains();
+      const changes = [
+        ...domains
+          .filter((domain) => !previous.includes(domain))
+          .map((domain) => `bound ${domain}`),
+        ...previous
+          .filter((domain) => !domains.includes(domain))
+          .map((domain) => `unbound ${domain}`),
+      ];
       recordActivity(db, {
         kind: 'ingress-updated',
-        detail: domain
-          ? `console domain bound: ${domain} — certificate issuance is Caddy's job from here`
-          : 'console domain cleared — plain-HTTP IP access only',
+        detail: `${changes.join(', ') || 'domains unchanged'} — now serving ${
+          domains.length ? domains.join(', ') : 'plain-HTTP IP access only'
+        }`,
       });
-      return { domain };
+      return { domains };
     },
   );
 };
