@@ -72,6 +72,9 @@ async function signOut() {
   window.location.href = '/console/login';
 }
 
+// 侧栏按钮统一药丸形 + medium 字重(风格参考 openasi 侧栏,2026-07-12)。
+const menuButtonClass = 'rounded-full font-medium';
+
 function isActivePath(pathname: string, to: string): boolean {
   if (to === '/') return pathname === '/';
   return pathname === to || pathname.startsWith(`${to}/`);
@@ -84,21 +87,13 @@ export function AppSidebar() {
   const { resolvedTheme, setTheme } = useTheme();
 
   return (
-    <Sidebar>
+    <Sidebar variant="inset" className="px-1">
       <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link to="/" />}>
-              <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <HugeiconsIcon icon={PackageIcon} className="size-4" />
-              </div>
-              <div className="grid leading-tight">
-                <span className="font-semibold">Dormice</span>
-                <span className="text-xs text-muted-foreground">控制台</span>
-              </div>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        {/* 纯文字 wordmark:侧栏融在页面底色里,不需要图标方块撑品牌。 */}
+        <Link to="/" className="flex items-baseline gap-1.5 px-2.5 pt-2 pb-1.5">
+          <span className="text-lg font-semibold leading-none">Dormice</span>
+          <span className="text-xs text-muted-foreground">控制台</span>
+        </Link>
       </SidebarHeader>
 
       <SidebarContent>
@@ -115,6 +110,7 @@ export function AppSidebar() {
                   {items.map((item) => (
                     <SidebarMenuItem key={item.to}>
                       <SidebarMenuButton
+                        className={menuButtonClass}
                         isActive={isActivePath(pathname, item.to)}
                         render={<Link to={item.to} />}
                       >
@@ -135,6 +131,7 @@ export function AppSidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
+              className={menuButtonClass}
               onClick={() =>
                 setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')
               }
@@ -147,7 +144,7 @@ export function AppSidebar() {
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <SidebarMenuButton onClick={signOut}>
+            <SidebarMenuButton className={menuButtonClass} onClick={signOut}>
               <HugeiconsIcon icon={Logout01Icon} strokeWidth={1.8} />
               <span>退出登录</span>
             </SidebarMenuButton>
