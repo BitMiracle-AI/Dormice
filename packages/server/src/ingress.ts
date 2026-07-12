@@ -12,12 +12,13 @@ import { execa } from 'execa';
  * entirely Caddy's job (ACME issuance and renewal); this class only decides
  * what the file says.
  *
- * The generated shape is two site blocks: the bound domain (Caddy obtains a
- * certificate and auto-redirects http://<domain> to https) and a plain :80
- * catch-all proxying by IP. The catch-all is the no-lockout guarantee — a
- * bind that never converges (typo'd domain, missing DNS record) leaves IP
- * access untouched. Caddy inserts its automatic HTTPS redirects after
- * host-matched routes but before user catch-alls, so the two coexist.
+ * The generated shape is one site block per bound domain (Caddy obtains a
+ * certificate per domain and auto-redirects http://<domain> to https) plus
+ * a plain :80 catch-all proxying by IP. The catch-all is the no-lockout
+ * guarantee — a bind that never converges (typo'd domain, missing DNS
+ * record) leaves IP access untouched. Caddy inserts its automatic HTTPS
+ * redirects after host-matched routes but before user catch-alls, so the
+ * domain sites and the catch-all coexist.
  */
 
 /**
@@ -75,48 +76,57 @@ export class Ingress {
   }
 
   /**
-   * The currently bound domain, read back from the file. Null when nothing
-   * is bound, the file does not exist yet, or the file is not ours — a
-   * foreign file's site addresses are not this daemon's to report.
+   * The currently bound domains, read back from the file in the order they
+   * are served. Empty when nothing is bound, the file does not exist yet,
+   * or the file is not ours — a foreign file's site addresses are not this
+   * daemon's to report.
    */
-  domain(): string | null {
-    if (!existsSync(this.filePath)) return null;
+  domains(): string[] {
+    if (!existsSync(this.filePath)) return [];
     const content = readFileSync(this.filePath, 'utf8');
-    if (!content.includes('Managed by Dormice')) return null;
+    if (!content.includes('Managed by Dormice')) return [];
+    const found: string[] = [];
     for (const line of content.split('\n')) {
       // Site addresses sit at column 0 in the generated shape; indented
-      // lines are directives (`\treverse_proxy … {`), never sites.
+      // lines are directives (`\treverse_proxy … {`), never sites. The
+      // leading-`:` exclusion keeps the :80 catch-all out of the answer.
       const site = /^([^\s#:{][^\s{]*)\s*\{/.exec(line);
-      if (site?.[1]) return site[1];
+      if (site?.[1]) found.push(site[1]);
     }
-    return null;
+    return found;
   }
 
   /**
-   * Rewrites the file for the given domain (null = back to IP-only) and
-   * reloads the proxy. On a failed reload the previous file is restored —
+   * Rewrites the file to serve exactly the given set (empty = back to
+   * IP-only) and reloads the proxy. Hostnames are case-insensitive, so the
+   * set is lowercased and deduped here — the one place that decides what
+   * the file says. On a failed reload the previous file is restored —
    * `caddy reload` rejects a bad config without applying it, so file and
    * running proxy stay consistent — and the failure is thrown with Caddy's
    * own words.
    */
-  setDomain(domain: string | null): Promise<void> {
-    const run = this.queue.then(() => this.apply(domain));
+  setDomains(domains: string[]): Promise<void> {
+    const wanted = [...new Set(domains.map((domain) => domain.toLowerCase()))];
+    const run = this.queue.then(() => this.apply(wanted));
     this.queue = run.catch(() => {});
     return run;
   }
 
   /** Everything getIngress reports: the file's word plus live probes. */
   async status(): Promise<GetIngressResponse> {
-    const domain = this.domain();
-    if (domain === null) return { managed: true, domain: null, probe: null };
-    const [dns, cert] = await Promise.all([
-      this.resolveDomain(domain),
-      this.probeTls(domain),
-    ]);
-    return { managed: true, domain, probe: { ...dns, ...cert } };
+    const statuses = await Promise.all(
+      this.domains().map(async (domain) => {
+        const [dns, cert] = await Promise.all([
+          this.resolveDomain(domain),
+          this.probeTls(domain),
+        ]);
+        return { domain, probe: { ...dns, ...cert } };
+      }),
+    );
+    return { managed: true, domains: statuses };
   }
 
-  private async apply(domain: string | null): Promise<void> {
+  private async apply(domains: string[]): Promise<void> {
     const previous = existsSync(this.filePath)
       ? readFileSync(this.filePath, 'utf8')
       : null;
@@ -130,7 +140,7 @@ export class Ingress {
           'move your configuration elsewhere, or point DORMICE_INGRESS_FILE at a file the daemon may own',
       );
     }
-    writeFileSync(this.filePath, this.render(domain));
+    writeFileSync(this.filePath, this.render(domains));
     const reload = await this.runCommand(this.reloadCommand);
     if (!reload.ok) {
       if (previous === null) unlinkSync(this.filePath);
@@ -141,16 +151,12 @@ export class Ingress {
     }
   }
 
-  private render(domain: string | null): string {
+  private render(domains: string[]): string {
     // flush_interval -1 streams byte-by-byte: buffering would dam the
     // console terminal and E2B's streaming exec (measured through Caddy).
     const site = (address: string) =>
       `${address} {\n\treverse_proxy 127.0.0.1:${this.upstreamPort} {\n\t\tflush_interval -1\n\t}\n}\n`;
-    return [
-      `${MARKER}\n`,
-      ...(domain === null ? [] : [site(domain)]),
-      site(':80'),
-    ].join('\n');
+    return [`${MARKER}\n`, ...domains.map(site), site(':80')].join('\n');
   }
 }
 

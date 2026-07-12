@@ -14,6 +14,7 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppTemplatesRouteImport } from './routes/_app/templates'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
+import { Route as AppDomainsRouteImport } from './routes/_app/domains'
 import { Route as AppDoctorRouteImport } from './routes/_app/doctor'
 import { Route as AppConnectRouteImport } from './routes/_app/connect'
 import { Route as AppActivityRouteImport } from './routes/_app/activity'
@@ -42,6 +43,11 @@ const AppTemplatesRoute = AppTemplatesRouteImport.update({
 const AppSettingsRoute = AppSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDomainsRoute = AppDomainsRouteImport.update({
+  id: '/domains',
+  path: '/domains',
   getParentRoute: () => AppRoute,
 } as any)
 const AppDoctorRoute = AppDoctorRouteImport.update({
@@ -76,6 +82,7 @@ export interface FileRoutesByFullPath {
   '/activity': typeof AppActivityRoute
   '/connect': typeof AppConnectRoute
   '/doctor': typeof AppDoctorRoute
+  '/domains': typeof AppDomainsRoute
   '/settings': typeof AppSettingsRoute
   '/templates': typeof AppTemplatesRoute
   '/sandboxes/$userKey': typeof AppSandboxesUserKeyRoute
@@ -86,6 +93,7 @@ export interface FileRoutesByTo {
   '/activity': typeof AppActivityRoute
   '/connect': typeof AppConnectRoute
   '/doctor': typeof AppDoctorRoute
+  '/domains': typeof AppDomainsRoute
   '/settings': typeof AppSettingsRoute
   '/templates': typeof AppTemplatesRoute
   '/': typeof AppIndexRoute
@@ -99,6 +107,7 @@ export interface FileRoutesById {
   '/_app/activity': typeof AppActivityRoute
   '/_app/connect': typeof AppConnectRoute
   '/_app/doctor': typeof AppDoctorRoute
+  '/_app/domains': typeof AppDomainsRoute
   '/_app/settings': typeof AppSettingsRoute
   '/_app/templates': typeof AppTemplatesRoute
   '/_app/': typeof AppIndexRoute
@@ -113,6 +122,7 @@ export interface FileRouteTypes {
     | '/activity'
     | '/connect'
     | '/doctor'
+    | '/domains'
     | '/settings'
     | '/templates'
     | '/sandboxes/$userKey'
@@ -123,6 +133,7 @@ export interface FileRouteTypes {
     | '/activity'
     | '/connect'
     | '/doctor'
+    | '/domains'
     | '/settings'
     | '/templates'
     | '/'
@@ -135,6 +146,7 @@ export interface FileRouteTypes {
     | '/_app/activity'
     | '/_app/connect'
     | '/_app/doctor'
+    | '/_app/domains'
     | '/_app/settings'
     | '/_app/templates'
     | '/_app/'
@@ -184,6 +196,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/domains': {
+      id: '/_app/domains'
+      path: '/domains'
+      fullPath: '/domains'
+      preLoaderRoute: typeof AppDomainsRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/doctor': {
       id: '/_app/doctor'
       path: '/doctor'
@@ -226,6 +245,7 @@ interface AppRouteChildren {
   AppActivityRoute: typeof AppActivityRoute
   AppConnectRoute: typeof AppConnectRoute
   AppDoctorRoute: typeof AppDoctorRoute
+  AppDomainsRoute: typeof AppDomainsRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppTemplatesRoute: typeof AppTemplatesRoute
   AppIndexRoute: typeof AppIndexRoute
@@ -237,6 +257,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppActivityRoute: AppActivityRoute,
   AppConnectRoute: AppConnectRoute,
   AppDoctorRoute: AppDoctorRoute,
+  AppDomainsRoute: AppDomainsRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppTemplatesRoute: AppTemplatesRoute,
   AppIndexRoute: AppIndexRoute,

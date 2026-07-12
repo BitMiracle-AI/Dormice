@@ -94,7 +94,7 @@ if (s3 !== null) {
 
 // The managed front door exists exactly when its file knob is set (the
 // archiver's rule). The file itself is the source of truth for the bound
-// domain — nothing to reconcile at boot, Caddy is already running it.
+// domains — nothing to reconcile at boot, Caddy is already running it.
 let ingress: Ingress | undefined;
 if (config.DORMICE_INGRESS_FILE) {
   ingress = new Ingress({
@@ -102,8 +102,9 @@ if (config.DORMICE_INGRESS_FILE) {
     upstreamPort: config.DORMICE_PORT,
     reloadCommand: config.DORMICE_INGRESS_RELOAD_CMD,
   });
+  const domains = ingress.domains();
   log.info(
-    `ingress managed at ${config.DORMICE_INGRESS_FILE}: ${ingress.domain() ?? 'no domain bound (IP access only)'}`,
+    `ingress managed at ${config.DORMICE_INGRESS_FILE}: ${domains.length ? domains.join(', ') : 'no domain bound (IP access only)'}`,
   );
 } else {
   log.info('ingress not managed: DORMICE_INGRESS_FILE not configured');

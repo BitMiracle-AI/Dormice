@@ -3,8 +3,8 @@ import { getIngress, setIngress } from '@/lib/api';
 
 /**
  * daemon 前门(反向代理)的观察与绑定。绑定后证书由 Caddy 后台申请,
- * 收敛前(域名已绑但 TLS 探测还没绿)每 5s 轮询让进度是真的;收敛后
- * 停表 — 一张绿卡不值得持续打 DNS。
+ * 只要还有域名没收敛(TLS 探测没绿)就每 5s 轮询让进度是真的;全绿后
+ * 停表 — 一排绿卡不值得持续打 DNS。
  */
 export function useIngress() {
   return useQuery({
@@ -12,7 +12,9 @@ export function useIngress() {
     queryFn: getIngress,
     refetchInterval: (query) => {
       const status = query.state.data;
-      return status?.domain && !status.probe?.tlsOk ? 5_000 : false;
+      return status?.domains.some((entry) => !entry.probe.tlsOk)
+        ? 5_000
+        : false;
     },
     retry: false,
   });

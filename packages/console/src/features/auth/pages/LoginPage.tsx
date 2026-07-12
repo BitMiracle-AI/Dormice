@@ -78,7 +78,7 @@ export function LoginPage() {
               // 取舍,提醒但不拦:绑定域名后这行自然消失。
               <p className="text-xs text-muted-foreground">
                 当前连接是明文 HTTP,token 在网络上不加密。建议登录后在
-                设置页绑定域名启用 HTTPS。
+                域名页绑定域名启用 HTTPS。
               </p>
             )}
           </form>
