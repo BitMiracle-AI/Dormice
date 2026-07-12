@@ -292,6 +292,26 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
     });
   });
 
+  it('patches a lifecycle policy in place, keeping the untouched knobs', async () => {
+    const created = await client.acquireSandbox('policy-key');
+    const { sandbox } = await client.setPolicy('policy-key', {
+      stopAfterSeconds: null,
+    });
+    expect(sandbox.sandboxId).toBe(created.sandbox.sandboxId);
+    expect(sandbox.policy).toEqual({
+      ...DEFAULT_LIFECYCLE_POLICY,
+      stopAfterSeconds: null,
+    });
+
+    await expect(
+      client.setPolicy('no-such-key', { freezeAfterSeconds: 60 }),
+    ).rejects.toMatchObject({ name: 'DormiceApiError', status: 404 });
+    await expect(
+      // Merged with the stored policy this breaks the ordering rule.
+      client.setPolicy('policy-key', { archiveAfterSeconds: 1 }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
   it('releases a sandbox and reports idempotently', async () => {
     const created = await client.acquireSandbox('frank');
     expect(await client.releaseSandbox('frank')).toEqual({ released: true });

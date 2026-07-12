@@ -31,6 +31,18 @@ export function formatDuration(totalSeconds: number): string {
     : `${Math.floor(s / 86400)}天${rest}小时`;
 }
 
+/**
+ * 秒数输入框旁的实时换算:"259200" → "= 3天"。展示侧全说人话,输入侧
+ * 不该让用户心算 — 空值或非法值返回 null,让固定文案独自站着。
+ */
+export function durationHint(raw: string): string | null {
+  const seconds = Number(raw);
+  if (raw.trim() === '' || !Number.isFinite(seconds) || seconds <= 0) {
+    return null;
+  }
+  return `= ${formatDuration(seconds)}`;
+}
+
 /** 距离某时刻过去了多久:"3分12秒"(调用方自己加"前")。 */
 export function since(iso: string): string {
   return formatDuration((Date.now() - Date.parse(iso)) / 1000);

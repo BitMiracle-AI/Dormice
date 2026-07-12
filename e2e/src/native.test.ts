@@ -126,6 +126,34 @@ describe('native API over a real daemon', () => {
     await client().releaseSandbox('rebuild-key');
   });
 
+  it('updates a lifecycle policy in place — no release, no lost disk', async () => {
+    const created = await client().acquireSandbox('set-policy-key');
+
+    // Promote to a never-stop resident agent; archive must fall with it
+    // (only a stopped sandbox can archive) — sent together, as the console does.
+    const { sandbox } = await client().setPolicy('set-policy-key', {
+      stopAfterSeconds: null,
+      archiveAfterSeconds: null,
+    });
+    expect(sandbox.sandboxId).toBe(created.sandbox.sandboxId);
+    expect(sandbox.policy.stopAfterSeconds).toBeNull();
+    expect(sandbox.policy.archiveAfterSeconds).toBeNull();
+    // Ledger-only: the sandbox itself was not woken or touched.
+    expect(sandbox.state).toBe(created.sandbox.state);
+
+    // The archive knob's front door works too on this S3-equipped daemon.
+    const back = await client().setPolicy('set-policy-key', {
+      stopAfterSeconds: 3 * 24 * 60 * 60,
+      archiveAfterSeconds: 30 * 24 * 60 * 60,
+    });
+    expect(back.sandbox.policy.archiveAfterSeconds).toBe(30 * 24 * 60 * 60);
+
+    await expect(
+      client().setPolicy('set-policy-nobody', { freezeAfterSeconds: 60 }),
+    ).rejects.toMatchObject({ name: 'DormiceApiError', status: 404 });
+    await client().releaseSandbox('set-policy-key');
+  });
+
   // The fake's files hang off the disk, so only a real container can show
   // the other half of rebuild's promise: the container layer resets.
   it.runIf(process.env.DORMICE_EXECUTOR === 'docker')(

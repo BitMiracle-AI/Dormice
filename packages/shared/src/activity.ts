@@ -24,6 +24,8 @@ export const ACTIVITY_KINDS = [
   'restore-failed',
   /** The reconciler corrected the ledger (or reality) to match the other. */
   'reconciled',
+  /** setPolicy rewrote a sandbox's lifecycle thresholds (ledger-only). */
+  'policy-changed',
   'daemon-started',
   /** An operator bound or cleared the console domain through setIngress. */
   'ingress-updated',

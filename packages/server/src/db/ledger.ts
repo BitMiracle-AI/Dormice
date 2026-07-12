@@ -158,6 +158,31 @@ export function setDeadline(
     .run();
 }
 
+/**
+ * Rewrites the three lifecycle thresholds. Ledger-only: no container work,
+ * no state change, and deliberately no touch — setPolicy is not activity,
+ * the new thresholds judge the idle time already on the clock.
+ */
+export function updatePolicy(
+  db: Db,
+  sandboxId: string,
+  policy: LifecyclePolicy,
+): SandboxRow {
+  db.update(sandboxes)
+    .set({
+      freezeAfterSeconds: policy.freezeAfterSeconds,
+      stopAfterSeconds: policy.stopAfterSeconds,
+      archiveAfterSeconds: policy.archiveAfterSeconds,
+    })
+    .where(eq(sandboxes.sandboxId, sandboxId))
+    .run();
+  const row = findBySandboxId(db, sandboxId);
+  if (!row) {
+    throw new Error(`sandbox ${sandboxId} not found`);
+  }
+  return row;
+}
+
 /** Marks an explicit E2B pause; wakes clear it (an awake sandbox is not paused). */
 export function setPausedByUser(
   db: Db,

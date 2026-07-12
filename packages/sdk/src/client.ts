@@ -28,7 +28,9 @@ import {
   type Sandbox,
   type SandboxMetricsSample,
   type SetIngressResponse,
+  type SetPolicyResponse,
   setIngressResponseSchema,
+  setPolicyResponseSchema,
   type Template,
   type WriteFilesResponse,
   writeFilesResponseSchema,
@@ -224,6 +226,22 @@ export class Dormice {
   async rebuildSandbox(userKey: string): Promise<RebuildSandboxResponse> {
     const data = await this.rpc('rebuildSandbox', { userKey });
     return rebuildSandboxResponseSchema.parse(data);
+  }
+
+  /**
+   * Updates the sandbox's lifecycle policy in place — the update verb
+   * acquire deliberately is not. Patch semantics over the stored policy:
+   * omitted fields keep their current values, `null` means "never take
+   * that step" (e.g. `{stopAfterSeconds: null}` promotes a sandbox to a
+   * never-stop resident agent). A pure ledger write: nothing is woken, and
+   * the idle clock is not refreshed. Unknown key: 404 — not a creator.
+   */
+  async setPolicy(
+    userKey: string,
+    policy: LifecyclePolicyOverride,
+  ): Promise<SetPolicyResponse> {
+    const data = await this.rpc('setPolicy', { userKey, policy });
+    return setPolicyResponseSchema.parse(data);
   }
 
   /**

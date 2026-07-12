@@ -5,6 +5,7 @@ import type {
   GetIngressResponse,
   GetSandboxMetricsResponse,
   HostMetricsResponse,
+  LifecyclePolicyOverride,
   ListActivityResponse,
   RegisterTemplateResponse,
   Sandbox,
@@ -99,7 +100,8 @@ export const getSandboxMetrics = (userKey: string) =>
 
 // The ledger's recent history, newest first — a bounded ring, not an audit
 // log. The daemon records at the moves themselves; this only reads.
-export const listActivity = () => rpc<ListActivityResponse>('/listActivity');
+export const listActivity = (limit?: number) =>
+  rpc<ListActivityResponse>('/listActivity', limit ? { limit } : {});
 
 // Effective configuration, read-only. Secrets come back as "set", never as
 // their value; archive.enabled is the daemon's own adjudication.
@@ -139,6 +141,11 @@ export const releaseSandbox = (userKey: string) =>
 // current base image.
 export const rebuildSandbox = (userKey: string) =>
   rpc<{ sandbox: Sandbox }>('/rebuildSandbox', { userKey });
+
+// Patch the stored lifecycle policy in place — the update verb acquire is
+// not. Ledger-only: nothing wakes, the idle clock keeps running.
+export const setPolicy = (userKey: string, policy: LifecyclePolicyOverride) =>
+  rpc<{ sandbox: Sandbox }>('/setPolicy', { userKey, policy });
 
 // The terminal's key: trades the session cookie for one sandbox's envd
 // access token, so the browser can speak to the envd surface directly.

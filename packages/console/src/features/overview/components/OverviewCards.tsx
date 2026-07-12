@@ -8,6 +8,7 @@ import {
   SnowIcon,
 } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon, type HugeiconsProps } from '@hugeicons/react';
+import { Link } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent } from '@/components/ui/card';
@@ -47,6 +48,7 @@ function StatCard({
   value,
   hint,
   pct,
+  to,
 }: {
   icon: NonNullable<HugeiconsProps['icon']>;
   label: string;
@@ -54,8 +56,10 @@ function StatCard({
   hint: ReactNode;
   /** Meter percentage; null renders an empty track, undefined no meter. */
   pct?: number | null;
+  /** Route this card drills into; only cards with a real destination get one. */
+  to?: string;
 }) {
-  return (
+  const card = (
     <Card size="sm">
       <CardContent className="flex flex-col gap-2">
         <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -67,6 +71,16 @@ function StatCard({
         {pct !== undefined && <Meter pct={pct} />}
       </CardContent>
     </Card>
+  );
+  if (!to) return card;
+  // Radius mirrors the Card's own, so the focus/hover ring hugs the shape.
+  return (
+    <Link
+      to={to}
+      className="block rounded-[min(var(--radius-4xl),24px)] transition-shadow hover:ring-2 hover:ring-primary/30"
+    >
+      {card}
+    </Link>
   );
 }
 
@@ -216,6 +230,7 @@ export function OverviewCards() {
           value={`${sandboxes.total} / ${sandboxes.maxSandboxes}`}
           hint={<StateCounts byState={sandboxes.byState} />}
           pct={pctOf(sandboxes.total, sandboxes.maxSandboxes)}
+          to="/sandboxes"
         />
         <StatCard
           icon={Database01Icon}
@@ -223,6 +238,7 @@ export function OverviewCards() {
           value={formatBytes(sandboxDisks.actualBytes)}
           hint={`${sandboxDisks.count} 块盘共许诺 ${formatBytes(sandboxDisks.nominalBytes)} — 稀疏镜像只为真实内容付费`}
           pct={pctOf(sandboxDisks.actualBytes, sandboxDisks.nominalBytes)}
+          to="/sandboxes"
         />
       </div>
     </section>

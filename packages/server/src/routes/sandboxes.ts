@@ -7,6 +7,7 @@ import {
   getSandboxMetricsRequestSchema,
   getSandboxMetricsResponseSchema,
   type LifecyclePolicy,
+  lifecyclePolicySchema,
   listSandboxesResponseSchema,
   readFileRequestSchema,
   readFileResponseSchema,
@@ -16,6 +17,8 @@ import {
   releaseSandboxResponseSchema,
   resolveSandboxPath,
   type Sandbox,
+  setPolicyRequestSchema,
+  setPolicyResponseSchema,
   WRITE_FILES_BODY_LIMIT_BYTES,
   writeFilesRequestSchema,
   writeFilesResponseSchema,
@@ -24,6 +27,7 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { ZodError, z } from 'zod';
 import type { Archiver, RestoreProgress } from '../archive/archiver';
 import type { Config } from '../config';
+import { recordActivity } from '../db/activity';
 import type { Db } from '../db/db';
 import {
   countSandboxes,
@@ -31,6 +35,7 @@ import {
   findByUserKey,
   listSandboxes,
   touch,
+  updatePolicy,
 } from '../db/ledger';
 import type { SandboxRow } from '../db/schema';
 import { findTemplate, resolveImage } from '../db/templates';
@@ -466,6 +471,103 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         const row = await rebuildSandbox(db, executor, existing);
         return { sandbox: toSandbox(row, endpoint) };
       });
+    },
+  );
+
+  app.post(
+    '/setPolicy',
+    {
+      schema: {
+        body: setPolicyRequestSchema,
+        response: {
+          200: setPolicyResponseSchema,
+          400: z.object({ message: z.string() }),
+        },
+      },
+    },
+    async (request, reply) => {
+      const { userKey, policy: patch } = request.body;
+      // Unlike acquire, the merge base is the STORED policy, so validation
+      // must wait for the row — it runs inside the slot, which also keeps a
+      // concurrent release from deleting the row between check and write.
+      const outcome = await locks.run<{ error: string } | { row: SandboxRow }>(
+        userKey,
+        async () => {
+          const existing = findByUserKey(db, userKey);
+          if (!existing) {
+            // Not a creator: an unknown key is a typo, same manners as rebuild.
+            throw httpError(
+              404,
+              `no sandbox for key "${userKey}" — acquire it first`,
+            );
+          }
+          // Legal in every state: policy is a ledger attribute, not a container
+          // one — even an archived sandbox's thresholds matter after restore.
+          const merged = lifecyclePolicySchema.safeParse({
+            freezeAfterSeconds:
+              patch.freezeAfterSeconds ?? existing.freezeAfterSeconds,
+            stopAfterSeconds:
+              patch.stopAfterSeconds !== undefined
+                ? patch.stopAfterSeconds
+                : existing.stopAfterSeconds,
+            archiveAfterSeconds:
+              patch.archiveAfterSeconds !== undefined
+                ? patch.archiveAfterSeconds
+                : existing.archiveAfterSeconds,
+          });
+          if (!merged.success) {
+            return {
+              error: `invalid lifecycle policy: ${merged.error.issues
+                .map((issue) => issue.message)
+                .join('; ')}`,
+            };
+          }
+          if (
+            archiveDefaultSeconds === null &&
+            merged.data.archiveAfterSeconds !== null
+          ) {
+            return {
+              error:
+                'invalid lifecycle policy: archiving requires S3 (DORMICE_S3_*) to be configured',
+            };
+          }
+          const before = {
+            freezeAfterSeconds: existing.freezeAfterSeconds,
+            stopAfterSeconds: existing.stopAfterSeconds,
+            archiveAfterSeconds: existing.archiveAfterSeconds,
+          } as const;
+          const changed = (
+            [
+              'freezeAfterSeconds',
+              'stopAfterSeconds',
+              'archiveAfterSeconds',
+            ] as const
+          ).filter((knob) => before[knob] !== merged.data[knob]);
+          if (changed.length === 0) {
+            // The goal state already holds; a no-op writes no history.
+            return { row: existing };
+          }
+          const row = updatePolicy(db, existing.sandboxId, merged.data);
+          const fmt = (seconds: number | null) =>
+            seconds === null ? 'never' : `${seconds}s`;
+          recordActivity(db, {
+            kind: 'policy-changed',
+            userKey,
+            sandboxId: row.sandboxId,
+            detail: changed
+              .map(
+                (knob) =>
+                  `${knob.replace('AfterSeconds', '')} ${fmt(before[knob])} -> ${fmt(merged.data[knob])}`,
+              )
+              .join(', '),
+          });
+          return { row };
+        },
+      );
+      if ('error' in outcome) {
+        return reply.code(400).send({ message: outcome.error });
+      }
+      return { sandbox: toSandbox(outcome.row, endpoint) };
     },
   );
 

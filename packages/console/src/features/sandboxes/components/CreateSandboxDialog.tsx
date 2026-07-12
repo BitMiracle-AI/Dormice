@@ -29,6 +29,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { useConfig } from '@/features/settings/hooks/useConfig';
 import { useTemplates } from '@/features/templates/hooks/useTemplates';
+import { durationHint } from '../format';
 import { useAcquireSandbox } from '../hooks/useSandboxes';
 
 /**
@@ -174,6 +175,7 @@ export function CreateSandboxDialog() {
               />
               <FieldDescription>
                 运行中 → 已冻结的空闲阈值:内存挤入 swap,唤醒约 50ms。
+                {durationHint(freezeAfter) && ` ${durationHint(freezeAfter)}`}
               </FieldDescription>
             </Field>
             <Field orientation="horizontal">
@@ -201,6 +203,7 @@ export function CreateSandboxDialog() {
                 />
                 <FieldDescription>
                   已冻结 → 已停止的空闲阈值:只留磁盘,唤醒是冷启动。
+                  {durationHint(stopAfter) && ` ${durationHint(stopAfter)}`}
                 </FieldDescription>
               </Field>
             )}
@@ -232,6 +235,8 @@ export function CreateSandboxDialog() {
                     <FieldDescription>
                       已停止 → 已归档:磁盘压缩上传 S3,本地零占用;
                       唤醒要下载解压,慢但有真进度。
+                      {durationHint(archiveAfter) &&
+                        ` ${durationHint(archiveAfter)}`}
                     </FieldDescription>
                   </Field>
                 )}

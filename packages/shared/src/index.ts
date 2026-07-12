@@ -11,5 +11,6 @@ export * from './policy';
 export * from './rebuild';
 export * from './release';
 export * from './sandbox';
+export * from './set-policy';
 export * from './states';
 export * from './templates';

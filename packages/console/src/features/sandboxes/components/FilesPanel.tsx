@@ -63,9 +63,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatBytes } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import type { EnvdEntry } from '../envd-client';
 import { STATE_LABELS } from '../format';
 import { useDirectory, useEnvdAuth, useFileMutations } from '../hooks/useEnvd';
+import { FilePreviewDialog } from './FilePreviewDialog';
 
 const HOME = '/home/user';
 
@@ -102,12 +104,15 @@ export function FilesPanel({ sandbox }: { sandbox: Sandbox }) {
   const mutations = useFileMutations(auth.data);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // 对话框状态:新建文件夹 / 重命名 / 删除,一次只开一个。
+  // 对话框状态:预览 / 新建文件夹 / 重命名 / 删除,一次只开一个。
+  const [viewing, setViewing] = useState<EnvdEntry | null>(null);
   const [mkdirOpen, setMkdirOpen] = useState(false);
   const [mkdirName, setMkdirName] = useState('');
   const [renaming, setRenaming] = useState<EnvdEntry | null>(null);
   const [renameTo, setRenameTo] = useState('');
   const [deleting, setDeleting] = useState<EnvdEntry | null>(null);
+  // 拖拽悬停的视觉反馈;计数器抵消子元素间的 dragenter/dragleave 抖动。
+  const [dragDepth, setDragDepth] = useState(0);
 
   if (!unlocked) {
     return (
@@ -131,18 +136,52 @@ export function FilesPanel({ sandbox }: { sandbox: Sandbox }) {
 
   const entries = sortEntries(directory.data ?? []);
 
-  const upload = (file: File) => {
-    mutations.upload.mutate(
-      { path: `${path}/${file.name}`, file },
-      {
-        onSuccess: () => toast.success(`已上传 ${file.name}`),
-        onError: (error) => toast.error(error.message),
-      },
-    );
+  // 逐个串行上传:一次汇报总成败,失败点名到文件。
+  const upload = async (files: File[]) => {
+    const failures: string[] = [];
+    for (const file of files) {
+      try {
+        await mutations.upload.mutateAsync({
+          path: `${path}/${file.name}`,
+          file,
+        });
+      } catch {
+        failures.push(file.name);
+      }
+    }
+    if (failures.length === 0) {
+      const only = files.length === 1 ? files[0] : undefined;
+      toast.success(
+        only ? `已上传 ${only.name}` : `已上传 ${files.length} 个文件`,
+      );
+    } else {
+      toast.error(`${failures.length} 个上传失败:${failures.join('、')}`);
+    }
   };
 
   return (
-    <div className="flex flex-col gap-3">
+    // 拖放只是「上传」按钮的增强,不是唯一入口;section 让辅助技术
+    // 知道这一块是文件工作区,而不是把版面 div 假装成控件。
+    <section
+      aria-label="文件浏览器(支持拖放上传)"
+      className={cn(
+        'flex flex-col gap-3 rounded-lg transition-shadow',
+        dragDepth > 0 && 'ring-2 ring-primary/60',
+      )}
+      // 拖文件进来直接落到当前目录 — 和上传按钮同一条路。
+      onDragOver={(event) => event.preventDefault()}
+      onDragEnter={(event) => {
+        event.preventDefault();
+        setDragDepth((depth) => depth + 1);
+      }}
+      onDragLeave={() => setDragDepth((depth) => Math.max(0, depth - 1))}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDragDepth(0);
+        const files = Array.from(event.dataTransfer.files);
+        if (files.length > 0) void upload(files);
+      }}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Breadcrumb>
           <BreadcrumbList>
@@ -172,10 +211,11 @@ export function FilesPanel({ sandbox }: { sandbox: Sandbox }) {
           <input
             ref={fileInputRef}
             type="file"
+            multiple
             className="hidden"
             onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) upload(file);
+              const files = Array.from(event.target.files ?? []);
+              if (files.length > 0) void upload(files);
               event.target.value = '';
             }}
           />
@@ -232,7 +272,9 @@ export function FilesPanel({ sandbox }: { sandbox: Sandbox }) {
         <Empty className="border border-dashed">
           <EmptyHeader>
             <EmptyTitle>空目录</EmptyTitle>
-            <EmptyDescription>上传一个文件试试。</EmptyDescription>
+            <EmptyDescription>
+              上传一个文件试试 — 拖进这个区域也行。
+            </EmptyDescription>
           </EmptyHeader>
         </Empty>
       )}
@@ -268,13 +310,17 @@ export function FilesPanel({ sandbox }: { sandbox: Sandbox }) {
                           {entry.name}
                         </button>
                       ) : (
-                        <span className="inline-flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-2 hover:underline"
+                          onClick={() => setViewing(entry)}
+                        >
                           <HugeiconsIcon
                             icon={File01Icon}
                             className="size-4 text-muted-foreground"
                           />
                           {entry.name}
-                        </span>
+                        </button>
                       )}
                     </TableCell>
                     <TableCell className="tabular-nums text-muted-foreground">
@@ -342,6 +388,13 @@ export function FilesPanel({ sandbox }: { sandbox: Sandbox }) {
           </Table>
         </div>
       )}
+
+      {/* 预览/编辑 */}
+      <FilePreviewDialog
+        auth={auth.data}
+        entry={viewing}
+        onClose={() => setViewing(null)}
+      />
 
       {/* 新建文件夹 */}
       <Dialog open={mkdirOpen} onOpenChange={setMkdirOpen}>
@@ -462,6 +515,6 @@ export function FilesPanel({ sandbox }: { sandbox: Sandbox }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </section>
   );
 }
