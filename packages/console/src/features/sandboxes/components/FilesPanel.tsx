@@ -66,7 +66,12 @@ import { formatBytes } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { EnvdEntry } from '../envd-client';
 import { STATE_LABELS } from '../format';
-import { useDirectory, useEnvdAuth, useFileMutations } from '../hooks/useEnvd';
+import {
+  useDirectory,
+  useDirectoryWatch,
+  useEnvdAuth,
+  useFileMutations,
+} from '../hooks/useEnvd';
 import { FilePreviewDialog } from './FilePreviewDialog';
 
 const HOME = '/home/user';
@@ -101,6 +106,11 @@ export function FilesPanel({ sandbox }: { sandbox: Sandbox }) {
   const [path, setPath] = useState(HOME);
   const auth = useEnvdAuth(sandbox.sandboxId);
   const directory = useDirectory(auth.data, path, unlocked);
+  // 沙箱里(agent、终端)动了文件,这张表 2 秒内自己跟上 — 不用手点刷新。
+  useDirectoryWatch(auth.data, path, {
+    enabled: unlocked,
+    active: sandbox.state === 'active',
+  });
   const mutations = useFileMutations(auth.data);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 

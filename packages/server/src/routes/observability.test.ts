@@ -8,6 +8,7 @@ import {
   getConfigResponseSchema,
   getSandboxMetricsResponseSchema,
   listActivityResponseSchema,
+  listSandboxMetricsResponseSchema,
 } from '@dormice/shared';
 import { count } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
@@ -270,5 +271,64 @@ describe('getSandboxMetrics', () => {
     const { app } = testApp();
     const res = await rpc(app, '/getSandboxMetrics', { userKey: 'nobody' });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('listSandboxMetrics', () => {
+  it('measures active and frozen sandboxes; colder states are absent', async () => {
+    const { app, db, executor } = testApp();
+    await rpc(app, '/acquireSandbox', { userKey: 'hot' });
+    const frozen = await rpc(app, '/acquireSandbox', { userKey: 'napping' });
+    await freezeSandbox(db, executor, frozen.json().sandbox.sandboxId);
+    const cold = await rpc(app, '/acquireSandbox', { userKey: 'cold' });
+    const coldId = cold.json().sandbox.sandboxId;
+    await freezeSandbox(db, executor, coldId);
+    await stopSandbox(db, executor, coldId);
+
+    const res = await rpc(app, '/listSandboxMetrics', {});
+    expect(res.statusCode).toBe(200);
+    const { samples } = listSandboxMetricsResponseSchema.parse(res.json());
+    const keys = samples.map((s) => s.userKey).sort();
+    // The frozen sandbox is measured as it sleeps; the stopped one has no
+    // container to measure and is honestly absent, not null-stuffed.
+    expect(keys).toEqual(['hot', 'napping']);
+    for (const entry of samples) {
+      expect(entry.sample.memTotalBytes).toBeGreaterThan(0);
+      expect(entry.sample.diskTotalBytes).toBeGreaterThan(0);
+    }
+    // Observation is not activity: nobody woke or cooled further.
+    const { sandboxes } = (await rpc(app, '/listSandboxes')).json();
+    const byKey = new Map<string, string>(
+      sandboxes.map((s: { userKey: string; state: string }) => [
+        s.userKey,
+        s.state,
+      ]),
+    );
+    expect(byKey.get('napping')).toBe('frozen');
+    expect(byKey.get('cold')).toBe('stopped');
+  });
+
+  it('skips a sandbox whose container vanished instead of failing the sweep', async () => {
+    const { app, executor } = testApp();
+    await rpc(app, '/acquireSandbox', { userKey: 'alive' });
+    const doomed = await rpc(app, '/acquireSandbox', { userKey: 'doomed' });
+    // The container dies physically, past the ledger (gVisor OOM does this
+    // for real) — the row still says active, the reading throws, the sweep
+    // reports what it could see.
+    const doomedId = doomed.json().sandbox.sandboxId;
+    await executor.freeze(doomedId);
+    await executor.stop(doomedId);
+
+    const res = await rpc(app, '/listSandboxMetrics', {});
+    const { samples } = listSandboxMetricsResponseSchema.parse(res.json());
+    expect(samples.map((s) => s.userKey)).toEqual(['alive']);
+  });
+
+  it('answers an empty list on an empty ledger', async () => {
+    const { app } = testApp();
+    const res = await rpc(app, '/listSandboxMetrics', {});
+    expect(listSandboxMetricsResponseSchema.parse(res.json()).samples).toEqual(
+      [],
+    );
   });
 });

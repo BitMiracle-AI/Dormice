@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EditPolicyDialog } from '../components/EditPolicyDialog';
 import { FilesPanel } from '../components/FilesPanel';
 import { HistoryPanel } from '../components/HistoryPanel';
+import { LifecycleCountdown } from '../components/LifecycleCountdown';
 import { MetricsPanel } from '../components/MetricsPanel';
 import { ProcessesPanel } from '../components/ProcessesPanel';
 import { RebuildSandboxButton } from '../components/RebuildSandboxButton';
@@ -88,6 +89,7 @@ export function SandboxDetailPage() {
         <div className="flex items-center gap-3">
           <h1 className="font-mono text-lg font-semibold">{sandbox.userKey}</h1>
           <SandboxStateBadge state={sandbox.state} />
+          <LifecycleCountdown sandbox={sandbox} />
         </div>
         <div className="flex items-center gap-2">
           <EditPolicyDialog sandbox={sandbox} />

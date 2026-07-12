@@ -7,6 +7,7 @@ import type {
   HostMetricsResponse,
   LifecyclePolicyOverride,
   ListActivityResponse,
+  ListSandboxMetricsResponse,
   RegisterTemplateResponse,
   Sandbox,
   SetIngressResponse,
@@ -97,6 +98,11 @@ export const getHostMetrics = () => rpc<HostMetricsResponse>('/getHostMetrics');
 // measured as it sleeps, a stopped one answers sample: null — never woken.
 export const getSandboxMetrics = (userKey: string) =>
   rpc<GetSandboxMetricsResponse>('/getSandboxMetrics', { userKey });
+
+// Every measurable sandbox in one answer — the list view's food. Presence
+// means measured: colder states are simply absent.
+export const listSandboxMetrics = () =>
+  rpc<ListSandboxMetricsResponse>('/listSandboxMetrics');
 
 // The ledger's recent history, newest first — a bounded ring, not an audit
 // log. The daemon records at the moves themselves; this only reads.

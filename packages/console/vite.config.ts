@@ -34,6 +34,7 @@ export default defineConfig({
       '/removeTemplate': 'http://127.0.0.1:3676',
       '/getHostMetrics': 'http://127.0.0.1:3676',
       '/getSandboxMetrics': 'http://127.0.0.1:3676',
+      '/listSandboxMetrics': 'http://127.0.0.1:3676',
       '/listActivity': 'http://127.0.0.1:3676',
       '/getConfig': 'http://127.0.0.1:3676',
       '/getIngress': 'http://127.0.0.1:3676',

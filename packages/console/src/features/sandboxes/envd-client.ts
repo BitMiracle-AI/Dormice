@@ -93,6 +93,35 @@ export const moveEntry = (
 export const removeEntry = (auth: EnvdAuth, path: string) =>
   unary<Record<string, never>>(auth, 'filesystem.Filesystem/Remove', { path });
 
+// ---- 目录监听(轮询三动词:create → drain → remove)------------------------
+//
+// 与官方 SDK 的流式 WatchDir 同一张水源,轮询形态对浏览器更顺:没有长连
+// 接要养,GetWatcherEvents 一次拿走积压(drained means drained),404 =
+// 监听器随容器一起没了(冻结/重建都会),调用方重建一个就是。
+
+export interface EnvdWatchEvent {
+  name: string;
+  type: string;
+}
+
+export const createWatcher = (auth: EnvdAuth, path: string) =>
+  unary<{ watcherId: string }>(auth, 'filesystem.Filesystem/CreateWatcher', {
+    path,
+  }).then((r) => r.watcherId);
+
+/** 只读不唤醒(与 Process/List 同一原则):挂着监听不养沙箱的体温。 */
+export const getWatcherEvents = (auth: EnvdAuth, watcherId: string) =>
+  unary<{ events?: EnvdWatchEvent[] }>(
+    auth,
+    'filesystem.Filesystem/GetWatcherEvents',
+    { watcherId },
+  ).then((r) => r.events ?? []);
+
+export const removeWatcher = (auth: EnvdAuth, watcherId: string) =>
+  unary<Record<string, never>>(auth, 'filesystem.Filesystem/RemoveWatcher', {
+    watcherId,
+  });
+
 // ---- 文件本体进出(纯 HTTP 面,流式无大小上限)---------------------------
 
 /** 下载整个文件为 Blob,交给浏览器落盘。 */
