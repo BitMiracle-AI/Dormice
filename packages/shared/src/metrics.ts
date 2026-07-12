@@ -42,3 +42,30 @@ export const getSandboxMetricsResponseSchema = z.object({
 export type GetSandboxMetricsResponse = z.infer<
   typeof getSandboxMetricsResponseSchema
 >;
+
+/**
+ * listSandboxMetrics() — every measurable sandbox in one answer, so a list
+ * view showing N sandboxes costs one request instead of N. Presence means
+ * measured: only physically running/paused sandboxes appear (the same
+ * honesty as getSandboxMetrics's null, expressed as absence), and a
+ * container that vanishes mid-reading is skipped rather than invented.
+ */
+export const listSandboxMetricsRequestSchema = z.object({});
+
+export type ListSandboxMetricsRequest = z.infer<
+  typeof listSandboxMetricsRequestSchema
+>;
+
+export const listSandboxMetricsResponseSchema = z.object({
+  samples: z.array(
+    z.object({
+      userKey: z.string(),
+      sandboxId: z.string(),
+      sample: sandboxMetricsSampleSchema,
+    }),
+  ),
+});
+
+export type ListSandboxMetricsResponse = z.infer<
+  typeof listSandboxMetricsResponseSchema
+>;

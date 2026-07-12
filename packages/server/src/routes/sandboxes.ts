@@ -9,6 +9,8 @@ import {
   type LifecyclePolicy,
   lifecyclePolicySchema,
   listSandboxesResponseSchema,
+  listSandboxMetricsRequestSchema,
+  listSandboxMetricsResponseSchema,
   readFileRequestSchema,
   readFileResponseSchema,
   rebuildSandboxRequestSchema,
@@ -315,6 +317,42 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       }
       const m = await executor.metrics(row.sandboxId);
       return { sample: { timestamp: new Date().toISOString(), ...m } };
+    },
+  );
+
+  // Every measurable sandbox in one answer: the list view's food. Readings
+  // run in parallel because one docker-stats sample costs about a second —
+  // serial would scale the answer with the fleet. Presence means measured:
+  // colder states are absent (same honesty as getSandboxMetrics's null),
+  // and a container that vanishes mid-reading is skipped, not invented —
+  // any code must expect containers to disappear at any moment.
+  app.post(
+    '/listSandboxMetrics',
+    {
+      schema: {
+        body: listSandboxMetricsRequestSchema,
+        response: { 200: listSandboxMetricsResponseSchema },
+      },
+    },
+    async () => {
+      const rows = listSandboxes(db).filter(
+        (row) => row.state === 'active' || row.state === 'frozen',
+      );
+      const samples = await Promise.all(
+        rows.map(async (row) => {
+          try {
+            const m = await executor.metrics(row.sandboxId);
+            return {
+              userKey: row.userKey,
+              sandboxId: row.sandboxId,
+              sample: { timestamp: new Date().toISOString(), ...m },
+            };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      return { samples: samples.filter((s) => s !== null) };
     },
   );
 

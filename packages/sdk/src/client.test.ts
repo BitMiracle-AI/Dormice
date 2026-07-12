@@ -384,6 +384,22 @@ describe('the observability verbs over real HTTP', () => {
     });
   });
 
+  it('listSandboxMetrics answers every measurable sandbox in one call', async () => {
+    await client.acquireSandbox('fleet-a');
+    await client.acquireSandbox('fleet-b');
+    const samples = await client.listSandboxMetrics();
+    const mine = samples.filter((s) => s.userKey.startsWith('fleet-'));
+    expect(mine.map((s) => s.userKey).sort()).toEqual(['fleet-a', 'fleet-b']);
+    for (const entry of mine) {
+      expect(entry.sample.memTotalBytes).toBeGreaterThan(0);
+    }
+    await client.releaseSandbox('fleet-a');
+    await client.releaseSandbox('fleet-b');
+    // Released means gone from the measurable set, not null-stuffed.
+    const after = await client.listSandboxMetrics();
+    expect(after.filter((s) => s.userKey.startsWith('fleet-'))).toEqual([]);
+  });
+
   it('listActivity tells the story just written, newest first', async () => {
     await client.acquireSandbox('story-sdk');
     await client.releaseSandbox('story-sdk');

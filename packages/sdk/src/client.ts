@@ -13,8 +13,10 @@ import {
   type HostMetricsResponse,
   hostMetricsResponseSchema,
   type LifecyclePolicyOverride,
+  type ListSandboxMetricsResponse,
   listActivityResponseSchema,
   listSandboxesResponseSchema,
+  listSandboxMetricsResponseSchema,
   listTemplatesResponseSchema,
   type RebuildSandboxResponse,
   type RegisterTemplateResponse,
@@ -165,6 +167,17 @@ export class Dormice {
   ): Promise<SandboxMetricsSample | null> {
     const data = await this.rpc('getSandboxMetrics', { userKey });
     return getSandboxMetricsResponseSchema.parse(data).sample;
+  }
+
+  /**
+   * Every measurable sandbox's reading in one answer — a view over N
+   * sandboxes costs one request instead of N. Presence means measured:
+   * only physically running/paused sandboxes appear; colder states are
+   * absent (getSandboxMetrics's null, expressed as absence).
+   */
+  async listSandboxMetrics(): Promise<ListSandboxMetricsResponse['samples']> {
+    const data = await this.rpc('listSandboxMetrics', {});
+    return listSandboxMetricsResponseSchema.parse(data).samples;
   }
 
   /**

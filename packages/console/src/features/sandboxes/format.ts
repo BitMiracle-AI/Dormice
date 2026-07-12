@@ -48,6 +48,47 @@ export function since(iso: string): string {
   return formatDuration((Date.now() - Date.parse(iso)) / 1000);
 }
 
+/**
+ * 沙箱的下一步降温:与 daemon 扫描器同一套语义 — 空闲时长从
+ * lastActiveAt 起算,按当前状态取对应旋钮,一次只降一档。旋钮为 null
+ * 表示这一档永不发生(常驻);active 的冻结旋钮不可为 null。到点未动
+ * 是正常态(等下一轮扫描),remainingSeconds 为 0 而不是负数。
+ * archived/restoring 没有下一步,返回 null。
+ */
+export function nextLifecycleStep(
+  sandbox: Pick<Sandbox, 'state' | 'lastActiveAt' | 'policy'>,
+  nowMs: number,
+): {
+  action: '冻结' | '停止' | '归档';
+  remainingSeconds: number | null;
+} | null {
+  const idle = (nowMs - Date.parse(sandbox.lastActiveAt)) / 1000;
+  const remaining = (threshold: number) => Math.max(0, threshold - idle);
+  switch (sandbox.state) {
+    case 'active':
+      return {
+        action: '冻结',
+        remainingSeconds: remaining(sandbox.policy.freezeAfterSeconds),
+      };
+    case 'frozen':
+      return sandbox.policy.stopAfterSeconds === null
+        ? { action: '停止', remainingSeconds: null }
+        : {
+            action: '停止',
+            remainingSeconds: remaining(sandbox.policy.stopAfterSeconds),
+          };
+    case 'stopped':
+      return sandbox.policy.archiveAfterSeconds === null
+        ? { action: '归档', remainingSeconds: null }
+        : {
+            action: '归档',
+            remainingSeconds: remaining(sandbox.policy.archiveAfterSeconds),
+          };
+    default:
+      return null;
+  }
+}
+
 /** 一个旋钮的文字形:"冻结 5分钟" / "停止 永不"。 */
 export function policyStep(label: string, seconds: number | null): string {
   return seconds === null

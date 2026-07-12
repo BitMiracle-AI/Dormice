@@ -4,6 +4,7 @@ import {
   acquireSandbox,
   getSandboxMetrics,
   listSandboxes,
+  listSandboxMetrics,
   rebuildSandbox,
   releaseSandbox,
   setPolicy,
@@ -42,6 +43,21 @@ export function useSandboxMetrics(userKey: string) {
   return useQuery({
     queryKey: ['sandbox-metrics', userKey],
     queryFn: () => getSandboxMetrics(userKey),
+    refetchInterval: 5000,
+    retry: false,
+  });
+}
+
+/**
+ * 全部可测沙箱的资源快照,一个请求管一整张表(逐行发 getSandboxMetrics
+ * 是 N 倍浪费)。答案里没出现 = 没有容器可测(停止/归档),不是 0。
+ * 5 秒一拍与列表的 2 秒分开定:daemon 侧一次 docker stats 读数约一秒,
+ * 这口锅比读 SQLite 贵。只在列表页挂载时跑,页面一关轮询即停。
+ */
+export function useFleetMetrics() {
+  return useQuery({
+    queryKey: ['fleet-metrics'],
+    queryFn: listSandboxMetrics,
     refetchInterval: 5000,
     retry: false,
   });

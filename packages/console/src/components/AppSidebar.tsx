@@ -40,7 +40,8 @@ interface NavItem {
 }
 
 // 平台 = 管的对象(沙箱/模板),运维 = 管这台机器;连接页是给要接 SDK 的人。
-const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
+// 导出给命令面板(⌘K)复用 — 页面清单只有这一份,两处永远一致。
+export const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
   {
     label: '平台',
     items: [

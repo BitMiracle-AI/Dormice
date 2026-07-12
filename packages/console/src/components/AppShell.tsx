@@ -1,6 +1,7 @@
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { Fragment } from 'react';
 import { AppSidebar } from '@/components/AppSidebar';
+import { CommandMenu } from '@/components/CommandMenu';
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -72,6 +73,7 @@ export function AppShell() {
               ))}
             </BreadcrumbList>
           </Breadcrumb>
+          <CommandMenu />
         </header>
         <div className="flex flex-1 flex-col gap-4 p-4 md:p-6">
           <Outlet />

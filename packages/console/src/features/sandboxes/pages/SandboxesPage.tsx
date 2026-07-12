@@ -49,12 +49,14 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { releaseSandbox } from '@/lib/api';
+import { formatBytes, pctOf } from '@/lib/format';
 import { queryClient } from '@/lib/queryClient';
+import { cn } from '@/lib/utils';
 import { CreateSandboxDialog } from '../components/CreateSandboxDialog';
 import { ReleaseSandboxButton } from '../components/ReleaseSandboxButton';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { policyLine, STATE_LABELS, since } from '../format';
-import { useSandboxes } from '../hooks/useSandboxes';
+import { useFleetMetrics, useSandboxes } from '../hooks/useSandboxes';
 
 const STATE_FILTERS: Array<SandboxState> = [
   'active',
@@ -67,6 +69,39 @@ const STATE_FILTERS: Array<SandboxState> = [
 /** 可排序的列:字符串比较对 userKey 和 ISO 时间戳同样成立。 */
 type SortKey = 'userKey' | 'lastActiveAt' | 'createdAt';
 type Sort = { key: SortKey; dir: 1 | -1 };
+
+/**
+ * 资源列的一格:数值紧凑,细节挂 hover;占比过线换警示色,和指标 tab
+ * 的 Meter 同一套阈值。value 为 null = 这行没被测到(没有容器可测)。
+ */
+function UsageCell({
+  value,
+  pct,
+  title,
+}: {
+  value: string | null;
+  pct: number;
+  title?: string;
+}) {
+  if (value === null) {
+    return <TableCell className="text-muted-foreground">—</TableCell>;
+  }
+  return (
+    <TableCell
+      className={cn(
+        'tabular-nums',
+        pct >= 90
+          ? 'text-red-600 dark:text-red-400'
+          : pct >= 75
+            ? 'text-amber-600 dark:text-amber-400'
+            : 'text-muted-foreground',
+      )}
+      title={title}
+    >
+      {value}
+    </TableCell>
+  );
+}
 
 /**
  * 表头的排序按钮:点一下升序,再点反向。"空闲最久的是谁"不该靠肉眼
@@ -166,6 +201,13 @@ function BulkReleaseButton({
 export function SandboxesPage() {
   const query = useSandboxes();
   const sandboxes = query.data?.sandboxes ?? [];
+  // 资源快照批量拉(一个请求管全表);读不到就整列出 —,不挡列表本身。
+  const fleet = useFleetMetrics();
+  const metricsOf = useMemo(
+    () =>
+      new Map((fleet.data?.samples ?? []).map((s) => [s.userKey, s.sample])),
+    [fleet.data],
+  );
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState<'all' | SandboxState>('all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -314,6 +356,9 @@ export function SandboxesPage() {
                 </TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead>模板</TableHead>
+                <TableHead>CPU</TableHead>
+                <TableHead>内存</TableHead>
+                <TableHead>磁盘</TableHead>
                 <TableHead>
                   {/* 升序 = 最久没动的排最前:回收磁盘时先看这里。 */}
                   <SortableHead
@@ -366,6 +411,37 @@ export function SandboxesPage() {
                   <TableCell className="text-muted-foreground">
                     {sandbox.template ?? '基础镜像'}
                   </TableCell>
+                  {(() => {
+                    const m = metricsOf.get(sandbox.userKey);
+                    if (!m) {
+                      return (
+                        <>
+                          <UsageCell value={null} pct={0} />
+                          <UsageCell value={null} pct={0} />
+                          <UsageCell value={null} pct={0} />
+                        </>
+                      );
+                    }
+                    return (
+                      <>
+                        <UsageCell
+                          value={`${Math.round(m.cpuUsedPct)}%`}
+                          pct={m.cpuUsedPct / m.cpuCount}
+                          title={`${m.cpuCount} 核 · 百分比按单核计`}
+                        />
+                        <UsageCell
+                          value={formatBytes(m.memUsedBytes)}
+                          pct={pctOf(m.memUsedBytes, m.memTotalBytes)}
+                          title={`共 ${formatBytes(m.memTotalBytes)}`}
+                        />
+                        <UsageCell
+                          value={formatBytes(m.diskUsedBytes)}
+                          pct={pctOf(m.diskUsedBytes, m.diskTotalBytes)}
+                          title={`名义 ${formatBytes(m.diskTotalBytes)}`}
+                        />
+                      </>
+                    );
+                  })()}
                   <TableCell
                     className="tabular-nums text-muted-foreground"
                     title={`最近活动:${new Date(sandbox.lastActiveAt).toLocaleString()}`}
