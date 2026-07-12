@@ -171,8 +171,9 @@ function BoundStatus({
         />
         {tlsOk && hereOverHttp && (
           <p className="text-sm text-muted-foreground">
-            当前页面还在用明文 HTTP — 若浏览器打不开下面的 HTTPS
-            地址,通常是云安全组还没放行 443 端口。
+            当前页面还在用明文 HTTP — 若浏览器打不开下面的 HTTPS 地址,
+            通常是云安全组还没放行 443 端口;中国大陆机房还需域名有 ICP
+            备案,否则云厂商会在入口拦截(与本机配置无关)。
           </p>
         )}
       </div>
