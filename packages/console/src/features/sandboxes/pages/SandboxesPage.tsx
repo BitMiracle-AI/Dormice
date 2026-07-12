@@ -1,5 +1,10 @@
 import type { Sandbox, SandboxState } from '@dormice/shared';
-import { PackageIcon, Search01Icon } from '@hugeicons/core-free-icons';
+import {
+  ArrowDown01Icon,
+  ArrowUp01Icon,
+  PackageIcon,
+  Search01Icon,
+} from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Link } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
@@ -58,6 +63,43 @@ const STATE_FILTERS: Array<SandboxState> = [
   'archived',
   'restoring',
 ];
+
+/** 可排序的列:字符串比较对 userKey 和 ISO 时间戳同样成立。 */
+type SortKey = 'userKey' | 'lastActiveAt' | 'createdAt';
+type Sort = { key: SortKey; dir: 1 | -1 };
+
+/**
+ * 表头的排序按钮:点一下升序,再点反向。"空闲最久的是谁"不该靠肉眼
+ * 扫一张会自己刷新的表。
+ */
+function SortableHead({
+  label,
+  sortKey,
+  sort,
+  onSort,
+}: {
+  label: string;
+  sortKey: SortKey;
+  sort: Sort | null;
+  onSort: (key: SortKey) => void;
+}) {
+  const active = sort?.key === sortKey;
+  return (
+    <button
+      type="button"
+      className="inline-flex items-center gap-1 transition-colors hover:text-foreground"
+      onClick={() => onSort(sortKey)}
+    >
+      {label}
+      {active && (
+        <HugeiconsIcon
+          icon={sort.dir === 1 ? ArrowUp01Icon : ArrowDown01Icon}
+          className="size-3.5"
+        />
+      )}
+    </button>
+  );
+}
 
 /**
  * 批量释放:逐个调用 releaseSandbox(daemon 的 per-key 锁本来就是逐个
@@ -127,17 +169,27 @@ export function SandboxesPage() {
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState<'all' | SandboxState>('all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [sort, setSort] = useState<Sort | null>(null);
 
-  const filtered = useMemo(
-    () =>
-      sandboxes.filter(
-        (sandbox) =>
-          (stateFilter === 'all' || sandbox.state === stateFilter) &&
-          (search === '' ||
-            sandbox.userKey.toLowerCase().includes(search.toLowerCase())),
-      ),
-    [sandboxes, stateFilter, search],
-  );
+  const toggleSort = (key: SortKey) =>
+    setSort((prev) =>
+      prev?.key === key
+        ? { key, dir: prev.dir === 1 ? -1 : 1 }
+        : { key, dir: 1 },
+    );
+
+  const filtered = useMemo(() => {
+    const matched = sandboxes.filter(
+      (sandbox) =>
+        (stateFilter === 'all' || sandbox.state === stateFilter) &&
+        (search === '' ||
+          sandbox.userKey.toLowerCase().includes(search.toLowerCase())),
+    );
+    if (!sort) return matched;
+    return [...matched].sort(
+      (a, b) => a[sort.key].localeCompare(b[sort.key]) * sort.dir,
+    );
+  }, [sandboxes, stateFilter, search, sort]);
 
   // 选中集随现实收敛:被别处释放的沙箱不该留在选中里撑数字。
   const selectedVisible = filtered.filter((s) => selected.has(s.userKey));
@@ -252,12 +304,34 @@ export function SandboxesPage() {
                     onCheckedChange={toggleAll}
                   />
                 </TableHead>
-                <TableHead>userKey</TableHead>
+                <TableHead>
+                  <SortableHead
+                    label="userKey"
+                    sortKey="userKey"
+                    sort={sort}
+                    onSort={toggleSort}
+                  />
+                </TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead>模板</TableHead>
-                <TableHead>空闲</TableHead>
+                <TableHead>
+                  {/* 升序 = 最久没动的排最前:回收磁盘时先看这里。 */}
+                  <SortableHead
+                    label="空闲"
+                    sortKey="lastActiveAt"
+                    sort={sort}
+                    onSort={toggleSort}
+                  />
+                </TableHead>
                 <TableHead>生命周期策略</TableHead>
-                <TableHead>存活</TableHead>
+                <TableHead>
+                  <SortableHead
+                    label="存活"
+                    sortKey="createdAt"
+                    sort={sort}
+                    onSort={toggleSort}
+                  />
+                </TableHead>
                 <TableHead className="text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
@@ -292,13 +366,19 @@ export function SandboxesPage() {
                   <TableCell className="text-muted-foreground">
                     {sandbox.template ?? '基础镜像'}
                   </TableCell>
-                  <TableCell className="tabular-nums text-muted-foreground">
+                  <TableCell
+                    className="tabular-nums text-muted-foreground"
+                    title={`最近活动:${new Date(sandbox.lastActiveAt).toLocaleString()}`}
+                  >
                     {since(sandbox.lastActiveAt)}
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {policyLine(sandbox.policy)}
                   </TableCell>
-                  <TableCell className="tabular-nums text-muted-foreground">
+                  <TableCell
+                    className="tabular-nums text-muted-foreground"
+                    title={`创建于:${new Date(sandbox.createdAt).toLocaleString()}`}
+                  >
                     {since(sandbox.createdAt)}
                   </TableCell>
                   <TableCell className="text-right">

@@ -1,4 +1,3 @@
-import type { ActivityKind } from '@dormice/shared';
 import { Link } from '@tanstack/react-router';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -19,52 +18,7 @@ import {
 import { since } from '@/features/sandboxes/format';
 import { cn } from '@/lib/utils';
 import { useActivity } from '../hooks/useActivity';
-
-/** 事件的中文名 — 与 wire 上的 kind 一比一,这里是唯一的翻译点。 */
-export const ACTIVITY_KIND_LABELS: Record<ActivityKind, string> = {
-  created: '创建',
-  woken: '唤醒',
-  frozen: '冻结',
-  stopped: '停止',
-  rebuilt: '重建',
-  released: '释放',
-  'expired-killed': '到期销毁',
-  archived: '归档',
-  'restore-started': '开始恢复',
-  restored: '恢复完成',
-  'restore-failed': '恢复失败',
-  reconciled: '对账修复',
-  'daemon-started': 'daemon 启动',
-  'ingress-updated': '域名配置',
-};
-
-// 事件色与沙箱状态徽章同一色系:落到哪个状态就穿哪个颜色。
-const KIND_STYLES: Record<ActivityKind, string> = {
-  created:
-    'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-  woken:
-    'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-  frozen: 'border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400',
-  stopped: 'border-border bg-muted text-muted-foreground',
-  rebuilt:
-    'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
-  released: 'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400',
-  'expired-killed':
-    'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400',
-  archived:
-    'border-indigo-500/40 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400',
-  'restore-started':
-    'border-indigo-500/40 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400',
-  restored:
-    'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-  'restore-failed':
-    'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400',
-  reconciled:
-    'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400',
-  'daemon-started': 'border-border bg-muted text-muted-foreground',
-  'ingress-updated':
-    'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
-};
+import { ACTIVITY_KIND_LABELS, ACTIVITY_KIND_STYLES } from '../kinds';
 
 /**
  * 「我不在的时候发生了什么」:daemon 每一次生命周期动作(创建、降温、
@@ -117,13 +71,20 @@ export function ActivityPage() {
             <TableBody>
               {data.events.map((event) => (
                 <TableRow key={event.id}>
-                  <TableCell className="tabular-nums text-muted-foreground">
+                  <TableCell
+                    className="tabular-nums text-muted-foreground"
+                    // 相对时间好扫读,绝对时间才对得上日志 — hover 给后者。
+                    title={new Date(event.at).toLocaleString()}
+                  >
                     {since(event.at)}前
                   </TableCell>
                   <TableCell>
                     <Badge
                       variant="outline"
-                      className={cn('font-medium', KIND_STYLES[event.kind])}
+                      className={cn(
+                        'font-medium',
+                        ACTIVITY_KIND_STYLES[event.kind],
+                      )}
                     >
                       {ACTIVITY_KIND_LABELS[event.kind]}
                     </Badge>

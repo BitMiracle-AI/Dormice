@@ -839,6 +839,108 @@ describe('POST /rebuildSandbox', () => {
   });
 });
 
+describe('POST /setPolicy', () => {
+  it('patches one knob, keeps the rest, and does not refresh the idle clock', async () => {
+    const { app } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+
+    const res = await rpc(app, '/setPolicy', {
+      userKey: 'alice',
+      policy: { freezeAfterSeconds: 120 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sandbox.policy).toEqual({
+      ...DEFAULT_LIFECYCLE_POLICY,
+      freezeAfterSeconds: 120,
+    });
+    // Adjusting a knob is not activity: the idle countdown keeps running.
+    expect(res.json().sandbox.lastActiveAt).toBe(created.sandbox.lastActiveAt);
+
+    const events = (await rpc(app, '/listActivity')).json().events;
+    expect(events[0]).toMatchObject({
+      kind: 'policy-changed',
+      userKey: 'alice',
+      detail: 'freeze 600s -> 120s',
+    });
+  });
+
+  it('promotes a frozen sandbox to never-stop without waking it', async () => {
+    const { app, db, executor, locks } = testApp();
+    const created = (await acquire(app, { userKey: 'alice' })).json();
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(
+        created.sandbox.lastActiveAt,
+        DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+      ),
+    );
+    expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
+
+    const res = await rpc(app, '/setPolicy', {
+      userKey: 'alice',
+      policy: { stopAfterSeconds: null },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sandbox.policy.stopAfterSeconds).toBeNull();
+    // Ledger-only: the sandbox slept through its own promotion.
+    expect(res.json().sandbox.state).toBe('frozen');
+    expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
+  });
+
+  it('rejects a patch whose merged result breaks the ordering rule', async () => {
+    const { app } = testApp();
+    await acquire(app, { userKey: 'alice' });
+    // freeze pushed past the stored stop threshold.
+    const res = await rpc(app, '/setPolicy', {
+      userKey: 'alice',
+      policy: {
+        freezeAfterSeconds:
+          (DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds ?? 0) + 1,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toMatch(/stopAfterSeconds/);
+  });
+
+  it('refuses to promise archiving on a daemon without S3', async () => {
+    const { app } = testApp();
+    await acquire(app, { userKey: 'alice' });
+    const res = await rpc(app, '/setPolicy', {
+      userKey: 'alice',
+      policy: { archiveAfterSeconds: 30 * 24 * 60 * 60 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toMatch(/DORMICE_S3_/);
+  });
+
+  it('answers 404 for an unknown key — setPolicy is not a creator', async () => {
+    const res = await rpc(testApp().app, '/setPolicy', {
+      userKey: 'nobody',
+      policy: { freezeAfterSeconds: 60 },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toMatch(/acquire it first/);
+  });
+
+  it('treats a no-change patch as the goal state and writes no history', async () => {
+    const { app } = testApp();
+    await acquire(app, { userKey: 'alice' });
+    const res = await rpc(app, '/setPolicy', {
+      userKey: 'alice',
+      policy: {
+        freezeAfterSeconds: DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const events = (await rpc(app, '/listActivity')).json().events;
+    expect(
+      events.some((e: { kind: string }) => e.kind === 'policy-changed'),
+    ).toBe(false);
+  });
+});
+
 describe('POST /releaseSandbox', () => {
   it('destroys the container and forgets the key', async () => {
     const { app, executor } = testApp();

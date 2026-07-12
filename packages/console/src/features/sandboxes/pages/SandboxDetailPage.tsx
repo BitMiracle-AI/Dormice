@@ -15,7 +15,9 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { EditPolicyDialog } from '../components/EditPolicyDialog';
 import { FilesPanel } from '../components/FilesPanel';
+import { HistoryPanel } from '../components/HistoryPanel';
 import { MetricsPanel } from '../components/MetricsPanel';
 import { ProcessesPanel } from '../components/ProcessesPanel';
 import { RebuildSandboxButton } from '../components/RebuildSandboxButton';
@@ -32,6 +34,7 @@ export const DETAIL_TABS = [
   'files',
   'processes',
   'metrics',
+  'history',
 ] as const;
 export type DetailTab = (typeof DETAIL_TABS)[number];
 
@@ -87,6 +90,7 @@ export function SandboxDetailPage() {
           <SandboxStateBadge state={sandbox.state} />
         </div>
         <div className="flex items-center gap-2">
+          <EditPolicyDialog sandbox={sandbox} />
           <RebuildSandboxButton userKey={sandbox.userKey} />
           <ReleaseSandboxButton
             userKey={sandbox.userKey}
@@ -114,6 +118,7 @@ export function SandboxDetailPage() {
           <TabsTrigger value="files">文件</TabsTrigger>
           <TabsTrigger value="processes">进程</TabsTrigger>
           <TabsTrigger value="metrics">指标</TabsTrigger>
+          <TabsTrigger value="history">历史</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
@@ -161,6 +166,10 @@ export function SandboxDetailPage() {
 
         <TabsContent value="metrics">
           <MetricsPanel sandbox={sandbox} />
+        </TabsContent>
+
+        <TabsContent value="history">
+          <HistoryPanel userKey={sandbox.userKey} />
         </TabsContent>
       </Tabs>
     </>

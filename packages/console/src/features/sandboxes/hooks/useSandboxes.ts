@@ -1,4 +1,4 @@
-import type { AcquireRequest } from '@dormice/shared';
+import type { AcquireRequest, LifecyclePolicyOverride } from '@dormice/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   acquireSandbox,
@@ -6,6 +6,7 @@ import {
   listSandboxes,
   rebuildSandbox,
   releaseSandbox,
+  setPolicy,
 } from '@/lib/api';
 
 /**
@@ -50,6 +51,15 @@ export function useAcquireSandbox() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (request: AcquireRequest) => acquireSandbox(request),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
+  });
+}
+
+export function useSetPolicy() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { userKey: string; policy: LifecyclePolicyOverride }) =>
+      setPolicy(args.userKey, args.policy),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
   });
 }
