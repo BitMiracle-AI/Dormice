@@ -9,12 +9,12 @@ import { Command } from 'commander';
 import {
   clientFromEnv,
   pullSavedMessage,
+  sandboxDestroy,
   sandboxExec,
   sandboxLs,
   sandboxPull,
   sandboxPush,
   sandboxRebuild,
-  sandboxDestroy,
   templateAdd,
   templateLs,
   templateRm,
@@ -88,17 +88,19 @@ sandbox
     '[remotePath]',
     'destination inside the sandbox; relative paths land under /home/user (default: the local file name)',
   )
-  .action(async (externalId: string, localPath: string, remotePath?: string) => {
-    const content = await readFile(localPath);
-    console.log(
-      await sandboxPush(
-        clientFromEnv(process.env),
-        externalId,
-        content,
-        remotePath ?? path.basename(localPath),
-      ),
-    );
-  });
+  .action(
+    async (externalId: string, localPath: string, remotePath?: string) => {
+      const content = await readFile(localPath);
+      console.log(
+        await sandboxPush(
+          clientFromEnv(process.env),
+          externalId,
+          content,
+          remotePath ?? path.basename(localPath),
+        ),
+      );
+    },
+  );
 
 sandbox
   .command('pull')
@@ -106,20 +108,22 @@ sandbox
   .argument('<externalId>', 'the external id whose sandbox holds the file')
   .argument('<remotePath>', 'file inside the sandbox; relative to /home/user')
   .argument('[localPath]', 'where to save it; omitted = raw bytes to stdout')
-  .action(async (externalId: string, remotePath: string, localPath?: string) => {
-    const result = await sandboxPull(
-      clientFromEnv(process.env),
-      externalId,
-      remotePath,
-    );
-    if (localPath === undefined) {
-      // Raw on purpose, like exec output: the operator's own file's bytes.
-      process.stdout.write(result.content);
-      return;
-    }
-    await writeFile(localPath, result.content);
-    console.log(pullSavedMessage(result, localPath));
-  });
+  .action(
+    async (externalId: string, remotePath: string, localPath?: string) => {
+      const result = await sandboxPull(
+        clientFromEnv(process.env),
+        externalId,
+        remotePath,
+      );
+      if (localPath === undefined) {
+        // Raw on purpose, like exec output: the operator's own file's bytes.
+        process.stdout.write(result.content);
+        return;
+      }
+      await writeFile(localPath, result.content);
+      console.log(pullSavedMessage(result, localPath));
+    },
+  );
 
 sandbox
   .command('rebuild')

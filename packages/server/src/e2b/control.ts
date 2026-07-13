@@ -5,8 +5,8 @@ import { z } from 'zod';
 import {
   countSandboxes,
   createSandbox,
-  findBySandboxId,
   findByExternalId,
+  findBySandboxId,
   listSandboxes,
   setDeadline,
   setPausedByUser,
@@ -15,8 +15,8 @@ import {
 import type { SandboxRow } from '../db/schema';
 import { findTemplate, resolveImage } from '../db/templates';
 import {
-  freezeSandbox,
   destroySandbox,
+  freezeSandbox,
   stopSandbox,
   wakeSandbox,
 } from '../lifecycle';
@@ -244,7 +244,10 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       const body = request.body;
       const timeoutSeconds = body.timeout ?? DEFAULT_TIMEOUT_SECONDS;
       const requestedKey = body.metadata?.externalId;
-      if (requestedKey !== undefined && !EXTERNAL_ID_PATTERN.test(requestedKey)) {
+      if (
+        requestedKey !== undefined &&
+        !EXTERNAL_ID_PATTERN.test(requestedKey)
+      ) {
         throw apiError(
           400,
           `invalid metadata.externalId "${requestedKey}": expected 1-64 chars of [a-zA-Z0-9._-]`,

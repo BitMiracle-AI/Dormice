@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import {
   acquireRequestSchema,
   acquireResponseSchema,
+  destroySandboxRequestSchema,
+  destroySandboxResponseSchema,
   execCommandRequestSchema,
   execCommandResponseSchema,
   getSandboxMetricsRequestSchema,
@@ -18,8 +20,6 @@ import {
   readFilesResponseSchema,
   rebuildSandboxRequestSchema,
   rebuildSandboxResponseSchema,
-  destroySandboxRequestSchema,
-  destroySandboxResponseSchema,
   resolveSandboxPath,
   type Sandbox,
   updatePolicyRequestSchema,
@@ -55,7 +55,7 @@ import {
 } from '../executor/executor';
 import { httpError } from '../http-error';
 import type { KeyedQueue } from '../keyed-queue';
-import { rebuildSandbox, destroySandbox, wakeSandbox } from '../lifecycle';
+import { destroySandbox, rebuildSandbox, wakeSandbox } from '../lifecycle';
 import { ArchiveDisabledError, resolvePolicy } from '../policy';
 
 export interface SandboxRoutesOptions {
@@ -131,7 +131,10 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       }
       const restoring = findByExternalId(db, externalId);
       if (!restoring) {
-        throw httpError(500, `sandbox for key "${externalId}" vanished mid-slot`);
+        throw httpError(
+          500,
+          `sandbox for key "${externalId}" vanished mid-slot`,
+        );
       }
       return {
         status: 'restoring',

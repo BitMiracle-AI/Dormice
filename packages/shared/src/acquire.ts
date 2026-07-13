@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { lifecyclePolicyOverrideSchema } from './policy';
-import { sandboxSchema, externalIdSchema } from './sandbox';
+import { externalIdSchema, sandboxSchema } from './sandbox';
 import { templateNameSchema } from './templates';
 
 /**

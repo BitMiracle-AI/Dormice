@@ -243,7 +243,9 @@ describe('getSandboxMetrics', () => {
   it('answers a single sample for a running sandbox', async () => {
     const { app } = testApp();
     await rpc(app, '/acquireSandbox', { externalId: 'measured' });
-    const res = await rpc(app, '/getSandboxMetrics', { externalId: 'measured' });
+    const res = await rpc(app, '/getSandboxMetrics', {
+      externalId: 'measured',
+    });
     expect(res.statusCode).toBe(200);
     const { sample } = getSandboxMetricsResponseSchema.parse(res.json());
     expect(sample).not.toBeNull();
@@ -258,7 +260,9 @@ describe('getSandboxMetrics', () => {
     await freezeSandbox(db, executor, sandboxId);
     await stopSandbox(db, executor, sandboxId);
 
-    const metrics = await rpc(app, '/getSandboxMetrics', { externalId: 'cold' });
+    const metrics = await rpc(app, '/getSandboxMetrics', {
+      externalId: 'cold',
+    });
     expect(getSandboxMetricsResponseSchema.parse(metrics.json()).sample).toBe(
       null,
     );

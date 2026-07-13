@@ -8,10 +8,10 @@ import {
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import type { Db } from '../db/db';
 import {
+  externalIdsUsingTemplate,
   listTemplates,
   registerTemplate,
   removeTemplate,
-  externalIdsUsingTemplate,
 } from '../db/templates';
 import { httpError } from '../http-error';
 

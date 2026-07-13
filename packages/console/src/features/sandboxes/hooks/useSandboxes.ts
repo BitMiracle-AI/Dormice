@@ -2,11 +2,11 @@ import type { AcquireRequest, LifecyclePolicyOverride } from '@dormice/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   acquireSandbox,
+  destroySandbox,
   getSandboxMetrics,
   listSandboxes,
   listSandboxMetrics,
   rebuildSandbox,
-  destroySandbox,
   updatePolicy,
 } from '@/lib/api';
 
@@ -74,8 +74,10 @@ export function useAcquireSandbox() {
 export function useUpdatePolicy() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (args: { externalId: string; policy: LifecyclePolicyOverride }) =>
-      updatePolicy(args.externalId, args.policy),
+    mutationFn: (args: {
+      externalId: string;
+      policy: LifecyclePolicyOverride;
+    }) => updatePolicy(args.externalId, args.policy),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
   });
 }

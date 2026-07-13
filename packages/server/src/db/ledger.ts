@@ -195,7 +195,10 @@ export function setPausedByUser(
     .run();
 }
 
-export function findByExternalId(db: Db, externalId: string): SandboxRow | undefined {
+export function findByExternalId(
+  db: Db,
+  externalId: string,
+): SandboxRow | undefined {
   return db
     .select()
     .from(sandboxes)

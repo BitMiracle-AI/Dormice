@@ -240,7 +240,9 @@ export function SandboxesPage() {
 
   const toggleAll = () => {
     setSelected(
-      allVisibleSelected ? new Set() : new Set(filtered.map((s) => s.externalId)),
+      allVisibleSelected
+        ? new Set()
+        : new Set(filtered.map((s) => s.externalId)),
     );
   };
   const toggleOne = (externalId: string) => {

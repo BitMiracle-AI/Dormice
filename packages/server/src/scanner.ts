@@ -4,7 +4,7 @@ import { findBySandboxId, listSandboxes } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
-import { freezeSandbox, destroySandbox, stopSandbox } from './lifecycle';
+import { destroySandbox, freezeSandbox, stopSandbox } from './lifecycle';
 
 export interface ScanResult {
   frozen: number;

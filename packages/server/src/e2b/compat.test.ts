@@ -218,8 +218,12 @@ describe('E2B control plane', () => {
 
   it('metadata.externalId is the Dormice extension: same key, same sandbox', async () => {
     const t = testApp();
-    const first = await createSandbox(t, { metadata: { externalId: 'agent-7' } });
-    const second = await createSandbox(t, { metadata: { externalId: 'agent-7' } });
+    const first = await createSandbox(t, {
+      metadata: { externalId: 'agent-7' },
+    });
+    const second = await createSandbox(t, {
+      metadata: { externalId: 'agent-7' },
+    });
     expect(second.sandboxID).toBe(first.sandboxID);
   });
 

@@ -12,7 +12,12 @@ import { Archiver } from './archive/archiver';
 import { MemStore } from './archive/mem-store';
 import { objectKey } from './archive/store';
 import { type Db, migrateDb, openDb } from './db/db';
-import { createSandbox, findByExternalId, setDeadline, touch } from './db/ledger';
+import {
+  createSandbox,
+  findByExternalId,
+  setDeadline,
+  touch,
+} from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
@@ -47,7 +52,12 @@ async function seed(
 ): Promise<SandboxRow> {
   const sandboxId = randomUUID();
   await executor.create(sandboxId);
-  return createSandbox(db, { sandboxId, externalId, nodeId: 'node-test', policy });
+  return createSandbox(db, {
+    sandboxId,
+    externalId,
+    nodeId: 'node-test',
+    policy,
+  });
 }
 
 /** Time travel: the instant `seconds` after the row's last activity. */

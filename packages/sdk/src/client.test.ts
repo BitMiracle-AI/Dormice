@@ -389,7 +389,10 @@ describe('the observability verbs over real HTTP', () => {
     await client.acquireSandbox('fleet-b');
     const samples = await client.listSandboxMetrics();
     const mine = samples.filter((s) => s.externalId.startsWith('fleet-'));
-    expect(mine.map((s) => s.externalId).sort()).toEqual(['fleet-a', 'fleet-b']);
+    expect(mine.map((s) => s.externalId).sort()).toEqual([
+      'fleet-a',
+      'fleet-b',
+    ]);
     for (const entry of mine) {
       expect(entry.sample.memTotalBytes).toBeGreaterThan(0);
     }
