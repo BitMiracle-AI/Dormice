@@ -1,20 +1,25 @@
 ---
 title: Templates
-description: A template is a named Docker image — build it with docker, register the name, and both APIs create sandboxes from it.
+description: Learn how to create sandboxes from your own Docker images by registering them as templates.
 ---
 
-Dormice deliberately has no template build pipeline. The host's Docker
-daemon is already an image store and `docker build` is already the build
-tool — a template is just a **name pointing at an image**, recorded in
-the ledger:
+A template is a name pointing at a Docker image. Dormice deliberately
+has no build pipeline — the host's Docker daemon is already an image
+store, and `docker build` is already the build tool.
+
+## Create a template
+
+Build an image (any way you like) and register its name:
 
 ```sh
-docker build -t my-agent-env:v1 .        # any image, built anywhere
+docker build -t my-agent-env:v1 .
 dor template add my-agent-env my-agent-env:v1
 dor template ls
 ```
 
-Create sandboxes from it on either surface:
+## Create sandboxes from a template
+
+Both API surfaces accept a template name at creation:
 
 ```ts
 // Native: a creation-time option, like policy
@@ -27,47 +32,53 @@ const sbx = await Sandbox.create('my-agent-env', { /* the two URLs + apiKey */ }
 An unknown template name is refused — 400 natively, 404 through the E2B
 surface — never silently substituted with the base image.
 
-## Names resolve late — that is the upgrade mechanism
+## Update a template
 
-A sandbox's ledger row records the template *name*, not the image behind
-it. Every time a container is built — waking from stopped, a rebuild, a
-restore from archive — the name resolves to the template's **current**
-image. So upgrading is three commands:
+Re-registering a name points it at a new image. Sandboxes pick up the
+new image the next time their container is built — on a rebuild, a cold
+start, or a restore from archive:
 
 ```sh
 docker build -t my-agent-env:v2 .
 dor template add my-agent-env my-agent-env:v2  # re-registering re-points the name
-dor sandbox rebuild user-42                    # per sandbox: new shell, same /home/user
+dor sandbox rebuild user-42                    # per sandbox: new container, same /home/user
 ```
 
 Until rebuilt (or cold-started), existing sandboxes keep running the
 image they were born on. Through a rebuild, `/home/user` carries over
 untouched and everything outside it resets onto the new image — see
-[Rebuild: new shell, same body](/docs/persistence#rebuild-new-shell-same-body).
+[Rebuild a sandbox](/docs/persistence#rebuild-a-sandbox).
 
-## Rules and edge cases
+## Remove a template
+
+```sh
+dor template rm my-agent-env
+```
+
+Removing a template that sandboxes still use is refused with a 409
+naming a sandbox. Removing an unknown name is a no-op, and removing a
+registration never removes the image itself.
+
+## Image requirements
+
+Sandboxes mount their own disk over `/home/user`, so a template must
+install its tools into image paths (`/opt`, `/usr/local`) — anything
+baked under `/home/user` is hidden at runtime. The stock image's
+[`Dockerfile`](https://github.com/BitMiracle-AI/Dormice/blob/main/images/Dockerfile)
+is the reference: layers ordered by change frequency, tools outside the
+home directory, non-root user at uid 1000.
+
+## Good to know
 
 - **Registration is configuration.** The image is not checked for
-  existence — register first, build later, if you like. If it is still
-  missing when a sandbox needs it, creation fails with a named error
+  existence when you register — register first, build later, if you
+  like. If it is still missing when a sandbox needs it, creation fails
+  with a named error
   (`image X is not on this host — docker pull or build it, then retry`).
 - **`base` is reserved.** Through the E2B surface, `Sandbox.create()`
-  with no template argument sends the string `base`, which means the
-  daemon's base image; the name cannot be registered.
-- **A referenced template cannot be removed.** `dor template rm` answers
-  a 409 naming a sandbox that still uses the template. Removing an
-  unknown name is a no-op, and removing a registration never removes the
-  image itself.
+  with no template argument means the daemon's base image; the name
+  `base` cannot be registered.
 - **Templates apply at creation only.** An acquire with a `template` on
   a key that already has a sandbox keeps the sandbox it finds, template
   unchanged — but an unknown name is still refused, never silently
   ignored.
-
-## Keep the image rules in mind
-
-Sandboxes mount their own disk over `/home/user`, so a template must
-install into image paths (`/opt`, `/usr/local`) — anything baked under
-`/home/user` is shadowed at runtime. The stock image's
-[`Dockerfile`](https://github.com/BitMiracle-AI/Dormice/blob/main/images/Dockerfile)
-is the reference: layers ordered by change frequency, tools outside the
-home directory, non-root user at uid 1000.

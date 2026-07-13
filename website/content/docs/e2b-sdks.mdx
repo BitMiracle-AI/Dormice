@@ -1,14 +1,16 @@
 ---
 title: Using the official E2B SDKs
-description: The official e2b packages — JavaScript and Python, unmodified — run against Dormice by changing two URLs.
+description: Learn how to run the official e2b packages — JavaScript and Python, unmodified — against Dormice by changing two URLs.
 ---
 
-The daemon speaks the E2B protocol on two prefixes (`/e2b/api` for the
-control plane, `/e2b/envd` for the in-sandbox surface). Point the official
-SDK at them and prefix your token with `e2b_` — migrating an application
-is configuration, not code. Everything documented here is exercised by
-black-box test suites *through the official packages* (e2b 2.31.0,
-JavaScript and Python) against a real Docker + gVisor daemon.
+Dormice speaks the E2B protocol, so the official `e2b` SDKs work against
+it without modification. Migrating an application is configuration, not
+code: point the SDK at your daemon's two URL prefixes and prefix your
+API token with `e2b_`.
+
+Everything documented here is exercised by black-box test suites
+*through the official packages* (e2b 2.31.0, JavaScript and Python)
+against a real Docker + gVisor daemon.
 
 ## JavaScript
 
@@ -41,18 +43,18 @@ sandbox = Sandbox.create(
 sandbox.commands.run("echo hello")
 ```
 
-One constraint worth knowing: **keep the API token hexadecimal**
-(`openssl rand -hex 32`, which is also what `install.sh` generates). The
-Python SDK validates its key against `e2b_[0-9a-f]+` client-side, before
-any request leaves the machine — a token with other characters fails in
-the SDK, not on the wire.
+**Note: keep the API token hexadecimal** (`openssl rand -hex 32`, which
+is what `install.sh` generates). The Python SDK validates its key
+against `e2b_[0-9a-f]+` on the client side, before any request leaves
+the machine — a token with other characters fails in the SDK, not on the
+wire.
 
-## `metadata.externalId`: idempotent create
+## Reuse the same sandbox across creates
 
 A Dormice extension: pass `metadata: { externalId: '...' }` and
 `Sandbox.create` behaves like the native `acquireSandbox` — the same key
 always returns the same sandbox instead of a new one, whatever state it
-was in, with its files intact:
+was in, files intact:
 
 ```ts
 const sbx = await Sandbox.create({
@@ -64,17 +66,18 @@ const sbx = await Sandbox.create({
 Without it, `create` makes a fresh sandbox every time — faithful E2B
 semantics.
 
-## Timeouts are real
+## Timeouts work as E2B defines them
 
-`timeoutMs` and `setTimeout()` set an absolute deadline, exactly as E2B
-defines them: at the deadline the sandbox is killed, or — with
-`lifecycle: { onTimeout: 'pause' }` — parked, to be revived by `connect`.
-See [Sandbox lifecycle](/docs/lifecycle) for how deadlines interact with
+`timeoutMs` and `setTimeout()` set an absolute deadline: at the deadline
+the sandbox is killed, or — with `lifecycle: { onTimeout: 'pause' }` —
+paused, to be revived by `connect`. See
+[Sandbox lifecycle](/docs/lifecycle) for how deadlines interact with
 Dormice's own idle policy.
 
-## Version gating
+## What's implemented
 
 The daemon reports envd `0.6.1`, chosen so the SDK itself gates features
-client-side: everything at or below that version is implemented, and the
-few gaps above it are answered with an honest `unimplemented` on the wire
-— the full list is in [Capabilities & differences](/docs/e2b-differences).
+on the client side: everything at or below that version is implemented,
+and the few gaps above it are answered with an honest `unimplemented` on
+the wire. The full list is in
+[Capabilities & differences](/docs/e2b-differences).

@@ -1,20 +1,20 @@
 ---
 title: Web console
-description: The daemon serves its own UI at /console — sign in once, watch everything, wake nothing by accident.
+description: The daemon serves its own web UI at /console — watch every sandbox live, open terminals, browse files, and manage templates.
 ---
 
 The daemon hosts a web console at `http://127.0.0.1:3676/console` — same
-process, same port, nothing extra to run. It is an observation window
-with hands: everything it shows comes from the same API documented in
-this section, and it follows the same rule the API does — **watching
-never wakes a sandbox; using does, and only behind an explicit click**.
+process, same port, nothing extra to run. Everything it shows comes from
+the same API documented in this section, and it follows the same rule:
+**watching never wakes a sandbox; using one does, and only behind an
+explicit click.**
 
 (The console UI is currently Chinese-language.)
 
 ## Signing in
 
-Paste the API token once. The browser trades it for an `httpOnly` session
-cookie (valid 7 days) and never stores the token anywhere page
+Paste the API token once. The browser trades it for an `httpOnly`
+session cookie (valid 7 days) and never stores the token anywhere page
 JavaScript can read — a script injected into the console cannot steal
 your long-term credential. Sessions are derived from the API token, so
 rotating the token signs every browser out at once.
@@ -23,8 +23,8 @@ rotating the token signs every browser out at once.
 
 The "is this machine healthy" page: CPU, memory, **swap** and the **data
 disk** as first-class cards — swap filling up means "idle is free" is
-ending, and a full data disk is the real capacity ceiling. Below them,
-sandbox counts by lifecycle state and the sandbox-disk overcommit figure
+ending, and a full data disk is the real capacity ceiling. Below them:
+sandbox counts by lifecycle state and the disk-overcommit figure
 (promised vs actually occupied — the same numbers as
 [`getHostMetrics`](/docs/metrics)). Usage bars turn amber at 75% and red
 at 90%; a host without swap gets an amber warning pointing at
@@ -32,23 +32,22 @@ at 90%; a host without swap gets an amber warning pointing at
 
 ## Sandboxes
 
-The live list — every sandbox with its state, polled every 2 seconds,
-with search, a state filter, and multi-select batch release. Creating a
-sandbox from here is exactly `acquireSandbox`: user key, the lifecycle
-knobs (including the never-stop [resident-agent
-switch](/docs/resident-agents)), and a template dropdown when templates
-are registered.
+The live list — every sandbox with its state, refreshed every 2 seconds,
+with search, a state filter, and multi-select batch destroy. Creating a
+sandbox from here is exactly `acquireSandbox`: a key, the lifecycle
+knobs (including the never-stop
+[resident-agent switch](/docs/resident-agents)), and a template dropdown
+when templates are registered.
 
 A sandbox's detail page is a workspace with four tabs:
 
-- **Overview** — identity, policy thresholds, last activity; release and
-  [rebuild](/docs/persistence#rebuild-new-shell-same-body) buttons, each
+- **Overview** — identity, policy thresholds, last activity; destroy
+  and [rebuild](/docs/persistence#rebuild-a-sandbox) buttons, each
   behind a confirmation dialog.
 - **Terminal** — a real interactive shell, kept behind an explicit
   "open" button because opening one *wakes* the sandbox. The browser
-  speaks the same wire the official E2B SDK does — the console did not
-  grow a second terminal protocol. Closing the terminal kills its shell
-  rather than leaving an orphan behind.
+  speaks the same wire the official E2B SDK does. Closing the terminal
+  kills its shell rather than leaving an orphan behind.
 - **Files** — browse, upload, download, rename, delete under
   `/home/user`. File operations wake the sandbox too, so a cold sandbox
   shows an explicit "open" gate first.

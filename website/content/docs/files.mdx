@@ -1,28 +1,43 @@
 ---
 title: Moving files
-description: writeFile(s) and readFile(s) move files through JSON — 16 MiB per file, honest refusals past that, and streaming alternatives when you need more.
+description: Learn how to write and read files in a sandbox, from the SDK or the CLI — and what to do with files over the 16 MiB limit.
 ---
 
-Native file transfer is four verbs — write and read, each in a single and
-a batch form. All wake a cold sandbox first; paths are absolute, or
-relative to `/home/user`:
+## Write files
+
+You can write files into a sandbox with `writeFile` (one file) or
+`writeFiles` (a batch). Both wake a cold sandbox first; paths are
+absolute, or relative to `/home/user`:
 
 ```ts
 await client.writeFiles('my-agent', [
   { path: 'config.json', content: JSON.stringify(config) }, // string → UTF-8
   { path: 'data/input.bin', content: bytes },               // Uint8Array, as-is
 ]);
-await client.writeFile('my-agent', 'notes.md', '# one file, no array');
 
+await client.writeFile('my-agent', 'notes.md', '# one file, no array');
+```
+
+Parent directories are created as needed; existing files are
+overwritten.
+
+## Read files
+
+`readFile` reads one file; `readFiles` reads a batch, returned in
+request order:
+
+```ts
 const file = await client.readFile('my-agent', 'results/out.csv');
 const text = new TextDecoder().decode(file.content);
 
-// Batch read: request order, all or nothing.
 const files = await client.readFiles('my-agent', ['a.txt', 'b.txt']);
 ```
 
-Parent directories are created as needed; existing files are overwritten.
-The CLI moves single files:
+A missing file is a 404; a directory or other non-regular file is a 400.
+
+## Move files with the CLI
+
+`dor sandbox push` and `pull` move single files:
 
 ```sh
 dor sandbox push my-agent ./data.csv            # → /home/user/data.csv
@@ -31,47 +46,42 @@ dor sandbox pull my-agent results/out.csv out.csv
 dor sandbox pull my-agent results/out.csv       # no local path: raw bytes to stdout
 ```
 
-## A batch saves round-trips — it is not a transaction
+## Size limits: 16 MiB per file
 
-`writeFiles` writes in array order and fails fast: on an error, the files
-earlier in the array are already written. Splitting a big upload into
-several calls loses nothing — writes are per-file independent.
+File content crosses the wire as base64 inside JSON, so each file is
+capped at 16 MiB, write and read alike. A `writeFiles` batch tops out at
+48 MiB of request body, and a `readFiles` batch at 48 MiB total.
 
-`readFiles` is the opposite on purpose: **all or nothing**. One missing
-path fails the whole call with a 404 naming it — a batch read that
-silently dropped a file would be a corrupt project checkout. A caller that
-can tolerate absence asks file by file; the batch total is capped at
-48 MiB (413 past it).
+Reading a file over the cap returns a **413 naming the file's actual
+size** — never a truncated file, which would just be a corrupt file.
 
-## The 16 MiB cap, and what to do past it
+For bigger files, use one of these instead:
 
-Content crosses the wire as base64 inside JSON and is buffered in daemon
-memory, so each file is capped at 16 MiB, write and read alike (a
-`writeFiles` batch tops out at 48 MiB of request body). The refusals are
-honest:
-
-- Reading a file over the cap is a **413 naming the file's actual size** —
-  never a truncated file. Unlike exec output, where a capped log still
-  informs, a truncated file is simply a corrupt file.
-- Missing file: 404. A directory or other non-regular file: 400.
-
-Bigger files are not this protocol's job:
-
-- **Fetch from inside the sandbox.** `execCommand` with `curl` or `wget`
-  (both in the stock image) downloads at full speed without routing bytes
-  through the daemon's JSON layer.
-- **Use the E2B files surface.** `files.read` / `files.write` stream with
-  no artificial cap — the disk quota is the cap — and
-  `uploadUrl()` / `downloadUrl()` mint signed URLs a bare browser or curl
-  can use, no headers required. See
+- **Download from inside the sandbox.** Run `curl` or `wget` (both in
+  the stock image) with [`execCommand`](/docs/commands) — full speed, no
+  JSON layer in the path.
+- **Use the E2B files surface.** `files.read` / `files.write` stream
+  with no artificial cap — the disk quota is the cap — and
+  `uploadUrl()` / `downloadUrl()` mint signed URLs that a bare browser
+  or curl can use, no headers required. See
   [Using the official E2B SDKs](/docs/e2b-sdks).
 
-## Every byte moves through the container
+## Batch behavior
 
-File verbs execute *inside* the sandbox, streamed through an in-container
-process — never as host-side writes into the disk image. The disk's
-contents belong to the sandbox, so a hostile symlink planted there must
-have nothing to escape to; resolved inside the container, it can only
-point at the container's own root. Ownership lands on the sandbox user
-(uid 1000) naturally. See [Architecture](/docs/architecture) for the
-boundary this preserves.
+- **`writeFiles` fails fast, not atomically.** Files are written in
+  array order; on an error, the earlier files are already written.
+  Splitting a big upload into several calls loses nothing — writes are
+  independent per file.
+- **`readFiles` is all or nothing.** One missing path fails the whole
+  call with a 404 naming it — a batch read that silently dropped a file
+  would hand you a corrupt project checkout. If you can tolerate missing
+  files, read them one by one.
+
+## How file transfer works
+
+File operations execute *inside* the sandbox, streamed through an
+in-container process — never as host-side writes into the disk image.
+This means a hostile symlink planted in the sandbox can only point at
+the sandbox's own filesystem, and ownership lands on the sandbox user
+naturally. See [Architecture](/docs/architecture) for the boundary this
+preserves.

@@ -1,42 +1,33 @@
 ---
 title: CLI reference
-description: Every dor command — sandboxes, templates, and the host doctor — with the exact flags and exit-code behavior.
+description: Every dor command — sandboxes, templates, and the host doctor — with flags and exit-code behavior.
 ---
 
-The CLI installs as two names for the same binary: `dormice` (the name you
-can guess) and `dor` (the name you actually type). It talks to a daemon
-over the [HTTP API](/docs/http-api) and connects with exactly two
-environment variables — missing one produces an error naming it:
+The CLI installs as two names for the same binary: `dormice` and `dor`
+(the one you actually type). It talks to a daemon over the
+[HTTP API](/docs/http-api) and connects with exactly two environment
+variables — missing one produces an error naming it:
 
 ```sh
 export DORMICE_ENDPOINT=http://127.0.0.1:3676
 export DORMICE_API_TOKEN=<token>   # on the daemon host: grep ^DORMICE_API_TOKEN /etc/dormice/env
 ```
 
-Errors print as one line on stderr (no stack traces at a shell prompt) and
-exit 1.
+Errors print as one line on stderr (no stack traces at a shell prompt)
+and exit 1.
 
-## dor doctor
-
-```sh
-dor doctor           # every check, including probes that start a real container
-dor doctor --quick   # skip the container probes
-```
-
-Read-only host checks: can this machine run the daemon? Exit 0 unless a
-check fails. Every check is documented one by one in
-[dor doctor](/docs/doctor).
-
-## dor sandbox
+## dor sandbox ls
 
 ```sh
 dor sandbox ls
 ```
 
-Every sandbox with its lifecycle state, as a table. Listing is
+Lists every sandbox with its lifecycle state, as a table. Listing is
 observation — it never wakes anything. (Table output strips control
-characters: user keys are not restricted on the wire, and an ANSI escape
-inside one must not reach your terminal.)
+characters, so an ANSI escape hidden in a sandbox key cannot reach your
+terminal.)
+
+## dor sandbox exec
 
 ```sh
 dor sandbox exec <externalId> '<command>' [-t <seconds>]
@@ -44,38 +35,46 @@ dor sandbox exec <externalId> '<command>' [-t <seconds>]
 
 Runs a shell command in the sandbox behind the key, waking it first. The
 command is one quoted argument, executed as `bash -c`. Its stdout and
-stderr pass through to yours, raw — this is your own command's output —
-and **its exit code becomes `dor`'s exit code**, so `dor sandbox exec` in
-a script behaves like the command itself. `-t, --timeout <seconds>` kills
-it after that long ([enforced inside the container](/docs/commands)). An
-unknown key is a 404, never a sandbox created by accident.
+stderr pass through to yours, and **its exit code becomes `dor`'s exit
+code** — so `dor sandbox exec` in a script behaves like the command
+itself.
+
+`-t, --timeout <seconds>` kills the command after that long
+([enforced inside the container](/docs/commands)). An unknown key is a
+404, never a sandbox created by accident.
+
+## dor sandbox push / pull
 
 ```sh
 dor sandbox push <externalId> <localPath> [remotePath]
 dor sandbox pull <externalId> <remotePath> [localPath]
 ```
 
-One file in, one file out. Relative remote paths land under `/home/user`;
-`push` without a remote path uses the local file's name. `pull` without a
-local path writes the raw bytes to stdout — pipe it wherever. Both obey
-the [16 MiB single-file contract](/docs/files).
+One file in, one file out. Relative remote paths land under
+`/home/user`; `push` without a remote path uses the local file's name.
+`pull` without a local path writes the raw bytes to stdout — pipe it
+wherever. Both obey the [16 MiB single-file limit](/docs/files).
+
+## dor sandbox rebuild
 
 ```sh
 dor sandbox rebuild <externalId>
 ```
 
-Swaps the container, keeps `/home/user` — the sandbox's next use starts
-on its template's *current* image (or the base image). This is how a
-[template upgrade](/docs/templates) reaches an existing sandbox. Details:
-[rebuild: new shell, same body](/docs/persistence#rebuild-new-shell-same-body).
+Swaps the container and keeps `/home/user` — the sandbox's next use
+starts on its template's *current* image (or the base image). This is
+how a [template upgrade](/docs/templates) reaches an existing sandbox.
+Details: [Rebuild a sandbox](/docs/persistence#rebuild-a-sandbox).
+
+## dor sandbox destroy
 
 ```sh
 dor sandbox destroy <externalId>
 ```
 
-Destroys the sandbox — container, disk, and (if archived) the S3 object.
-The only verb that loses data. Idempotent: releasing a key that has no
-sandbox reports so and exits 0.
+Destroys the sandbox — container, disk, and (if archived) the S3
+object. The only command that loses data. Idempotent: destroying a key
+that has no sandbox reports so and exits 0.
 
 ## dor template
 
@@ -85,8 +84,19 @@ dor template ls
 dor template rm <name>
 ```
 
-A template is a name for a Docker image already on the daemon's host —
-`add` on an existing name re-points it at the new image, which is the
-[upgrade front door](/docs/templates). `rm` is refused (with the sandboxes
-named) while any sandbox still uses the template, and never removes the
-image itself.
+A template is a name for a Docker image already on the daemon's host.
+`add` on an existing name re-points it at the new image — the
+[upgrade front door](/docs/templates). `rm` is refused (with the
+sandboxes named) while any sandbox still uses the template, and never
+removes the image itself.
+
+## dor doctor
+
+```sh
+dor doctor           # every check, including probes that start a real container
+dor doctor --quick   # skip the container probes
+```
+
+Read-only host checks: can this machine run the daemon? Exits 0 unless
+a check fails. Every check is documented one by one in
+[dor doctor](/docs/doctor).

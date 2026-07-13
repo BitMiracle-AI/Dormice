@@ -1,67 +1,75 @@
 ---
 title: Architecture & security
-description: One daemon keeping a SQLite ledger and Docker reality in agreement — and what the sandbox boundary actually is.
+description: How the daemon works, what the sandbox isolation boundary actually is, and when Dormice is the wrong tool.
 ---
 
-## The ledger and reality
+This page is the deep end: how Dormice works underneath, and the
+security properties you are relying on. You don't need it to use
+Dormice — start with the [Quick start](/docs/quickstart) — but read it
+before you run untrusted code in production.
 
-The mental model behind the whole daemon: **SQLite is the ledger, Docker
-is reality, and the daemon's core job is keeping the two in agreement.**
+## One daemon, one database
 
-- Reality moves first, then the ledger records it — a crash between the
-  two leaves a container without a row, never a row without a container,
-  and the reconciler cleans up the former.
-- A **reconciler** runs before the daemon starts listening (a failure
-  refuses startup) and again on every heartbeat: a container that died
-  behind the daemon's back is recorded stopped — its disk, and therefore
-  its data, kept; ownerless leftovers are swept.
-- The design is **crash-only**: there is no graceful-shutdown path to get
-  wrong. Kill the daemon at any moment; it reconciles on the way up.
-- **One machine, one daemon**, enforced rather than assumed: an exclusive
-  lock next to the ledger makes a second daemon refuse to start, and a
-  startup guard refuses to boot when the ledger and the machine's reality
-  cannot belong together (an empty ledger facing live sandboxes means a
-  wrong database path — starting anyway would destroy them all).
+The daemon keeps a SQLite database of sandboxes and drives Docker to
+match it. **SQLite is the ledger, Docker is reality, and the daemon's
+core job is keeping the two in agreement.**
+
+- Reality moves first, then the ledger records it. A crash between the
+  two leaves a container without a record — never a record without a
+  container — and the reconciler cleans that up.
+- A **reconciler** runs before the daemon starts listening and again on
+  every heartbeat: a container that died behind the daemon's back is
+  recorded as stopped (its disk, and therefore its data, kept), and
+  ownerless leftovers are swept.
+- The design is **crash-only**: there is no graceful-shutdown path to
+  get wrong. You can kill the daemon at any moment; it reconciles on the
+  way up.
+- **One machine, one daemon**, enforced rather than assumed: an
+  exclusive lock next to the database makes a second daemon refuse to
+  start, and a startup guard refuses to boot when the database and the
+  machine's reality cannot belong together (an empty database facing
+  live sandboxes means a wrong database path — starting anyway would
+  destroy them all).
 
 There is deliberately no cluster mode, no external database, no queue.
-The ledger schema carries the fields sharding would need (node IDs,
-endpoints), but today the simplicity *is* the feature.
+The schema carries the fields sharding would need (node IDs, endpoints),
+but today the simplicity is the feature.
 
-## One sandbox = a gVisor container + a loop disk
+## What a sandbox is
 
 Each sandbox is a Docker container running under **gVisor** (`runsc`),
-with its `/home/user` on a dedicated loop-mounted disk image (see
-[The disk is the sandbox](/docs/persistence)). Every sandbox runs with
-the same non-negotiable parameters: non-root (uid 1000), `--init`,
+with its `/home/user` on a dedicated disk image (see
+[Sandbox persistence](/docs/persistence)). Every sandbox runs with the
+same non-negotiable parameters: non-root (uid 1000), `--init`,
 `no-new-privileges`, a pids limit, CPU and memory caps.
 
 Why gVisor and not VMs: freezing requires sandboxes to be **processes**
-(suspend them, squeeze their memory to swap), and "installs anywhere"
-rules out requiring KVM. Firecracker-class hardware virtualization is a
+(suspend them, push their memory to swap), and "installs anywhere" rules
+out requiring KVM. Firecracker-class hardware virtualization is a
 different trade — see the last section.
 
-## The security boundary, honestly
+## The security boundary
 
 - **gVisor's userspace kernel is the boundary.** Sandbox code — even
   running as `root` inside — talks to gVisor's reimplemented kernel, not
-  the host's. `uname -r` inside a sandbox reports a `-gvisor` kernel; the
-  host kernel is never exposed.
-- **Four red lines** hold everywhere:
-  1. The daemon binds to 127.0.0.1 only — by design without a knob.
-     Exposing anything is a reverse proxy's explicit job.
+  the host's. `uname -r` inside a sandbox reports a `-gvisor` kernel;
+  the host kernel is never exposed.
+- **Four rules hold everywhere:**
+  1. The daemon binds to 127.0.0.1 only — by design, without a setting
+     to change it. Exposing anything is a reverse proxy's explicit job.
   2. The Docker socket never enters a container.
-  3. Containers cannot reach the cloud metadata service (iptables) or
-     each other (`icc: false`).
+  3. Containers cannot reach the cloud metadata service (blocked by
+     iptables) or each other (`icc: false`).
   4. Containers may vanish at any time; only the disk is the sandbox.
 - **Credentials never downgrade.** The API token must be 32+ characters
-  and is compared in constant time; the E2B surface derives per-sandbox
-  access tokens from it (HMAC, stateless); the web console trades it once
-  for an httpOnly session cookie and never stores it anywhere page
+  and is compared in constant time. The E2B surface derives per-sandbox
+  access tokens from it (HMAC, stateless). The web console trades it
+  once for an httpOnly session cookie and never stores it anywhere page
   JavaScript can read.
 - **Sandbox preview URLs are deliberately unauthenticated** (the
-  `getHost()` port proxy, when `DORMICE_SANDBOX_DOMAIN` is set) — same as
-  E2B: they exist to be opened by humans and shared. Don't run a service
-  on a sandbox port unless you mean for the URL to work.
+  `getHost()` port proxy, when `DORMICE_SANDBOX_DOMAIN` is set) — same
+  as E2B: they exist to be opened by humans and shared. Don't run a
+  service on a sandbox port unless you mean for the URL to work.
 
 ## When Dormice is the wrong tool
 
@@ -74,8 +82,7 @@ Pick something else if:
 - **You want a managed service.** No hosted anything, no SLA. That is
   E2B's product, and it is good at it.
 - **Your threat model demands hardware virtualization.** Sandboxes are
-  Docker + gVisor — a userspace kernel, chosen deliberately: freezing
-  requires sandboxes to be processes, and "installs anywhere" rules out
-  requiring KVM. If only Firecracker-class VM isolation will do, this
-  trade is not for you.
+  Docker + gVisor — a userspace kernel, chosen deliberately, as above.
+  If only Firecracker-class VM isolation will do, this trade is not for
+  you.
 - **Your workloads aren't Linux.** Sandboxes are Linux containers.

@@ -1,61 +1,65 @@
 ---
 title: Troubleshooting
-description: Symptoms, causes, and fixes — every entry was hit on real hardware before it was written down.
+description: Symptoms, causes, and fixes — every entry here was hit on real hardware before it was written down.
 ---
 
 Three places answer most questions before this page does: the daemon's
-log (`journalctl -u dormice -f` — refusals are written to be read),
-`dor doctor` (the environment, [check by check](/docs/doctor)), and the
-console's Overview or `getHostMetrics` (the machine's
-[capacity](/docs/metrics)).
+log (`journalctl -u dormice -f` — error messages are written to be
+read), `dor doctor` (the environment,
+[check by check](/docs/doctor)), and the console's Overview or
+`getHostMetrics` (the machine's [capacity](/docs/metrics)).
 
 ## Freezing frees almost no memory
 
-Idle sandboxes stay at full residency instead of dropping to a few MiB.
+**Symptom:** idle sandboxes stay at full memory instead of dropping to a
+few MiB.
+
 Freezing works by pushing sandbox memory to swap, and two host settings
 gate it: **swap must exist**, and **`vm.swappiness` must be 100** — at
-the default 60 the kernel refuses to swap the shmem-backed memory gVisor
+the default 60 the kernel refuses to swap the kind of memory gVisor
 holds sandboxes in. Measured: 0 bytes reclaimed at 60; the same sandbox
-went from ~1 GiB to ~5 MiB at 100. `dor doctor` checks both; note some
-clouds ship `swappiness=0` in their own sysctl.d file, which is why
-doctor reads the live value.
+went from ~1 GiB to ~5 MiB at 100.
+
+`dor doctor` checks both. Note that some clouds ship `swappiness=0` in
+their own sysctl.d file, which is why doctor reads the live value.
 
 ## The daemon refuses to start
 
 It refuses loudly and on purpose — each message names its situation:
 
-- **"another daemon holds the ledger"** — the ledger carries an
+- **"another daemon holds the ledger"** — the database carries an
   exclusive lock; one daemon per machine is enforced, not suggested.
-  The lock dies with the process, so no stale-pidfile cleanup exists.
-- **Empty ledger, but sandbox containers exist** — almost always a
-  wrong `DORMICE_DB_PATH` or a docker-mode daemon started from the
-  wrong directory. Starting anyway would make the reconciler destroy
-  every "orphan" — so it won't. Fix the path, or clean the leftovers
-  up by hand if they really are debris.
-- **Ledger has sandboxes, but Docker shows none** — the mirror image:
-  wrong machine or wrong data directory; starting would empty the
-  ledger.
+  The lock dies with the process, so there is no stale-lock cleanup.
+- **Empty database, but sandbox containers exist** — almost always a
+  wrong `DORMICE_DB_PATH`, or a daemon started from the wrong
+  directory. Starting anyway would make the reconciler destroy every
+  "orphan" container — so it won't. Fix the path, or clean the
+  leftovers up by hand if they really are debris.
+- **Database has sandboxes, but Docker shows none** — the mirror image:
+  wrong machine or wrong data directory; starting would wipe the
+  records.
 - **Relative paths in docker mode** — refused outright, because a
   relative DB path is how the first situation happens.
 
 ## `docker container prune` deleted my sandbox containers
 
-Not data loss. The **disk is the sandbox's body**; the container is a
-disposable shell. The reconciler records the pruned sandboxes as
-stopped, and the next `acquireSandbox` rebuilds a container from the
+Not data loss. The disk — not the container — is the sandbox; the
+container is a disposable shell. The daemon records the pruned sandboxes
+as stopped, and the next `acquireSandbox` rebuilds a container from the
 surviving disk — same sandbox ID, `/home/user` intact. Verified
-end-to-end on real hardware. ([Persistence](/docs/persistence) is the
-full contract.)
+end-to-end on real hardware.
+([Sandbox persistence](/docs/persistence) is the full contract.)
 
 ## Long commands die at exactly 5 minutes
 
-A command past ~300 s fails with a client-side connection error while
-the daemon shows nothing wrong. `execCommand` sends its response headers
-only when the command *finishes*, and many HTTP clients ship a hidden
-~5-minute wait-for-headers timeout — Node's undici does. The SDK
-disables those clocks and derives one honest deadline from
-`timeoutSeconds`; a hand-rolled client must do the same
-([details](/docs/http-api)).
+**Symptom:** a command past ~300 s fails with a client-side connection
+error while the daemon shows nothing wrong.
+
+`execCommand` sends its response headers only when the command
+*finishes*, and many HTTP clients ship a hidden ~5-minute
+wait-for-headers timeout — Node's undici does. The SDK disables those
+clocks and derives one deadline from `timeoutSeconds`; a hand-rolled
+client must do the same ([details](/docs/http-api)).
 
 ## Terminals or streams stall behind a reverse proxy
 
@@ -67,14 +71,14 @@ a live terminal session through Caddy.
 ## A sandbox turned up stopped with exit code 137
 
 Out-of-memory *inside* the sandbox takes down the whole gVisor container
-— that is the isolation working: the guest hit its
-`DORMICE_SANDBOX_MEMORY_GB` ceiling (default 2). The disk survives; the
+— that is the isolation working: the sandbox hit its
+`DORMICE_SANDBOX_MEMORY_GB` limit (default 2 GB). The disk survives; the
 next acquire revives the sandbox. Raise the limit if the workload
 honestly needs more.
 
 ## E2B `watchDir` refuses to start
 
-The sandbox image predates `inotify-tools`. Rebuild it from
+The sandbox image predates `inotify-tools`. Rebuild the image from
 `images/Dockerfile`, point `DORMICE_BASE_IMAGE` at the new tag, and
 [rebuild](/docs/upgrading) the sandboxes that need watching. Doctor's
 image probe warns about exactly this.
@@ -85,14 +89,14 @@ The sandbox limit (`DORMICE_MAX_SANDBOXES`, default 100) gates
 *creation* only — waking an existing sandbox is never blocked. Before
 raising it, look at the disk-overcommit figure in
 [`getHostMetrics`](/docs/metrics): disk is the real ceiling, and past
-full even the ledger cannot write.
+full even the daemon's database cannot write.
 
 ## Creating from a template fails: "image … is not on this host"
 
 By design: [registration is configuration](/docs/templates) — the image
 is not checked when a name is registered, so the error surfaces at
-create time, named. `docker pull` or build the image on the daemon
-host, then retry.
+create time, named. `docker pull` or build the image on the daemon host,
+then retry.
 
 ## A paused container won't `docker rm` by hand
 

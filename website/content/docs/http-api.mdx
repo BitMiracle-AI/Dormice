@@ -3,10 +3,9 @@ title: HTTP API
 description: One RPC route per verb, plain JSON, Bearer auth — everything the SDK does, curl can do.
 ---
 
-The native API is deliberately boring: every operation is a `POST` to a
-camelCase verb route, input and output entirely in the JSON body, and the
-route name is identical to the SDK method name. There is nothing the SDK
-can do that `curl` cannot.
+Every operation is a `POST` to a camelCase verb route, with input and
+output entirely in the JSON body. The route name is identical to the SDK
+method name, so there is nothing the SDK can do that curl cannot:
 
 ```sh
 curl -X POST http://127.0.0.1:3676/acquireSandbox \
@@ -18,35 +17,37 @@ curl -X POST http://127.0.0.1:3676/acquireSandbox \
 Two rules cover the whole surface:
 
 - **Auth** is `Authorization: Bearer <token>` on every route except
-  `GET /healthz`, the open liveness probe (probes have no secrets — it
-  answers `{"status":"ok"}`).
+  `GET /healthz`, the open liveness probe (it answers
+  `{"status":"ok"}`).
 - **Every non-2xx body is `{ "message": "..." }`** — one error shape,
-  whoever produced the error. 4xx name your mistake; 5xx are the daemon's.
+  whoever produced the error. 4xx name your mistake; 5xx are the
+  daemon's.
 
 The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 `/e2b/*` with its own authentication — nothing below applies to it.
 
 ## The verbs
 
-| Route | Does | Refusals worth knowing |
+| Route | Does | Errors worth knowing |
 | --- | --- | --- |
 | `POST /acquireSandbox` | create, wake, or restore — idempotent per key | 400 invalid policy/unknown template, 429 at the sandbox limit |
 | `POST /listSandboxes` | every sandbox and its state; never wakes anything | — |
 | `POST /execCommand` | run a command, buffered | 404 unknown key, 409 archived/restoring |
 | `POST /writeFiles` | batch write, base64 in JSON | 404/409 as above; body over 48 MiB refused |
-| `POST /writeFile` | write one file — the single form of `writeFiles` | same refusals as `writeFiles` |
+| `POST /writeFile` | write one file — the single form of `writeFiles` | same as `writeFiles` |
 | `POST /readFile` | read one file, base64 out | 404 no such file, 400 not a file, 413 over 16 MiB (names the real size) |
 | `POST /readFiles` | batch read, all or nothing, request order | first bad path fails the whole batch; 413 over 48 MiB total |
 | `POST /rebuildSandbox` | swap container, keep `/home/user` | 404 unknown key, 409 archived/restoring |
-| `POST /destroySandbox` | destroy; idempotent | 409 mid-restore (the one dent — retry when it finishes) |
+| `POST /destroySandbox` | destroy; idempotent | 409 mid-restore — retry when it finishes |
 | `POST /registerTemplate` | upsert name → image | 400 `'base'` is reserved |
 | `POST /listTemplates` | every registered template | — |
 | `POST /removeTemplate` | unregister; idempotent | 409 while sandboxes still use it (names them) |
 | `POST /getHostMetrics` | host snapshot; never wakes anything | — |
 
-Use verbs (`execCommand`, files, `rebuildSandbox`) answer 404 for an
-unknown key rather than creating a sandbox as a side effect — an unknown
-key is more likely a typo than an intent. Only `acquireSandbox` creates.
+**Only `acquireSandbox` creates.** The use verbs (`execCommand`, files,
+`rebuildSandbox`) answer 404 for an unknown key rather than creating a
+sandbox as a side effect — an unknown key is more likely a typo than an
+intent.
 
 ## The sandbox object
 
@@ -61,13 +62,13 @@ Everything that returns a sandbox returns this shape:
 }
 ```
 
-`state` is one of `active | frozen | stopped | archived | restoring` (the
-[lifecycle ladder](/docs/lifecycle)). `acquireSandbox` wraps it in a
-union: `{ "status": "ready", "sandbox": … }`, or — when the sandbox is
+`state` is one of `active | frozen | stopped | archived | restoring`
+(the [lifecycle states](/docs/lifecycle)). `acquireSandbox` wraps it in
+a union: `{ "status": "ready", "sandbox": … }`, or — when the sandbox is
 coming back from S3 —
 `{ "status": "restoring", "sandbox": …, "progress": { "phase": "downloading" | "extracting", "percent": … } }`;
-poll acquire until it flips to `ready`
-([archiving](/docs/archiving)).
+poll acquire until it flips to `ready` (see
+[Archiving](/docs/archiving)).
 
 ## Commands and files on the wire
 
@@ -78,19 +79,18 @@ non-zero exit code is a result, not an HTTP error
 ([details](/docs/commands)).
 
 File content crosses the wire as base64 inside JSON: `writeFiles` takes
-`{ externalId, files: [{ path, contentBase64 }] }`, `readFile` takes
-`{ externalId, path }` and returns `{ path, contentBase64 }` with the path
-resolved absolute. Each has a twin for the other arity: `writeFile` writes
-one file without the array ceremony, `readFiles` reads a batch all or
-nothing — one missing path fails the whole call. Limits and refusal
-semantics: [moving files](/docs/files).
+`{ externalId, files: [{ path, contentBase64 }] }`; `readFile` takes
+`{ externalId, path }` and returns `{ path, contentBase64 }` with the
+path resolved absolute. Each has a twin for the other arity: `writeFile`
+writes one file without the array, `readFiles` reads a batch all or
+nothing. Limits and error semantics: [Moving files](/docs/files).
 
 ## Bring a patient HTTP client
 
 `execCommand`'s response headers arrive only when the command finishes —
 legally hours later. Many HTTP clients ship a hidden ~5-minute
-first-byte/header timeout (Node's undici does); the SDK disables it and
-enforces one deadline derived from `timeoutSeconds`. Rolling your own
-client, do the same, or a `sleep 310` dies at exactly 300 s with a
-connection error that looks like the daemon's fault. It isn't —
-measured, twice.
+wait-for-headers timeout (Node's undici does). The SDK disables it and
+enforces one deadline derived from `timeoutSeconds`; if you roll your
+own client, do the same — otherwise a `sleep 310` dies at exactly 300
+seconds with a connection error that looks like the daemon's fault. It
+isn't — measured, twice.

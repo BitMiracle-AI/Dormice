@@ -1,10 +1,26 @@
 ---
 title: Quick start
-description: Acquire a sandbox, run commands, move files — with the SDK, curl, or the CLI.
+description: This guide shows you how to acquire your first sandbox, run commands in it, and write files — with the SDK, curl, or the CLI.
 ---
 
-`@dormice/sdk` is the native TypeScript client. (Not on npm yet — the
-first release is queued; inside the repo, `pnpm build` produces it.)
+## 1. Set your environment variables
+
+You need the daemon's address and its API token
+(from [Installation](/docs/installation)):
+
+```sh
+export DORMICE_ENDPOINT=http://127.0.0.1:3676
+export DORMICE_API_TOKEN=<your token>  # on the daemon host: grep ^DORMICE_API_TOKEN /etc/dormice/env
+```
+
+## 2. Get the SDK
+
+`@dormice/sdk` is the native TypeScript client. It is not on npm yet —
+the first release is queued. Inside the repo, `pnpm build` produces it;
+or skip the SDK entirely and use [curl](#use-curl-instead) or the
+[CLI](#use-the-cli-instead) below.
+
+## 3. Acquire a sandbox and run commands
 
 ```ts
 import { Dormice } from '@dormice/sdk';
@@ -29,12 +45,15 @@ await client.writeFiles('my-agent', [
 await client.destroySandbox('my-agent'); // destroy — the only verb that loses data
 ```
 
-## The wire is plain HTTP
+That's the whole loop: `acquireSandbox` is idempotent (the same key
+always returns the same sandbox, whatever state it was in), commands run
+inside the sandbox, files persist until you destroy it.
 
-Every operation is an RPC route named after the SDK method
-(`POST /acquireSandbox`, `POST /execCommand`, …), authenticated with
-`Authorization: Bearer` and your API token, so `curl` works where the SDK
-doesn't reach:
+## Use curl instead
+
+Every operation is a plain HTTP RPC route named after the SDK method
+(`POST /acquireSandbox`, `POST /execCommand`, …), authenticated with a
+Bearer token — so curl works anywhere the SDK doesn't reach:
 
 ```sh
 curl -X POST http://127.0.0.1:3676/listSandboxes \
@@ -42,11 +61,12 @@ curl -X POST http://127.0.0.1:3676/listSandboxes \
   -H "content-type: application/json" -d '{}'
 ```
 
-## The CLI
+The full wire surface is in the [HTTP API reference](/docs/http-api).
 
-The `dor` command (long form: `dormice`) covers the operator side. It
-connects with the `DORMICE_ENDPOINT` and `DORMICE_API_TOKEN` environment
-variables:
+## Use the CLI instead
+
+The `dor` command (long form: `dormice`) covers the same ground from a
+shell. It connects with the two environment variables from step 1:
 
 ```sh
 dor sandbox ls                        # every sandbox, with lifecycle state
@@ -57,3 +77,12 @@ dor sandbox rebuild my-agent          # fresh container, /home/user kept
 dor sandbox destroy my-agent          # destroy
 dor doctor                            # can this machine run sandboxes?
 ```
+
+## Next steps
+
+- [Sandbox lifecycle](/docs/lifecycle) — how sandboxes cool down when
+  idle, and how to tune it.
+- [Running commands](/docs/commands) — timeouts, working directory,
+  environment variables.
+- [Moving files](/docs/files) — reading and writing files, and the
+  size limits.
