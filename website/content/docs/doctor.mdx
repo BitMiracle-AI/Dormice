@@ -1,12 +1,18 @@
 ---
 title: dor doctor
-description: Read-only host checks, one by one — what each verifies, why it exists, and what fix it names.
+description: Read-only host checks, one by one — what each verifies and what fix it names.
 ---
 
 `dor doctor` answers one question: **can this host run the Dormice
 daemon?** Every check encodes a fact measured on real hardware — a pit
-someone actually fell into — not a hypothesis. Three disciplines shape
-it:
+someone actually fell into — not a hypothesis.
+
+```sh
+dor doctor           # every check, including probes that start a real container
+dor doctor --quick   # skip the container probes
+```
+
+Three rules shape it:
 
 - **Read-only.** Doctor names the fix but never applies it. Fixing is
   [the installer's](/docs/installation) job.
@@ -16,17 +22,17 @@ it:
 - **No silent downloads.** A missing image is reported with build
   instructions; doctor never runs `docker pull` behind your back.
 
-Checks are gated: when a prerequisite fails, dependents report *skip*
-with the blocker's name instead of piling on noise. Any failure exits 1;
-warnings don't affect the exit code. `--quick` skips the probes that
-start a real container.
+Checks are gated: when a prerequisite fails, dependent checks report
+*skip* with the blocker's name instead of piling on noise. Any failure
+exits 1; warnings don't affect the exit code.
 
 ## Platform
 
 - **operating system** — Linux, full stop: loop mounts, cgroups and
   gVisor exist nowhere else.
 - **Node.js version** — 22 or newer.
-- **running as root** — loop mounts, `mkfs` and cgroup writes need uid 0.
+- **running as root** — loop mounts, `mkfs` and cgroup writes need
+  uid 0.
 - **cgroup v2 memory controller** — freezing works by writing
   `memory.reclaim`, a cgroup v2 file (default on Ubuntu 22.04+).
 
@@ -45,14 +51,14 @@ start a real container.
 - **swap present** — freezing pushes sandbox memory to swap; measured
   without it: 0 bytes reclaimed.
 - **vm.swappiness = 100** — below 100 the kernel refuses to swap the
-  shmem-backed memory gVisor holds sandboxes in; measured at the default
-  60: 0 bytes reclaimed. This is the check that reads the live value.
+  kind of memory gVisor holds sandboxes in; measured at the default 60:
+  0 bytes reclaimed. This is the check that reads the live value.
 
 ## Network containment
 
 - **cloud metadata firewall** — `DROP` rules in the `DOCKER-USER` chain
-  for `169.254.0.0/16` and `100.100.100.200`; without them a sandbox can
-  steal cloud credentials from the metadata service.
+  for `169.254.0.0/16` and `100.100.100.200`; without them a sandbox
+  can steal cloud credentials from the metadata service.
 - **firewall rules persisted** — *warn*: rules living only in memory
   silently vanish on reboot.
 
@@ -60,20 +66,20 @@ start a real container.
 
 - **DORMICE_API_TOKEN** — set and at least 32 characters (the daemon
   refuses to start without it).
-- **S3 archive configuration** — three honest states: none set (skipped —
-  archiver off, sandboxes park at stopped), all four set (pass), or a
-  partial set (fail, naming the missing variables — the daemon refuses a
-  half-configured archiver anyway).
+- **S3 archive configuration** — three honest states: none set (skipped
+  — archiver off, sandboxes park at stopped), all four set (pass), or a
+  partial set (fail, naming the missing variables — the daemon refuses
+  a half-configured archiver anyway).
 - **zstd available** — the archiver shells out to `tar -I zstd` on the
   host at every archive and restore.
 - **base image available** — present locally; the fix names
   `images/Dockerfile`, and doctor never pulls.
 - **docker-mode paths absolute** — a relative `DORMICE_DB_PATH` depends
   on the start directory, and a wrong start directory opens an *empty
-  ledger next to real sandboxes* — the exact mismatch the daemon's
+  database next to real sandboxes* — the exact mismatch the daemon's
   startup guard exists to refuse.
-- **free disk space** — *warn* under 10 GiB for the data directory: past
-  full, even the ledger cannot write.
+- **free disk space** — *warn* under 10 GiB for the data directory:
+  past full, even the daemon's database cannot write.
 
 ## Probes (start a real sandbox container)
 
@@ -85,7 +91,7 @@ start a real container.
 - **image runs as uid 1000** — sandboxes must not run as root, even
   behind gVisor.
 - **image has inotify-tools** — *warn*: without `inotifywait`, E2B
-  directory watching honestly refuses to start; everything else works.
+  directory watching refuses to start; everything else works.
 
 When all of this passes, the machine can run the daemon — that is the
 installer's definition of success too: it ends by running doctor and

@@ -1,11 +1,13 @@
 ---
 title: Resident agents
-description: One permanent sandbox per agent — frozen to a few MiB when idle, awake in ~50 ms, never a cold start.
+description: Give every agent a permanent sandbox that costs a few MiB while idle and wakes in ~50 ms — the pattern Dormice was built for.
 ---
 
-The pattern Dormice was built for: give every agent (or user, or project)
-a permanent sandbox keyed by its own ID, and let the lifecycle engine
-make the idle time free.
+The pattern Dormice was built for: give every agent (or user, or
+project) a permanent sandbox keyed by its own ID, and let the lifecycle
+engine make the idle time nearly free.
+
+## Give each agent a permanent sandbox
 
 ```ts
 const res = await client.acquireSandbox(`agent-${userId}`, {
@@ -13,13 +15,13 @@ const res = await client.acquireSandbox(`agent-${userId}`, {
 });
 ```
 
-`stopAfterSeconds: null` pins the sandbox to the top two rungs of the
-[lifecycle](/docs/lifecycle): idle, it freezes — measured on real
-hardware, ~1 GiB of resident memory squeezed to ~5 MiB — and any touch
+`stopAfterSeconds: null` keeps the sandbox in the top two states of the
+[lifecycle](/docs/lifecycle): when idle it freezes — measured on real
+hardware, ~1 GiB of resident memory drops to ~5 MiB — and any touch
 wakes it in about 50 ms. It never decays to a seconds-long cold start.
 
 Every later `acquireSandbox` with the same key — tomorrow, next month —
-comes back to the same sandbox: same files, same installed packages, same
+returns the same sandbox: same files, same installed packages, same
 processes. A runnable version of this pattern lives at
 [`examples/resident-agent.mjs`](https://github.com/BitMiracle-AI/Dormice/blob/main/examples/resident-agent.mjs).
 
@@ -30,31 +32,33 @@ they were: a REPL keeps its state, a dev server its sockets, an agent
 process its memory. Nothing running in a resident sandbox is ever killed
 by idleness.
 
-The flip side, stated honestly: a background process does not *keep* its
-sandbox warm. Once the streams watching it disconnect, the idle clock
-runs, the scanner freezes the sandbox, and the process suspends with it —
-to continue, mid-instruction, on the next touch. A resident sandbox is
-not a way to run an unattended 24×7 workload; it is a way to make "ready
-whenever the agent returns" cost a few MiB.
+**The flip side:** a background process does not *keep* its sandbox
+warm. Once nothing is watching it, the idle clock runs, the sandbox
+freezes, and the process suspends with it — to continue, mid-instruction,
+on the next touch. A resident sandbox is not a way to run an unattended
+24×7 workload; it is a way to make "ready whenever the agent returns"
+cost a few MiB.
 
-## What a sandbox costs while frozen
+## What an idle sandbox costs
 
-A few MiB of resident memory (the rest sits in swap), plus a sparse disk
-that occupies only what was actually written. That is the entire idle
-bill — which is why one modest machine can hold a long tail of dormant
-agents. If even frozen is too warm, leave `stopAfterSeconds` set and let
+A frozen sandbox costs a few MiB of resident memory (the rest sits in
+swap), plus a sparse disk that occupies only what was actually written.
+That is the entire idle bill — which is why one modest machine can hold
+a long tail of dormant agents.
+
+If even frozen is too warm, leave `stopAfterSeconds` set and let
 sandboxes fall to stopped (disk only, cold start in seconds) or
 [archived](/docs/archiving) (S3 only, nothing on the host).
 
-## What the stock image ships
+## What the default image ships
 
 Sandboxes boot from the image `install.sh` builds
 ([`images/Dockerfile`](https://github.com/BitMiracle-AI/Dormice/blob/main/images/Dockerfile)):
-Ubuntu 24.04 with Python 3.12 (`pip install` works — the PEP 668 guard is
-removed), Node.js 24 (sha256-pinned), git, ripgrep, jq, curl/wget, and a
-version-pinned [Claude Code](https://claude.com/claude-code) — so a coding
-agent can start working in its sandbox with zero setup. Everything runs
-as a non-root user (uid 1000) inside gVisor.
+Ubuntu 24.04 with Python 3.12 (`pip install` works out of the box),
+Node.js 24, git, ripgrep, jq, curl/wget, and a version-pinned
+[Claude Code](https://claude.com/claude-code) — so a coding agent can
+start working with zero setup. Everything runs as a non-root user inside
+gVisor.
 
 Need more? Bake it into a [template](/docs/templates) instead of
 reinstalling per sandbox — and remember that whatever an agent installs

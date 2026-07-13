@@ -1,45 +1,68 @@
 ---
 title: What is Dormice?
-description: A self-hosted sandbox platform for AI agents — one machine, sandboxes that live forever, idle costs nothing.
+description: Dormice is a self-hosted sandbox platform for AI agents — run it on your own machine and give every agent a secure, permanent sandbox.
 ---
 
-Cloud sandbox platforms charge for every second a sandbox exists, so their
-sandboxes are disposable. Dormice inverts that: you run it on a machine you
-already pay for, and sandboxes are **permanent** — they just get cheaper to
-keep the longer they sit idle.
+Dormice gives your AI agents isolated Linux sandboxes where they can
+safely run code, process data, and keep a long-lived workspace — on a
+machine you already own. You install one daemon; it manages the sandboxes
+for you.
 
-- **`acquireSandbox(externalId)` is the entire mental model.** Idempotent: the
-  same key always comes back to the same sandbox, whatever state it was in.
-  No sandbox → create; frozen → wake; stopped → start; archived → restore.
-- **Idle is free.** Sandboxes cool down on their own —
-  `active → frozen → stopped → archived` — one rung at a time, and any
-  acquire brings them back. Measured on real hardware: freezing takes an
-  idle sandbox holding 1 GiB down to ~5 MiB of resident memory, and waking
-  it takes ~50 ms.
-- **Deploys like a single binary.** One daemon, one SQLite ledger, one
+Start a sandbox and run a command in a few lines:
+
+```ts
+import { Dormice } from '@dormice/sdk';
+
+const client = new Dormice({
+  endpoint: 'http://127.0.0.1:3676',
+  token: process.env.DORMICE_API_TOKEN!,
+});
+
+await client.acquireSandbox('my-agent');
+const result = await client.execCommand('my-agent', 'echo "Hello from Dormice!"');
+console.log(result.stdout); // Hello from Dormice!
+```
+
+## Why Dormice
+
+- **Sandboxes are permanent.** Cloud sandbox platforms charge for every
+  second a sandbox exists, so their sandboxes are disposable. Dormice
+  inverts that: `acquireSandbox('my-agent')` always returns the same
+  sandbox for the same key — today, tomorrow, next month — with all its
+  files intact.
+- **Idle costs almost nothing.** Idle sandboxes cool down on their own
+  (`active → frozen → stopped → archived`), and any acquire brings them
+  back. Measured on real hardware: freezing takes an idle sandbox holding
+  1 GiB of memory down to ~5 MiB, and waking it takes ~50 ms.
+- **Deploys like a single binary.** One daemon, one SQLite database, one
   port. No Kubernetes, no external database.
-- **E2B compatible.** The official `e2b` SDKs — JavaScript and Python —
-  work against Dormice by changing two URLs — see
+- **Works with the official E2B SDKs.** The unmodified `e2b` packages
+  (JavaScript and Python) run against Dormice by changing two URLs — see
   [Using the official E2B SDKs](/docs/e2b-sdks).
 
 ## How it works
 
-The daemon keeps a SQLite ledger of sandboxes and drives Docker + gVisor to
-match it. Each sandbox is a gVisor container with its own disk-quota volume;
-freezing suspends its processes and squeezes their memory out to swap, so an
-idle sandbox costs a few megabytes of RAM and wakes in about 50 ms with all
-its processes still running.
-
-Because the disk — not the container — is the sandbox's body, a sandbox
-survives anything short of an explicit release: the daemon restarts, the
-host reboots, even `docker container prune` eating the container object.
+The daemon runs each sandbox as a Docker container under
+[gVisor](https://gvisor.dev), with its own disk. When a sandbox sits
+idle, the daemon suspends its processes and squeezes their memory out to
+swap — so it costs a few megabytes of RAM and wakes in about 50 ms,
+processes still running. The sandbox's data lives on its own disk, not in
+the container, so it survives daemon restarts, host reboots, and even the
+container being deleted. [Architecture](/docs/architecture) has the full
+picture.
 
 ## Status
 
-Early development. The daemon, its lifecycle engine, the SDK, the CLI, the
-web console, the real Docker + gVisor executor, and the E2B-compatible API
-work end to end and pass a black-box test suite against real
-infrastructure. Nothing here is ready for production yet.
+Early development. The daemon, SDK, CLI, web console, Docker + gVisor
+executor, and E2B-compatible API work end to end and pass a black-box
+test suite against real infrastructure. Nothing here is ready for
+production yet.
 
-Next steps: [Installation](/docs/installation), then the
-[Quick start](/docs/quickstart).
+## Next steps
+
+1. [Installation](/docs/installation) — set up the daemon on a Linux
+   host with one command.
+2. [Quick start](/docs/quickstart) — acquire your first sandbox and run
+   commands in it.
+3. [Using the official E2B SDKs](/docs/e2b-sdks) — if you already have
+   an E2B application, point it at Dormice.

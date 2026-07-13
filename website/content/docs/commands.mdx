@@ -1,68 +1,57 @@
 ---
 title: Running commands
-description: execCommand is a buffered shell round-trip — honest exit codes, timeouts enforced inside the container, output capped at 1 MiB per stream.
+description: Learn how to run shell commands inside a sandbox — timeouts, working directory, environment variables, and output limits.
 ---
 
-The native surface has one command verb: `execCommand(externalId, command)`.
-It wakes the sandbox if it is cold, runs the command as `bash -c` inside
-the container (as the sandbox's non-root user, uid 1000), waits, and
-returns the whole result at once:
+## Run a command
+
+You can run a shell command inside a sandbox with `execCommand`. It
+wakes the sandbox if needed, runs the command as `bash -c` (as the
+sandbox's non-root user), waits, and returns the whole result at once:
 
 ```ts
 const result = await client.execCommand('my-agent', 'python3 --version');
 result.exitCode;        // 0
 result.stdout;          // 'Python 3.12.…\n'
 result.stderr;          // ''
-result.stdoutTruncated; // false — see "Output is capped" below
+result.stdoutTruncated; // false — see "Output limits" below
 ```
 
-The same verb from the CLI, where stdout and stderr pass through to your
-own streams and the exit code becomes `dor`'s own:
+**A non-zero exit code is a result, not an error.** `execCommand`
+resolves with `exitCode: 1` — it does not throw. Errors are reserved for
+the protocol failing: 404 when no sandbox exists behind the key (one is
+never silently created), 409 while a sandbox is mid-restore.
+
+## Run a command from the CLI
+
+`dor sandbox exec` runs the same verb from a shell. The command's stdout
+and stderr pass through to yours, and its exit code becomes `dor`'s own —
+so it behaves like the command itself in scripts:
 
 ```sh
 dor sandbox exec my-agent 'uname -r'
 dor sandbox exec my-agent 'npm ci && npm test' -t 3600
 ```
 
-## A non-zero exit is a result, not an error
+## Set a timeout
 
-`execCommand` resolves with `exitCode: 1` — it does not throw. Errors are
-reserved for the protocol failing (no sandbox behind the key: 404, never
-silently created; sandbox mid-restore: 409), not for your command doing
-what commands do.
+Pass `timeoutSeconds` (default 300, maximum 86400). On expiry the
+command is killed and returns exit code 137, like any SIGKILLed process:
 
-## Timeouts are enforced inside the container
+```ts
+await client.execCommand('my-agent', 'npm ci && npm test', {
+  timeoutSeconds: 3600,
+});
+```
 
-`timeoutSeconds` (default 300, ceiling 86400) arms a
-`timeout --signal=KILL` around your command *inside* the sandbox; on
-expiry the command dies with exit 137 like any SIGKILLed process. Inside
-on purpose: dropping the HTTP request cannot reach a process on the other
-side of the container boundary, so a host-side deadline would report a
-kill without performing one.
+The SDK derives its HTTP deadline from the same value, so a long-running
+command is never cut short by a client-side timeout.
 
-There is deliberately no `timedOut` flag in the response: 137 is also what
-an in-sandbox OOM kill looks like, and the daemon cannot tell the two
-apart — so it does not pretend to.
+**Note:** there is no `timedOut` flag in the response — 137 is also what
+an out-of-memory kill inside the sandbox looks like, and the daemon
+cannot tell the two apart, so it does not pretend to.
 
-The SDK derives its HTTP deadline from the same `timeoutSeconds` (plus
-slack for the wake and the round-trip), so a long-running command is never
-cut short by the client-wide `timeoutMs`.
-
-## A running command is activity
-
-While a command runs, the sandbox's idle clock keeps resetting — the idle
-scanner never freezes a sandbox mid-command, even one that legitimately
-runs for hours.
-
-## Output is capped at 1 MiB per stream
-
-The buffered protocol holds the whole result in daemon memory, so stdout
-and stderr are each capped at 1 MiB. Truncation is reported
-(`stdoutTruncated` / `stderrTruncated`), never silent. A capped log still
-informs; for bulk output, write to a file and [read it out](/docs/files)
-instead of routing bytes through stdout.
-
-## Working directory and environment
+## Set the working directory and environment
 
 ```ts
 await client.execCommand('my-agent', 'env | sort', {
@@ -71,13 +60,34 @@ await client.execCommand('my-agent', 'env | sort', {
 });
 ```
 
-`cwd` defaults to `/home/user` — the same base relative file paths
+`cwd` defaults to `/home/user` — the same base that relative file paths
 resolve against.
 
-## When buffered is the wrong shape
+## Output limits
+
+stdout and stderr are each capped at 1 MiB. Truncation is always
+reported (`stdoutTruncated` / `stderrTruncated`), never silent. For bulk
+output, write to a file and [read it out](/docs/files) instead of
+routing everything through stdout.
+
+## A running command keeps the sandbox awake
+
+While a command runs, the sandbox's idle clock keeps resetting — the
+lifecycle engine never freezes a sandbox mid-command, even one that
+legitimately runs for hours.
+
+## Streaming, background processes, and terminals
 
 `execCommand` is deliberately simple: one request, one finished result.
 For live streaming output, processes that outlive the request, stdin, or
-an interactive terminal, use the E2B surface — `commands.run` streams,
-backgrounds, and reconnects, and `pty.*` is a real interactive bash. See
-[Using the official E2B SDKs](/docs/e2b-sdks).
+an interactive terminal, use the [E2B surface](/docs/e2b-sdks) —
+`commands.run` streams, backgrounds, and reconnects, and `pty.*` is a
+real interactive bash.
+
+## How timeouts are enforced
+
+The timeout runs *inside* the container (`timeout --signal=KILL` around
+your command), not as a host-side deadline. Dropping the HTTP request
+cannot reach a process on the other side of the container boundary — an
+in-container timeout actually kills the command instead of just
+reporting that it should die.

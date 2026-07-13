@@ -1,68 +1,88 @@
 ---
 title: Installation
-description: One command on a bare Ubuntu/Debian x86_64 host.
+description: Install the Dormice daemon on a Linux host with one command.
 ---
 
-Run as root on a bare Ubuntu/Debian x86_64 host:
+## Install the daemon
+
+Run this as root on a bare Ubuntu/Debian x86_64 host:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/BitMiracle-AI/Dormice/main/deploy/install.sh | bash
 ```
 
-Behind a slow connection to the usual sources, add `-s -- --mirror cn`.
+If your host has a slow connection to GitHub and the usual package
+sources, add `-s -- --mirror cn`.
 
-The installer is idempotent — re-running it upgrades the code and repairs
-drift, and never rotates your API token. It ends by running `dor doctor`, a
-battery of read-only checks — three of them boot a real gVisor container —
-that decides whether the install actually succeeded; `dor doctor` can be
-re-run on its own at any time.
+The installer sets up everything — Docker, gVisor, swap, the network
+hardening, the daemon as a systemd service — and finishes by running
+`dor doctor`, a battery of read-only checks that verifies the install
+actually works. You can re-run `dor doctor` at any time.
+
+**The installer is safe to re-run.** Running it again upgrades the code
+and repairs anything that drifted, and never rotates your API token.
+
+## Get your API token
+
+The installer generates an API token and stores it in the daemon's
+config file. You need it for every client — SDK, CLI, and console:
+
+```sh
+grep ^DORMICE_API_TOKEN /etc/dormice/env
+```
+
+## Connect from another machine
+
+The daemon listens on `127.0.0.1` only — reaching it from another
+machine is a choice you make explicitly, one of two ways.
+
+**Option 1: SSH tunnel** (private, zero setup):
+
+```sh
+ssh -L 3676:127.0.0.1:3676 root@your-host
+```
+
+Then use `http://127.0.0.1:3676` as your endpoint, as if the daemon were
+local.
+
+**Option 2: Reverse proxy** — serves the API, the E2B surface, and the
+web console at once. With Caddy, TLS certificates are automatic once you
+give it a domain:
+
+```text
+your-domain.example {
+	reverse_proxy 127.0.0.1:3676 {
+		flush_interval -1
+	}
+}
+```
+
+**Note:** `flush_interval -1` matters — streamed command output is
+written frame by frame, and a buffering proxy would hold it all back
+until the end. Use HTTPS for anything exposed beyond localhost: the API
+token and the session cookie travel in every request.
 
 ## What the host needs
 
-The daemon itself runs anywhere Node 22+ runs, with an in-memory fake
-executor for development. Running **real** sandboxes needs a Linux host —
-`install.sh` automates all of it and `dor doctor` verifies it, but these
-are the facts underneath:
+The installer handles all of this and `dor doctor` verifies it, but
+these are the requirements underneath:
 
-- **Docker + gVisor (`runsc`)**, and root (loop mounts, cgroup writes).
-- **Swap, and `vm.swappiness=100`.** Freezing squeezes an idle sandbox's
-  memory out to swap; gVisor holds sandbox memory as shared memory, which
-  the kernel refuses to swap at the default swappiness — measured on real
-  hardware: 0 bytes reclaimed at the default, 99.5% reclaimed at 100. Note
-  that some cloud images (Alibaba Cloud, for one) ship `vm.swappiness=0`;
-  check the *effective* value with `sysctl vm.swappiness`, not the config
-  files.
-- **Network hardening is not optional.** Sandboxes run untrusted code:
-  block the cloud metadata service from containers
+- **Docker + gVisor (`runsc`)**, and root — sandboxes are gVisor
+  containers, and the daemon needs loop mounts and cgroup writes.
+- **Swap, with `vm.swappiness=100`.** Freezing works by pushing idle
+  sandbox memory to swap. gVisor holds sandbox memory in a form the
+  kernel refuses to swap at the default setting — measured on real
+  hardware: 0 bytes reclaimed at the default, 99.5% reclaimed at 100.
+  Some cloud images (Alibaba Cloud, for one) ship `vm.swappiness=0`;
+  check the effective value with `sysctl vm.swappiness`.
+- **Network hardening.** Sandboxes run untrusted code, so the installer
+  blocks the cloud metadata service from containers
   (`iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP`, persisted) and
-  disable inter-container traffic (`"icc": false` in `daemon.json`). The
-  daemon binds to 127.0.0.1 only, by design without a knob; exposing it is
-  a reverse proxy's job.
-- **One machine, one daemon.** The daemon enforces this with a lock next
-  to its ledger and refuses to start when its ledger and the machine's
-  reality cannot belong together.
+  disables inter-container traffic (`"icc": false` in `daemon.json`).
+- **One machine, one daemon.** The daemon enforces this with a lock and
+  refuses to start when its database and the machine's reality don't
+  match.
 
-## Reaching the daemon from outside
-
-The daemon listens on 127.0.0.1 only, so reaching it from another machine
-is a choice you make explicitly, one of two ways:
-
-- **SSH tunnel** (private, zero setup):
-  `ssh -L 3676:127.0.0.1:3676 root@host`, then use
-  `http://127.0.0.1:3676` as your endpoint.
-- **Reverse proxy** for the console, the API, and the E2B surface at once —
-  e.g. Caddy, which also handles TLS certificates automatically once you
-  give it a domain:
-
-  ```
-  your-domain.example {
-  	reverse_proxy 127.0.0.1:3676 {
-  		flush_interval -1
-  	}
-  }
-  ```
-
-  `flush_interval -1` matters: streamed command output is written frame by
-  frame, and a buffering proxy would turn it into one lump at the end.
-  Anything exposed beyond localhost should be HTTPS — the API token and
-  the session cookie travel in every request.
+Without a prepared Linux host, the daemon still runs anywhere Node 22+
+runs using an in-memory fake executor — useful for development, not for
+real sandboxes.

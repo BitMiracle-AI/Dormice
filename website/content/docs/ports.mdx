@@ -1,47 +1,24 @@
 ---
 title: Exposing ports
-description: getHost(port) preview URLs — a transparent proxy with wake-on-traffic, behind one wildcard domain you control.
+description: Learn how to reach a server running inside a sandbox from the outside, through preview URLs that wake the sandbox on traffic.
 ---
 
-Anything listening on a port inside a sandbox — a dev server, a notebook,
-an agent's UI — can be reached from outside through the daemon's sandbox
-proxy. Switch it on with one variable:
+Anything listening on a port inside a sandbox — a dev server, a
+notebook, an agent's UI — can be reached from outside through the
+daemon's sandbox proxy.
+
+## 1. Set the sandbox domain
+
+Pick a domain for sandbox traffic and tell the daemon about it:
 
 ```sh
 DORMICE_SANDBOX_DOMAIN=sbx.example.com
 ```
 
-and the E2B SDK's `getHost()` does the rest:
+## 2. Point DNS and a reverse proxy at the host
 
-```ts
-const sbx = await Sandbox.create({ /* the two URLs + apiKey */ });
-await sbx.commands.run('python3 -m http.server 8000', { background: true });
-
-const host = sbx.getHost(8000); // '8000-<sandboxId>.sbx.example.com'
-await fetch(`https://${host}/`);
-```
-
-Requests arriving with such a `Host` header are proxied straight into the
-sandbox — headers untouched, WebSocket upgrades passed through both ways.
-Verified on real hardware: a `python3 -m http.server` inside a gVisor
-sandbox answers 200 through the proxy. If nothing listens on the port,
-the proxy answers an honest **502 naming the port**, not a hang.
-
-Unset, the feature is honestly absent: responses carry no domain and the
-SDK has nothing to build URLs from.
-
-## Wake-on-traffic
-
-A frozen sandbox is woken by the first proxied request — ~50 ms,
-invisible to the caller — so a preview URL keeps working against a
-sandbox nobody has touched in days. While a proxied connection stays
-open, the sandbox counts as active; when the last one closes, the idle
-clock resumes.
-
-## The ops recipe
-
-The daemon itself only ever binds `127.0.0.1`. The internet-facing half
-is one wildcard DNS record plus a reverse proxy that terminates TLS:
+The daemon itself only binds `127.0.0.1`. The internet-facing half is
+one wildcard DNS record plus a reverse proxy that terminates TLS:
 
 ```text
 *.sbx.example.com → your host
@@ -54,16 +31,42 @@ is one wildcard DNS record plus a reverse proxy that terminates TLS:
 }
 ```
 
-`flush_interval -1` keeps streaming responses unbuffered — verified with
-a real terminal session through Caddy: output arrived while the stream
-was still open. (A wildcard certificate needs Caddy's DNS challenge; a
-plain HTTP setup works for a LAN.)
+**Note:** `flush_interval -1` keeps streaming responses unbuffered —
+verified with a real terminal session through Caddy. A wildcard
+certificate needs Caddy's DNS challenge; plain HTTP works for a LAN.
 
-## No authentication, on purpose
+## 3. Get the URL with `getHost()`
+
+The E2B SDK's `getHost(port)` builds the preview URL:
+
+```ts
+const sbx = await Sandbox.create({ /* the two URLs + apiKey */ });
+await sbx.commands.run('python3 -m http.server 8000', { background: true });
+
+const host = sbx.getHost(8000); // '8000-<sandboxId>.sbx.example.com'
+await fetch(`https://${host}/`);
+```
+
+Requests arriving with such a `Host` header are proxied straight into
+the sandbox — headers untouched, WebSocket upgrades passed through both
+ways. If nothing listens on the port, the proxy answers a 502 naming the
+port, not a hang.
+
+If `DORMICE_SANDBOX_DOMAIN` is unset, the feature is off: responses
+carry no domain and the SDK has nothing to build URLs from.
+
+## Frozen sandboxes wake on traffic
+
+The first proxied request wakes a frozen sandbox — ~50 ms, invisible to
+the caller — so a preview URL keeps working against a sandbox nobody has
+touched in days. While a proxied connection stays open, the sandbox
+counts as active; when the last one closes, the idle clock resumes.
+
+## Preview URLs are public
 
 Preview URLs are unauthenticated — the same call E2B made, because these
-URLs exist to be opened in browsers. The sandbox ID in the hostname is
-unguessable (a UUID), but that is obscurity, not access control: treat a
-preview URL as public while the port is open. Everything else on the
-daemon — native API, E2B API, console — stays authenticated; only sandbox
-port traffic passes free.
+URLs exist to be opened in browsers and shared. The sandbox ID in the
+hostname is unguessable (a UUID), but that is obscurity, not access
+control: **treat a preview URL as public while the port is open.**
+Everything else on the daemon — native API, E2B API, console — stays
+authenticated; only sandbox port traffic passes free.
