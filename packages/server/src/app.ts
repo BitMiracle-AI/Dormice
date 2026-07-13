@@ -11,6 +11,7 @@ import { z } from 'zod';
 import type { Archiver } from './archive/archiver';
 import { requireApiAuth } from './auth';
 import { type Config, type ConfigSources, configSources } from './config';
+import { getConsoleAccount } from './db/account';
 import type { Db } from './db/db';
 import { registerE2bCompat } from './e2b';
 import { ProcessTable } from './e2b/process-table';
@@ -165,8 +166,17 @@ export function buildApp({
   // cookie on the native routes, the /console surface mints and clears it.
   app.register(fastifyCookie);
 
+  // Built once, used by every guarded surface. The secret getter reads the
+  // ledger per request because setup can replace the account (and void its
+  // sessions) while the daemon runs — a captured value would keep dead
+  // sessions alive until restart.
+  const apiAuth = requireApiAuth(
+    config.DORMICE_API_TOKEN,
+    () => getConsoleAccount(db)?.sessionSecret ?? null,
+  );
+
   app.register(async (api) => {
-    api.addHook('onRequest', requireApiAuth(config.DORMICE_API_TOKEN));
+    api.addHook('onRequest', apiAuth);
     await api.register(sandboxRoutes, {
       config,
       db,
@@ -186,10 +196,16 @@ export function buildApp({
     });
   });
 
-  // The web console: session endpoints (open — login carries the token
-  // itself) and the static SPA. Its API calls go through the routes above.
+  // The web console: account + session endpoints (open — setup and login
+  // carry the credentials themselves) and the static SPA. Its API calls go
+  // through the routes above.
   app.register(async (scope) => {
-    await scope.register(consoleRoutes, { config, consoleDistDir });
+    await scope.register(consoleRoutes, {
+      config,
+      db,
+      apiAuth,
+      consoleDistDir,
+    });
   });
 
   // The E2B compatibility surface lives beside the native API with its own

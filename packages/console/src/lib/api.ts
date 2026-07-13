@@ -75,14 +75,33 @@ async function rpc<T>(
   return res.json() as Promise<T>;
 }
 
-// Login's own 401 means "wrong token", a form error to show in place — the
-// interceptor is for sessions dying mid-flight, not for failed sign-ins.
-export const login = (token: string) =>
-  rpc<{ loggedIn: true }>(
-    '/console/auth/login',
-    { token },
+// Whether setup has happened — the login page's fork: no account yet means
+// it renders the initialization form instead of username/password.
+export const authStatus = () =>
+  rpc<{ accountExists: boolean }>(
+    '/console/auth/status',
+    {},
     { intercept401: false },
   );
+
+// First-run initialization, password change and forgot-password are all this
+// one verb: the API token is the root of trust, presenting it (re)writes the
+// single account and signs the caller in.
+export const setup = (input: {
+  token: string;
+  username: string;
+  password: string;
+}) =>
+  rpc<{ loggedIn: true }>('/console/auth/setup', input, {
+    intercept401: false,
+  });
+
+// Login's own 401 means "wrong credentials", a form error to show in place —
+// the interceptor is for sessions dying mid-flight, not for failed sign-ins.
+export const login = (input: { username: string; password: string }) =>
+  rpc<{ loggedIn: true }>('/console/auth/login', input, {
+    intercept401: false,
+  });
 
 export const logout = () =>
   rpc<{ loggedIn: false }>('/console/auth/logout', {}, { intercept401: false });
