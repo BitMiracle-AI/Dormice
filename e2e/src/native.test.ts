@@ -319,7 +319,11 @@ describe('native API over a real daemon', () => {
       { path: 'hello.txt', content: 'hello from e2e\n' },
     ]);
 
-    const one = await client().writeFile('files-key', 'single.txt', 'just me\n');
+    const one = await client().writeFile(
+      'files-key',
+      'single.txt',
+      'just me\n',
+    );
     expect(one).toEqual({ path: '/home/user/single.txt' });
 
     // Batch read comes back in request order, paths resolved.

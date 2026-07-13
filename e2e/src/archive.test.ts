@@ -83,7 +83,9 @@ describe('the archive lifecycle over a real daemon', () => {
     const deadline = Date.now() + 15_000;
     for (;;) {
       const sandboxes = await dormice.listSandboxes();
-      const mine = sandboxes.find((s) => s.externalId === 'archive-destroy-key');
+      const mine = sandboxes.find(
+        (s) => s.externalId === 'archive-destroy-key',
+      );
       if (mine?.state === 'archived') break;
       if (Date.now() > deadline) {
         throw new Error(`never archived; last observed: ${mine?.state}`);

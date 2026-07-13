@@ -51,7 +51,9 @@ export function ActivityPage() {
         (event) =>
           (kindFilter === 'all' || event.kind === kindFilter) &&
           (search === '' ||
-            (event.externalId ?? '').toLowerCase().includes(search.toLowerCase())),
+            (event.externalId ?? '')
+              .toLowerCase()
+              .includes(search.toLowerCase())),
       ),
     [events, kindFilter, search],
   );

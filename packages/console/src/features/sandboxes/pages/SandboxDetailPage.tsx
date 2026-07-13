@@ -15,6 +15,7 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { DestroySandboxButton } from '../components/DestroySandboxButton';
 import { EditPolicyDialog } from '../components/EditPolicyDialog';
 import { FilesPanel } from '../components/FilesPanel';
 import { HistoryPanel } from '../components/HistoryPanel';
@@ -22,7 +23,6 @@ import { LifecycleCountdown } from '../components/LifecycleCountdown';
 import { MetricsPanel } from '../components/MetricsPanel';
 import { ProcessesPanel } from '../components/ProcessesPanel';
 import { RebuildSandboxButton } from '../components/RebuildSandboxButton';
-import { DestroySandboxButton } from '../components/DestroySandboxButton';
 import { RestoreCard } from '../components/RestoreCard';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { SandboxTerminalCard } from '../components/SandboxTerminal';
@@ -87,7 +87,9 @@ export function SandboxDetailPage() {
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <h1 className="font-mono text-lg font-semibold">{sandbox.externalId}</h1>
+          <h1 className="font-mono text-lg font-semibold">
+            {sandbox.externalId}
+          </h1>
           <SandboxStateBadge state={sandbox.state} />
           <LifecycleCountdown sandbox={sandbox} />
         </div>

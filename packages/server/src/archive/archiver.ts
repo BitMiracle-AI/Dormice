@@ -141,11 +141,13 @@ export class Archiver {
       detail: 'restore from S3 began',
     });
     const progress: RestoreProgress = { phase: 'downloading', percent: 0 };
-    const done = this.runRestore(row.sandboxId, row.externalId, progress).finally(
-      () => {
-        this.restores.delete(row.sandboxId);
-      },
-    );
+    const done = this.runRestore(
+      row.sandboxId,
+      row.externalId,
+      progress,
+    ).finally(() => {
+      this.restores.delete(row.sandboxId);
+    });
     // Native acquire never awaits this — a failure with no joiner must not
     // crash the daemon as an unhandled rejection. Joiners still observe the
     // rejection through the same promise.

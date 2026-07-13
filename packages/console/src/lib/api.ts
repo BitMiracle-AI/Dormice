@@ -169,8 +169,10 @@ export const rebuildSandbox = (externalId: string) =>
 
 // Patch the stored lifecycle policy in place — the update verb acquire is
 // not. Ledger-only: nothing wakes, the idle clock keeps running.
-export const updatePolicy = (externalId: string, policy: LifecyclePolicyOverride) =>
-  rpc<{ sandbox: Sandbox }>('/updatePolicy', { externalId, policy });
+export const updatePolicy = (
+  externalId: string,
+  policy: LifecyclePolicyOverride,
+) => rpc<{ sandbox: Sandbox }>('/updatePolicy', { externalId, policy });
 
 // The terminal's key: trades the session cookie for one sandbox's envd
 // access token, so the browser can speak to the envd surface directly.

@@ -537,7 +537,9 @@ describe('POST /execCommand', () => {
       command: 'sleep 1',
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    const releaseRes = await rpc(app, '/destroySandbox', { externalId: 'alice' });
+    const releaseRes = await rpc(app, '/destroySandbox', {
+      externalId: 'alice',
+    });
     expect(releaseRes.json()).toEqual({ destroyed: true });
 
     // Both requests settle; ride out one more heartbeat interval on the
@@ -617,7 +619,10 @@ describe('POST /writeFiles and /readFile', () => {
       files: [{ path: 'x', contentBase64: 'eA==' }],
     });
     expect(write.statusCode).toBe(404);
-    const read = await rpc(app, '/readFile', { externalId: 'nobody', path: 'x' });
+    const read = await rpc(app, '/readFile', {
+      externalId: 'nobody',
+      path: 'x',
+    });
     expect(read.statusCode).toBe(404);
     expect(read.json().message).toMatch(/no sandbox for key/);
   });
@@ -1280,7 +1285,8 @@ describe('templates', () => {
   it('a valid template on an existing key is not applied — creation-time only', async () => {
     const { app } = testApp();
     await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' });
-    const created = (await acquire(app, { externalId: 'alice' })).json().sandbox;
+    const created = (await acquire(app, { externalId: 'alice' })).json()
+      .sandbox;
     expect(created.template).toBeNull();
     const again = (
       await acquire(app, { externalId: 'alice', template: 'py' })

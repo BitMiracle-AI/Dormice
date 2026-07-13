@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { sandboxSchema, externalIdSchema } from './sandbox';
+import { externalIdSchema, sandboxSchema } from './sandbox';
 
 /**
  * rebuildSandbox(externalId) — swap the container, keep the disk. The disk is

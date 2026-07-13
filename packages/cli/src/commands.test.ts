@@ -12,12 +12,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   clientFromEnv,
   pullSavedMessage,
+  sandboxDestroy,
   sandboxExec,
   sandboxLs,
   sandboxPull,
   sandboxPush,
   sandboxRebuild,
-  sandboxDestroy,
   templateAdd,
   templateLs,
   templateRm,
