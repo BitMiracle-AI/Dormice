@@ -88,3 +88,26 @@ export const activity = sqliteTable('activity', {
 });
 
 export type ActivityRow = typeof activity.$inferSelect;
+
+/**
+ * The console's one human account (the fixed id makes "at most one row" a
+ * schema fact, not a convention). The API token stays the root of trust:
+ * presenting it (re)creates this row — that IS the forgot-password path —
+ * while day-to-day console logins are username + password.
+ *
+ * sessionSecret is the HMAC key for session cookies. It lives here and not
+ * in the token so the two credentials rotate independently: re-running
+ * setup regenerates it (every session out — correct for a password reset),
+ * rotating the API token leaves console sessions alone.
+ */
+export const consoleAccount = sqliteTable('console_account', {
+  id: integer('id').primaryKey(),
+  username: text('username').notNull(),
+  /** Self-describing scrypt string: scrypt$N$r$p$<salt b64>$<hash b64>. */
+  passwordHash: text('password_hash').notNull(),
+  sessionSecret: text('session_secret').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export type ConsoleAccountRow = typeof consoleAccount.$inferSelect;
