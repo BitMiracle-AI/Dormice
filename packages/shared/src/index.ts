@@ -5,6 +5,7 @@ export * from './destroy';
 export * from './exec';
 export * from './files';
 export * from './host';
+export * from './images';
 export * from './ingress';
 export * from './list';
 export * from './metrics';

@@ -11,6 +11,8 @@ import {
   type LifecyclePolicy,
   lifecyclePolicySchema,
   listSandboxesResponseSchema,
+  listSandboxImagesRequestSchema,
+  listSandboxImagesResponseSchema,
   listSandboxMetricsRequestSchema,
   listSandboxMetricsResponseSchema,
   READ_FILES_TOTAL_LIMIT_BYTES,
@@ -361,6 +363,54 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         }),
       );
       return { samples: samples.filter((s) => s !== null) };
+    },
+  );
+
+  // Every sandbox's image lineage in one answer: which image the current
+  // shell was born from, next to what the next shell would boot. The born
+  // image is a property of the shell and deliberately not a ledger column,
+  // so it is read from reality on demand — in parallel, like the metrics
+  // batch above. Rows that cannot have a container (archived, restoring)
+  // skip the executor call outright; for the rest a vanished container
+  // reads as null, not a guess. Observation never wakes anything.
+  app.post(
+    '/listSandboxImages',
+    {
+      schema: {
+        body: listSandboxImagesRequestSchema,
+        response: { 200: listSandboxImagesResponseSchema },
+      },
+    },
+    async () => {
+      const images = await Promise.all(
+        listSandboxes(db).map(async (row) => {
+          // resolveImage is the one arbiter of template -> image; undefined
+          // means "the executor's own base image", and the executor is the
+          // one authority on what that is (config only knows in docker mode).
+          const nextImage =
+            resolveImage(db, row.template) ?? executor.baseImage;
+          let image: string | null = null;
+          if (row.state !== 'archived' && row.state !== 'restoring') {
+            try {
+              image = await executor.imageOf(row.sandboxId);
+            } catch {
+              // Reading failed mid-vanish: no shell to report, same as null.
+              image = null;
+            }
+          }
+          return {
+            externalId: row.externalId,
+            sandboxId: row.sandboxId,
+            image,
+            nextImage,
+            // A row without a shell is not upgradable: its very next boot
+            // resolves the current image by itself. rebuildSandbox is the
+            // front door for the rest.
+            upgradable: image !== null && image !== nextImage,
+          };
+        }),
+      );
+      return { images };
     },
   );
 

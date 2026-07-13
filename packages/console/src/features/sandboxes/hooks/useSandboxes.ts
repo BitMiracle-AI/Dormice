@@ -5,6 +5,7 @@ import {
   destroySandbox,
   getSandboxMetrics,
   listSandboxes,
+  listSandboxImages,
   listSandboxMetrics,
   rebuildSandbox,
   updatePolicy,
@@ -63,6 +64,20 @@ export function useFleetMetrics() {
   });
 }
 
+/**
+ * 全舰队镜像血统:每行的出生镜像、下一次启动会用的镜像、是否可升级。
+ * upgradable 由 daemon 裁决(resolveImage 是唯一裁决点),前端只展示。
+ * 5 秒一拍与列表的 2 秒分开:读现实要逐容器 docker inspect,比读 SQLite 贵。
+ */
+export function useSandboxImages() {
+  return useQuery({
+    queryKey: ['sandbox-images'],
+    queryFn: listSandboxImages,
+    refetchInterval: 5000,
+    retry: false,
+  });
+}
+
 export function useAcquireSandbox() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -86,7 +101,11 @@ export function useRebuildSandbox() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (externalId: string) => rebuildSandbox(externalId),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['sandboxes'] });
+      // 换壳直接改变镜像血统(可升级标记要立即消失),不等下一拍。
+      queryClient.invalidateQueries({ queryKey: ['sandbox-images'] });
+    },
   });
 }
 

@@ -49,6 +49,14 @@ image they were born on. Through a rebuild, `/home/user` carries over
 untouched and everything outside it resets onto the new image — see
 [Rebuild a sandbox](/docs/persistence#rebuild-a-sandbox).
 
+You can ask which sandboxes still run an old image with the
+`listSandboxImages` verb (SDK method of the same name), or look for the
+"upgradable" marker in the [console](/docs/console)'s sandbox list.
+
+**Note:** the comparison is by image name. Rebuilding the same tag in
+place is invisible to it — upgrade by registering a new tag
+(`my-agent-env:v2`), not by overwriting `v1`.
+
 ## Remove a template
 
 ```sh
@@ -61,7 +69,9 @@ registration never removes the image itself.
 
 ## Image requirements
 
-Sandboxes mount their own disk over `/home/user`, so a template must
+Sandboxes mount their own disk over `/home/user` (see
+[Anatomy of a sandbox](/docs/architecture#anatomy-of-a-sandbox)), so a
+template must
 install its tools into image paths (`/opt`, `/usr/local`) — anything
 baked under `/home/user` is hidden at runtime. The stock image's
 [`Dockerfile`](https://github.com/BitMiracle-AI/Dormice/blob/main/images/Dockerfile)

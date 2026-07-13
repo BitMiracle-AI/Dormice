@@ -1653,7 +1653,7 @@ describe('E2B templates', () => {
     expect(body.templateID).toBe('py311');
     expect(body.alias).toBe('py311');
     // The physical half: the shell was born from the template's image.
-    expect(t.executor.imageOf(body.sandboxID)).toBe('img-py');
+    expect(await t.executor.imageOf(body.sandboxID)).toBe('img-py');
 
     const info = await control(t, 'GET', `/sandboxes/${body.sandboxID}`);
     // The SDK maps wire templateID -> SandboxInfo.templateId and a truthy
@@ -1689,7 +1689,7 @@ describe('E2B templates', () => {
       // Echo keeps the pre-templates shape: the base image name, no alias.
       expect(body.templateID).toBe('dormice-base:test');
       expect(body.alias).toBeUndefined();
-      expect(t.executor.imageOf(body.sandboxID)).toBe(FAKE_BASE_IMAGE);
+      expect(await t.executor.imageOf(body.sandboxID)).toBe(FAKE_BASE_IMAGE);
     }
   });
 

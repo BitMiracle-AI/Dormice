@@ -15,9 +15,11 @@ import {
   type HostMetricsResponse,
   hostMetricsResponseSchema,
   type LifecyclePolicyOverride,
+  type ListSandboxImagesResponse,
   type ListSandboxMetricsResponse,
   listActivityResponseSchema,
   listSandboxesResponseSchema,
+  listSandboxImagesResponseSchema,
   listSandboxMetricsResponseSchema,
   listTemplatesResponseSchema,
   type RebuildSandboxResponse,
@@ -181,6 +183,18 @@ export class Dormice {
   async listSandboxMetrics(): Promise<ListSandboxMetricsResponse['samples']> {
     const data = await this.rpc('listSandboxMetrics', {});
     return listSandboxMetricsResponseSchema.parse(data).samples;
+  }
+
+  /**
+   * Every sandbox's image lineage in one answer: the image its current
+   * shell was born from (`image`, null when no shell exists), the image
+   * its next shell would boot (`nextImage`), and whether a rebuild would
+   * change anything (`upgradable`). The window answering "which sandboxes
+   * still run an old image?" after a template is re-registered.
+   */
+  async listSandboxImages(): Promise<ListSandboxImagesResponse['images']> {
+    const data = await this.rpc('listSandboxImages', {});
+    return listSandboxImagesResponseSchema.parse(data).images;
   }
 
   /**

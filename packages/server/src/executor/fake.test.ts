@@ -12,8 +12,8 @@ describeExecutorContract('FakeExecutor', () => {
     // Any string: the fake plays whatever image it is asked to.
     altImage: 'fake-alt-image',
     imageOf: async (sandboxId: string) => {
-      const image = executor.imageOf(sandboxId);
-      if (!image) {
+      const image = await executor.imageOf(sandboxId);
+      if (image === null) {
         throw new Error(`no shell for ${sandboxId}`);
       }
       return image;

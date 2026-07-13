@@ -1262,7 +1262,7 @@ describe('templates', () => {
     const sandbox = res.json().sandbox;
     expect(sandbox.template).toBe('py');
     // The physical half: the shell was actually born from the template's image.
-    expect(executor.imageOf(sandbox.sandboxId)).toBe('img-a');
+    expect(await executor.imageOf(sandbox.sandboxId)).toBe('img-a');
     // A template-less acquire stays on the base image, template null.
     const plain = (await acquire(app, { externalId: 'bob' })).json().sandbox;
     expect(plain.template).toBeNull();
@@ -1322,18 +1322,18 @@ describe('templates', () => {
     const created = (
       await acquire(app, { externalId: 'alice', template: 'py' })
     ).json().sandbox;
-    expect(executor.imageOf(created.sandboxId)).toBe('img-v1');
+    expect(await executor.imageOf(created.sandboxId)).toBe('img-v1');
 
     // Operator builds a new image and re-points the name; the stock moves
     // per sandbox, on its own rebuild — never behind its back.
     await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
-    expect(executor.imageOf(created.sandboxId)).toBe('img-v1');
+    expect(await executor.imageOf(created.sandboxId)).toBe('img-v1');
 
     await rpc(app, '/rebuildSandbox', { externalId: 'alice' });
     const woken = (await acquire(app, { externalId: 'alice' })).json().sandbox;
     expect(woken.sandboxId).toBe(created.sandboxId);
     // The rebuilt shell was born from the template's *current* image.
-    expect(executor.imageOf(created.sandboxId)).toBe('img-v2');
+    expect(await executor.imageOf(created.sandboxId)).toBe('img-v2');
   });
 });
 

@@ -26,8 +26,9 @@ import { RebuildSandboxButton } from '../components/RebuildSandboxButton';
 import { RestoreCard } from '../components/RestoreCard';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { SandboxTerminalCard } from '../components/SandboxTerminal';
+import { UpgradableBadge } from '../components/UpgradableBadge';
 import { formatDuration, since } from '../format';
-import { useSandbox } from '../hooks/useSandboxes';
+import { useSandbox, useSandboxImages } from '../hooks/useSandboxes';
 
 export const DETAIL_TABS = [
   'overview',
@@ -58,6 +59,9 @@ export function SandboxDetailPage() {
   const { tab } = useSearch({ from: '/_app/sandboxes/$externalId' });
   const navigate = useNavigate({ from: '/sandboxes/$externalId' });
   const { sandbox, isSuccess } = useSandbox(externalId);
+  // 镜像血统与列表页同一份 5 秒缓存;拿不到就不显示,不挡页面。
+  const images = useSandboxImages();
+  const lineage = images.data?.images.find((e) => e.externalId === externalId);
 
   if (!sandbox) {
     return isSuccess ? (
@@ -130,7 +134,21 @@ export function SandboxDetailPage() {
             <CardContent>
               <dl>
                 <Row label="沙箱 ID">{sandbox.sandboxId}</Row>
-                <Row label="模板">{sandbox.template ?? '基础镜像'}</Row>
+                <Row label="模板">
+                  <span className="inline-flex items-center gap-1.5">
+                    {sandbox.template ?? '基础镜像'}
+                    <UpgradableBadge lineage={lineage} />
+                  </span>
+                </Row>
+                {lineage && (
+                  <Row label="镜像">
+                    {lineage.image === null
+                      ? `无容器 — 下次启动用 ${lineage.nextImage}`
+                      : lineage.upgradable
+                        ? `${lineage.image} → Rebuild 后 ${lineage.nextImage}`
+                        : lineage.image}
+                  </Row>
+                )}
                 <Row label="节点">{sandbox.nodeId}</Row>
                 <Row label="端点">{sandbox.endpoint}</Row>
                 <Row label="创建于">

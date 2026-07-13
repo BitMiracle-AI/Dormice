@@ -62,5 +62,36 @@ export function imageTests(ctx: ContractContext) {
       },
       timeoutMs,
     );
+
+    it(
+      'imageOf reads the born image in any state, stopped included',
+      async () => {
+        const id = await ctx.fresh({ image: ctx.subject.altImage });
+        expect(await ctx.executor.imageOf(id)).toBe(ctx.subject.altImage);
+        await ctx.executor.freeze(id);
+        expect(await ctx.executor.imageOf(id)).toBe(ctx.subject.altImage);
+        // The exited container is still the shell, and start would boot it
+        // as-is — so a stopped sandbox honestly reports the old image.
+        await ctx.executor.stop(id);
+        expect(await ctx.executor.imageOf(id)).toBe(ctx.subject.altImage);
+      },
+      timeoutMs,
+    );
+
+    it(
+      'imageOf answers null when no shell exists, never a guess',
+      async () => {
+        const id = await ctx.fresh();
+        await ctx.executor.freeze(id);
+        await ctx.executor.stop(id);
+        await ctx.subject.vanishContainer(id);
+        // The disk survives, but an image is a property of the shell — with
+        // no shell there is nothing to report; the next start decides.
+        expect(await ctx.executor.imageOf(id)).toBe(null);
+        // An observation verb: an unknown sandbox is null too, not a throw.
+        expect(await ctx.executor.imageOf('never-created')).toBe(null);
+      },
+      timeoutMs,
+    );
   });
 }

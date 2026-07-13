@@ -48,6 +48,46 @@ Why gVisor and not VMs: freezing requires sandboxes to be **processes**
 out requiring KVM. Firecracker-class hardware virtualization is a
 different trade — see the last section.
 
+## Anatomy of a sandbox
+
+A running sandbox is three layers stacked, each with its own lifetime:
+
+```text
+┌────────────────────────────────────────────┐
+│ your disk, mounted at /home/user           │  the sandbox itself:
+│                                            │  survives everything but destroy
+├────────────────────────────────────────────┤
+│ container writable layer (/tmp, processes) │  vanishes with the container
+├────────────────────────────────────────────┤
+│ image layers (base image or template)      │  read-only, shared by every
+│                                            │  sandbox on the same image
+└────────────────────────────────────────────┘
+```
+
+**Image layers** hold the tools. The stock base image ships Python,
+Node.js and Claude Code; a [template](/docs/templates) replaces it with
+your own image. These layers are read-only and Docker stores each one
+once per host, however many sandboxes boot from it. Composition happens
+at build time: a template image can `FROM` the base image, or another
+template's image, and stack as many layers as you need.
+
+**The container writable layer** is scratch space: `/tmp`, packages
+installed outside the home directory, running processes. The container
+is replaceable machinery, and this layer goes wherever it goes — a
+rebuild, a prune, an out-of-memory kill.
+
+**The disk at `/home/user`** is the sandbox's body: a dedicated disk
+image with a physical quota, and the only layer that persists. See
+[Sandbox persistence](/docs/persistence) for exactly what survives what.
+
+`rebuildSandbox` is the seam between the layers. It replaces the
+container and its writable layer while the disk stays put, so the next
+wake boots the template's *current* image with `/home/user` untouched —
+that is how an existing sandbox picks up new image layers. The
+`listSandboxImages` verb reports which sandboxes still run an image
+older than their template's current one; the console shows it as an
+"upgradable" marker next to the template name.
+
 ## The security boundary
 
 - **gVisor's userspace kernel is the boundary.** Sandbox code — even

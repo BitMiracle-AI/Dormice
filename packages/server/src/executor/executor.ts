@@ -242,6 +242,13 @@ export interface ShellOptions {
  */
 export interface Executor {
   /**
+   * The image shells boot from when create/start name none. The executor is
+   * the one authority on its own default — config knows it only in docker
+   * mode, and callers comparing born images against "what would boot next"
+   * must not guess.
+   */
+  readonly baseImage: string;
+  /**
    * Brings a brand-new sandbox up to running. `image` picks what the shell
    * boots from (a template's current image); absent means the executor's
    * configured base image.
@@ -341,6 +348,15 @@ export interface Executor {
    * running to measure — the route above answers [] for those on its own.
    */
   metrics(sandboxId: string): Promise<SandboxMetrics>;
+  /**
+   * The image the sandbox's current shell was born from — an image is a
+   * property of the shell, fixed at its birth and gone with it. Returns
+   * null when no container object exists (stopped-and-pruned, archived):
+   * there is no shell to have an image, and the next start() decides one
+   * from the template's current image. A pure read on whatever state the
+   * container is in; never wakes anything — observation is not activity.
+   */
+  imageOf(sandboxId: string): Promise<string | null>;
   /**
    * Every sandbox disk on this host, summed: how many, what they were
    * promised, what they actually occupy. A snapshot like listDisks —
