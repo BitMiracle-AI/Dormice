@@ -43,6 +43,7 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | `POST /listTemplates` | every registered template | — |
 | `POST /removeTemplate` | unregister; idempotent | 409 while sandboxes still use it (names them) |
 | `POST /getHostMetrics` | host snapshot; never wakes anything | — |
+| `POST /listSandboxImages` | each sandbox's born image vs its template's current one | — |
 
 **Only `acquireSandbox` creates.** The use verbs (`execCommand`, files,
 `rebuildSandbox`) answer 404 for an unknown key rather than creating a

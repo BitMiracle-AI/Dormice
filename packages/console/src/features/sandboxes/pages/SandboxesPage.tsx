@@ -55,8 +55,13 @@ import { cn } from '@/lib/utils';
 import { CreateSandboxDialog } from '../components/CreateSandboxDialog';
 import { DestroySandboxButton } from '../components/DestroySandboxButton';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
+import { UpgradableBadge } from '../components/UpgradableBadge';
 import { policyLine, STATE_LABELS, since } from '../format';
-import { useFleetMetrics, useSandboxes } from '../hooks/useSandboxes';
+import {
+  useFleetMetrics,
+  useSandboxes,
+  useSandboxImages,
+} from '../hooks/useSandboxes';
 
 const STATE_FILTERS: Array<SandboxState> = [
   'active',
@@ -207,6 +212,12 @@ export function SandboxesPage() {
     () =>
       new Map((fleet.data?.samples ?? []).map((s) => [s.externalId, s.sample])),
     [fleet.data],
+  );
+  // 镜像血统批量拉,同一口径:拉不到就不出标记,不挡列表。
+  const images = useSandboxImages();
+  const lineageOf = useMemo(
+    () => new Map((images.data?.images ?? []).map((e) => [e.externalId, e])),
+    [images.data],
   );
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState<'all' | SandboxState>('all');
@@ -411,7 +422,12 @@ export function SandboxesPage() {
                     <SandboxStateBadge state={sandbox.state} />
                   </TableCell>
                   <TableCell className="text-muted-foreground">
-                    {sandbox.template ?? '基础镜像'}
+                    <span className="inline-flex items-center gap-1.5">
+                      {sandbox.template ?? '基础镜像'}
+                      <UpgradableBadge
+                        lineage={lineageOf.get(sandbox.externalId)}
+                      />
+                    </span>
                   </TableCell>
                   {(() => {
                     const m = metricsOf.get(sandbox.externalId);

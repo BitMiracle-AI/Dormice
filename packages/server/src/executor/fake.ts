@@ -197,6 +197,7 @@ class FakeProcessIO {
  * the fake too.
  */
 export class FakeExecutor implements Executor {
+  readonly baseImage = FAKE_BASE_IMAGE;
   private readonly containers = new Map<string, ContainerState>();
   private readonly disks = new Set<string>();
   /**
@@ -238,9 +239,13 @@ export class FakeExecutor implements Executor {
     return this.containers.get(sandboxId);
   }
 
-  /** Test hook: the image the sandbox's current shell was born from. */
-  imageOf(sandboxId: string): string | undefined {
-    return this.images.get(sandboxId);
+  /**
+   * The image the sandbox's current shell was born from; null when no
+   * shell exists. Reads the images map — keyed like containers, so a
+   * vanished or removed shell honestly has no image.
+   */
+  async imageOf(sandboxId: string): Promise<string | null> {
+    return this.images.get(sandboxId) ?? null;
   }
 
   /**

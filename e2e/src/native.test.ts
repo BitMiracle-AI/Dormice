@@ -391,6 +391,60 @@ describe('native API over a real daemon', () => {
     });
   });
 
+  it('listSandboxImages tracks a template upgrade; rebuild closes the gap', async () => {
+    // The daemon's base image doubles as the template image (real in docker
+    // mode, an arbitrary string for the fake). The "upgrade" points the name
+    // at an unbuilt image on purpose: registration is config and observation
+    // never boots anything, so no engine ever has to pull it.
+    const image = process.env.DORMICE_BASE_IMAGE ?? 'img:lineage-v1';
+    await client().registerTemplate('lineage-tpl', image);
+    const created = await client().acquireSandbox('lineage-key', {
+      template: 'lineage-tpl',
+    });
+    const mine = async () =>
+      (await client().listSandboxImages()).find(
+        (e) => e.externalId === 'lineage-key',
+      );
+
+    // Fresh: born from the template's current image, nothing to upgrade.
+    expect(await mine()).toEqual({
+      externalId: 'lineage-key',
+      sandboxId: created.sandbox.sandboxId,
+      image,
+      nextImage: image,
+      upgradable: false,
+    });
+
+    // Re-registering moves nextImage; the live shell honestly stays behind.
+    await client().registerTemplate('lineage-tpl', 'img:lineage-v2');
+    expect(await mine()).toMatchObject({
+      image,
+      nextImage: 'img:lineage-v2',
+      upgradable: true,
+    });
+
+    // Point the name back and rebuild: no shell means no image and nothing
+    // to upgrade; the wake boots the template's current image, in sync.
+    await client().registerTemplate('lineage-tpl', image);
+    await client().rebuildSandbox('lineage-key');
+    expect(await mine()).toMatchObject({
+      image: null,
+      nextImage: image,
+      upgradable: false,
+    });
+    await client().acquireSandbox('lineage-key');
+    expect(await mine()).toMatchObject({
+      image,
+      nextImage: image,
+      upgradable: false,
+    });
+
+    await client().destroySandbox('lineage-key');
+    expect(await client().removeTemplate('lineage-tpl')).toEqual({
+      removed: true,
+    });
+  });
+
   // Registration never checks the image; only a real engine can show what
   // happens when the promise is broken at create time.
   it.runIf(process.env.DORMICE_EXECUTOR === 'docker')(

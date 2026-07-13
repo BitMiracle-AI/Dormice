@@ -107,7 +107,7 @@ function RegisterTemplateDialog({
                   toast.success(
                     `模板「${template.name}」→ ${template.image}` +
                       (initial
-                        ? ' — 存量沙箱要吃到新镜像,去详情页 Rebuild'
+                        ? ' — 还在旧镜像上的沙箱在列表里带「可升级」标记,逐个 Rebuild'
                         : ''),
                   );
                   setOpen(false);

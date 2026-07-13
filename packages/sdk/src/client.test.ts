@@ -334,7 +334,7 @@ describe('templates over real HTTP', () => {
       template: 'tpl-sdk',
     });
     expect(res.sandbox.template).toBe('tpl-sdk');
-    expect(executor.imageOf(res.sandbox.sandboxId)).toBe('img-sdk');
+    expect(await executor.imageOf(res.sandbox.sandboxId)).toBe('img-sdk');
 
     // In use: removal is refused, naming the key that holds it.
     await expect(client.removeTemplate('tpl-sdk')).rejects.toMatchObject({

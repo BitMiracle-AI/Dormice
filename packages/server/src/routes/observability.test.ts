@@ -8,6 +8,7 @@ import {
   getConfigResponseSchema,
   getSandboxMetricsResponseSchema,
   listActivityResponseSchema,
+  listSandboxImagesResponseSchema,
   listSandboxMetricsResponseSchema,
 } from '@dormice/shared';
 import { count } from 'drizzle-orm';
@@ -19,7 +20,7 @@ import { CONFIG_KEYS, type ConfigSources, loadConfig } from '../config';
 import { ACTIVITY_KEEP, recordActivity } from '../db/activity';
 import { migrateDb, openDb } from '../db/db';
 import { activity } from '../db/schema';
-import { FakeExecutor } from '../executor/fake';
+import { FAKE_BASE_IMAGE, FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
 import { freezeSandbox, stopSandbox } from '../lifecycle';
 import { ARCHIVE_DEFAULT_SECONDS } from '../policy';
@@ -334,5 +335,79 @@ describe('listSandboxMetrics', () => {
     expect(listSandboxMetricsResponseSchema.parse(res.json()).samples).toEqual(
       [],
     );
+  });
+});
+
+describe('listSandboxImages', () => {
+  async function images(app: Parameters<typeof rpc>[0]) {
+    const res = await rpc(app, '/listSandboxImages', {});
+    expect(res.statusCode).toBe(200);
+    return listSandboxImagesResponseSchema.parse(res.json()).images;
+  }
+
+  it('walks a template upgrade: in sync, left behind, rebuilt, in sync again', async () => {
+    const { app } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const created = (
+      await rpc(app, '/acquireSandbox', { externalId: 'alice', template: 'py' })
+    ).json().sandbox;
+
+    // Fresh: the shell was born from the template's current image.
+    expect(await images(app)).toEqual([
+      {
+        externalId: 'alice',
+        sandboxId: created.sandboxId,
+        image: 'img-v1',
+        nextImage: 'img-v1',
+        upgradable: false,
+      },
+    ]);
+
+    // Re-registering moves nextImage; the live shell honestly stays behind.
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+    expect(await images(app)).toMatchObject([
+      { image: 'img-v1', nextImage: 'img-v2', upgradable: true },
+    ]);
+
+    // Rebuild removes the shell: no image to report, and nothing to upgrade
+    // — the next boot resolves the current image by itself.
+    await rpc(app, '/rebuildSandbox', { externalId: 'alice' });
+    expect(await images(app)).toMatchObject([
+      { image: null, nextImage: 'img-v2', upgradable: false },
+    ]);
+
+    // Woken: born from the template's current image, in sync again.
+    await rpc(app, '/acquireSandbox', { externalId: 'alice' });
+    expect(await images(app)).toMatchObject([
+      { image: 'img-v2', nextImage: 'img-v2', upgradable: false },
+    ]);
+  });
+
+  it('compares template-less sandboxes against the executor base image', async () => {
+    const { app } = testApp();
+    await rpc(app, '/acquireSandbox', { externalId: 'plain' });
+    expect(await images(app)).toMatchObject([
+      { image: FAKE_BASE_IMAGE, nextImage: FAKE_BASE_IMAGE, upgradable: false },
+    ]);
+  });
+
+  it('answers every row: a stopped shell keeps its old image, honestly upgradable', async () => {
+    const { app, db, executor } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const created = (
+      await rpc(app, '/acquireSandbox', { externalId: 'cold', template: 'py' })
+    ).json().sandbox;
+    await freezeSandbox(db, executor, created.sandboxId);
+    await stopSandbox(db, executor, created.sandboxId);
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+
+    // The exited container is still the shell: waking it would boot the old
+    // image, so the row is honestly reported as upgradable.
+    expect(await images(app)).toMatchObject([
+      { image: 'img-v1', nextImage: 'img-v2', upgradable: true },
+    ]);
+    // Observation is not activity: still stopped afterwards.
+    const { sandboxes } = (await rpc(app, '/listSandboxes')).json();
+    expect(sandboxes[0].state).toBe('stopped');
   });
 });

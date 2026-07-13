@@ -146,6 +146,10 @@ export class DockerExecutor implements Executor {
     this.docker = docker ?? new Docker({ socketPath: '/var/run/docker.sock' });
   }
 
+  get baseImage(): string {
+    return this.opts.baseImage;
+  }
+
   async create(sandboxId: string, opts?: ShellOptions): Promise<void> {
     if ((await this.inspect(sandboxId)) !== null) {
       throw new Error(`container ${sandboxId} already exists`);
@@ -419,6 +423,20 @@ export class DockerExecutor implements Executor {
       throw new Error(`container ${sandboxId} has no network address`);
     }
     return { host: ip, port };
+  }
+
+  async imageOf(sandboxId: string): Promise<string | null> {
+    try {
+      const info = await this.docker
+        .getContainer(containerName(sandboxId))
+        .inspect();
+      // Config.Image is the name the shell was created with — the same
+      // string launchContainer wrote, not a resolved digest.
+      return info.Config.Image;
+    } catch (err) {
+      if (isDockerApiError(err) && err.statusCode === 404) return null;
+      throw err;
+    }
   }
 
   async metrics(sandboxId: string): Promise<SandboxMetrics> {

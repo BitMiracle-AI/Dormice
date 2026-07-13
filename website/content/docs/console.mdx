@@ -37,7 +37,10 @@ with search, a state filter, and multi-select batch destroy. Creating a
 sandbox from here is exactly `acquireSandbox`: a key, the lifecycle
 knobs (including the never-stop
 [resident-agent switch](/docs/resident-agents)), and a template dropdown
-when templates are registered.
+when templates are registered. After a
+[template upgrade](/docs/templates#update-a-template), sandboxes still
+running the old image carry an "upgradable" marker next to their
+template name — rebuild them to move.
 
 A sandbox's detail page is a workspace with four tabs:
 
