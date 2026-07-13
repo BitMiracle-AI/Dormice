@@ -27,13 +27,13 @@ import { since } from '../format';
 
 /**
  * 「我的沙箱昨晚为什么停了」— 活动环里只属于这个沙箱的那几行。纯前端
- * 过滤:活动事件本来就带 userKey,不发明新端点;按环形表上限(1000)
+ * 过滤:活动事件本来就带 externalId,不发明新端点;按环形表上限(1000)
  * 拉取,把这个沙箱的事件尽量捞全,再老的已经滚出环了。
  */
-export function HistoryPanel({ userKey }: { userKey: string }) {
+export function HistoryPanel({ externalId }: { externalId: string }) {
   const { data, isPending, isError, error } = useActivity(1000);
   const events = (data?.events ?? []).filter(
-    (event) => event.userKey === userKey,
+    (event) => event.externalId === externalId,
   );
 
   if (isPending) {
@@ -109,7 +109,7 @@ export function HistoryPanel({ userKey }: { userKey: string }) {
         </Table>
       </div>
       <p className="text-sm text-muted-foreground">
-        释放沙箱后 key 会重新可用 — 这里可能同时看到新旧两代沙箱的事件。
+        销毁沙箱后 key 会重新可用 — 这里可能同时看到新旧两代沙箱的事件。
       </p>
     </div>
   );

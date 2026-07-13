@@ -1,14 +1,14 @@
 import { z } from 'zod';
 import { lifecyclePolicyOverrideSchema } from './policy';
-import { sandboxSchema, userKeySchema } from './sandbox';
+import { sandboxSchema, externalIdSchema } from './sandbox';
 import { templateNameSchema } from './templates';
 
 /**
- * acquire(userKey) — the platform's single entry point. Idempotent:
+ * acquire(externalId) — the platform's single entry point. Idempotent:
  * no sandbox → create; frozen → wake; stopped → rebuild; archived → restore.
  */
 export const acquireRequestSchema = z.object({
-  userKey: userKeySchema,
+  externalId: externalIdSchema,
   /**
    * Lifecycle override applied when this acquire creates the sandbox;
    * omitted fields fall back to the daemon's global defaults. When the key

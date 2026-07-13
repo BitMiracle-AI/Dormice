@@ -1,6 +1,7 @@
 export * from './acquire';
 export * from './activity';
 export * from './config';
+export * from './destroy';
 export * from './exec';
 export * from './files';
 export * from './host';
@@ -9,8 +10,7 @@ export * from './list';
 export * from './metrics';
 export * from './policy';
 export * from './rebuild';
-export * from './release';
 export * from './sandbox';
-export * from './set-policy';
 export * from './states';
 export * from './templates';
+export * from './update-policy';

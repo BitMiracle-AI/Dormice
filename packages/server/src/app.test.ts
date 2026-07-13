@@ -78,14 +78,14 @@ describe('auth', () => {
   });
 
   it('rejects API calls without a token', async () => {
-    const res = await acquire(testApp().app, { userKey: 'u' }, {});
+    const res = await acquire(testApp().app, { externalId: 'u' }, {});
     expect(res.statusCode).toBe(401);
   });
 
   it('rejects API calls with a wrong token', async () => {
     const res = await acquire(
       testApp().app,
-      { userKey: 'u' },
+      { externalId: 'u' },
       { authorization: 'Bearer wrong-token-wrong-token-wrong-token' },
     );
     expect(res.statusCode).toBe(401);
@@ -95,35 +95,35 @@ describe('auth', () => {
 describe('POST /acquireSandbox', () => {
   it('creates a sandbox on first acquire, with default policy', async () => {
     const { app, executor } = testApp();
-    const res = await acquire(app, { userKey: 'alice' });
+    const res = await acquire(app, { externalId: 'alice' });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.status).toBe('ready');
     expect(body.sandbox.state).toBe('active');
-    expect(body.sandbox.userKey).toBe('alice');
+    expect(body.sandbox.externalId).toBe('alice');
     expect(body.sandbox.policy).toEqual(DEFAULT_LIFECYCLE_POLICY);
     expect(body.sandbox.endpoint).toBe('http://127.0.0.1:3676');
     // The ledger and reality agree: the container is actually running.
     expect(executor.stateOf(body.sandbox.sandboxId)).toBe('running');
   });
 
-  it('is idempotent: same user key returns the same sandbox', async () => {
+  it('is idempotent: same external id returns the same sandbox', async () => {
     const { app } = testApp();
-    const first = (await acquire(app, { userKey: 'alice' })).json();
-    const second = (await acquire(app, { userKey: 'alice' })).json();
+    const first = (await acquire(app, { externalId: 'alice' })).json();
+    const second = (await acquire(app, { externalId: 'alice' })).json();
     expect(second.sandbox.sandboxId).toBe(first.sandbox.sandboxId);
   });
 
-  it('gives different user keys different sandboxes', async () => {
+  it('gives different external ids different sandboxes', async () => {
     const { app } = testApp();
-    const alice = (await acquire(app, { userKey: 'alice' })).json();
-    const bob = (await acquire(app, { userKey: 'bob' })).json();
+    const alice = (await acquire(app, { externalId: 'alice' })).json();
+    const bob = (await acquire(app, { externalId: 'bob' })).json();
     expect(bob.sandbox.sandboxId).not.toBe(alice.sandbox.sandboxId);
   });
 
   it('stores a policy override, including explicit null for archive', async () => {
     const res = await acquire(testApp().app, {
-      userKey: 'alice',
+      externalId: 'alice',
       policy: { freezeAfterSeconds: 60, archiveAfterSeconds: null },
     });
     expect(res.json().sandbox.policy).toEqual({
@@ -135,7 +135,7 @@ describe('POST /acquireSandbox', () => {
 
   it('rejects an override whose merged result breaks the ordering rule', async () => {
     const res = await acquire(testApp().app, {
-      userKey: 'alice',
+      externalId: 'alice',
       policy: { freezeAfterSeconds: 61, stopAfterSeconds: 60 },
     });
     expect(res.statusCode).toBe(400);
@@ -146,7 +146,7 @@ describe('POST /acquireSandbox', () => {
     // Without an archiver a stored archive threshold would be a standing
     // lie; the daemon refuses rather than nodding along.
     const res = await acquire(testApp().app, {
-      userKey: 'alice',
+      externalId: 'alice',
       policy: { archiveAfterSeconds: 3600 },
     });
     expect(res.statusCode).toBe(400);
@@ -162,7 +162,7 @@ describe('POST /acquireSandbox', () => {
 
   it('stores stopAfterSeconds: null — the never-stop resident policy', async () => {
     const res = await acquire(testApp().app, {
-      userKey: 'resident',
+      externalId: 'resident',
       policy: { stopAfterSeconds: null },
     });
     expect(res.statusCode).toBe(200);
@@ -171,11 +171,11 @@ describe('POST /acquireSandbox', () => {
 
   it('rejects an invalid override even when the sandbox already exists', async () => {
     const { app } = testApp();
-    await acquire(app, { userKey: 'alice' });
+    await acquire(app, { externalId: 'alice' });
     // The override would not apply (the sandbox exists), but it is still
     // the caller's mistake — a 400, never a silent ignore.
     const res = await acquire(app, {
-      userKey: 'alice',
+      externalId: 'alice',
       policy: { archiveAfterSeconds: 1 },
     });
     expect(res.statusCode).toBe(400);
@@ -184,9 +184,9 @@ describe('POST /acquireSandbox', () => {
 
 describe('error shape', () => {
   it('answers validation failures with the protocol {message} body on every route', async () => {
-    // releaseSandbox declares no error schema; without the global error
+    // destroySandbox declares no error schema; without the global error
     // handler Fastify's native multi-field shape leaked here.
-    const res = await rpc(testApp().app, '/releaseSandbox', {});
+    const res = await rpc(testApp().app, '/destroySandbox', {});
     expect(res.statusCode).toBe(400);
     expect(Object.keys(res.json())).toEqual(['message']);
   });
@@ -201,17 +201,17 @@ describe('error shape', () => {
 describe('sandbox capacity', () => {
   it('caps creation at DORMICE_MAX_SANDBOXES with an honest 429', async () => {
     const { app } = testApp(undefined, { DORMICE_MAX_SANDBOXES: '1' });
-    expect((await acquire(app, { userKey: 'alice' })).statusCode).toBe(200);
+    expect((await acquire(app, { externalId: 'alice' })).statusCode).toBe(200);
 
-    const capped = await acquire(app, { userKey: 'bob' });
+    const capped = await acquire(app, { externalId: 'bob' });
     expect(capped.statusCode).toBe(429);
     expect(capped.json().message).toMatch(/DORMICE_MAX_SANDBOXES/);
 
     // Existing sandboxes always wake — the cap only guards creation.
-    expect((await acquire(app, { userKey: 'alice' })).statusCode).toBe(200);
+    expect((await acquire(app, { externalId: 'alice' })).statusCode).toBe(200);
     // Releasing frees the slot.
-    await rpc(app, '/releaseSandbox', { userKey: 'alice' });
-    expect((await acquire(app, { userKey: 'bob' })).statusCode).toBe(200);
+    await rpc(app, '/destroySandbox', { externalId: 'alice' });
+    expect((await acquire(app, { externalId: 'bob' })).statusCode).toBe(200);
   });
 });
 
@@ -229,8 +229,8 @@ describe('concurrent acquires', () => {
     const executor = new SlowCreateExecutor();
     const { app } = testApp(executor);
     const [first, second] = await Promise.all([
-      acquire(app, { userKey: 'alice' }),
-      acquire(app, { userKey: 'alice' }),
+      acquire(app, { externalId: 'alice' }),
+      acquire(app, { externalId: 'alice' }),
     ]);
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
@@ -246,8 +246,8 @@ describe('concurrent acquires', () => {
     const executor = new SlowCreateExecutor();
     const { app } = testApp(executor);
     const [alice, bob] = await Promise.all([
-      acquire(app, { userKey: 'alice' }),
-      acquire(app, { userKey: 'bob' }),
+      acquire(app, { externalId: 'alice' }),
+      acquire(app, { externalId: 'bob' }),
     ]);
     expect(bob.json().sandbox.sandboxId).not.toBe(
       alice.json().sandbox.sandboxId,
@@ -259,7 +259,7 @@ describe('concurrent acquires', () => {
 describe('acquire wakes cold sandboxes', () => {
   it('unfreezes a frozen sandbox back to active', async () => {
     const { app, db, executor, locks } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
     const id = created.sandbox.sandboxId;
 
     await scanOnce(
@@ -273,7 +273,7 @@ describe('acquire wakes cold sandboxes', () => {
     );
     expect(executor.stateOf(id)).toBe('paused');
 
-    const woken = (await acquire(app, { userKey: 'alice' })).json();
+    const woken = (await acquire(app, { externalId: 'alice' })).json();
     expect(woken.sandbox.sandboxId).toBe(id);
     expect(woken.sandbox.state).toBe('active');
     expect(executor.stateOf(id)).toBe('running');
@@ -283,7 +283,7 @@ describe('acquire wakes cold sandboxes', () => {
     const { app, db, executor, locks } = testApp();
     const created = (
       await acquire(app, {
-        userKey: 'alice',
+        externalId: 'alice',
         policy: { freezeAfterSeconds: 60, stopAfterSeconds: 120 },
       })
     ).json();
@@ -294,7 +294,7 @@ describe('acquire wakes cold sandboxes', () => {
     await scanOnce(db, executor, locks, after(lastActiveAt, 120));
     expect(executor.stateOf(id)).toBe('stopped');
 
-    const woken = (await acquire(app, { userKey: 'alice' })).json();
+    const woken = (await acquire(app, { externalId: 'alice' })).json();
     expect(woken.sandbox.sandboxId).toBe(id);
     expect(woken.sandbox.state).toBe('active');
     expect(executor.stateOf(id)).toBe('running');
@@ -302,7 +302,7 @@ describe('acquire wakes cold sandboxes', () => {
 
   it('waking refreshes the idle clock', async () => {
     const { app, db, executor, locks } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
 
     await scanOnce(
       db,
@@ -315,7 +315,7 @@ describe('acquire wakes cold sandboxes', () => {
     );
     // touch() stamps real wall-clock time, so give it a distinct millisecond.
     await new Promise((resolve) => setTimeout(resolve, 5));
-    const woken = (await acquire(app, { userKey: 'alice' })).json();
+    const woken = (await acquire(app, { externalId: 'alice' })).json();
     expect(Date.parse(woken.sandbox.lastActiveAt)).toBeGreaterThan(
       Date.parse(created.sandbox.lastActiveAt),
     );
@@ -334,7 +334,7 @@ describe('scanner vs acquire on the same key', () => {
   it('an acquire during a freeze waits its turn and gets a running sandbox', async () => {
     const executor = new SlowFreezeExecutor();
     const { app, db, locks } = testApp(executor);
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
     const id = created.sandbox.sandboxId;
 
     // The scanner decides to freeze; the acquire lands mid-freeze.
@@ -350,7 +350,7 @@ describe('scanner vs acquire on the same key', () => {
         DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
       ),
     );
-    const woken = acquire(app, { userKey: 'alice' });
+    const woken = acquire(app, { externalId: 'alice' });
     const [sweepResult, res] = await Promise.all([sweep, woken]);
 
     expect(sweepResult.frozen).toBe(1);
@@ -372,15 +372,15 @@ describe('concurrent releases of the same key', () => {
   it('one reports released, the other reports the goal state — no 500', async () => {
     const executor = new SlowDestroyExecutor();
     const { app } = testApp(executor);
-    await acquire(app, { userKey: 'alice' });
+    await acquire(app, { externalId: 'alice' });
 
     const [a, b] = await Promise.all([
-      rpc(app, '/releaseSandbox', { userKey: 'alice' }),
-      rpc(app, '/releaseSandbox', { userKey: 'alice' }),
+      rpc(app, '/destroySandbox', { externalId: 'alice' }),
+      rpc(app, '/destroySandbox', { externalId: 'alice' }),
     ]);
     expect(a.statusCode).toBe(200);
     expect(b.statusCode).toBe(200);
-    const released = [a.json().released, b.json().released];
+    const released = [a.json().destroyed, b.json().destroyed];
     expect(released.filter(Boolean)).toHaveLength(1);
   });
 });
@@ -388,7 +388,7 @@ describe('concurrent releases of the same key', () => {
 describe('acquire after reality moved behind the ledger', () => {
   it('returns a fresh sandbox when container and disk are truly gone', async () => {
     const { app, db, executor, locks } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
     // Container and disk wiped behind the daemon's back — the end state of
     // a release that crashed after the executor's work, before the ledger's.
     await executor.destroy(created.sandbox.sandboxId);
@@ -397,7 +397,7 @@ describe('acquire after reality moved behind the ledger', () => {
     // within one interval, freeing the key.
     await reconcile(db, executor, locks, new Set());
 
-    const again = (await acquire(app, { userKey: 'alice' })).json();
+    const again = (await acquire(app, { externalId: 'alice' })).json();
     expect(again.status).toBe('ready');
     expect(again.sandbox.sandboxId).not.toBe(created.sandbox.sandboxId);
     // This time the sandbox is real.
@@ -413,7 +413,7 @@ describe('acquire after reality moved behind the ledger', () => {
     const { app, db, executor, locks } = testApp();
     const created = (
       await acquire(app, {
-        userKey: 'alice',
+        externalId: 'alice',
         policy: { freezeAfterSeconds: 60, stopAfterSeconds: 120 },
       })
     ).json();
@@ -425,7 +425,7 @@ describe('acquire after reality moved behind the ledger', () => {
 
     await reconcile(db, executor, locks, new Set());
 
-    const again = (await acquire(app, { userKey: 'alice' })).json();
+    const again = (await acquire(app, { externalId: 'alice' })).json();
     expect(again.sandbox.sandboxId).toBe(id);
     expect(again.sandbox.state).toBe('active');
     expect(executor.stateOf(id)).toBe('running');
@@ -435,10 +435,10 @@ describe('acquire after reality moved behind the ledger', () => {
 describe('POST /execCommand', () => {
   it('runs a command in the sandbox and returns the buffered result', async () => {
     const { app } = testApp();
-    await acquire(app, { userKey: 'alice' });
+    await acquire(app, { externalId: 'alice' });
     // No timeoutSeconds sent: the schema default fills it in server-side.
     const res = await rpc(app, '/execCommand', {
-      userKey: 'alice',
+      externalId: 'alice',
       command: 'echo hi',
     });
     expect(res.statusCode).toBe(200);
@@ -453,7 +453,7 @@ describe('POST /execCommand', () => {
 
   it('answers an unknown key with a 404, never a silent create', async () => {
     const res = await rpc(testApp().app, '/execCommand', {
-      userKey: 'nobody',
+      externalId: 'nobody',
       command: 'echo hi',
     });
     expect(res.statusCode).toBe(404);
@@ -462,7 +462,7 @@ describe('POST /execCommand', () => {
 
   it('wakes a frozen sandbox before running the command', async () => {
     const { app, db, executor, locks } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
     const id = created.sandbox.sandboxId;
     await scanOnce(
       db,
@@ -478,7 +478,7 @@ describe('POST /execCommand', () => {
     // A paused container cannot even receive an exec (Docker refuses); the
     // route must wake it first, exactly like acquire does.
     const res = await rpc(app, '/execCommand', {
-      userKey: 'alice',
+      externalId: 'alice',
       command: 'echo woke',
     });
     expect(res.statusCode).toBe(200);
@@ -492,7 +492,7 @@ describe('POST /execCommand', () => {
     const { app, db, executor, locks } = testApp();
     const created = (
       await acquire(app, {
-        userKey: 'alice',
+        externalId: 'alice',
         policy: { freezeAfterSeconds: 1 },
       })
     ).json();
@@ -503,7 +503,7 @@ describe('POST /execCommand', () => {
     // touch (~0ms) is stale against that clock — only the 500ms heartbeat
     // touch keeps the idle under the threshold.
     const execPromise = rpc(app, '/execCommand', {
-      userKey: 'alice',
+      externalId: 'alice',
       command: 'sleep 1',
     });
     await new Promise((resolve) => setTimeout(resolve, 700));
@@ -528,17 +528,17 @@ describe('POST /execCommand', () => {
     // Reverse-verified: without the heartbeat's try/catch this crashes.
     const { app } = testApp();
     await acquire(app, {
-      userKey: 'alice',
+      externalId: 'alice',
       policy: { freezeAfterSeconds: 1 },
     });
 
     const execPromise = rpc(app, '/execCommand', {
-      userKey: 'alice',
+      externalId: 'alice',
       command: 'sleep 1',
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    const releaseRes = await rpc(app, '/releaseSandbox', { userKey: 'alice' });
-    expect(releaseRes.json()).toEqual({ released: true });
+    const releaseRes = await rpc(app, '/destroySandbox', { externalId: 'alice' });
+    expect(releaseRes.json()).toEqual({ destroyed: true });
 
     // Both requests settle; ride out one more heartbeat interval on the
     // deleted row before declaring the daemon healthy.
@@ -552,15 +552,15 @@ describe('POST /execCommand', () => {
 
   it('rejects malformed requests with the protocol {message} shape', async () => {
     const { app } = testApp();
-    await acquire(app, { userKey: 'alice' });
+    await acquire(app, { externalId: 'alice' });
     const bad = [
-      { userKey: 'alice' }, // no command
-      { userKey: 'alice', command: '' },
-      { userKey: 'alice', command: 'echo hi', timeoutSeconds: 0 },
-      { userKey: 'alice', command: 'echo hi', timeoutSeconds: -5 },
-      { userKey: 'alice', command: 'echo hi', timeoutSeconds: 1.5 },
-      { userKey: 'alice', command: 'echo hi', timeoutSeconds: 86_401 },
-      { userKey: 'alice', command: 'echo hi', env: { PATH: 42 } },
+      { externalId: 'alice' }, // no command
+      { externalId: 'alice', command: '' },
+      { externalId: 'alice', command: 'echo hi', timeoutSeconds: 0 },
+      { externalId: 'alice', command: 'echo hi', timeoutSeconds: -5 },
+      { externalId: 'alice', command: 'echo hi', timeoutSeconds: 1.5 },
+      { externalId: 'alice', command: 'echo hi', timeoutSeconds: 86_401 },
+      { externalId: 'alice', command: 'echo hi', env: { PATH: 42 } },
     ];
     for (const payload of bad) {
       const res = await rpc(app, '/execCommand', payload);
@@ -573,13 +573,13 @@ describe('POST /execCommand', () => {
 describe('POST /writeFiles and /readFile', () => {
   it('round-trips content through base64, resolving paths to absolute', async () => {
     const { app } = testApp();
-    await acquire(app, { userKey: 'alice' });
+    await acquire(app, { externalId: 'alice' });
     // Every byte value: any utf8 coercion or base64 sloppiness breaks this.
     const bytes = Buffer.alloc(256);
     for (let i = 0; i < 256; i++) bytes[i] = i;
 
     const write = await rpc(app, '/writeFiles', {
-      userKey: 'alice',
+      externalId: 'alice',
       files: [
         {
           path: 'notes.txt',
@@ -600,7 +600,7 @@ describe('POST /writeFiles and /readFile', () => {
     });
 
     const read = await rpc(app, '/readFile', {
-      userKey: 'alice',
+      externalId: 'alice',
       path: 'blob.bin',
     });
     expect(read.statusCode).toBe(200);
@@ -613,18 +613,18 @@ describe('POST /writeFiles and /readFile', () => {
   it('answers an unknown key with a 404 on both verbs, never a silent create', async () => {
     const { app } = testApp();
     const write = await rpc(app, '/writeFiles', {
-      userKey: 'nobody',
+      externalId: 'nobody',
       files: [{ path: 'x', contentBase64: 'eA==' }],
     });
     expect(write.statusCode).toBe(404);
-    const read = await rpc(app, '/readFile', { userKey: 'nobody', path: 'x' });
+    const read = await rpc(app, '/readFile', { externalId: 'nobody', path: 'x' });
     expect(read.statusCode).toBe(404);
     expect(read.json().message).toMatch(/no sandbox for key/);
   });
 
   it('wakes a frozen sandbox before touching files', async () => {
     const { app, db, executor, locks } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
     await scanOnce(
       db,
       executor,
@@ -637,7 +637,7 @@ describe('POST /writeFiles and /readFile', () => {
     expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
 
     const res = await rpc(app, '/writeFiles', {
-      userKey: 'alice',
+      externalId: 'alice',
       files: [{ path: 'woke.txt', contentBase64: 'eA==' }],
     });
     expect(res.statusCode).toBe(200);
@@ -646,17 +646,17 @@ describe('POST /writeFiles and /readFile', () => {
 
   it('maps the typed file errors onto 404, 400 and 413', async () => {
     const { app, executor } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
 
     const missing = await rpc(app, '/readFile', {
-      userKey: 'alice',
+      externalId: 'alice',
       path: 'absent.txt',
     });
     expect(missing.statusCode).toBe(404);
     expect(missing.json().message).toBe('no such file: /home/user/absent.txt');
 
     const directory = await rpc(app, '/readFile', {
-      userKey: 'alice',
+      externalId: 'alice',
       path: '/home/user',
     });
     expect(directory.statusCode).toBe(400);
@@ -670,7 +670,7 @@ describe('POST /writeFiles and /readFile', () => {
       { path: 'big.bin', content: Buffer.alloc(size) },
     ]);
     const big = await rpc(app, '/readFile', {
-      userKey: 'alice',
+      externalId: 'alice',
       path: 'big.bin',
     });
     expect(big.statusCode).toBe(413);
@@ -684,9 +684,9 @@ describe('POST /writeFiles and /readFile', () => {
     // bodyLimit and failing the per-file refine proves both gates sit where
     // they should: total bytes at the body limit, per-file size in the schema.
     const { app } = testApp();
-    await acquire(app, { userKey: 'alice' });
+    await acquire(app, { externalId: 'alice' });
     const res = await rpc(app, '/writeFiles', {
-      userKey: 'alice',
+      externalId: 'alice',
       files: [
         {
           path: 'big.bin',
@@ -702,30 +702,30 @@ describe('POST /writeFiles and /readFile', () => {
 
   it('rejects malformed requests with the protocol {message} shape', async () => {
     const { app } = testApp();
-    await acquire(app, { userKey: 'alice' });
+    await acquire(app, { externalId: 'alice' });
     const bad = [
-      ['/writeFiles', { userKey: 'alice', files: [] }],
-      ['/writeFiles', { userKey: 'alice' }],
+      ['/writeFiles', { externalId: 'alice', files: [] }],
+      ['/writeFiles', { externalId: 'alice' }],
       [
         '/writeFiles',
-        { userKey: 'alice', files: [{ path: '', contentBase64: 'eA==' }] },
+        { externalId: 'alice', files: [{ path: '', contentBase64: 'eA==' }] },
       ],
       [
         '/writeFiles',
         {
-          userKey: 'alice',
+          externalId: 'alice',
           files: [{ path: 'a\0b', contentBase64: 'eA==' }],
         },
       ],
       [
         '/writeFiles',
         {
-          userKey: 'alice',
+          externalId: 'alice',
           files: [{ path: 'x', contentBase64: '!!not-b64' }],
         },
       ],
-      ['/readFile', { userKey: 'alice' }],
-      ['/readFile', { userKey: 'alice', path: '' }],
+      ['/readFile', { externalId: 'alice' }],
+      ['/readFile', { externalId: 'alice', path: '' }],
     ] as const;
     for (const [url, payload] of bad) {
       const res = await rpc(app, url, payload as Record<string, unknown>);
@@ -750,11 +750,11 @@ describe('POST /listSandboxes', () => {
     // Give alice a shorter freeze threshold so one sweep freezes only her.
     const alice = (
       await acquire(app, {
-        userKey: 'alice',
+        externalId: 'alice',
         policy: { freezeAfterSeconds: 60 },
       })
     ).json();
-    await acquire(app, { userKey: 'bob' });
+    await acquire(app, { externalId: 'bob' });
     await scanOnce(db, executor, locks, after(alice.sandbox.lastActiveAt, 60));
 
     const res = await rpc(app, '/listSandboxes');
@@ -762,8 +762,8 @@ describe('POST /listSandboxes', () => {
     const states = Object.fromEntries(
       res
         .json()
-        .sandboxes.map((s: { userKey: string; state: string }) => [
-          s.userKey,
+        .sandboxes.map((s: { externalId: string; state: string }) => [
+          s.externalId,
           s.state,
         ]),
     );
@@ -774,10 +774,10 @@ describe('POST /listSandboxes', () => {
 describe('POST /rebuildSandbox', () => {
   it('swaps the container, keeps the disk, and the same key wakes with its data', async () => {
     const { app, executor } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
     const id = created.sandbox.sandboxId;
     await rpc(app, '/writeFiles', {
-      userKey: 'alice',
+      externalId: 'alice',
       files: [
         {
           path: 'keep.txt',
@@ -786,7 +786,7 @@ describe('POST /rebuildSandbox', () => {
       ],
     });
 
-    const res = await rpc(app, '/rebuildSandbox', { userKey: 'alice' });
+    const res = await rpc(app, '/rebuildSandbox', { externalId: 'alice' });
     expect(res.statusCode).toBe(200);
     // The shell is gone, the row stays, the state says so honestly.
     expect(res.json().sandbox).toMatchObject({
@@ -796,10 +796,10 @@ describe('POST /rebuildSandbox', () => {
     expect(executor.stateOf(id)).toBeUndefined();
 
     // The same key comes back to the same sandbox — rebuilt shell, same body.
-    const again = (await acquire(app, { userKey: 'alice' })).json();
+    const again = (await acquire(app, { externalId: 'alice' })).json();
     expect(again.sandbox.sandboxId).toBe(id);
     const read = await rpc(app, '/readFile', {
-      userKey: 'alice',
+      externalId: 'alice',
       path: 'keep.txt',
     });
     expect(Buffer.from(read.json().contentBase64, 'base64').toString()).toBe(
@@ -809,7 +809,7 @@ describe('POST /rebuildSandbox', () => {
 
   it('rebuilds a frozen sandbox too, and again while already stopped', async () => {
     const { app, db, executor, locks } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
     await scanOnce(
       db,
       executor,
@@ -821,31 +821,31 @@ describe('POST /rebuildSandbox', () => {
     );
     expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
 
-    const res = await rpc(app, '/rebuildSandbox', { userKey: 'alice' });
+    const res = await rpc(app, '/rebuildSandbox', { externalId: 'alice' });
     expect(res.json().sandbox.state).toBe('stopped');
 
     // A second rebuild finds no container — the goal state, not an error.
-    const again = await rpc(app, '/rebuildSandbox', { userKey: 'alice' });
+    const again = await rpc(app, '/rebuildSandbox', { externalId: 'alice' });
     expect(again.statusCode).toBe(200);
     expect(again.json().sandbox.state).toBe('stopped');
   });
 
   it('answers 404 for an unknown key — rebuild is not a creator', async () => {
     const res = await rpc(testApp().app, '/rebuildSandbox', {
-      userKey: 'nobody',
+      externalId: 'nobody',
     });
     expect(res.statusCode).toBe(404);
     expect(res.json().message).toMatch(/acquire it first/);
   });
 });
 
-describe('POST /setPolicy', () => {
+describe('POST /updatePolicy', () => {
   it('patches one knob, keeps the rest, and does not refresh the idle clock', async () => {
     const { app } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
 
-    const res = await rpc(app, '/setPolicy', {
-      userKey: 'alice',
+    const res = await rpc(app, '/updatePolicy', {
+      externalId: 'alice',
       policy: { freezeAfterSeconds: 120 },
     });
     expect(res.statusCode).toBe(200);
@@ -859,14 +859,14 @@ describe('POST /setPolicy', () => {
     const events = (await rpc(app, '/listActivity')).json().events;
     expect(events[0]).toMatchObject({
       kind: 'policy-changed',
-      userKey: 'alice',
+      externalId: 'alice',
       detail: 'freeze 600s -> 120s',
     });
   });
 
   it('promotes a frozen sandbox to never-stop without waking it', async () => {
     const { app, db, executor, locks } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
     await scanOnce(
       db,
       executor,
@@ -878,8 +878,8 @@ describe('POST /setPolicy', () => {
     );
     expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
 
-    const res = await rpc(app, '/setPolicy', {
-      userKey: 'alice',
+    const res = await rpc(app, '/updatePolicy', {
+      externalId: 'alice',
       policy: { stopAfterSeconds: null },
     });
     expect(res.statusCode).toBe(200);
@@ -891,10 +891,10 @@ describe('POST /setPolicy', () => {
 
   it('rejects a patch whose merged result breaks the ordering rule', async () => {
     const { app } = testApp();
-    await acquire(app, { userKey: 'alice' });
+    await acquire(app, { externalId: 'alice' });
     // freeze pushed past the stored stop threshold.
-    const res = await rpc(app, '/setPolicy', {
-      userKey: 'alice',
+    const res = await rpc(app, '/updatePolicy', {
+      externalId: 'alice',
       policy: {
         freezeAfterSeconds:
           (DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds ?? 0) + 1,
@@ -906,18 +906,18 @@ describe('POST /setPolicy', () => {
 
   it('refuses to promise archiving on a daemon without S3', async () => {
     const { app } = testApp();
-    await acquire(app, { userKey: 'alice' });
-    const res = await rpc(app, '/setPolicy', {
-      userKey: 'alice',
+    await acquire(app, { externalId: 'alice' });
+    const res = await rpc(app, '/updatePolicy', {
+      externalId: 'alice',
       policy: { archiveAfterSeconds: 30 * 24 * 60 * 60 },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().message).toMatch(/DORMICE_S3_/);
   });
 
-  it('answers 404 for an unknown key — setPolicy is not a creator', async () => {
-    const res = await rpc(testApp().app, '/setPolicy', {
-      userKey: 'nobody',
+  it('answers 404 for an unknown key — updatePolicy is not a creator', async () => {
+    const res = await rpc(testApp().app, '/updatePolicy', {
+      externalId: 'nobody',
       policy: { freezeAfterSeconds: 60 },
     });
     expect(res.statusCode).toBe(404);
@@ -926,9 +926,9 @@ describe('POST /setPolicy', () => {
 
   it('treats a no-change patch as the goal state and writes no history', async () => {
     const { app } = testApp();
-    await acquire(app, { userKey: 'alice' });
-    const res = await rpc(app, '/setPolicy', {
-      userKey: 'alice',
+    await acquire(app, { externalId: 'alice' });
+    const res = await rpc(app, '/updatePolicy', {
+      externalId: 'alice',
       policy: {
         freezeAfterSeconds: DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
       },
@@ -941,24 +941,24 @@ describe('POST /setPolicy', () => {
   });
 });
 
-describe('POST /releaseSandbox', () => {
+describe('POST /destroySandbox', () => {
   it('destroys the container and forgets the key', async () => {
     const { app, executor } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
     const id = created.sandbox.sandboxId;
 
-    const res = await rpc(app, '/releaseSandbox', { userKey: 'alice' });
-    expect(res.json()).toEqual({ released: true });
+    const res = await rpc(app, '/destroySandbox', { externalId: 'alice' });
+    expect(res.json()).toEqual({ destroyed: true });
     // Reality and ledger agree: container gone, key free again — the next
     // acquire builds a brand-new sandbox.
     expect(executor.stateOf(id)).toBeUndefined();
-    const again = (await acquire(app, { userKey: 'alice' })).json();
+    const again = (await acquire(app, { externalId: 'alice' })).json();
     expect(again.sandbox.sandboxId).not.toBe(id);
   });
 
   it('releases a cold sandbox too', async () => {
     const { app, db, executor, locks } = testApp();
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
     await scanOnce(
       db,
       executor,
@@ -970,17 +970,17 @@ describe('POST /releaseSandbox', () => {
     );
     expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
 
-    const res = await rpc(app, '/releaseSandbox', { userKey: 'alice' });
-    expect(res.json()).toEqual({ released: true });
+    const res = await rpc(app, '/destroySandbox', { externalId: 'alice' });
+    expect(res.json()).toEqual({ destroyed: true });
     expect(executor.stateOf(created.sandbox.sandboxId)).toBeUndefined();
   });
 
   it('is idempotent: a key with no sandbox reports released false', async () => {
-    const res = await rpc(testApp().app, '/releaseSandbox', {
-      userKey: 'nobody',
+    const res = await rpc(testApp().app, '/destroySandbox', {
+      externalId: 'nobody',
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ released: false });
+    expect(res.json()).toEqual({ destroyed: false });
   });
 });
 
@@ -1017,11 +1017,11 @@ describe('the archiver through the app', () => {
   /** Polls acquire until the union flips to ready; the whole restore path. */
   async function acquireUntilReady(
     app: ReturnType<typeof testApp>['app'],
-    userKey: string,
+    externalId: string,
   ) {
     const deadline = Date.now() + 5_000;
     while (true) {
-      const body = (await acquire(app, { userKey })).json();
+      const body = (await acquire(app, { externalId })).json();
       if (body.status === 'ready') return body;
       expect(body.status).toBe('restoring');
       expect(body.progress.phase).toMatch(/downloading|extracting/);
@@ -1036,7 +1036,7 @@ describe('the archiver through the app', () => {
     const { app, db, executor, locks, store, archiver } = archiverTestApp();
     const created = (
       await acquire(app, {
-        userKey: 'alice',
+        externalId: 'alice',
         policy: {
           freezeAfterSeconds: 1,
           stopAfterSeconds: 2,
@@ -1046,7 +1046,7 @@ describe('the archiver through the app', () => {
     ).json();
     const id = created.sandbox.sandboxId;
     await rpc(app, '/writeFiles', {
-      userKey: 'alice',
+      externalId: 'alice',
       files: [
         {
           path: 'kept.txt',
@@ -1073,7 +1073,7 @@ describe('the archiver through the app', () => {
     expect(ready.sandbox.sandboxId).toBe(id);
     expect(ready.sandbox.state).toBe('active');
     const read = (
-      await rpc(app, '/readFile', { userKey: 'alice', path: 'kept.txt' })
+      await rpc(app, '/readFile', { externalId: 'alice', path: 'kept.txt' })
     ).json();
     expect(Buffer.from(read.contentBase64, 'base64').toString()).toBe(
       'through the archive',
@@ -1082,7 +1082,7 @@ describe('the archiver through the app', () => {
 
   it('stores the 7-day archive default when S3 is configured', async () => {
     const { app } = archiverTestApp();
-    const res = await acquire(app, { userKey: 'alice' });
+    const res = await acquire(app, { externalId: 'alice' });
     expect(res.json().sandbox.policy.archiveAfterSeconds).toBe(
       ARCHIVE_DEFAULT_SECONDS,
     );
@@ -1093,14 +1093,14 @@ describe('the archiver through the app', () => {
     // the rows are honest, the restore is impossible, the error names it.
     const executor = new FakeExecutor();
     const { app, db } = testApp(executor);
-    const created = (await acquire(app, { userKey: 'alice' })).json();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
     const id = created.sandbox.sandboxId;
     transition(db, id, 'frozen');
     transition(db, id, 'stopped');
     transition(db, id, 'archived');
     await executor.destroy(id);
 
-    const res = await acquire(app, { userKey: 'alice' });
+    const res = await acquire(app, { externalId: 'alice' });
     expect(res.statusCode).toBe(503);
     expect(res.json().message).toMatch(/no S3 configured \(DORMICE_S3_\*\)/);
   });
@@ -1109,7 +1109,7 @@ describe('the archiver through the app', () => {
     const { app, db, executor, locks, store, archiver } = archiverTestApp();
     const created = (
       await acquire(app, {
-        userKey: 'alice',
+        externalId: 'alice',
         policy: {
           freezeAfterSeconds: 1,
           stopAfterSeconds: 2,
@@ -1124,8 +1124,8 @@ describe('the archiver through the app', () => {
     await scanOnce(db, executor, locks, after(stamp, 3), archiver);
     expect(store.has(objectKey(id))).toBe(true);
 
-    const res = await rpc(app, '/releaseSandbox', { userKey: 'alice' });
-    expect(res.json()).toEqual({ released: true });
+    const res = await rpc(app, '/destroySandbox', { externalId: 'alice' });
+    expect(res.json()).toEqual({ destroyed: true });
     expect(store.has(objectKey(id))).toBe(false);
     expect((await rpc(app, '/listSandboxes')).json().sandboxes).toEqual([]);
   });
@@ -1134,7 +1134,7 @@ describe('the archiver through the app', () => {
     const { app, db, executor, locks, store, archiver } = archiverTestApp();
     const created = (
       await acquire(app, {
-        userKey: 'alice',
+        externalId: 'alice',
         policy: {
           freezeAfterSeconds: 1,
           stopAfterSeconds: 2,
@@ -1157,9 +1157,9 @@ describe('the archiver through the app', () => {
       return innerGet(key, dest, onProgress);
     };
 
-    const restoring = (await acquire(app, { userKey: 'alice' })).json();
+    const restoring = (await acquire(app, { externalId: 'alice' })).json();
     expect(restoring.status).toBe('restoring');
-    const res = await rpc(app, '/releaseSandbox', { userKey: 'alice' });
+    const res = await rpc(app, '/destroySandbox', { externalId: 'alice' });
     expect(res.statusCode).toBe(409);
     expect(res.json().message).toMatch(/restoring; retry/);
 
@@ -1171,7 +1171,7 @@ describe('the archiver through the app', () => {
     const { app, db, executor, locks, archiver } = archiverTestApp();
     const created = (
       await acquire(app, {
-        userKey: 'alice',
+        externalId: 'alice',
         policy: {
           freezeAfterSeconds: 1,
           stopAfterSeconds: 2,
@@ -1185,13 +1185,13 @@ describe('the archiver through the app', () => {
     await scanOnce(db, executor, locks, after(stamp, 3), archiver);
 
     const exec = await rpc(app, '/execCommand', {
-      userKey: 'alice',
+      externalId: 'alice',
       command: 'echo hi',
     });
     expect(exec.statusCode).toBe(409);
     expect(exec.json().message).toMatch(/call acquireSandbox and poll/);
     const read = await rpc(app, '/readFile', {
-      userKey: 'alice',
+      externalId: 'alice',
       path: 'kept.txt',
     });
     expect(read.statusCode).toBe(409);
@@ -1252,38 +1252,38 @@ describe('templates', () => {
   it('acquire with a template creates the sandbox from its image and records the name', async () => {
     const { app, executor } = testApp();
     await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' });
-    const res = await acquire(app, { userKey: 'alice', template: 'py' });
+    const res = await acquire(app, { externalId: 'alice', template: 'py' });
     expect(res.statusCode).toBe(200);
     const sandbox = res.json().sandbox;
     expect(sandbox.template).toBe('py');
     // The physical half: the shell was actually born from the template's image.
     expect(executor.imageOf(sandbox.sandboxId)).toBe('img-a');
     // A template-less acquire stays on the base image, template null.
-    const plain = (await acquire(app, { userKey: 'bob' })).json().sandbox;
+    const plain = (await acquire(app, { externalId: 'bob' })).json().sandbox;
     expect(plain.template).toBeNull();
   });
 
   it('rejects an unknown template with 400, on the wake path too', async () => {
     const { app } = testApp();
-    const res = await acquire(app, { userKey: 'alice', template: 'ghost' });
+    const res = await acquire(app, { externalId: 'alice', template: 'ghost' });
     expect(res.statusCode).toBe(400);
     expect(res.json().message).toBe(
       "unknown template 'ghost' — register it first",
     );
     // Same answer when the key already has a sandbox: the caller's mistake
     // deserves a 400 even when the value would not apply.
-    await acquire(app, { userKey: 'bob' });
-    const wake = await acquire(app, { userKey: 'bob', template: 'ghost' });
+    await acquire(app, { externalId: 'bob' });
+    const wake = await acquire(app, { externalId: 'bob', template: 'ghost' });
     expect(wake.statusCode).toBe(400);
   });
 
   it('a valid template on an existing key is not applied — creation-time only', async () => {
     const { app } = testApp();
     await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' });
-    const created = (await acquire(app, { userKey: 'alice' })).json().sandbox;
+    const created = (await acquire(app, { externalId: 'alice' })).json().sandbox;
     expect(created.template).toBeNull();
     const again = (
-      await acquire(app, { userKey: 'alice', template: 'py' })
+      await acquire(app, { externalId: 'alice', template: 'py' })
     ).json().sandbox;
     expect(again.sandboxId).toBe(created.sandboxId);
     expect(again.template).toBeNull();
@@ -1292,19 +1292,19 @@ describe('templates', () => {
   it('refuses to remove a template while sandboxes use it, naming the keys', async () => {
     const { app } = testApp();
     await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' });
-    await acquire(app, { userKey: 'alice', template: 'py' });
+    await acquire(app, { externalId: 'alice', template: 'py' });
 
     const refused = await rpc(app, '/removeTemplate', { name: 'py' });
     expect(refused.statusCode).toBe(409);
     expect(refused.json().message).toBe(
-      "template 'py' is used by 1 sandbox(es): alice — release them first",
+      "template 'py' is used by 1 sandbox(es): alice — destroy them first",
     );
 
-    await rpc(app, '/releaseSandbox', { userKey: 'alice' });
+    await rpc(app, '/destroySandbox', { externalId: 'alice' });
     expect((await rpc(app, '/removeTemplate', { name: 'py' })).json()).toEqual({
       removed: true,
     });
-    // Idempotent on an unknown name, like releaseSandbox.
+    // Idempotent on an unknown name, like destroySandbox.
     expect((await rpc(app, '/removeTemplate', { name: 'py' })).json()).toEqual({
       removed: false,
     });
@@ -1314,7 +1314,7 @@ describe('templates', () => {
     const { app, executor } = testApp();
     await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
     const created = (
-      await acquire(app, { userKey: 'alice', template: 'py' })
+      await acquire(app, { externalId: 'alice', template: 'py' })
     ).json().sandbox;
     expect(executor.imageOf(created.sandboxId)).toBe('img-v1');
 
@@ -1323,8 +1323,8 @@ describe('templates', () => {
     await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
     expect(executor.imageOf(created.sandboxId)).toBe('img-v1');
 
-    await rpc(app, '/rebuildSandbox', { userKey: 'alice' });
-    const woken = (await acquire(app, { userKey: 'alice' })).json().sandbox;
+    await rpc(app, '/rebuildSandbox', { externalId: 'alice' });
+    const woken = (await acquire(app, { externalId: 'alice' })).json().sandbox;
     expect(woken.sandboxId).toBe(created.sandboxId);
     // The rebuilt shell was born from the template's *current* image.
     expect(executor.imageOf(created.sandboxId)).toBe('img-v2');
@@ -1381,11 +1381,11 @@ describe('POST /getHostMetrics', () => {
     // to alice+60 freezes exactly one of them.
     const created = (
       await acquire(app, {
-        userKey: 'alice',
+        externalId: 'alice',
         policy: { freezeAfterSeconds: 60 },
       })
     ).json();
-    await acquire(app, { userKey: 'bob' });
+    await acquire(app, { externalId: 'bob' });
 
     let body = (await rpc(app, '/getHostMetrics')).json();
     expect(body.sandboxes.total).toBe(2);

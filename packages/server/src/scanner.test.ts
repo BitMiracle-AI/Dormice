@@ -12,11 +12,11 @@ import { Archiver } from './archive/archiver';
 import { MemStore } from './archive/mem-store';
 import { objectKey } from './archive/store';
 import { type Db, migrateDb, openDb } from './db/db';
-import { createSandbox, findByUserKey, setDeadline, touch } from './db/ledger';
+import { createSandbox, findByExternalId, setDeadline, touch } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
-import { releaseSandbox } from './lifecycle';
+import { destroySandbox } from './lifecycle';
 import { scanOnce } from './scanner';
 
 const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
@@ -42,12 +42,12 @@ function setupWithArchiver() {
 async function seed(
   db: Db,
   executor: FakeExecutor,
-  userKey: string,
+  externalId: string,
   policy: LifecyclePolicy = DEFAULT_LIFECYCLE_POLICY,
 ): Promise<SandboxRow> {
   const sandboxId = randomUUID();
   await executor.create(sandboxId);
-  return createSandbox(db, { sandboxId, userKey, nodeId: 'node-test', policy });
+  return createSandbox(db, { sandboxId, externalId, nodeId: 'node-test', policy });
 }
 
 /** Time travel: the instant `seconds` after the row's last activity. */
@@ -67,7 +67,7 @@ describe('idle scanner', () => {
       expiredKilled: 0,
       failures: [],
     });
-    expect(findByUserKey(db, 'alice')?.state).toBe('active');
+    expect(findByExternalId(db, 'alice')?.state).toBe('active');
     expect(executor.stateOf(row.sandboxId)).toBe('running');
   });
 
@@ -87,7 +87,7 @@ describe('idle scanner', () => {
       expiredKilled: 0,
       failures: [],
     });
-    expect(findByUserKey(db, 'alice')?.state).toBe('frozen');
+    expect(findByExternalId(db, 'alice')?.state).toBe('frozen');
     expect(executor.stateOf(row.sandboxId)).toBe('paused');
   });
 
@@ -108,7 +108,7 @@ describe('idle scanner', () => {
       expiredKilled: 0,
       failures: [],
     });
-    expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
+    expect(findByExternalId(db, 'alice')?.state).toBe('stopped');
     expect(executor.stateOf(row.sandboxId)).toBe('stopped');
   });
 
@@ -123,7 +123,7 @@ describe('idle scanner', () => {
       expiredKilled: 0,
       failures: [],
     });
-    expect(findByUserKey(db, 'alice')?.state).toBe('frozen');
+    expect(findByExternalId(db, 'alice')?.state).toBe('frozen');
     expect(await scanOnce(db, executor, locks, yearLater)).toEqual({
       frozen: 0,
       stopped: 1,
@@ -131,7 +131,7 @@ describe('idle scanner', () => {
       expiredKilled: 0,
       failures: [],
     });
-    expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
+    expect(findByExternalId(db, 'alice')?.state).toBe('stopped');
   });
 
   it('applies each sandbox its own policy', async () => {
@@ -149,8 +149,8 @@ describe('idle scanner', () => {
       expiredKilled: 0,
       failures: [],
     });
-    expect(findByUserKey(db, 'quick')?.state).toBe('frozen');
-    expect(findByUserKey(db, 'slow')?.state).toBe('active');
+    expect(findByExternalId(db, 'quick')?.state).toBe('frozen');
+    expect(findByExternalId(db, 'slow')?.state).toBe('active');
     expect(executor.stateOf(slow.sandboxId)).toBe('running');
   });
 
@@ -163,7 +163,7 @@ describe('idle scanner', () => {
       archiveAfterSeconds: null,
     });
     await scanOnce(db, executor, locks, after(row, row.freezeAfterSeconds));
-    expect(findByUserKey(db, 'resident')?.state).toBe('frozen');
+    expect(findByExternalId(db, 'resident')?.state).toBe('frozen');
 
     const yearLater = await scanOnce(
       db,
@@ -178,7 +178,7 @@ describe('idle scanner', () => {
       expiredKilled: 0,
       failures: [],
     });
-    expect(findByUserKey(db, 'resident')?.state).toBe('frozen');
+    expect(findByExternalId(db, 'resident')?.state).toBe('frozen');
   });
 
   it('keeps sweeping past a sandbox whose container has vanished', async () => {
@@ -203,11 +203,11 @@ describe('idle scanner', () => {
       },
     ]);
     expect(result.frozen).toBe(1);
-    expect(findByUserKey(db, 'alive')?.state).toBe('frozen');
+    expect(findByExternalId(db, 'alive')?.state).toBe('frozen');
     expect(executor.stateOf(alive.sandboxId)).toBe('paused');
     // The dead row was not written: reality never moved. Repairing it is
     // reconciliation's job, not the scanner's.
-    expect(findByUserKey(db, 'dead')?.state).toBe('active');
+    expect(findByExternalId(db, 'dead')?.state).toBe('active');
   });
 });
 
@@ -241,7 +241,7 @@ describe('idle scanner vs the per-key queue', () => {
       expiredKilled: 0,
       failures: [],
     });
-    expect(findByUserKey(db, 'alice')?.state).toBe('active');
+    expect(findByExternalId(db, 'alice')?.state).toBe('active');
 
     release();
     await holder;
@@ -286,7 +286,7 @@ describe('idle scanner vs the per-key queue', () => {
       after(first, first.freezeAfterSeconds),
     );
     const released = locks.run('doomed', () =>
-      releaseSandbox(db, executor, doomed.sandboxId, null),
+      destroySandbox(db, executor, doomed.sandboxId, null),
     );
     const [result] = await Promise.all([sweep, released]);
 
@@ -297,7 +297,7 @@ describe('idle scanner vs the per-key queue', () => {
       expiredKilled: 0,
       failures: [],
     });
-    expect(findByUserKey(db, 'doomed')).toBeUndefined();
+    expect(findByExternalId(db, 'doomed')).toBeUndefined();
   });
 });
 
@@ -317,7 +317,7 @@ describe('idle scanner: the archive rung', () => {
   ): Promise<void> {
     await scanOnce(db, executor, locks, after(row, 60));
     await scanOnce(db, executor, locks, after(row, 120));
-    expect(findByUserKey(db, row.userKey)?.state).toBe('stopped');
+    expect(findByExternalId(db, row.externalId)?.state).toBe('stopped');
   }
 
   it('archives a stopped sandbox idle past archiveAfterSeconds', async () => {
@@ -342,7 +342,7 @@ describe('idle scanner: the archive rung', () => {
       expiredKilled: 0,
       failures: [],
     });
-    expect(findByUserKey(db, 'alice')?.state).toBe('archived');
+    expect(findByExternalId(db, 'alice')?.state).toBe('archived');
     expect(store.has(objectKey(row.sandboxId))).toBe(true);
     // Local copy freed: container and disk both gone.
     expect(executor.stateOf(row.sandboxId)).toBeUndefined();
@@ -357,7 +357,7 @@ describe('idle scanner: the archive rung', () => {
     // No archiver passed: the row keeps its recorded intent, untouched.
     const result = await scanOnce(db, executor, locks, after(row, 9999));
     expect(result.archived).toBe(0);
-    expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
+    expect(findByExternalId(db, 'alice')?.state).toBe('stopped');
     expect(await executor.listDisks()).toContain(row.sandboxId);
   });
 
@@ -377,7 +377,7 @@ describe('idle scanner: the archive rung', () => {
       archiver,
     );
     expect(yearLater.archived).toBe(0);
-    expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
+    expect(findByExternalId(db, 'alice')?.state).toBe('stopped');
   });
 
   it('an archive failure lands in failures without blocking the sweep', async () => {
@@ -410,7 +410,7 @@ describe('idle scanner: the archive rung', () => {
       },
     ]);
     // Retryable: still stopped, disk still local.
-    expect(findByUserKey(db, 'doomed')?.state).toBe('stopped');
+    expect(findByExternalId(db, 'doomed')?.state).toBe('stopped');
     expect(await executor.listDisks()).toContain(doomed.sandboxId);
   });
 
@@ -433,7 +433,7 @@ describe('idle scanner: the archive rung', () => {
       archiver,
     );
     expect(result.expiredKilled).toBe(1);
-    expect(findByUserKey(db, 'alice')).toBeUndefined();
+    expect(findByExternalId(db, 'alice')).toBeUndefined();
     expect(store.has(objectKey(row.sandboxId))).toBe(false);
   });
 
@@ -453,10 +453,10 @@ describe('idle scanner: the archive rung', () => {
       await gate;
       return innerGet(key, dest, onProgress);
     };
-    const archived = findByUserKey(db, 'alice');
+    const archived = findByExternalId(db, 'alice');
     if (!archived) throw new Error('row vanished');
     archiver.beginRestore(archived);
-    expect(findByUserKey(db, 'alice')?.state).toBe('restoring');
+    expect(findByExternalId(db, 'alice')?.state).toBe('restoring');
     setDeadline(db, row.sandboxId, {
       deadlineAt: after(row, 200).toISOString(),
       onDeadline: 'kill',
@@ -471,11 +471,11 @@ describe('idle scanner: the archive rung', () => {
       archiver,
     );
     expect(during.expiredKilled).toBe(0);
-    expect(findByUserKey(db, 'alice')?.state).toBe('restoring');
+    expect(findByExternalId(db, 'alice')?.state).toBe('restoring');
 
     releaseDownload();
     await archiver.restoreJoin(row.sandboxId);
-    expect(findByUserKey(db, 'alice')?.state).toBe('active');
+    expect(findByExternalId(db, 'alice')?.state).toBe('active');
 
     // Next sweep, with the restore settled, the kill lands clean.
     const settled = await scanOnce(
@@ -486,7 +486,7 @@ describe('idle scanner: the archive rung', () => {
       archiver,
     );
     expect(settled.expiredKilled).toBe(1);
-    expect(findByUserKey(db, 'alice')).toBeUndefined();
+    expect(findByExternalId(db, 'alice')).toBeUndefined();
   });
 });
 
@@ -494,12 +494,12 @@ describe('E2B deadline rule', () => {
   async function seedWithDeadline(
     db: Db,
     executor: FakeExecutor,
-    userKey: string,
+    externalId: string,
     row: SandboxRow | null,
     afterSeconds: number,
     onDeadline: 'kill' | 'pause',
   ): Promise<SandboxRow> {
-    const seeded = row ?? (await seed(db, executor, userKey));
+    const seeded = row ?? (await seed(db, executor, externalId));
     setDeadline(db, seeded.sandboxId, {
       deadlineAt: after(seeded, afterSeconds).toISOString(),
       onDeadline,
@@ -536,7 +536,7 @@ describe('E2B deadline rule', () => {
       expiredKilled: 1,
       failures: [],
     });
-    expect(findByUserKey(db, 'doomed')).toBeUndefined();
+    expect(findByExternalId(db, 'doomed')).toBeUndefined();
     expect(executor.stateOf(row.sandboxId)).toBeUndefined();
     expect(await executor.listDisks()).not.toContain(row.sandboxId);
   });
@@ -558,7 +558,7 @@ describe('E2B deadline rule', () => {
       expiredKilled: 1,
       failures: [],
     });
-    expect(findByUserKey(db, 'both')).toBeUndefined();
+    expect(findByExternalId(db, 'both')).toBeUndefined();
   });
 
   it('activity does not extend a deadline — it is an absolute clock', async () => {
@@ -569,7 +569,7 @@ describe('E2B deadline rule', () => {
     touch(db, row.sandboxId, after(row, 99).toISOString());
     const result = await scanOnce(db, executor, locks, after(row, 101));
     expect(result.expiredKilled).toBe(1);
-    expect(findByUserKey(db, 'busy')).toBeUndefined();
+    expect(findByExternalId(db, 'busy')).toBeUndefined();
   });
 
   it('parks an expired pause-deadline sandbox frozen, once, and keeps the row', async () => {
@@ -591,7 +591,7 @@ describe('E2B deadline rule', () => {
       expiredKilled: 0,
       failures: [],
     });
-    expect(findByUserKey(db, 'parked')?.state).toBe('frozen');
+    expect(findByExternalId(db, 'parked')?.state).toBe('frozen');
     expect(executor.stateOf(row.sandboxId)).toBe('paused');
 
     // A second sweep finds no physical work left: frozen already satisfies
@@ -604,6 +604,6 @@ describe('E2B deadline rule', () => {
       expiredKilled: 0,
       failures: [],
     });
-    expect(findByUserKey(db, 'parked')?.state).toBe('frozen');
+    expect(findByExternalId(db, 'parked')?.state).toBe('frozen');
   });
 });

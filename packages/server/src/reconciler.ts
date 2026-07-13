@@ -60,15 +60,15 @@ const LEDGER_STATE: Record<ContainerState, SandboxState> = {
  *                                a routine `docker container prune`
  *                                survivable instead of silent data loss.
  * - container and disk gone   -> the sandbox truly is gone (an interrupted
- *                                release, a wiped data dir): the row is
- *                                deleted and the user key is free again
+ *                                destroy, a wiped data dir): the row is
+ *                                deleted and the external id is free again
  * - container without a row   -> destroyed; without a row it has no user
  *                                key, so nothing could ever reach it
  * - disk owned by nothing     -> removed; leaked disks silently eat the host
  *
  * Every rowed repair happens inside the sandbox's per-key queue slot, and
  * only if the row still shows the state the snapshot decided on: an acquire
- * or release that moved the sandbox in between makes the observation stale,
+ * or destroy that moved the sandbox in between makes the observation stale,
  * and writing a stale repair would manufacture the very drift this function
  * exists to remove. A busy key is skipped outright — whatever holds it has
  * fresher knowledge — and the next tick sees the settled picture.
@@ -123,7 +123,7 @@ export async function reconcile(
     row: SandboxRow,
     apply: () => void | Promise<void>,
   ) =>
-    locks.tryRun(row.userKey, async () => {
+    locks.tryRun(row.externalId, async () => {
       const fresh = findBySandboxId(db, row.sandboxId);
       if (fresh && fresh.state === row.state) {
         await apply();
@@ -135,7 +135,7 @@ export async function reconcile(
   const note = (row: SandboxRow, detail: string) =>
     recordActivity(db, {
       kind: 'reconciled',
-      userKey: row.userKey,
+      externalId: row.externalId,
       sandboxId: row.sandboxId,
       detail,
     });

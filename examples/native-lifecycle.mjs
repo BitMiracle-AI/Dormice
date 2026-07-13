@@ -48,5 +48,5 @@ console.log(
 );
 
 // release() destroys container and disk — the only verb that loses data.
-await client.releaseSandbox(key);
-console.log('released');
+await client.destroySandbox(key);
+console.log('destroyed');

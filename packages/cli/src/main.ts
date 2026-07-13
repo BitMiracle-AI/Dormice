@@ -14,7 +14,7 @@ import {
   sandboxPull,
   sandboxPush,
   sandboxRebuild,
-  sandboxRelease,
+  sandboxDestroy,
   templateAdd,
   templateLs,
   templateRm,
@@ -53,7 +53,7 @@ sandbox
   .description(
     'Run a shell command inside the sandbox behind a key (wakes it first)',
   )
-  .argument('<userKey>', 'the user key whose sandbox runs the command')
+  .argument('<externalId>', 'the external id whose sandbox runs the command')
   .argument(
     '<command>',
     'shell command, quoted as one argument (runs as bash -c)',
@@ -64,10 +64,10 @@ sandbox
     (value: string) => Number(value),
   )
   .action(
-    async (userKey: string, command: string, opts: { timeout?: number }) => {
+    async (externalId: string, command: string, opts: { timeout?: number }) => {
       const result = await sandboxExec(
         clientFromEnv(process.env),
-        userKey,
+        externalId,
         command,
         opts.timeout,
       );
@@ -82,18 +82,18 @@ sandbox
   .description(
     'Copy a local file into the sandbox behind a key (wakes it first)',
   )
-  .argument('<userKey>', 'the user key whose sandbox receives the file')
+  .argument('<externalId>', 'the external id whose sandbox receives the file')
   .argument('<localPath>', 'local file to send')
   .argument(
     '[remotePath]',
     'destination inside the sandbox; relative paths land under /home/user (default: the local file name)',
   )
-  .action(async (userKey: string, localPath: string, remotePath?: string) => {
+  .action(async (externalId: string, localPath: string, remotePath?: string) => {
     const content = await readFile(localPath);
     console.log(
       await sandboxPush(
         clientFromEnv(process.env),
-        userKey,
+        externalId,
         content,
         remotePath ?? path.basename(localPath),
       ),
@@ -103,13 +103,13 @@ sandbox
 sandbox
   .command('pull')
   .description('Copy a file out of the sandbox behind a key (wakes it first)')
-  .argument('<userKey>', 'the user key whose sandbox holds the file')
+  .argument('<externalId>', 'the external id whose sandbox holds the file')
   .argument('<remotePath>', 'file inside the sandbox; relative to /home/user')
   .argument('[localPath]', 'where to save it; omitted = raw bytes to stdout')
-  .action(async (userKey: string, remotePath: string, localPath?: string) => {
+  .action(async (externalId: string, remotePath: string, localPath?: string) => {
     const result = await sandboxPull(
       clientFromEnv(process.env),
-      userKey,
+      externalId,
       remotePath,
     );
     if (localPath === undefined) {
@@ -126,17 +126,17 @@ sandbox
   .description(
     "Swap the container, keep /home/user — next use starts on the template's current image (or the base image)",
   )
-  .argument('<userKey>', 'the user key whose sandbox to rebuild')
-  .action(async (userKey: string) => {
-    console.log(await sandboxRebuild(clientFromEnv(process.env), userKey));
+  .argument('<externalId>', 'the external id whose sandbox to rebuild')
+  .action(async (externalId: string) => {
+    console.log(await sandboxRebuild(clientFromEnv(process.env), externalId));
   });
 
 sandbox
-  .command('release')
-  .description('Destroy the sandbox behind a user key (idempotent)')
-  .argument('<userKey>', 'the user key whose sandbox to destroy')
-  .action(async (userKey: string) => {
-    console.log(await sandboxRelease(clientFromEnv(process.env), userKey));
+  .command('destroy')
+  .description('Destroy the sandbox behind an external id (idempotent)')
+  .argument('<externalId>', 'the external id whose sandbox to destroy')
+  .action(async (externalId: string) => {
+    console.log(await sandboxDestroy(clientFromEnv(process.env), externalId));
   });
 
 const template = program

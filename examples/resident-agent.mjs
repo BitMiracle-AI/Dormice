@@ -38,7 +38,7 @@ const visit = await client.execCommand(
 );
 console.log(visit.stdout.trimEnd());
 
-// Deliberately NOT released — a resident agent's sandbox outlives every run
+// Deliberately NOT destroyed — a resident agent's sandbox outlives every run
 // of this script. When you are done playing:
 //   dor sandbox release example-resident-agent
 console.log('\nleft running; the journal will still be here tomorrow.');

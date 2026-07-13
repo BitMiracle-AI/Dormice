@@ -11,7 +11,7 @@ import {
   listTemplates,
   registerTemplate,
   removeTemplate,
-  sandboxKeysUsingTemplate,
+  externalIdsUsingTemplate,
 } from '../db/templates';
 import { httpError } from '../http-error';
 
@@ -67,12 +67,12 @@ export const templateRoutes: FastifyPluginAsyncZod<
       const { name } = request.body;
       // Refused while referenced: a sandbox row pointing at a removed
       // template would wake onto a dangling name. Named keys, so the
-      // operator knows exactly what to release.
-      const users = sandboxKeysUsingTemplate(db, name);
+      // operator knows exactly what to destroy.
+      const users = externalIdsUsingTemplate(db, name);
       if (users.length > 0) {
         throw httpError(
           409,
-          `template '${name}' is used by ${users.length} sandbox(es): ${users.join(', ')} — release them first`,
+          `template '${name}' is used by ${users.length} sandbox(es): ${users.join(', ')} — destroy them first`,
         );
       }
       return { removed: removeTemplate(db, name) };

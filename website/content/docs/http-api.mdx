@@ -12,7 +12,7 @@ can do that `curl` cannot.
 curl -X POST http://127.0.0.1:3676/acquireSandbox \
   -H "Authorization: Bearer $DORMICE_API_TOKEN" \
   -H "content-type: application/json" \
-  -d '{"userKey": "my-agent"}'
+  -d '{"externalId": "my-agent"}'
 ```
 
 Two rules cover the whole surface:
@@ -34,9 +34,11 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | `POST /listSandboxes` | every sandbox and its state; never wakes anything | — |
 | `POST /execCommand` | run a command, buffered | 404 unknown key, 409 archived/restoring |
 | `POST /writeFiles` | batch write, base64 in JSON | 404/409 as above; body over 48 MiB refused |
+| `POST /writeFile` | write one file — the single form of `writeFiles` | same refusals as `writeFiles` |
 | `POST /readFile` | read one file, base64 out | 404 no such file, 400 not a file, 413 over 16 MiB (names the real size) |
+| `POST /readFiles` | batch read, all or nothing, request order | first bad path fails the whole batch; 413 over 48 MiB total |
 | `POST /rebuildSandbox` | swap container, keep `/home/user` | 404 unknown key, 409 archived/restoring |
-| `POST /releaseSandbox` | destroy; idempotent | 409 mid-restore (the one dent — retry when it finishes) |
+| `POST /destroySandbox` | destroy; idempotent | 409 mid-restore (the one dent — retry when it finishes) |
 | `POST /registerTemplate` | upsert name → image | 400 `'base'` is reserved |
 | `POST /listTemplates` | every registered template | — |
 | `POST /removeTemplate` | unregister; idempotent | 409 while sandboxes still use it (names them) |
@@ -52,7 +54,7 @@ Everything that returns a sandbox returns this shape:
 
 ```json
 {
-  "sandboxId": "8b1e…-uuid", "userKey": "my-agent",
+  "sandboxId": "8b1e…-uuid", "externalId": "my-agent",
   "state": "active", "nodeId": "…", "endpoint": "http://127.0.0.1:3676",
   "policy": { "freezeAfterSeconds": 600, "stopAfterSeconds": 259200, "archiveAfterSeconds": null },
   "template": null, "createdAt": "…", "lastActiveAt": "…"
@@ -69,17 +71,19 @@ poll acquire until it flips to `ready`
 
 ## Commands and files on the wire
 
-`execCommand` takes `{ userKey, command, timeoutSeconds?, cwd?, env? }`
+`execCommand` takes `{ externalId, command, timeoutSeconds?, cwd?, env? }`
 and returns
 `{ exitCode, stdout, stderr, stdoutTruncated, stderrTruncated }` — a
 non-zero exit code is a result, not an HTTP error
 ([details](/docs/commands)).
 
 File content crosses the wire as base64 inside JSON: `writeFiles` takes
-`{ userKey, files: [{ path, contentBase64 }] }`, `readFile` takes
-`{ userKey, path }` and returns `{ path, contentBase64 }` with the path
-resolved absolute. Limits and refusal semantics:
-[moving files](/docs/files).
+`{ externalId, files: [{ path, contentBase64 }] }`, `readFile` takes
+`{ externalId, path }` and returns `{ path, contentBase64 }` with the path
+resolved absolute. Each has a twin for the other arity: `writeFile` writes
+one file without the array ceremony, `readFiles` reads a batch all or
+nothing — one missing path fails the whole call. Limits and refusal
+semantics: [moving files](/docs/files).
 
 ## Bring a patient HTTP client
 

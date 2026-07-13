@@ -6,7 +6,7 @@ import { touch } from './db/ledger';
  * is in flight, so the scanner never freezes a container that is
  * mid-command. Half the freeze threshold (never above 10s) lands at least
  * one touch inside every scan window, down to the schema's minimum
- * freezeAfterSeconds of 1. A vanished row (released mid-exec) stops the
+ * freezeAfterSeconds of 1. A vanished row (destroyed mid-exec) stops the
  * timer — the exec itself will fail with its own honest error; an unhandled
  * throw inside setInterval would take the daemon down instead.
  */

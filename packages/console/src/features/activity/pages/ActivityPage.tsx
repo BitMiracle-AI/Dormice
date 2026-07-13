@@ -51,7 +51,7 @@ export function ActivityPage() {
         (event) =>
           (kindFilter === 'all' || event.kind === kindFilter) &&
           (search === '' ||
-            (event.userKey ?? '').toLowerCase().includes(search.toLowerCase())),
+            (event.externalId ?? '').toLowerCase().includes(search.toLowerCase())),
       ),
     [events, kindFilter, search],
   );
@@ -77,7 +77,7 @@ export function ActivityPage() {
           <InputGroupInput
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="按 userKey 搜索"
+            placeholder="按 externalId 搜索"
           />
         </InputGroup>
         <NativeSelect
@@ -137,7 +137,7 @@ export function ActivityPage() {
               <TableRow>
                 <TableHead className="w-28">时间</TableHead>
                 <TableHead className="w-28">事件</TableHead>
-                <TableHead className="w-40">userKey</TableHead>
+                <TableHead className="w-40">externalId</TableHead>
                 <TableHead>详情</TableHead>
               </TableRow>
             </TableHeader>
@@ -163,14 +163,14 @@ export function ActivityPage() {
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    {event.userKey ? (
+                    {event.externalId ? (
                       <Link
-                        to="/sandboxes/$userKey"
-                        params={{ userKey: event.userKey }}
+                        to="/sandboxes/$externalId"
+                        params={{ externalId: event.externalId }}
                         search={{ tab: 'overview' as const }}
                         className="font-mono hover:underline"
                       >
-                        {event.userKey}
+                        {event.externalId}
                       </Link>
                     ) : (
                       <span className="text-muted-foreground">—</span>

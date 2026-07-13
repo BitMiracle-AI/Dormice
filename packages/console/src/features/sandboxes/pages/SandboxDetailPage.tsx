@@ -22,7 +22,7 @@ import { LifecycleCountdown } from '../components/LifecycleCountdown';
 import { MetricsPanel } from '../components/MetricsPanel';
 import { ProcessesPanel } from '../components/ProcessesPanel';
 import { RebuildSandboxButton } from '../components/RebuildSandboxButton';
-import { ReleaseSandboxButton } from '../components/ReleaseSandboxButton';
+import { DestroySandboxButton } from '../components/DestroySandboxButton';
 import { RestoreCard } from '../components/RestoreCard';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { SandboxTerminalCard } from '../components/SandboxTerminal';
@@ -54,18 +54,18 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
  * SDK 同一条 wire。tab 记在 URL 里,刷新与分享都停在原面板。
  */
 export function SandboxDetailPage() {
-  const { userKey } = useParams({ from: '/_app/sandboxes/$userKey' });
-  const { tab } = useSearch({ from: '/_app/sandboxes/$userKey' });
-  const navigate = useNavigate({ from: '/sandboxes/$userKey' });
-  const { sandbox, isSuccess } = useSandbox(userKey);
+  const { externalId } = useParams({ from: '/_app/sandboxes/$externalId' });
+  const { tab } = useSearch({ from: '/_app/sandboxes/$externalId' });
+  const navigate = useNavigate({ from: '/sandboxes/$externalId' });
+  const { sandbox, isSuccess } = useSandbox(externalId);
 
   if (!sandbox) {
     return isSuccess ? (
       <Empty className="border border-dashed">
         <EmptyHeader>
-          <EmptyTitle>没有叫「{userKey}」的沙箱</EmptyTitle>
+          <EmptyTitle>没有叫「{externalId}」的沙箱</EmptyTitle>
           <EmptyDescription>
-            可能已被释放 — 这个 key 依然有效,下次 acquire 会得到一个
+            可能已被销毁 — 这个 key 依然有效,下次 acquire 会得到一个
             全新的沙箱。
           </EmptyDescription>
         </EmptyHeader>
@@ -87,16 +87,16 @@ export function SandboxDetailPage() {
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <h1 className="font-mono text-lg font-semibold">{sandbox.userKey}</h1>
+          <h1 className="font-mono text-lg font-semibold">{sandbox.externalId}</h1>
           <SandboxStateBadge state={sandbox.state} />
           <LifecycleCountdown sandbox={sandbox} />
         </div>
         <div className="flex items-center gap-2">
           <EditPolicyDialog sandbox={sandbox} />
-          <RebuildSandboxButton userKey={sandbox.userKey} />
-          <ReleaseSandboxButton
-            userKey={sandbox.userKey}
-            onReleased={() => navigate({ to: '/sandboxes' })}
+          <RebuildSandboxButton externalId={sandbox.externalId} />
+          <DestroySandboxButton
+            externalId={sandbox.externalId}
+            onDestroyed={() => navigate({ to: '/sandboxes' })}
           />
         </div>
       </div>
@@ -171,7 +171,7 @@ export function SandboxDetailPage() {
         </TabsContent>
 
         <TabsContent value="history">
-          <HistoryPanel userKey={sandbox.userKey} />
+          <HistoryPanel externalId={sandbox.externalId} />
         </TabsContent>
       </Tabs>
     </>

@@ -39,7 +39,7 @@ characters: user keys are not restricted on the wire, and an ANSI escape
 inside one must not reach your terminal.)
 
 ```sh
-dor sandbox exec <userKey> '<command>' [-t <seconds>]
+dor sandbox exec <externalId> '<command>' [-t <seconds>]
 ```
 
 Runs a shell command in the sandbox behind the key, waking it first. The
@@ -51,8 +51,8 @@ it after that long ([enforced inside the container](/docs/commands)). An
 unknown key is a 404, never a sandbox created by accident.
 
 ```sh
-dor sandbox push <userKey> <localPath> [remotePath]
-dor sandbox pull <userKey> <remotePath> [localPath]
+dor sandbox push <externalId> <localPath> [remotePath]
+dor sandbox pull <externalId> <remotePath> [localPath]
 ```
 
 One file in, one file out. Relative remote paths land under `/home/user`;
@@ -61,7 +61,7 @@ local path writes the raw bytes to stdout — pipe it wherever. Both obey
 the [16 MiB single-file contract](/docs/files).
 
 ```sh
-dor sandbox rebuild <userKey>
+dor sandbox rebuild <externalId>
 ```
 
 Swaps the container, keeps `/home/user` — the sandbox's next use starts
@@ -70,7 +70,7 @@ on its template's *current* image (or the base image). This is how a
 [rebuild: new shell, same body](/docs/persistence#rebuild-new-shell-same-body).
 
 ```sh
-dor sandbox release <userKey>
+dor sandbox destroy <externalId>
 ```
 
 Destroys the sandbox — container, disk, and (if archived) the S3 object.

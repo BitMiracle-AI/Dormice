@@ -183,7 +183,7 @@ function HistoryChart({
  */
 export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
   const { data, isPending, isError, error } = useSandboxMetrics(
-    sandbox.userKey,
+    sandbox.externalId,
   );
   // Hook 在任何 early return 之前:面板打开期间持续累积,换沙箱清零。
   const history = useSampleHistory(sandbox.sandboxId, data?.sample);

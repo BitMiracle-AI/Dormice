@@ -10,7 +10,7 @@ export const ACTIVITY_KIND_LABELS: Record<ActivityKind, string> = {
   frozen: '冻结',
   stopped: '停止',
   rebuilt: '重建',
-  released: '释放',
+  destroyed: '销毁',
   'expired-killed': '到期销毁',
   archived: '归档',
   'restore-started': '开始恢复',
@@ -33,7 +33,7 @@ export const ACTIVITY_KIND_STYLES: Record<ActivityKind, string> = {
   stopped: 'border-border bg-muted text-muted-foreground',
   rebuilt:
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
-  released: 'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400',
+  destroyed: 'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400',
   'expired-killed':
     'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400',
   archived:

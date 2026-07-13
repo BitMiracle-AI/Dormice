@@ -26,7 +26,7 @@ await client.writeFiles('my-agent', [
   { path: 'notes.txt', content: 'survives freeze and stop' },
 ]);
 
-await client.releaseSandbox('my-agent'); // destroy — the only verb that loses data
+await client.destroySandbox('my-agent'); // destroy — the only verb that loses data
 ```
 
 ## The wire is plain HTTP
@@ -54,6 +54,6 @@ dor sandbox exec my-agent 'uname -r'  # run a command, exit code passes through
 dor sandbox push my-agent ./data.csv  # copy a file in…
 dor sandbox pull my-agent notes.txt   # …and out
 dor sandbox rebuild my-agent          # fresh container, /home/user kept
-dor sandbox release my-agent          # destroy
+dor sandbox destroy my-agent          # destroy
 dor doctor                            # can this machine run sandboxes?
 ```

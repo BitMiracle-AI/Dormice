@@ -5,7 +5,7 @@ self-contained — read it top to bottom, then run it.
 
 | File | What it shows |
 | --- | --- |
-| [`native-lifecycle.mjs`](native-lifecycle.mjs) | The native SDK end to end: idempotent `acquireSandbox`, command execution, file I/O, `releaseSandbox` |
+| [`native-lifecycle.mjs`](native-lifecycle.mjs) | The native SDK end to end: idempotent `acquireSandbox`, command execution, file I/O, `destroySandbox` |
 | [`e2b-compat.mjs`](e2b-compat.mjs) | The **official `e2b` package**, unmodified, pointed at Dormice by two URLs — with live output streaming |
 | [`resident-agent.mjs`](resident-agent.mjs) | A permanent per-agent sandbox (`stopAfterSeconds: null`): run it repeatedly, its state survives |
 
@@ -45,4 +45,4 @@ after `npm install @dormice/sdk e2b`.
 
 `resident-agent.mjs` deliberately leaves its sandbox running; when you are
 done playing, remove it with `dor sandbox release example-resident-agent`
-(or `releaseSandbox` from the SDK).
+(or `destroySandbox` from the SDK).

@@ -25,12 +25,12 @@ import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { useConfig } from '@/features/settings/hooks/useConfig';
 import { durationHint } from '../format';
-import { useSetPolicy } from '../hooks/useSandboxes';
+import { useUpdatePolicy } from '../hooks/useSandboxes';
 
 /**
- * acquire 只在创建时收策略,这个弹窗是之后的正门:setPolicy 纯改账本,
+ * acquire 只在创建时收策略,这个弹窗是之后的正门:updatePolicy 纯改账本,
  * 不唤醒、不重置空闲时钟 — 把跑了几天的沙箱升格成常驻 agent 不再需要
- * 释放重建(那会销毁磁盘)。三个旋钮整体提交:界面上看到什么就写下什么,
+ * 销毁重建(那会销毁磁盘)。三个旋钮整体提交:界面上看到什么就写下什么,
  * 关掉"永不停止"时归档旋钮的取舍也一并说清,不留隐式合并的悬念。
  */
 export function EditPolicyDialog({ sandbox }: { sandbox: Sandbox }) {
@@ -40,7 +40,7 @@ export function EditPolicyDialog({ sandbox }: { sandbox: Sandbox }) {
   const [stopAfter, setStopAfter] = useState('');
   const [neverArchive, setNeverArchive] = useState(false);
   const [archiveAfter, setArchiveAfter] = useState('');
-  const mutation = useSetPolicy();
+  const mutation = useUpdatePolicy();
   const archive = useConfig().data?.archive;
 
   // 每次打开都从沙箱的现值起步 — 编辑的是"现在是什么",不是空表单。
@@ -63,7 +63,7 @@ export function EditPolicyDialog({ sandbox }: { sandbox: Sandbox }) {
   const submit = () => {
     mutation.mutate(
       {
-        userKey: sandbox.userKey,
+        externalId: sandbox.externalId,
         policy: {
           freezeAfterSeconds: Number(freezeAfter),
           stopAfterSeconds: neverStop ? null : Number(stopAfter),
@@ -79,7 +79,7 @@ export function EditPolicyDialog({ sandbox }: { sandbox: Sandbox }) {
       },
       {
         onSuccess: () => {
-          toast.success(`「${sandbox.userKey}」的策略已更新`);
+          toast.success(`「${sandbox.externalId}」的策略已更新`);
           setOpen(false);
         },
       },
@@ -110,7 +110,7 @@ export function EditPolicyDialog({ sandbox }: { sandbox: Sandbox }) {
       />
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>调整「{sandbox.userKey}」的生命周期策略</DialogTitle>
+          <DialogTitle>调整「{sandbox.externalId}」的生命周期策略</DialogTitle>
           <DialogDescription>
             立即生效,只改账本 — 沉睡的沙箱不会被吵醒,空闲计时也不重置
             (新阈值按已累积的空闲时间判定)。

@@ -26,7 +26,7 @@ import { MOCK_PAGES_ENABLED } from '@/lib/mock';
  * hook 不能条件调用,但组件可以条件挂载。缓存和列表页共享同一个 key,
  * 打开面板时多半直接命中。
  */
-function SandboxItems({ onGo }: { onGo: (userKey: string) => void }) {
+function SandboxItems({ onGo }: { onGo: (externalId: string) => void }) {
   const query = useSandboxes();
   const sandboxes = query.data?.sandboxes ?? [];
   if (sandboxes.length === 0) return null;
@@ -35,11 +35,11 @@ function SandboxItems({ onGo }: { onGo: (userKey: string) => void }) {
       {sandboxes.map((sandbox) => (
         <CommandItem
           key={sandbox.sandboxId}
-          value={`sandbox ${sandbox.userKey}`}
-          onSelect={() => onGo(sandbox.userKey)}
+          value={`sandbox ${sandbox.externalId}`}
+          onSelect={() => onGo(sandbox.externalId)}
         >
           <HugeiconsIcon icon={PackageIcon} strokeWidth={1.8} />
-          <span className="font-mono">{sandbox.userKey}</span>
+          <span className="font-mono">{sandbox.externalId}</span>
           <span className="ml-auto text-xs text-muted-foreground">
             {STATE_LABELS[sandbox.state]}
           </span>
@@ -50,8 +50,8 @@ function SandboxItems({ onGo }: { onGo: (userKey: string) => void }) {
 }
 
 /**
- * ⌘K / Ctrl+K 命令面板:跳页面、按 userKey 跳沙箱。挂在 AppShell 上,
- * 登录后全站可用;它只做导航 — 动作(释放/重建)留在各自页面的确认
+ * ⌘K / Ctrl+K 命令面板:跳页面、按 externalId 跳沙箱。挂在 AppShell 上,
+ * 登录后全站可用;它只做导航 — 动作(销毁/重建)留在各自页面的确认
  * 流程里,快捷键不该绕过"删了就没有了"的那道闸。
  */
 export function CommandMenu() {
@@ -73,11 +73,11 @@ export function CommandMenu() {
     setOpen(false);
     void navigate({ to });
   };
-  const goSandbox = (userKey: string) => {
+  const goSandbox = (externalId: string) => {
     setOpen(false);
     void navigate({
-      to: '/sandboxes/$userKey',
-      params: { userKey },
+      to: '/sandboxes/$externalId',
+      params: { externalId },
       search: { tab: 'overview' },
     });
   };

@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import { lifecyclePolicyOverrideSchema } from './policy';
-import { sandboxSchema, userKeySchema } from './sandbox';
+import { sandboxSchema, externalIdSchema } from './sandbox';
 
 /**
- * setPolicy(userKey, policy) — the update verb acquire deliberately is not.
+ * updatePolicy(externalId, policy) — the update verb acquire deliberately is not.
  * Without it, changing a live sandbox's lifecycle (say, promoting it to a
- * never-stop resident agent) would require release + re-acquire, and release
- * destroys the disk — the one thing this platform promises to keep.
+ * never-stop resident agent) would require destroy + re-acquire, and destroy
+ * removes the disk — the one thing this platform promises to keep.
  *
  * Patch semantics over the STORED policy: omitted fields keep their current
  * values, `null` still means "never take that step". The merged result is
@@ -17,16 +17,16 @@ import { sandboxSchema, userKeySchema } from './sandbox';
  * is NOT refreshed — adjusting a knob is not sandbox activity, and the new
  * thresholds apply to the idle time already accumulated.
  */
-export const setPolicyRequestSchema = z.object({
-  userKey: userKeySchema,
+export const updatePolicyRequestSchema = z.object({
+  externalId: externalIdSchema,
   policy: lifecyclePolicyOverrideSchema,
 });
 
-export type SetPolicyRequest = z.infer<typeof setPolicyRequestSchema>;
+export type UpdatePolicyRequest = z.infer<typeof updatePolicyRequestSchema>;
 
 /** The sandbox as it stands after the update (state untouched). */
-export const setPolicyResponseSchema = z.object({
+export const updatePolicyResponseSchema = z.object({
   sandbox: sandboxSchema,
 });
 
-export type SetPolicyResponse = z.infer<typeof setPolicyResponseSchema>;
+export type UpdatePolicyResponse = z.infer<typeof updatePolicyResponseSchema>;

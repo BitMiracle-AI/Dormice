@@ -6,8 +6,8 @@ import {
   listSandboxes,
   listSandboxMetrics,
   rebuildSandbox,
-  releaseSandbox,
-  setPolicy,
+  destroySandbox,
+  updatePolicy,
 } from '@/lib/api';
 
 /**
@@ -27,11 +27,11 @@ export function useSandboxes() {
   });
 }
 
-export function useSandbox(userKey: string) {
+export function useSandbox(externalId: string) {
   const query = useSandboxes();
   return {
     ...query,
-    sandbox: query.data?.sandboxes.find((s) => s.userKey === userKey),
+    sandbox: query.data?.sandboxes.find((s) => s.externalId === externalId),
   };
 }
 
@@ -39,10 +39,10 @@ export function useSandbox(userKey: string) {
  * 单沙箱指标,5 秒一拍。观察不唤醒:停着的沙箱答 sample: null,面板
  * 据此出空态而不是把沙箱吵醒。只在指标 tab 挂载时才跑(面板卸载即停)。
  */
-export function useSandboxMetrics(userKey: string) {
+export function useSandboxMetrics(externalId: string) {
   return useQuery({
-    queryKey: ['sandbox-metrics', userKey],
-    queryFn: () => getSandboxMetrics(userKey),
+    queryKey: ['sandbox-metrics', externalId],
+    queryFn: () => getSandboxMetrics(externalId),
     refetchInterval: 5000,
     retry: false,
   });
@@ -71,11 +71,11 @@ export function useAcquireSandbox() {
   });
 }
 
-export function useSetPolicy() {
+export function useUpdatePolicy() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (args: { userKey: string; policy: LifecyclePolicyOverride }) =>
-      setPolicy(args.userKey, args.policy),
+    mutationFn: (args: { externalId: string; policy: LifecyclePolicyOverride }) =>
+      updatePolicy(args.externalId, args.policy),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
   });
 }
@@ -83,15 +83,15 @@ export function useSetPolicy() {
 export function useRebuildSandbox() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (userKey: string) => rebuildSandbox(userKey),
+    mutationFn: (externalId: string) => rebuildSandbox(externalId),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
   });
 }
 
-export function useReleaseSandbox() {
+export function useDestroySandbox() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (userKey: string) => releaseSandbox(userKey),
+    mutationFn: (externalId: string) => destroySandbox(externalId),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
   });
 }

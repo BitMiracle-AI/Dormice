@@ -17,7 +17,7 @@ import {
   sandboxPull,
   sandboxPush,
   sandboxRebuild,
-  sandboxRelease,
+  sandboxDestroy,
   templateAdd,
   templateLs,
   templateRm,
@@ -109,14 +109,14 @@ describe('sandbox commands over real HTTP', () => {
     expect(output).toContain(alice.sandbox.sandboxId);
   });
 
-  it('neutralizes control characters a hostile user key smuggles in', async () => {
-    // The protocol keeps userKey opaque, so an ESC sequence is a legal key;
+  it('neutralizes control characters a hostile external id smuggles in', async () => {
+    // The protocol keeps externalId opaque, so an ESC sequence is a legal key;
     // printed raw it would rewrite the operator's terminal.
     await client.acquireSandbox('evil\u001b[31mkey');
     const output = await sandboxLs(client);
     expect(output).not.toContain('\u001b');
     expect(output).toContain('evil?[31mkey');
-    await client.releaseSandbox('evil\u001b[31mkey');
+    await client.destroySandbox('evil\u001b[31mkey');
   });
 
   it('exec hands back the three channels untouched', async () => {
@@ -129,7 +129,7 @@ describe('sandbox commands over real HTTP', () => {
     // The exit code passes through as data; main.ts turns it into the
     // process's own.
     expect((await sandboxExec(client, 'dave', 'exit 3')).exitCode).toBe(3);
-    await client.releaseSandbox('dave');
+    await client.destroySandbox('dave');
   });
 
   it('push reports the resolved path and byte count', async () => {
@@ -141,7 +141,7 @@ describe('sandbox commands over real HTTP', () => {
       'notes.txt',
     );
     expect(message).toBe('Wrote /home/user/notes.txt (2 bytes).');
-    await client.releaseSandbox('pusher');
+    await client.destroySandbox('pusher');
   });
 
   it('pull hands back the exact bytes; the save message is separate', async () => {
@@ -155,7 +155,7 @@ describe('sandbox commands over real HTTP', () => {
     expect(pullSavedMessage(result, 'local.bin')).toBe(
       'Pulled /home/user/data.bin -> local.bin (4 bytes).',
     );
-    await client.releaseSandbox('puller');
+    await client.destroySandbox('puller');
   });
 
   it('rebuild reports the swap and surfaces the 404 for an unknown key', async () => {
@@ -167,16 +167,16 @@ describe('sandbox commands over real HTTP', () => {
     await expect(sandboxRebuild(client, 'nobody')).rejects.toThrow(
       /acquire it first/,
     );
-    await client.releaseSandbox('rebuilder');
+    await client.destroySandbox('rebuilder');
   });
 
-  it('release reports both outcomes of the idempotent destroy', async () => {
+  it('destroy reports both outcomes of the idempotent destroy', async () => {
     await client.acquireSandbox('carol');
-    expect(await sandboxRelease(client, 'carol')).toBe(
-      'Released the sandbox for key "carol".',
+    expect(await sandboxDestroy(client, 'carol')).toBe(
+      'Destroyed the sandbox for key "carol".',
     );
-    expect(await sandboxRelease(client, 'carol')).toBe(
-      'No sandbox for key "carol" — nothing to release.',
+    expect(await sandboxDestroy(client, 'carol')).toBe(
+      'No sandbox for key "carol" — nothing to destroy.',
     );
   });
 });

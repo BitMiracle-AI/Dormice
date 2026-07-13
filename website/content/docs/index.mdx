@@ -8,7 +8,7 @@ sandboxes are disposable. Dormice inverts that: you run it on a machine you
 already pay for, and sandboxes are **permanent** — they just get cheaper to
 keep the longer they sit idle.
 
-- **`acquireSandbox(userKey)` is the entire mental model.** Idempotent: the
+- **`acquireSandbox(externalId)` is the entire mental model.** Idempotent: the
   same key always comes back to the same sandbox, whatever state it was in.
   No sandbox → create; frozen → wake; stopped → start; archived → restore.
 - **Idle is free.** Sandboxes cool down on their own —

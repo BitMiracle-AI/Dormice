@@ -13,7 +13,7 @@ export const ACTIVITY_KEEP = 1000;
 
 export interface ActivityInput {
   kind: ActivityKind;
-  userKey?: string | null;
+  externalId?: string | null;
   sandboxId?: string | null;
   detail: string;
 }
@@ -30,7 +30,7 @@ export function recordActivity(db: Db, input: ActivityInput): void {
     .values({
       at: new Date().toISOString(),
       kind: input.kind,
-      userKey: input.userKey ?? null,
+      externalId: input.externalId ?? null,
       sandboxId: input.sandboxId ?? null,
       detail: input.detail,
     })
