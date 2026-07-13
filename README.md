@@ -56,15 +56,30 @@ await client.writeFiles('my-agent', [
   { path: 'notes.txt', content: 'survives freeze and stop' },
 ]);
 
-await client.releaseSandbox('my-agent'); // destroy — the only verb that loses data
+await client.destroySandbox('my-agent'); // destroy — the only verb that loses data
 ```
 
 The wire is plain HTTP RPC (`POST /acquireSandbox`, `POST /execCommand`, …),
 so `curl` works where the SDK doesn't reach, and the `dor` CLI covers the
-operator side: `dor sandbox ls / exec / push / pull / rebuild / release`,
+operator side: `dor sandbox ls / exec / push / pull / rebuild / destroy`,
 plus `dor doctor`. The full native surface is documented in
 [`packages/sdk`](packages/sdk/README.md), and runnable versions of these
 flows live in [`examples/`](examples/).
+
+## Agent skill
+
+Dormice's users are agents, so the manual comes in a form an agent can
+install — a skill in the open [Agent Skills](https://skills.sh) format:
+
+```sh
+npx skills add BitMiracle-AI/Dormice
+```
+
+One file, [`skills/dormice/SKILL.md`](skills/dormice/SKILL.md), teaching a
+coding agent the whole surface: how to connect, pick between the E2B SDKs /
+native API / CLI, run commands, move files, and set lifecycle policy. The
+documentation site is AI-readable too — its build emits `/llms.txt`,
+`/llms-full.txt`, and a plain-markdown `.md` twin of every docs page.
 
 ## E2B compatibility
 
@@ -111,7 +126,7 @@ Deliberate deltas from the hosted product:
 - **Permanence stays the default.** Sandboxes created through the E2B
   surface get real deadlines, as E2B semantics demand; deadlines are never
   imposed on natively created sandboxes.
-- **`metadata.userKey`** turns `Sandbox.create` into Dormice's idempotent
+- **`metadata.externalId`** turns `Sandbox.create` into Dormice's idempotent
   acquire: the same key returns the same sandbox instead of a new one.
 - **Not implemented**, answered with an honest `unimplemented` on the
   wire: `Process/StreamInput` (the JS SDK never calls it) and xattr-based

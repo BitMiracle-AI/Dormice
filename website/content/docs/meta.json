@@ -26,7 +26,7 @@
     },
     {
       "title": "Reference",
-      "pages": ["configuration", "cli", "http-api", "console"]
+      "pages": ["configuration", "cli", "http-api", "console", "llms"]
     },
     {
       "title": "Operations",

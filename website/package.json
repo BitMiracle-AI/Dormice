@@ -6,7 +6,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "NEXT_TELEMETRY_DISABLED=1 next build",
+    "build": "NEXT_TELEMETRY_DISABLED=1 next build && node scripts/generate-llms.mjs",
     "dev": "NEXT_TELEMETRY_DISABLED=1 next dev",
     "typecheck": "tsc --noEmit"
   },

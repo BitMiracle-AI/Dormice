@@ -1,0 +1,37 @@
+---
+title: AI-readable docs
+description: llms.txt, llms-full.txt and a markdown twin of every page — plus an installable skill that teaches a coding agent to drive Dormice.
+---
+
+Dormice's users are agents, so the documentation ships in forms an agent
+can consume directly — no HTML scraping.
+
+## llms.txt and markdown pages
+
+Following the [llms.txt convention](https://llmstxt.org), the site serves:
+
+- **`/llms.txt`** — an index of every docs page with its one-line
+  description, grouped exactly like the sidebar.
+- **`/llms-full.txt`** — the entire documentation concatenated into one
+  markdown file, for tools that prefer a single fetch.
+- **A `.md` twin of every page** — append `.md` to any docs path
+  (`/docs/quickstart` → `/docs/quickstart.md`; this page's index is
+  `/docs/index.md`) and get the page as plain markdown.
+
+All three are generated from the same sources as the pages you are
+reading, in the same build — they cannot drift.
+
+## The agent skill
+
+A skill in the open [Agent Skills](https://skills.sh) format teaches a
+coding agent the whole operating surface — connecting, choosing between
+the E2B SDKs, the native API and the CLI, running commands, moving files,
+setting lifecycle policy, and the gotchas:
+
+```sh
+npx skills add BitMiracle-AI/Dormice
+```
+
+It installs into your agent's skills directory (Claude Code, Codex,
+Cursor and others). The source is one reviewable file:
+[`skills/dormice/SKILL.md`](https://github.com/BitMiracle-AI/Dormice/blob/main/skills/dormice/SKILL.md).
