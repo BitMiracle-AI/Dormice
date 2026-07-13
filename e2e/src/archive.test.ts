@@ -38,7 +38,7 @@ describe('the archive lifecycle over a real daemon', () => {
     const deadline = Date.now() + 15_000;
     for (;;) {
       const sandboxes = await dormice.listSandboxes();
-      const mine = sandboxes.find((s) => s.userKey === 'archive-key');
+      const mine = sandboxes.find((s) => s.externalId === 'archive-key');
       if (mine?.state === 'archived') break;
       if (Date.now() > deadline) {
         throw new Error(`never archived; last observed: ${mine?.state}`);
@@ -68,12 +68,12 @@ describe('the archive lifecycle over a real daemon', () => {
     const read = await dormice.readFile('archive-key', 'kept.txt');
     expect(Buffer.from(read.content).toString()).toBe('survived the bucket');
 
-    await dormice.releaseSandbox('archive-key');
+    await dormice.destroySandbox('archive-key');
   });
 
-  it('a released archived sandbox is gone for good', async () => {
+  it('a destroyed archived sandbox is gone for good', async () => {
     const dormice = client();
-    await dormice.acquireSandbox('archive-release-key', {
+    await dormice.acquireSandbox('archive-destroy-key', {
       policy: {
         freezeAfterSeconds: 1,
         stopAfterSeconds: 2,
@@ -83,7 +83,7 @@ describe('the archive lifecycle over a real daemon', () => {
     const deadline = Date.now() + 15_000;
     for (;;) {
       const sandboxes = await dormice.listSandboxes();
-      const mine = sandboxes.find((s) => s.userKey === 'archive-release-key');
+      const mine = sandboxes.find((s) => s.externalId === 'archive-destroy-key');
       if (mine?.state === 'archived') break;
       if (Date.now() > deadline) {
         throw new Error(`never archived; last observed: ${mine?.state}`);
@@ -91,11 +91,11 @@ describe('the archive lifecycle over a real daemon', () => {
       await sleep(0.25);
     }
 
-    const released = await dormice.releaseSandbox('archive-release-key');
-    expect(released.released).toBe(true);
+    const destroyed = await dormice.destroySandbox('archive-destroy-key');
+    expect(destroyed.destroyed).toBe(true);
     // The key is free again: the next acquire is a brand-new sandbox.
-    const fresh = await dormice.acquireSandbox('archive-release-key');
+    const fresh = await dormice.acquireSandbox('archive-destroy-key');
     expect(fresh.status).toBe('ready');
-    await dormice.releaseSandbox('archive-release-key');
+    await dormice.destroySandbox('archive-destroy-key');
   });
 });

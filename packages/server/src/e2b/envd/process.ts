@@ -77,7 +77,7 @@ function streamSubscriber(write: (buf: Buffer) => Promise<void>): {
               envelope(FLAG_END_STREAM, {}),
             ]
           : [
-              // The container died under the process (a kill, a release):
+              // The container died under the process (a kill, a destroy):
               // an in-stream internal error, which the SDK triages via its
               // health check — the same feel as a killed E2B sandbox.
               envelope(FLAG_END_STREAM, {

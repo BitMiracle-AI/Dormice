@@ -1,7 +1,7 @@
 import { DEFAULT_LIFECYCLE_POLICY, Dormice } from '@dormice/sdk';
 import { describe, expect, inject, it } from 'vitest';
 
-// One daemon serves the whole run, so every test uses its own user key to
+// One daemon serves the whole run, so every test uses its own external id to
 // stay independent of the others.
 function client(token = inject('dormiceToken')) {
   return new Dormice({ endpoint: inject('dormiceEndpoint'), token });
@@ -30,7 +30,7 @@ describe('native API over a real daemon', () => {
     const res = await client().acquireSandbox('fresh-key');
     expect(res.status).toBe('ready');
     expect(res.sandbox.state).toBe('active');
-    expect(res.sandbox.userKey).toBe('fresh-key');
+    expect(res.sandbox.externalId).toBe('fresh-key');
     // The exam daemon runs with S3 configured (see setup/daemon.ts), so the
     // archive default is live: a week from stopped to archived.
     expect(res.sandbox.policy).toEqual({
@@ -83,22 +83,22 @@ describe('native API over a real daemon', () => {
     ).resolves.toBe(400);
   });
 
-  it('releases a sandbox: destroyed, forgotten, idempotent', async () => {
-    const created = await client().acquireSandbox('release-key');
+  it('destroys a sandbox: gone, forgotten, idempotent', async () => {
+    const created = await client().acquireSandbox('destroy-key');
 
-    expect(await client().releaseSandbox('release-key')).toEqual({
-      released: true,
+    expect(await client().destroySandbox('destroy-key')).toEqual({
+      destroyed: true,
     });
     const listed = await client().listSandboxes();
     expect(listed.some((s) => s.sandboxId === created.sandbox.sandboxId)).toBe(
       false,
     );
-    expect(await client().releaseSandbox('release-key')).toEqual({
-      released: false,
+    expect(await client().destroySandbox('destroy-key')).toEqual({
+      destroyed: false,
     });
 
     // The key is free again: the next acquire builds a brand-new sandbox.
-    const again = await client().acquireSandbox('release-key');
+    const again = await client().acquireSandbox('destroy-key');
     expect(again.sandbox.sandboxId).not.toBe(created.sandbox.sandboxId);
   });
 
@@ -123,15 +123,15 @@ describe('native API over a real daemon', () => {
       name: 'DormiceApiError',
       status: 404,
     });
-    await client().releaseSandbox('rebuild-key');
+    await client().destroySandbox('rebuild-key');
   });
 
   it('updates a lifecycle policy in place — no release, no lost disk', async () => {
-    const created = await client().acquireSandbox('set-policy-key');
+    const created = await client().acquireSandbox('update-policy-key');
 
     // Promote to a never-stop resident agent; archive must fall with it
     // (only a stopped sandbox can archive) — sent together, as the console does.
-    const { sandbox } = await client().setPolicy('set-policy-key', {
+    const { sandbox } = await client().updatePolicy('update-policy-key', {
       stopAfterSeconds: null,
       archiveAfterSeconds: null,
     });
@@ -142,16 +142,16 @@ describe('native API over a real daemon', () => {
     expect(sandbox.state).toBe(created.sandbox.state);
 
     // The archive knob's front door works too on this S3-equipped daemon.
-    const back = await client().setPolicy('set-policy-key', {
+    const back = await client().updatePolicy('update-policy-key', {
       stopAfterSeconds: 3 * 24 * 60 * 60,
       archiveAfterSeconds: 30 * 24 * 60 * 60,
     });
     expect(back.sandbox.policy.archiveAfterSeconds).toBe(30 * 24 * 60 * 60);
 
     await expect(
-      client().setPolicy('set-policy-nobody', { freezeAfterSeconds: 60 }),
+      client().updatePolicy('update-policy-nobody', { freezeAfterSeconds: 60 }),
     ).rejects.toMatchObject({ name: 'DormiceApiError', status: 404 });
-    await client().releaseSandbox('set-policy-key');
+    await client().destroySandbox('update-policy-key');
   });
 
   // The fake's files hang off the disk, so only a real container can show
@@ -174,7 +174,7 @@ describe('native API over a real daemon', () => {
       expect(check.stdout).toContain('kept');
       expect(check.stdout).not.toContain('ephemeral');
       expect(check.stderr).toMatch(/No such file/);
-      await client().releaseSandbox('rebuild-layers-key');
+      await client().destroySandbox('rebuild-layers-key');
     },
   );
 
@@ -217,7 +217,7 @@ describe('native API over a real daemon', () => {
     const result = await client().execCommand('exec-busy-key', 'sleep 3');
     expect(result.exitCode).toBe(0);
     const observed = (await client().listSandboxes()).find(
-      (s) => s.userKey === 'exec-busy-key',
+      (s) => s.externalId === 'exec-busy-key',
     );
     expect(observed?.state).toBe('active');
   });
@@ -234,7 +234,7 @@ describe('native API over a real daemon', () => {
     const deadline = Date.now() + 15_000;
     for (;;) {
       const cold = (await client().listSandboxes()).find(
-        (s) => s.userKey === 'exec-wake-key',
+        (s) => s.externalId === 'exec-wake-key',
       );
       if (cold?.state === 'frozen') break;
       if (Date.now() > deadline) {
@@ -251,7 +251,7 @@ describe('native API over a real daemon', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('woke\n');
     const observed = (await client().listSandboxes()).find(
-      (s) => s.userKey === 'exec-wake-key',
+      (s) => s.externalId === 'exec-wake-key',
     );
     expect(observed?.state).toBe('active');
   });
@@ -275,7 +275,7 @@ describe('native API over a real daemon', () => {
     const deadline = Date.now() + 15_000;
     for (;;) {
       const asleep = (await client().listSandboxes()).find(
-        (s) => s.userKey === 'sleeper-key',
+        (s) => s.externalId === 'sleeper-key',
       );
       if (asleep?.state === 'stopped') break;
       if (Date.now() > deadline) {
@@ -313,6 +313,38 @@ describe('native API over a real daemon', () => {
     expect(blob.content).toEqual(bytes);
   });
 
+  it('writeFile and readFiles: the single and batch forms hold the same contract', async () => {
+    await client().acquireSandbox('files-key');
+    await client().writeFiles('files-key', [
+      { path: 'hello.txt', content: 'hello from e2e\n' },
+    ]);
+
+    const one = await client().writeFile('files-key', 'single.txt', 'just me\n');
+    expect(one).toEqual({ path: '/home/user/single.txt' });
+
+    // Batch read comes back in request order, paths resolved.
+    const batch = await client().readFiles('files-key', [
+      'single.txt',
+      '/home/user/hello.txt',
+    ]);
+    expect(batch.map((f) => f.path)).toEqual([
+      '/home/user/single.txt',
+      '/home/user/hello.txt',
+    ]);
+    expect(batch.map((f) => new TextDecoder().decode(f.content))).toEqual([
+      'just me\n',
+      'hello from e2e\n',
+    ]);
+
+    // All or nothing: one missing path fails the whole batch, naming it.
+    await expect(
+      client().readFiles('files-key', ['single.txt', 'absent.txt']),
+    ).rejects.toMatchObject({
+      status: 404,
+      message: 'no such file: /home/user/absent.txt',
+    });
+  });
+
   it('surfaces the honest errors: missing file 404, directory 400', async () => {
     await client().acquireSandbox('files-err-key');
     await expect(
@@ -340,7 +372,7 @@ describe('native API over a real daemon', () => {
     });
     expect(created.sandbox.template).toBe('native-tpl');
     const listed = (await client().listSandboxes()).find(
-      (s) => s.userKey === 'tpl-key',
+      (s) => s.externalId === 'tpl-key',
     );
     expect(listed?.template).toBe('native-tpl');
 
@@ -349,7 +381,7 @@ describe('native API over a real daemon', () => {
       status: 409,
       message: expect.stringMatching(/tpl-key/),
     });
-    await client().releaseSandbox('tpl-key');
+    await client().destroySandbox('tpl-key');
     expect(await client().removeTemplate('native-tpl')).toEqual({
       removed: true,
     });
@@ -371,8 +403,8 @@ describe('native API over a real daemon', () => {
         ),
       });
       // Nothing was created: the key is still free, the template removable.
-      expect(await client().releaseSandbox('hollow-key')).toEqual({
-        released: false,
+      expect(await client().destroySandbox('hollow-key')).toEqual({
+        destroyed: false,
       });
       expect(await client().removeTemplate('hollow-tpl')).toEqual({
         removed: true,
@@ -395,7 +427,7 @@ describe('native API over a real daemon', () => {
     const deadline = Date.now() + 15_000;
     for (;;) {
       const cold = (await client().listSandboxes()).find(
-        (s) => s.userKey === 'files-wake-key',
+        (s) => s.externalId === 'files-wake-key',
       );
       if (cold?.state === 'frozen') break;
       if (Date.now() > deadline) {
@@ -409,7 +441,7 @@ describe('native API over a real daemon', () => {
     const read = await client().readFile('files-wake-key', 'keep.txt');
     expect(new TextDecoder().decode(read.content)).toBe('still here');
     const observed = (await client().listSandboxes()).find(
-      (s) => s.userKey === 'files-wake-key',
+      (s) => s.externalId === 'files-wake-key',
     );
     expect(observed?.state).toBe('active');
   });
@@ -430,7 +462,7 @@ describe('native API over a real daemon', () => {
     expect(metrics.sandboxDisks.nominalBytes).toBeGreaterThan(
       metrics.sandboxDisks.actualBytes,
     );
-    await client().releaseSandbox('host-metrics-key');
+    await client().destroySandbox('host-metrics-key');
   });
 });
 
@@ -449,14 +481,14 @@ describe('the observability verbs over a real daemon', () => {
     });
   });
 
-  it('getSandboxMetrics samples a live sandbox and 404s after release', async () => {
+  it('getSandboxMetrics samples a live sandbox and 404s after destroy', async () => {
     await client().acquireSandbox('obs-metrics-key');
     const sample = await client().getSandboxMetrics('obs-metrics-key');
     expect(sample).not.toBeNull();
     expect(sample?.memTotalBytes).toBeGreaterThan(0);
     expect(sample?.diskTotalBytes).toBeGreaterThan(0);
 
-    await client().releaseSandbox('obs-metrics-key');
+    await client().destroySandbox('obs-metrics-key');
     await expect(
       client().getSandboxMetrics('obs-metrics-key'),
     ).rejects.toMatchObject({ name: 'DormiceApiError', status: 404 });
@@ -464,10 +496,10 @@ describe('the observability verbs over a real daemon', () => {
 
   it("listActivity tells one sandbox's story, newest first", async () => {
     await client().acquireSandbox('obs-story-key');
-    await client().releaseSandbox('obs-story-key');
+    await client().destroySandbox('obs-story-key');
     const events = await client().listActivity({ limit: 500 });
-    const mine = events.filter((e) => e.userKey === 'obs-story-key');
-    expect(mine.map((e) => e.kind)).toEqual(['released', 'created']);
+    const mine = events.filter((e) => e.externalId === 'obs-story-key');
+    expect(mine.map((e) => e.kind)).toEqual(['destroyed', 'created']);
     expect(mine[1]?.detail).toContain('acquireSandbox');
   });
 });

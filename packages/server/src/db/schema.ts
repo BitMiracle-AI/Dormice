@@ -12,8 +12,8 @@ import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 export const sandboxes = sqliteTable('sandboxes', {
   /** UUID, never an autoincrement — ids must stay unique across machines. */
   sandboxId: text('sandbox_id').primaryKey(),
-  /** The key acquire() is idempotent on: one sandbox per user key. */
-  userKey: text('user_key').notNull().unique(),
+  /** The key acquire() is idempotent on: one sandbox per external id. */
+  externalId: text('external_id').notNull().unique(),
   state: text('state', { enum: SANDBOX_STATES }).notNull(),
   nodeId: text('node_id').notNull(),
   freezeAfterSeconds: integer('freeze_after_seconds').notNull(),
@@ -82,7 +82,7 @@ export const activity = sqliteTable('activity', {
   at: text('at').notNull(),
   kind: text('kind', { enum: ACTIVITY_KINDS }).notNull(),
   /** Null for events with no owning sandbox (orphan sweeps, daemon start). */
-  userKey: text('user_key'),
+  externalId: text('external_id'),
   sandboxId: text('sandbox_id'),
   detail: text('detail').notNull(),
 });

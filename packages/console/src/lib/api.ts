@@ -115,8 +115,8 @@ export const getHostMetrics = () => rpc<HostMetricsResponse>('/getHostMetrics');
 
 // One sandbox's point-in-time reading. Same principle: a frozen sandbox is
 // measured as it sleeps, a stopped one answers sample: null — never woken.
-export const getSandboxMetrics = (userKey: string) =>
-  rpc<GetSandboxMetricsResponse>('/getSandboxMetrics', { userKey });
+export const getSandboxMetrics = (externalId: string) =>
+  rpc<GetSandboxMetricsResponse>('/getSandboxMetrics', { externalId });
 
 // Every measurable sandbox in one answer — the list view's food. Presence
 // means measured: colder states are simply absent.
@@ -159,18 +159,18 @@ export const removeTemplate = (name: string) =>
 export const acquireSandbox = (request: AcquireRequest) =>
   rpc<AcquireResponse>('/acquireSandbox', request);
 
-export const releaseSandbox = (userKey: string) =>
-  rpc<{ released: boolean }>('/releaseSandbox', { userKey });
+export const destroySandbox = (externalId: string) =>
+  rpc<{ destroyed: boolean }>('/destroySandbox', { externalId });
 
 // Swap the container, keep /home/user: the next use starts on the daemon's
 // current base image.
-export const rebuildSandbox = (userKey: string) =>
-  rpc<{ sandbox: Sandbox }>('/rebuildSandbox', { userKey });
+export const rebuildSandbox = (externalId: string) =>
+  rpc<{ sandbox: Sandbox }>('/rebuildSandbox', { externalId });
 
 // Patch the stored lifecycle policy in place — the update verb acquire is
 // not. Ledger-only: nothing wakes, the idle clock keeps running.
-export const setPolicy = (userKey: string, policy: LifecyclePolicyOverride) =>
-  rpc<{ sandbox: Sandbox }>('/setPolicy', { userKey, policy });
+export const updatePolicy = (externalId: string, policy: LifecyclePolicyOverride) =>
+  rpc<{ sandbox: Sandbox }>('/updatePolicy', { externalId, policy });
 
 // The terminal's key: trades the session cookie for one sandbox's envd
 // access token, so the browser can speak to the envd surface directly.

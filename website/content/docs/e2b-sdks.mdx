@@ -47,16 +47,16 @@ Python SDK validates its key against `e2b_[0-9a-f]+` client-side, before
 any request leaves the machine — a token with other characters fails in
 the SDK, not on the wire.
 
-## `metadata.userKey`: idempotent create
+## `metadata.externalId`: idempotent create
 
-A Dormice extension: pass `metadata: { userKey: '...' }` and
+A Dormice extension: pass `metadata: { externalId: '...' }` and
 `Sandbox.create` behaves like the native `acquireSandbox` — the same key
 always returns the same sandbox instead of a new one, whatever state it
 was in, with its files intact:
 
 ```ts
 const sbx = await Sandbox.create({
-  metadata: { userKey: 'my-project' },
+  metadata: { externalId: 'my-project' },
   // ...the two URLs and apiKey as above
 });
 ```

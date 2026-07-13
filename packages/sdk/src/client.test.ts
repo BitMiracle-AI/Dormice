@@ -166,7 +166,7 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
   it('lists sandboxes with their lifecycle states', async () => {
     await client.acquireSandbox('erin');
     const sandboxes = await client.listSandboxes();
-    const erin = sandboxes.find((s) => s.userKey === 'erin');
+    const erin = sandboxes.find((s) => s.externalId === 'erin');
     expect(erin?.state).toBe('active');
   });
 
@@ -216,7 +216,7 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
             authorization: `Bearer ${TOKEN}`,
             'content-type': 'application/json',
           },
-          body: JSON.stringify({ userKey: 'henry', command: 'sleep 1' }),
+          body: JSON.stringify({ externalId: 'henry', command: 'sleep 1' }),
         }),
       ).rejects.toThrow(/fetch failed/);
       // The SDK carries its own dispatcher, so the same call sails through.
@@ -294,7 +294,7 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
 
   it('patches a lifecycle policy in place, keeping the untouched knobs', async () => {
     const created = await client.acquireSandbox('policy-key');
-    const { sandbox } = await client.setPolicy('policy-key', {
+    const { sandbox } = await client.updatePolicy('policy-key', {
       stopAfterSeconds: null,
     });
     expect(sandbox.sandboxId).toBe(created.sandbox.sandboxId);
@@ -304,19 +304,19 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
     });
 
     await expect(
-      client.setPolicy('no-such-key', { freezeAfterSeconds: 60 }),
+      client.updatePolicy('no-such-key', { freezeAfterSeconds: 60 }),
     ).rejects.toMatchObject({ name: 'DormiceApiError', status: 404 });
     await expect(
       // Merged with the stored policy this breaks the ordering rule.
-      client.setPolicy('policy-key', { archiveAfterSeconds: 1 }),
+      client.updatePolicy('policy-key', { archiveAfterSeconds: 1 }),
     ).rejects.toMatchObject({ status: 400 });
   });
 
   it('releases a sandbox and reports idempotently', async () => {
     const created = await client.acquireSandbox('frank');
-    expect(await client.releaseSandbox('frank')).toEqual({ released: true });
+    expect(await client.destroySandbox('frank')).toEqual({ destroyed: true });
     expect(executor.stateOf(created.sandbox.sandboxId)).toBeUndefined();
-    expect(await client.releaseSandbox('frank')).toEqual({ released: false });
+    expect(await client.destroySandbox('frank')).toEqual({ destroyed: false });
 
     const again = await client.acquireSandbox('frank');
     expect(again.sandbox.sandboxId).not.toBe(created.sandbox.sandboxId);
@@ -343,7 +343,7 @@ describe('templates over real HTTP', () => {
       message: expect.stringMatching(/tpl-user/),
     });
 
-    await client.releaseSandbox('tpl-user');
+    await client.destroySandbox('tpl-user');
     expect(await client.removeTemplate('tpl-sdk')).toEqual({ removed: true });
     expect(await client.removeTemplate('tpl-sdk')).toEqual({ removed: false });
   });
@@ -374,7 +374,7 @@ describe('the observability verbs over real HTTP', () => {
     await client.acquireSandbox('metrics-sdk');
     const sample = await client.getSandboxMetrics('metrics-sdk');
     expect(sample?.memTotalBytes).toBeGreaterThan(0);
-    await client.releaseSandbox('metrics-sdk');
+    await client.destroySandbox('metrics-sdk');
 
     await expect(
       client.getSandboxMetrics('metrics-nobody'),
@@ -388,23 +388,23 @@ describe('the observability verbs over real HTTP', () => {
     await client.acquireSandbox('fleet-a');
     await client.acquireSandbox('fleet-b');
     const samples = await client.listSandboxMetrics();
-    const mine = samples.filter((s) => s.userKey.startsWith('fleet-'));
-    expect(mine.map((s) => s.userKey).sort()).toEqual(['fleet-a', 'fleet-b']);
+    const mine = samples.filter((s) => s.externalId.startsWith('fleet-'));
+    expect(mine.map((s) => s.externalId).sort()).toEqual(['fleet-a', 'fleet-b']);
     for (const entry of mine) {
       expect(entry.sample.memTotalBytes).toBeGreaterThan(0);
     }
-    await client.releaseSandbox('fleet-a');
-    await client.releaseSandbox('fleet-b');
+    await client.destroySandbox('fleet-a');
+    await client.destroySandbox('fleet-b');
     // Released means gone from the measurable set, not null-stuffed.
     const after = await client.listSandboxMetrics();
-    expect(after.filter((s) => s.userKey.startsWith('fleet-'))).toEqual([]);
+    expect(after.filter((s) => s.externalId.startsWith('fleet-'))).toEqual([]);
   });
 
   it('listActivity tells the story just written, newest first', async () => {
     await client.acquireSandbox('story-sdk');
-    await client.releaseSandbox('story-sdk');
+    await client.destroySandbox('story-sdk');
     const log = await client.listActivity({ limit: 10 });
-    const mine = log.filter((e) => e.userKey === 'story-sdk');
-    expect(mine.map((e) => e.kind)).toEqual(['released', 'created']);
+    const mine = log.filter((e) => e.externalId === 'story-sdk');
+    expect(mine.map((e) => e.kind)).toEqual(['destroyed', 'created']);
   });
 });

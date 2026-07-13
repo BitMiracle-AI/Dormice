@@ -87,7 +87,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
   /**
    * Host -> a dialable target, waking the sandbox under its key slot like
    * every other verb (physical wake-ups must not race the scanner or a
-   * release). Throws ProxyRefusal for everything that deserves a 502.
+   * destroy). Throws ProxyRefusal for everything that deserves a 502.
    */
   async function resolveTarget(req: http.IncomingMessage): Promise<{
     row: SandboxRow;
@@ -97,7 +97,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
     const parsed = parseSandboxHost(req.headers.host, domain);
     if (!parsed) throw new ProxyRefusal('not sandbox traffic');
     const before = liveRow(parsed.sandboxId);
-    const row = await locks.run(before.userKey, async () => {
+    const row = await locks.run(before.externalId, async () => {
       const fresh = liveRow(parsed.sandboxId);
       const awake = await wakeSandbox(db, executor, fresh);
       return touch(db, awake.sandboxId);

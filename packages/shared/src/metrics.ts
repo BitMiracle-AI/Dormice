@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { userKeySchema } from './sandbox';
+import { externalIdSchema } from './sandbox';
 
 /**
- * getSandboxMetrics(userKey) — one sandbox's point-in-time resource
+ * getSandboxMetrics(externalId) — one sandbox's point-in-time resource
  * reading: the per-sandbox sibling of getHostMetrics, and the native twin
  * of the E2B surface's metrics endpoint (same executor reading, same
  * single-sample answer — the daemon keeps no metrics history). Observation
@@ -27,7 +27,7 @@ export const sandboxMetricsSampleSchema = z.object({
 export type SandboxMetricsSample = z.infer<typeof sandboxMetricsSampleSchema>;
 
 export const getSandboxMetricsRequestSchema = z.object({
-  userKey: userKeySchema,
+  externalId: externalIdSchema,
 });
 
 export type GetSandboxMetricsRequest = z.infer<
@@ -59,7 +59,7 @@ export type ListSandboxMetricsRequest = z.infer<
 export const listSandboxMetricsResponseSchema = z.object({
   samples: z.array(
     z.object({
-      userKey: z.string(),
+      externalId: z.string(),
       sandboxId: z.string(),
       sample: sandboxMetricsSampleSchema,
     }),

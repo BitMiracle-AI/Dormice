@@ -3,7 +3,7 @@ title: Running commands
 description: execCommand is a buffered shell round-trip — honest exit codes, timeouts enforced inside the container, output capped at 1 MiB per stream.
 ---
 
-The native surface has one command verb: `execCommand(userKey, command)`.
+The native surface has one command verb: `execCommand(externalId, command)`.
 It wakes the sandbox if it is cold, runs the command as `bash -c` inside
 the container (as the sandbox's non-root user, uid 1000), waits, and
 returns the whole result at once:

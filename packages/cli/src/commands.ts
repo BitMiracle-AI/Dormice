@@ -32,14 +32,14 @@ export function clientFromEnv(
 }
 
 const COLUMNS: { header: string; value: (s: Sandbox) => string }[] = [
-  { header: 'USER KEY', value: (s) => s.userKey },
+  { header: 'USER KEY', value: (s) => s.externalId },
   { header: 'STATE', value: (s) => s.state },
   { header: 'SANDBOX ID', value: (s) => s.sandboxId },
   { header: 'LAST ACTIVE', value: (s) => s.lastActiveAt },
 ];
 
 /**
- * The protocol keeps userKey opaque, so a hostile key can carry control
+ * The protocol keeps externalId opaque, so a hostile key can carry control
  * characters — printed raw, ESC sequences would let one sandbox's name
  * rewrite the operator's terminal. Neutralized here, at the output layer,
  * where the terminal risk lives.
@@ -80,7 +80,7 @@ export interface ExecOutput {
 }
 
 /**
- * `dor sandbox exec <userKey> <command>`: run a shell command in the
+ * `dor sandbox exec <externalId> <command>`: run a shell command in the
  * sandbox, buffered. Three channels instead of one string: the command's
  * stdout and stderr must reach the operator's matching streams untouched
  * (this is their own command's output, like ssh — unlike the ls table,
@@ -89,11 +89,11 @@ export interface ExecOutput {
  */
 export async function sandboxExec(
   client: Dormice,
-  userKey: string,
+  externalId: string,
   command: string,
   timeoutSeconds?: number,
 ): Promise<ExecOutput> {
-  const result = await client.execCommand(userKey, command, {
+  const result = await client.execCommand(externalId, command, {
     timeoutSeconds,
   });
   let stderr = result.stderr;
@@ -103,17 +103,17 @@ export async function sandboxExec(
 }
 
 /**
- * `dor sandbox push <userKey> <localPath> [remotePath]`: one local file into
+ * `dor sandbox push <externalId> <localPath> [remotePath]`: one local file into
  * the sandbox. The bytes arrive here already read — main.ts owns the
  * filesystem, this function owns the API call and the message.
  */
 export async function sandboxPush(
   client: Dormice,
-  userKey: string,
+  externalId: string,
   content: Uint8Array,
   remotePath: string,
 ): Promise<string> {
-  const { files } = await client.writeFiles(userKey, [
+  const { files } = await client.writeFiles(externalId, [
     { path: remotePath, content },
   ]);
   const written = files[0]?.path ?? remotePath;
@@ -121,17 +121,17 @@ export async function sandboxPush(
 }
 
 /**
- * `dor sandbox pull <userKey> <remotePath> [localPath]`: one file out of the
+ * `dor sandbox pull <externalId> <remotePath> [localPath]`: one file out of the
  * sandbox. Returns the exact bytes; main.ts decides between a local file and
  * raw stdout — raw on purpose, the same rule as exec output: these are the
  * operator's own bytes, not a place to strip control characters.
  */
 export async function sandboxPull(
   client: Dormice,
-  userKey: string,
+  externalId: string,
   remotePath: string,
 ): Promise<ReadFileResult> {
-  return client.readFile(userKey, remotePath);
+  return client.readFile(externalId, remotePath);
 }
 
 /** The message printed instead of raw bytes when pull saves to a local file. */
@@ -143,33 +143,33 @@ export function pullSavedMessage(
 }
 
 /**
- * `dor sandbox rebuild <userKey>`: swap the sandbox's container, keep its
+ * `dor sandbox rebuild <externalId>`: swap the sandbox's container, keep its
  * disk. /home/user survives; everything else resets onto the current image
  * of the sandbox's template (or the base image) at the next use.
  */
 export async function sandboxRebuild(
   client: Dormice,
-  userKey: string,
+  externalId: string,
 ): Promise<string> {
-  const { sandbox } = await client.rebuildSandbox(userKey);
+  const { sandbox } = await client.rebuildSandbox(externalId);
   const target = sandbox.template
     ? `template "${printable(sandbox.template)}"'s current image`
     : 'the current base image';
   return (
-    `Rebuilt the sandbox for key "${printable(userKey)}" — /home/user kept, ` +
+    `Rebuilt the sandbox for key "${printable(externalId)}" — /home/user kept, ` +
     `now ${sandbox.state}; its next use starts on ${target}.`
   );
 }
 
-/** `dor sandbox release <userKey>`: destroy the sandbox behind a key, idempotently. */
-export async function sandboxRelease(
+/** `dor sandbox destroy <externalId>`: destroy the sandbox behind a key, idempotently. */
+export async function sandboxDestroy(
   client: Dormice,
-  userKey: string,
+  externalId: string,
 ): Promise<string> {
-  const { released } = await client.releaseSandbox(userKey);
-  return released
-    ? `Released the sandbox for key "${printable(userKey)}".`
-    : `No sandbox for key "${printable(userKey)}" — nothing to release.`;
+  const { destroyed } = await client.destroySandbox(externalId);
+  return destroyed
+    ? `Destroyed the sandbox for key "${printable(externalId)}".`
+    : `No sandbox for key "${printable(externalId)}" — nothing to destroy.`;
 }
 
 /**

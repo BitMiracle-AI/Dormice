@@ -6,7 +6,7 @@ import {
   countSandboxes,
   createSandbox,
   findBySandboxId,
-  findByUserKey,
+  findByExternalId,
   listSandboxes,
   setDeadline,
   setPausedByUser,
@@ -16,7 +16,7 @@ import type { SandboxRow } from '../db/schema';
 import { findTemplate, resolveImage } from '../db/templates';
 import {
   freezeSandbox,
-  releaseSandbox,
+  destroySandbox,
   stopSandbox,
   wakeSandbox,
 } from '../lifecycle';
@@ -35,11 +35,11 @@ import { e2bView } from './view';
  * The E2B control plane: what the official SDK calls api.e2b.app for.
  * Mounted under /e2b/api; the SDK reaches it through its `apiUrl` option.
  * Faithful by default — timeouts kill, kill destroys; Dormice's immortality
- * is opt-in via metadata.userKey (idempotent create) or autoPause.
+ * is opt-in via metadata.externalId (idempotent create) or autoPause.
  */
 
-/** The Dormice extension key: metadata.userKey makes create idempotent. */
-const USER_KEY_PATTERN = /^[a-zA-Z0-9._-]{1,64}$/;
+/** The Dormice extension key: metadata.externalId makes create idempotent. */
+const EXTERNAL_ID_PATTERN = /^[a-zA-Z0-9._-]{1,64}$/;
 
 /** Seconds; E2B's default sandbox TTL. */
 const DEFAULT_TIMEOUT_SECONDS = 300;
@@ -243,19 +243,19 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     async (request, reply) => {
       const body = request.body;
       const timeoutSeconds = body.timeout ?? DEFAULT_TIMEOUT_SECONDS;
-      const requestedKey = body.metadata?.userKey;
-      if (requestedKey !== undefined && !USER_KEY_PATTERN.test(requestedKey)) {
+      const requestedKey = body.metadata?.externalId;
+      if (requestedKey !== undefined && !EXTERNAL_ID_PATTERN.test(requestedKey)) {
         throw apiError(
           400,
-          `invalid metadata.userKey "${requestedKey}": expected 1-64 chars of [a-zA-Z0-9._-]`,
+          `invalid metadata.externalId "${requestedKey}": expected 1-64 chars of [a-zA-Z0-9._-]`,
         );
       }
-      const userKey = requestedKey ?? `e2b-${randomUUID()}`;
+      const externalId = requestedKey ?? `e2b-${randomUUID()}`;
 
-      // The userKey reuse path may find an archived sandbox; the join
+      // The externalId reuse path may find an archived sandbox; the join
       // brings it back before the slot work below wakes it as usual.
       if (requestedKey !== undefined) {
-        await joinRestore(findByUserKey(db, requestedKey));
+        await joinRestore(findByExternalId(db, requestedKey));
       }
 
       // templateID resolution: a registered name wins; 'base', the base
@@ -275,8 +275,8 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         }
       }
 
-      const row = await locks.run(userKey, async () => {
-        const existing = findByUserKey(db, userKey);
+      const row = await locks.run(externalId, async () => {
+        const existing = findByExternalId(db, externalId);
         if (existing && e2bView(existing, new Date()) !== 'dead') {
           // The Dormice extension: same key, same sandbox — an acquire in
           // E2B clothes. Stored metadata/envs stay (same principle as the
@@ -289,13 +289,13 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         if (existing) {
           // Protocol-dead but not yet reaped: E2B semantics say it is gone,
           // so finish the job and build fresh under the same key.
-          await releaseSandbox(
+          await destroySandbox(
             db,
             executor,
             existing.sandboxId,
             archiver?.store ?? null,
             {
-              kind: 'released',
+              kind: 'destroyed',
               cause: 'protocol-dead row reaped by E2B create',
             },
           );
@@ -304,7 +304,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         if (countSandboxes(db) >= config.DORMICE_MAX_SANDBOXES) {
           throw apiError(
             429,
-            `sandbox limit reached (DORMICE_MAX_SANDBOXES=${config.DORMICE_MAX_SANDBOXES}) — release a sandbox or raise the limit`,
+            `sandbox limit reached (DORMICE_MAX_SANDBOXES=${config.DORMICE_MAX_SANDBOXES}) — destroy a sandbox or raise the limit`,
           );
         }
         const sandboxId = randomUUID();
@@ -313,7 +313,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         });
         return createSandbox(db, {
           sandboxId,
-          userKey,
+          externalId,
           nodeId: config.DORMICE_NODE_ID,
           policy: resolvePolicy(undefined, archiveDefaultSeconds),
           template,
@@ -346,7 +346,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       // then finds it active and the wake below is a no-op. Blocking is the
       // faithful behavior: E2B's connect returns a live sandbox, period.
       await joinRestore(before.row);
-      const row = await locks.run(before.row.userKey, async () => {
+      const row = await locks.run(before.row.externalId, async () => {
         const fresh = findBySandboxId(db, id);
         if (!fresh || e2bView(fresh, new Date()) === 'dead') {
           throw notFound(id);
@@ -403,26 +403,26 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
 
   app.delete('/sandboxes/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
-    // kill = release, for real: container, disk and row gone. Persistence
-    // on the E2B surface is "don't kill" (autoPause / userKey), never a
+    // kill = destroy, for real: container, disk and row gone. Persistence
+    // on the E2B surface is "don't kill" (autoPause / externalId), never a
     // kill that secretly keeps data.
     const { row } = findLive(id);
     if (row.state === 'restoring') {
       // A mid-restore teardown would race the task over the half-built
       // disk; join it first. The outcome is irrelevant — we are deleting
       // either way, and a failed restore parks the row back on archived,
-      // whose release below deletes the S3 object.
+      // whose destroy below deletes the S3 object.
       await archiver?.restoreJoin(id).catch(() => {});
     }
-    await locks.run(row.userKey, async () => {
+    await locks.run(row.externalId, async () => {
       const fresh = findBySandboxId(db, id);
       if (!fresh) throw notFound(id);
-      await releaseSandbox(
+      await destroySandbox(
         db,
         executor,
         fresh.sandboxId,
         archiver?.store ?? null,
-        { kind: 'released', cause: 'via E2B kill' },
+        { kind: 'destroyed', cause: 'via E2B kill' },
       );
     });
     return reply.code(204).send();
@@ -458,7 +458,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         // The SDK reads a 409 as "already paused" and answers false.
         throw apiError(409, 'sandbox is already paused');
       }
-      await locks.run(before.row.userKey, async () => {
+      await locks.run(before.row.externalId, async () => {
         const fresh = findBySandboxId(db, id);
         if (!fresh) throw notFound(id);
         let current = fresh;

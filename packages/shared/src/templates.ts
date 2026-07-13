@@ -67,7 +67,7 @@ export type ListTemplatesResponse = z.infer<typeof listTemplatesResponseSchema>;
 /**
  * removeTemplate(name) — refused with a 409 while any sandbox still uses the
  * template (the sandboxes would wake onto a dangling name); idempotent on an
- * unknown name, like releaseSandbox: "no template under this name" is the
+ * unknown name, like destroySandbox: "no template under this name" is the
  * desired end state.
  */
 export const removeTemplateRequestSchema = z.object({

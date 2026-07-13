@@ -44,17 +44,17 @@ describe('dor CLI against a real daemon', () => {
     expect(stdout).toContain(created.sandbox.sandboxId);
   });
 
-  it('sandbox release destroys and is idempotent', async () => {
+  it('sandbox destroy destroys and is idempotent', async () => {
     const sdk = new Dormice({
       endpoint: inject('dormiceEndpoint'),
       token: inject('dormiceToken'),
     });
-    await sdk.acquireSandbox('cli-release-key');
+    await sdk.acquireSandbox('cli-destroy-key');
 
-    const first = await cli('sandbox', 'release', 'cli-release-key');
-    expect(first.stdout).toContain('Released the sandbox');
-    const second = await cli('sandbox', 'release', 'cli-release-key');
-    expect(second.stdout).toContain('nothing to release');
+    const first = await cli('sandbox', 'destroy', 'cli-destroy-key');
+    expect(first.stdout).toContain('Destroyed the sandbox');
+    const second = await cli('sandbox', 'destroy', 'cli-destroy-key');
+    expect(second.stdout).toContain('nothing to destroy');
   });
 
   it('sandbox exec prints the output and passes the exit code through', async () => {

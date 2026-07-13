@@ -11,17 +11,22 @@ import {
   listSandboxesResponseSchema,
   listSandboxMetricsRequestSchema,
   listSandboxMetricsResponseSchema,
+  READ_FILES_TOTAL_LIMIT_BYTES,
   readFileRequestSchema,
   readFileResponseSchema,
+  readFilesRequestSchema,
+  readFilesResponseSchema,
   rebuildSandboxRequestSchema,
   rebuildSandboxResponseSchema,
-  releaseSandboxRequestSchema,
-  releaseSandboxResponseSchema,
+  destroySandboxRequestSchema,
+  destroySandboxResponseSchema,
   resolveSandboxPath,
   type Sandbox,
-  setPolicyRequestSchema,
-  setPolicyResponseSchema,
+  updatePolicyRequestSchema,
+  updatePolicyResponseSchema,
   WRITE_FILES_BODY_LIMIT_BYTES,
+  writeFileRequestSchema,
+  writeFileResponseSchema,
   writeFilesRequestSchema,
   writeFilesResponseSchema,
 } from '@dormice/shared';
@@ -34,7 +39,7 @@ import type { Db } from '../db/db';
 import {
   countSandboxes,
   createSandbox,
-  findByUserKey,
+  findByExternalId,
   listSandboxes,
   touch,
   updatePolicy,
@@ -50,7 +55,7 @@ import {
 } from '../executor/executor';
 import { httpError } from '../http-error';
 import type { KeyedQueue } from '../keyed-queue';
-import { rebuildSandbox, releaseSandbox, wakeSandbox } from '../lifecycle';
+import { rebuildSandbox, destroySandbox, wakeSandbox } from '../lifecycle';
 import { ArchiveDisabledError, resolvePolicy } from '../policy';
 
 export interface SandboxRoutesOptions {
@@ -73,7 +78,7 @@ type AcquireOutcome =
 function toSandbox(row: SandboxRow, endpoint: string): Sandbox {
   return {
     sandboxId: row.sandboxId,
-    userKey: row.userKey,
+    externalId: row.externalId,
     state: row.state,
     nodeId: row.nodeId,
     endpoint,
@@ -106,11 +111,11 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   // request queues, finds the row the first one wrote, and comes back with
   // the same sandbox instead of racing a duplicate create.
   async function findOrCreate(
-    userKey: string,
+    externalId: string,
     policy: LifecyclePolicy,
     template: string | null,
   ): Promise<AcquireOutcome> {
-    const existing = findByUserKey(db, userKey);
+    const existing = findByExternalId(db, externalId);
     if (existing?.state === 'archived' || existing?.state === 'restoring') {
       // The protocol's promise: acquire never blocks on a slow wake-up. An
       // archived sandbox starts its restore and answers `restoring` with
@@ -118,15 +123,15 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       if (!archiver) {
         throw httpError(
           503,
-          `sandbox for key "${userKey}" is ${existing.state} but the daemon has no S3 configured (DORMICE_S3_*) — restore is impossible until it is`,
+          `sandbox for key "${externalId}" is ${existing.state} but the daemon has no S3 configured (DORMICE_S3_*) — restore is impossible until it is`,
         );
       }
       if (existing.state === 'archived') {
         archiver.beginRestore(existing);
       }
-      const restoring = findByUserKey(db, userKey);
+      const restoring = findByExternalId(db, externalId);
       if (!restoring) {
-        throw httpError(500, `sandbox for key "${userKey}" vanished mid-slot`);
+        throw httpError(500, `sandbox for key "${externalId}" vanished mid-slot`);
       }
       return {
         status: 'restoring',
@@ -156,7 +161,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     if (countSandboxes(db) >= config.DORMICE_MAX_SANDBOXES) {
       throw httpError(
         429,
-        `sandbox limit reached (DORMICE_MAX_SANDBOXES=${config.DORMICE_MAX_SANDBOXES}) — release a sandbox or raise the limit`,
+        `sandbox limit reached (DORMICE_MAX_SANDBOXES=${config.DORMICE_MAX_SANDBOXES}) — destroy a sandbox or raise the limit`,
       );
     }
 
@@ -173,7 +178,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       status: 'ready',
       row: createSandbox(db, {
         sandboxId,
-        userKey,
+        externalId,
         nodeId: config.DORMICE_NODE_ID,
         policy,
         template,
@@ -186,12 +191,12 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   // is more likely a typo than an intent to build a sandbox as a side
   // effect — then wake whatever cold state the sandbox is in and refresh
   // its idle clock. Must be called while holding the key's queue slot.
-  async function wakeForUse(userKey: string): Promise<SandboxRow> {
-    const existing = findByUserKey(db, userKey);
+  async function wakeForUse(externalId: string): Promise<SandboxRow> {
+    const existing = findByExternalId(db, externalId);
     if (!existing) {
       throw httpError(
         404,
-        `no sandbox for key "${userKey}" — acquire it first`,
+        `no sandbox for key "${externalId}" — acquire it first`,
       );
     }
     if (existing.state === 'archived' || existing.state === 'restoring') {
@@ -199,7 +204,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       // blocks for minutes nor starts restores on the side.
       throw httpError(
         409,
-        `sandbox for key "${userKey}" is ${existing.state} — call acquireSandbox and poll until it is ready`,
+        `sandbox for key "${externalId}" is ${existing.state} — call acquireSandbox and poll until it is ready`,
       );
     }
     const awake = await wakeSandbox(db, executor, existing);
@@ -222,7 +227,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request, reply) => {
-      const { userKey, policy: override, template } = request.body;
+      const { externalId, policy: override, template } = request.body;
 
       // Validate the policy before taking the key's slot, so a queued
       // rejection can only come from the work itself, never from another
@@ -259,8 +264,8 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         });
       }
 
-      const outcome = await locks.run(userKey, () =>
-        findOrCreate(userKey, policy, template ?? null),
+      const outcome = await locks.run(externalId, () =>
+        findOrCreate(externalId, policy, template ?? null),
       );
       if (outcome.status === 'restoring') {
         return {
@@ -304,12 +309,12 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { userKey } = request.body;
-      const row = findByUserKey(db, userKey);
+      const { externalId } = request.body;
+      const row = findByExternalId(db, externalId);
       if (!row) {
         throw httpError(
           404,
-          `no sandbox for key "${userKey}" — acquire it first`,
+          `no sandbox for key "${externalId}" — acquire it first`,
         );
       }
       if (row.state !== 'active' && row.state !== 'frozen') {
@@ -343,7 +348,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           try {
             const m = await executor.metrics(row.sandboxId);
             return {
-              userKey: row.userKey,
+              externalId: row.externalId,
               sandboxId: row.sandboxId,
               sample: { timestamp: new Date().toISOString(), ...m },
             };
@@ -365,16 +370,16 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { userKey, command, timeoutSeconds, cwd, env } = request.body;
+      const { externalId, command, timeoutSeconds, cwd, env } = request.body;
 
       // Only the wake takes the key's queue slot — seconds of executor
       // work, the same serialization story as acquire. The exec itself
       // runs OUTSIDE the slot: a command may legally run for hours, and
-      // holding the slot would block release and every other verb for its
+      // holding the slot would block destroy and every other verb for its
       // whole duration. The heartbeat keeps the scanner away; a concurrent
-      // release mid-exec destroys the container and this exec fails with
+      // destroy mid-exec removes the container and this exec fails with
       // the executor's honest error — accepted, not defended against.
-      const row = await locks.run(userKey, () => wakeForUse(userKey));
+      const row = await locks.run(externalId, () => wakeForUse(externalId));
 
       const stopHeartbeat = startExecHeartbeat(
         db,
@@ -409,12 +414,12 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     throw error;
   }
 
-  // Both file verbs run ENTIRELY inside the key's queue slot, unlike exec:
-  // a file operation's work is bounded (16 MiB against a local ext4 —
+  // The file verbs run ENTIRELY inside the key's queue slot, unlike exec:
+  // a file operation's work is bounded (48 MiB against a local ext4 —
   // seconds at worst), so holding the slot is cheap and buys the same
   // guarantees acquire enjoys — the scanner cannot freeze the sandbox
-  // mid-write and a concurrent release queues up behind us instead of
-  // destroying the container under our feet. No heartbeat needed.
+  // mid-write and a concurrent destroy queues up behind us instead of
+  // removing the container under our feet. No heartbeat needed.
   app.post(
     '/writeFiles',
     {
@@ -426,9 +431,9 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { userKey, files } = request.body;
-      return locks.run(userKey, async () => {
-        const row = await wakeForUse(userKey);
+      const { externalId, files } = request.body;
+      return locks.run(externalId, async () => {
+        const row = await wakeForUse(externalId);
         try {
           await executor.writeFiles(
             row.sandboxId,
@@ -448,6 +453,35 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     },
   );
 
+  // The single-file form of writeFiles: same slot, same executor call, no
+  // array ceremony. The transport gate is shared with the batch — the
+  // schema's per-file cap is the real limit.
+  app.post(
+    '/writeFile',
+    {
+      bodyLimit: WRITE_FILES_BODY_LIMIT_BYTES,
+      schema: {
+        body: writeFileRequestSchema,
+        response: { 200: writeFileResponseSchema },
+      },
+    },
+    async (request) => {
+      const { externalId, path, contentBase64 } = request.body;
+      return locks.run(externalId, async () => {
+        const row = await wakeForUse(externalId);
+        try {
+          await executor.writeFiles(row.sandboxId, [
+            { path, content: Buffer.from(contentBase64, 'base64') },
+          ]);
+        } catch (error) {
+          throwFileHttpError(error);
+        }
+        touch(db, row.sandboxId);
+        return { path: resolveSandboxPath(path) };
+      });
+    },
+  );
+
   app.post(
     '/readFile',
     {
@@ -457,9 +491,9 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { userKey, path } = request.body;
-      return locks.run(userKey, async () => {
-        const row = await wakeForUse(userKey);
+      const { externalId, path } = request.body;
+      return locks.run(externalId, async () => {
+        const row = await wakeForUse(externalId);
         let content: Buffer;
         try {
           content = await executor.readFile(row.sandboxId, path);
@@ -475,6 +509,48 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     },
   );
 
+  // Batch reads are all or nothing (see readFilesRequestSchema): the first
+  // failing path aborts the call through throwFileHttpError, and the running
+  // total is gated so a broad glob cannot buffer the daemon into the ground.
+  app.post(
+    '/readFiles',
+    {
+      schema: {
+        body: readFilesRequestSchema,
+        response: { 200: readFilesResponseSchema },
+      },
+    },
+    async (request) => {
+      const { externalId, paths } = request.body;
+      return locks.run(externalId, async () => {
+        const row = await wakeForUse(externalId);
+        const files: { path: string; contentBase64: string }[] = [];
+        let totalBytes = 0;
+        for (const path of paths) {
+          let content: Buffer;
+          try {
+            content = await executor.readFile(row.sandboxId, path);
+          } catch (error) {
+            throwFileHttpError(error);
+          }
+          totalBytes += content.length;
+          if (totalBytes > READ_FILES_TOTAL_LIMIT_BYTES) {
+            throw httpError(
+              413,
+              `readFiles batch exceeds the ${READ_FILES_TOTAL_LIMIT_BYTES}-byte total limit at "${resolveSandboxPath(path)}" — split it into smaller calls`,
+            );
+          }
+          files.push({
+            path: resolveSandboxPath(path),
+            contentBase64: content.toString('base64'),
+          });
+        }
+        touch(db, row.sandboxId);
+        return { files };
+      });
+    },
+  );
+
   app.post(
     '/rebuildSandbox',
     {
@@ -484,18 +560,18 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { userKey } = request.body;
+      const { externalId } = request.body;
       // The whole verb holds the key's slot, like the file verbs: seconds of
       // executor work at worst, and the slot keeps the scanner and a
-      // concurrent release from moving the sandbox under our feet.
-      return locks.run(userKey, async () => {
-        const existing = findByUserKey(db, userKey);
+      // concurrent destroy from moving the sandbox under our feet.
+      return locks.run(externalId, async () => {
+        const existing = findByExternalId(db, externalId);
         if (!existing) {
           // Not a creator and not a destroyer: an unknown key is a typo,
           // not a goal state — same manners as exec.
           throw httpError(
             404,
-            `no sandbox for key "${userKey}" — acquire it first`,
+            `no sandbox for key "${externalId}" — acquire it first`,
           );
         }
         if (existing.state === 'archived' || existing.state === 'restoring') {
@@ -503,7 +579,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           // rebuild's promise (its next wake builds from the current image).
           throw httpError(
             409,
-            `sandbox for key "${userKey}" is ${existing.state} — it has no container to rebuild`,
+            `sandbox for key "${externalId}" is ${existing.state} — it has no container to rebuild`,
           );
         }
         const row = await rebuildSandbox(db, executor, existing);
@@ -513,30 +589,30 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   );
 
   app.post(
-    '/setPolicy',
+    '/updatePolicy',
     {
       schema: {
-        body: setPolicyRequestSchema,
+        body: updatePolicyRequestSchema,
         response: {
-          200: setPolicyResponseSchema,
+          200: updatePolicyResponseSchema,
           400: z.object({ message: z.string() }),
         },
       },
     },
     async (request, reply) => {
-      const { userKey, policy: patch } = request.body;
+      const { externalId, policy: patch } = request.body;
       // Unlike acquire, the merge base is the STORED policy, so validation
       // must wait for the row — it runs inside the slot, which also keeps a
-      // concurrent release from deleting the row between check and write.
+      // concurrent destroy from deleting the row between check and write.
       const outcome = await locks.run<{ error: string } | { row: SandboxRow }>(
-        userKey,
+        externalId,
         async () => {
-          const existing = findByUserKey(db, userKey);
+          const existing = findByExternalId(db, externalId);
           if (!existing) {
             // Not a creator: an unknown key is a typo, same manners as rebuild.
             throw httpError(
               404,
-              `no sandbox for key "${userKey}" — acquire it first`,
+              `no sandbox for key "${externalId}" — acquire it first`,
             );
           }
           // Legal in every state: policy is a ledger attribute, not a container
@@ -590,7 +666,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
             seconds === null ? 'never' : `${seconds}s`;
           recordActivity(db, {
             kind: 'policy-changed',
-            userKey,
+            externalId,
             sandboxId: row.sandboxId,
             detail: changed
               .map(
@@ -610,39 +686,39 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   );
 
   app.post(
-    '/releaseSandbox',
+    '/destroySandbox',
     {
       schema: {
-        body: releaseSandboxRequestSchema,
-        response: { 200: releaseSandboxResponseSchema },
+        body: destroySandboxRequestSchema,
+        response: { 200: destroySandboxResponseSchema },
       },
     },
     async (request) => {
-      const { userKey } = request.body;
-      // Same slot as acquire and the scanner: two parallel releases of one
+      const { externalId } = request.body;
+      // Same slot as acquire and the scanner: two parallel destroys of one
       // key queue up — the first destroys, the second re-checks and reports
       // the goal state honestly instead of tripping over a half-destroyed
       // sandbox.
-      return locks.run(userKey, async () => {
-        const existing = findByUserKey(db, userKey);
+      return locks.run(externalId, async () => {
+        const existing = findByExternalId(db, externalId);
         if (!existing) {
           // Idempotent like acquire: the desired end state — no sandbox
           // under this key — already holds.
-          return { released: false };
+          return { destroyed: false };
         }
         if (existing.state === 'restoring') {
-          // The one documented dent in release's idempotence: tearing the
+          // The one documented dent in destroy's idempotence: tearing the
           // half-built disk down would race the restore task over it. The
           // task finishes in seconds to minutes; retry then.
           throw httpError(409, 'sandbox is restoring; retry when it finishes');
         }
-        await releaseSandbox(
+        await destroySandbox(
           db,
           executor,
           existing.sandboxId,
           archiver?.store ?? null,
         );
-        return { released: true };
+        return { destroyed: true };
       });
     },
   );

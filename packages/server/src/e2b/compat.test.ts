@@ -216,10 +216,10 @@ describe('E2B control plane', () => {
     expect(t.executor.stateOf(first.sandboxID)).toBe('running');
   });
 
-  it('metadata.userKey is the Dormice extension: same key, same sandbox', async () => {
+  it('metadata.externalId is the Dormice extension: same key, same sandbox', async () => {
     const t = testApp();
-    const first = await createSandbox(t, { metadata: { userKey: 'agent-7' } });
-    const second = await createSandbox(t, { metadata: { userKey: 'agent-7' } });
+    const first = await createSandbox(t, { metadata: { externalId: 'agent-7' } });
+    const second = await createSandbox(t, { metadata: { externalId: 'agent-7' } });
     expect(second.sandboxID).toBe(first.sandboxID);
   });
 
@@ -227,13 +227,13 @@ describe('E2B control plane', () => {
     const t = testApp();
     const { sandboxID } = await createSandbox(t, {
       timeout: 600,
-      metadata: { userKey: 'meta-echo', team: 'blue' },
+      metadata: { externalId: 'meta-echo', team: 'blue' },
     });
     const res = await control(t, 'GET', `/sandboxes/${sandboxID}`);
     expect(res.statusCode).toBe(200);
     const info = res.json();
     expect(info.state).toBe('running');
-    expect(info.metadata).toEqual({ userKey: 'meta-echo', team: 'blue' });
+    expect(info.metadata).toEqual({ externalId: 'meta-echo', team: 'blue' });
     const endInMs = Date.parse(info.endAt) - Date.now();
     expect(endInMs).toBeGreaterThan(590_000);
     expect(endInMs).toBeLessThan(610_000);
@@ -513,7 +513,7 @@ describe('E2B control plane', () => {
       method: 'POST',
       url: '/acquireSandbox',
       headers: { authorization: `Bearer ${TOKEN}` },
-      payload: { userKey: 'native-immortal' },
+      payload: { externalId: 'native-immortal' },
     });
     const sandboxId = native.json().sandbox.sandboxId;
 
@@ -1689,20 +1689,20 @@ describe('E2B templates', () => {
     }
   });
 
-  it('userKey reuse keeps the original template; an unknown one still 404s first', async () => {
+  it('externalId reuse keeps the original template; an unknown one still 404s first', async () => {
     const t = testApp();
     await registerTemplate(t, 'tpl-a', 'img-a');
     await registerTemplate(t, 'tpl-b', 'img-b');
     const first = await createSandbox(t, {
       templateID: 'tpl-a',
-      metadata: { userKey: 'alice' },
+      metadata: { externalId: 'alice' },
     });
 
     // Same key, different template: the stored one stays — same principle
     // as metadata and envs on the reuse path.
     const again = await control(t, 'POST', '/sandboxes', {
       templateID: 'tpl-b',
-      metadata: { userKey: 'alice' },
+      metadata: { externalId: 'alice' },
     });
     expect(again.statusCode).toBe(201);
     expect(again.json().sandboxID).toBe(first.sandboxID);
@@ -1711,7 +1711,7 @@ describe('E2B templates', () => {
     // Validation happens before the reuse shortcut: a typo is a typo.
     const typo = await control(t, 'POST', '/sandboxes', {
       templateID: 'ghost',
-      metadata: { userKey: 'alice' },
+      metadata: { externalId: 'alice' },
     });
     expect(typo.statusCode).toBe(404);
   });
@@ -1721,7 +1721,7 @@ describe('E2B templates', () => {
     await registerTemplate(t, 'py311', 'img-py');
     await createSandbox(t, {
       templateID: 'py311',
-      metadata: { userKey: 'tpl-list' },
+      metadata: { externalId: 'tpl-list' },
     });
     const res = await control(t, 'GET', '/v2/sandboxes');
     const items = res.json() as Array<{ templateID: string; alias?: string }>;
@@ -1839,7 +1839,7 @@ describe('E2B surface vs the archiver', () => {
       url: '/acquireSandbox',
       headers: { authorization: `Bearer ${TOKEN}` },
       payload: {
-        userKey: 'native',
+        externalId: 'native',
         policy: {
           freezeAfterSeconds: 1,
           stopAfterSeconds: 2,
@@ -1864,16 +1864,16 @@ describe('E2B surface vs the archiver', () => {
     expect(findBySandboxId(t.db, sandboxID)?.state).toBe('active');
   });
 
-  it('create with metadata.userKey resumes its archived sandbox', async () => {
+  it('create with metadata.externalId resumes its archived sandbox', async () => {
     const t = archiverTestApp();
     const first = await createSandbox(t, {
       autoPause: true,
-      metadata: { userKey: 'alice' },
+      metadata: { externalId: 'alice' },
     });
     await walkToArchived(t, first.sandboxID);
 
     const res = await control(t, 'POST', '/sandboxes', {
-      metadata: { userKey: 'alice' },
+      metadata: { externalId: 'alice' },
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().sandboxID).toBe(first.sandboxID);

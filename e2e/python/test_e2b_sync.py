@@ -99,8 +99,8 @@ def test_list_filters(conn, make_sandbox):
 
 
 def test_userkey_extension_is_idempotent(conn, make_sandbox):
-    first = make_sandbox(metadata={"userKey": "py-idem"})
-    second = Sandbox.create(metadata={"userKey": "py-idem"}, **conn)
+    first = make_sandbox(metadata={"externalId": "py-idem"})
+    second = Sandbox.create(metadata={"externalId": "py-idem"}, **conn)
     # Same key, same sandbox — the Dormice extension speaks Python too.
     assert second.sandbox_id == first.sandbox_id
 

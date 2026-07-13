@@ -1,19 +1,24 @@
 ---
 title: Moving files
-description: writeFiles and readFile move files through JSON — 16 MiB per file, honest refusals past that, and streaming alternatives when you need more.
+description: writeFile(s) and readFile(s) move files through JSON — 16 MiB per file, honest refusals past that, and streaming alternatives when you need more.
 ---
 
-Native file transfer is two verbs. Both wake a cold sandbox first; paths
-are absolute, or relative to `/home/user`:
+Native file transfer is four verbs — write and read, each in a single and
+a batch form. All wake a cold sandbox first; paths are absolute, or
+relative to `/home/user`:
 
 ```ts
 await client.writeFiles('my-agent', [
   { path: 'config.json', content: JSON.stringify(config) }, // string → UTF-8
   { path: 'data/input.bin', content: bytes },               // Uint8Array, as-is
 ]);
+await client.writeFile('my-agent', 'notes.md', '# one file, no array');
 
 const file = await client.readFile('my-agent', 'results/out.csv');
 const text = new TextDecoder().decode(file.content);
+
+// Batch read: request order, all or nothing.
+const files = await client.readFiles('my-agent', ['a.txt', 'b.txt']);
 ```
 
 Parent directories are created as needed; existing files are overwritten.
@@ -31,6 +36,12 @@ dor sandbox pull my-agent results/out.csv       # no local path: raw bytes to st
 `writeFiles` writes in array order and fails fast: on an error, the files
 earlier in the array are already written. Splitting a big upload into
 several calls loses nothing — writes are per-file independent.
+
+`readFiles` is the opposite on purpose: **all or nothing**. One missing
+path fails the whole call with a 404 naming it — a batch read that
+silently dropped a file would be a corrupt project checkout. A caller that
+can tolerate absence asks file by file; the batch total is capped at
+48 MiB (413 past it).
 
 ## The 16 MiB cap, and what to do past it
 

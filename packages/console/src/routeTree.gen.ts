@@ -19,7 +19,7 @@ import { Route as AppDoctorRouteImport } from './routes/_app/doctor'
 import { Route as AppConnectRouteImport } from './routes/_app/connect'
 import { Route as AppActivityRouteImport } from './routes/_app/activity'
 import { Route as AppSandboxesIndexRouteImport } from './routes/_app/sandboxes/index'
-import { Route as AppSandboxesUserKeyRouteImport } from './routes/_app/sandboxes/$userKey'
+import { Route as AppSandboxesExternalIdRouteImport } from './routes/_app/sandboxes/$externalId'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -70,9 +70,9 @@ const AppSandboxesIndexRoute = AppSandboxesIndexRouteImport.update({
   path: '/sandboxes/',
   getParentRoute: () => AppRoute,
 } as any)
-const AppSandboxesUserKeyRoute = AppSandboxesUserKeyRouteImport.update({
-  id: '/sandboxes/$userKey',
-  path: '/sandboxes/$userKey',
+const AppSandboxesExternalIdRoute = AppSandboxesExternalIdRouteImport.update({
+  id: '/sandboxes/$externalId',
+  path: '/sandboxes/$externalId',
   getParentRoute: () => AppRoute,
 } as any)
 
@@ -85,7 +85,7 @@ export interface FileRoutesByFullPath {
   '/domains': typeof AppDomainsRoute
   '/settings': typeof AppSettingsRoute
   '/templates': typeof AppTemplatesRoute
-  '/sandboxes/$userKey': typeof AppSandboxesUserKeyRoute
+  '/sandboxes/$externalId': typeof AppSandboxesExternalIdRoute
   '/sandboxes/': typeof AppSandboxesIndexRoute
 }
 export interface FileRoutesByTo {
@@ -97,7 +97,7 @@ export interface FileRoutesByTo {
   '/settings': typeof AppSettingsRoute
   '/templates': typeof AppTemplatesRoute
   '/': typeof AppIndexRoute
-  '/sandboxes/$userKey': typeof AppSandboxesUserKeyRoute
+  '/sandboxes/$externalId': typeof AppSandboxesExternalIdRoute
   '/sandboxes': typeof AppSandboxesIndexRoute
 }
 export interface FileRoutesById {
@@ -111,7 +111,7 @@ export interface FileRoutesById {
   '/_app/settings': typeof AppSettingsRoute
   '/_app/templates': typeof AppTemplatesRoute
   '/_app/': typeof AppIndexRoute
-  '/_app/sandboxes/$userKey': typeof AppSandboxesUserKeyRoute
+  '/_app/sandboxes/$externalId': typeof AppSandboxesExternalIdRoute
   '/_app/sandboxes/': typeof AppSandboxesIndexRoute
 }
 export interface FileRouteTypes {
@@ -125,7 +125,7 @@ export interface FileRouteTypes {
     | '/domains'
     | '/settings'
     | '/templates'
-    | '/sandboxes/$userKey'
+    | '/sandboxes/$externalId'
     | '/sandboxes/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -137,7 +137,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/templates'
     | '/'
-    | '/sandboxes/$userKey'
+    | '/sandboxes/$externalId'
     | '/sandboxes'
   id:
     | '__root__'
@@ -150,7 +150,7 @@ export interface FileRouteTypes {
     | '/_app/settings'
     | '/_app/templates'
     | '/_app/'
-    | '/_app/sandboxes/$userKey'
+    | '/_app/sandboxes/$externalId'
     | '/_app/sandboxes/'
   fileRoutesById: FileRoutesById
 }
@@ -231,11 +231,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSandboxesIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/sandboxes/$userKey': {
-      id: '/_app/sandboxes/$userKey'
-      path: '/sandboxes/$userKey'
-      fullPath: '/sandboxes/$userKey'
-      preLoaderRoute: typeof AppSandboxesUserKeyRouteImport
+    '/_app/sandboxes/$externalId': {
+      id: '/_app/sandboxes/$externalId'
+      path: '/sandboxes/$externalId'
+      fullPath: '/sandboxes/$externalId'
+      preLoaderRoute: typeof AppSandboxesExternalIdRouteImport
       parentRoute: typeof AppRoute
     }
   }
@@ -249,7 +249,7 @@ interface AppRouteChildren {
   AppSettingsRoute: typeof AppSettingsRoute
   AppTemplatesRoute: typeof AppTemplatesRoute
   AppIndexRoute: typeof AppIndexRoute
-  AppSandboxesUserKeyRoute: typeof AppSandboxesUserKeyRoute
+  AppSandboxesExternalIdRoute: typeof AppSandboxesExternalIdRoute
   AppSandboxesIndexRoute: typeof AppSandboxesIndexRoute
 }
 
@@ -261,7 +261,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppSettingsRoute: AppSettingsRoute,
   AppTemplatesRoute: AppTemplatesRoute,
   AppIndexRoute: AppIndexRoute,
-  AppSandboxesUserKeyRoute: AppSandboxesUserKeyRoute,
+  AppSandboxesExternalIdRoute: AppSandboxesExternalIdRoute,
   AppSandboxesIndexRoute: AppSandboxesIndexRoute,
 }
 

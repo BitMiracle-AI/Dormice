@@ -21,14 +21,14 @@ export function RestoreCard({ sandbox }: { sandbox: Sandbox }) {
   const restoring = sandbox.state === 'restoring';
 
   const progressQuery = useQuery({
-    queryKey: ['restore-progress', sandbox.userKey],
-    queryFn: () => acquireSandbox({ userKey: sandbox.userKey }),
+    queryKey: ['restore-progress', sandbox.externalId],
+    queryFn: () => acquireSandbox({ externalId: sandbox.externalId }),
     enabled: restoring,
     refetchInterval: 1500,
     retry: false,
   });
   const begin = useMutation({
-    mutationFn: () => acquireSandbox({ userKey: sandbox.userKey }),
+    mutationFn: () => acquireSandbox({ externalId: sandbox.externalId }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
     onError: (error) => toast.error(`恢复没能开始:${error.message}`),
   });
@@ -49,7 +49,7 @@ export function RestoreCard({ sandbox }: { sandbox: Sandbox }) {
           </div>
           <Progress value={progress?.percent ?? 0} />
           <p className="text-xs text-muted-foreground">
-            恢复完成后自动回到「运行中」;期间释放会被拒绝(409),等它跑完。
+            恢复完成后自动回到「运行中」;期间销毁会被拒绝(409),等它跑完。
           </p>
         </CardContent>
       </Card>

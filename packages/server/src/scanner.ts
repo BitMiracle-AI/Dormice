@@ -4,7 +4,7 @@ import { findBySandboxId, listSandboxes } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
-import { freezeSandbox, releaseSandbox, stopSandbox } from './lifecycle';
+import { freezeSandbox, destroySandbox, stopSandbox } from './lifecycle';
 
 export interface ScanResult {
   frozen: number;
@@ -21,7 +21,7 @@ export interface ScanResult {
  * The E2B deadline rule. Unlike the idle rules it is an absolute clock —
  * E2B kills a sandbox at its deadline even mid-command; activity does not
  * extend it, only create/connect/setTimeout do. `kill` applies from any
- * state (release handles them all); `pause` only has physical work while
+ * state (destroy handles them all); `pause` only has physical work while
  * the sandbox is still active — colder states already satisfy it, and the
  * logical view reads the expired deadline directly.
  */
@@ -86,7 +86,7 @@ function dueTransition(
  * slip into that gap, answer "ready", and leave the caller holding a paused
  * sandbox. A key that is already busy is skipped — whatever is running
  * there has fresher knowledge than this sweep's snapshot — and the re-read
- * catches rows that were released or woken between the snapshot and the
+ * catches rows that were destroyed or woken between the snapshot and the
  * slot.
  *
  * Two phases, fast then slow: an archive is minutes of tar and upload, and
@@ -128,7 +128,7 @@ export async function scanOnce(
       continue;
     }
     try {
-      await locks.tryRun(row.userKey, async () => {
+      await locks.tryRun(row.externalId, async () => {
         const fresh = findBySandboxId(db, row.sandboxId);
         if (!fresh) {
           return; // Released since the sweep's snapshot.
@@ -137,7 +137,7 @@ export async function scanOnce(
         // parks) by its deadline, not one rung colder.
         const deadline = dueDeadline(fresh, now);
         if (deadline === 'kill') {
-          await releaseSandbox(
+          await destroySandbox(
             db,
             executor,
             fresh.sandboxId,
@@ -187,10 +187,10 @@ export async function scanOnce(
   if (archiver === undefined) return result;
   for (const row of archiveDue) {
     try {
-      await locks.tryRun(row.userKey, async () => {
+      await locks.tryRun(row.externalId, async () => {
         const fresh = findBySandboxId(db, row.sandboxId);
         // Re-verified in the slot: phase one may have killed it by
-        // deadline, an acquire may have woken it, a release removed it —
+        // deadline, an acquire may have woken it, a destroy removed it —
         // the snapshot's opinion is void either way.
         if (
           !fresh ||

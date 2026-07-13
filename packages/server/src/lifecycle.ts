@@ -38,7 +38,7 @@ export async function freezeSandbox(
   const row = transition(db, sandboxId, 'frozen');
   recordActivity(db, {
     kind: 'frozen',
-    userKey: row.userKey,
+    externalId: row.externalId,
     sandboxId,
     detail: cause ?? 'memory squeezed into swap',
   });
@@ -55,7 +55,7 @@ export async function stopSandbox(
   const row = transition(db, sandboxId, 'stopped');
   recordActivity(db, {
     kind: 'stopped',
-    userKey: row.userKey,
+    externalId: row.externalId,
     sandboxId,
     detail: cause ?? 'container torn down, disk kept',
   });
@@ -69,20 +69,20 @@ export async function stopSandbox(
  * of drift, not this caller's.
  *
  * An archived sandbox's body is its S3 object — nothing physical exists
- * locally, so release deletes the object instead of calling destroy (which
+ * locally, so destroy deletes the object instead of calling destroy (which
  * would honestly throw at the double absence). Every caller passes the
  * store explicitly (null = no archiver configured): releasing an archived
  * row without a store fails loudly and keeps the row, retryable once the
  * operator restores the DORMICE_S3_* configuration.
  */
-export async function releaseSandbox(
+export async function destroySandbox(
   db: Db,
   executor: Executor,
   sandboxId: string,
   store: ArchiveStore | null,
-  activity: { kind: 'released' | 'expired-killed'; cause: string } = {
-    kind: 'released',
-    cause: 'via releaseSandbox',
+  activity: { kind: 'destroyed' | 'expired-killed'; cause: string } = {
+    kind: 'destroyed',
+    cause: 'via destroySandbox',
   },
 ): Promise<void> {
   const row = findBySandboxId(db, sandboxId);
@@ -96,7 +96,7 @@ export async function releaseSandbox(
     deleteSandbox(db, sandboxId);
     recordActivity(db, {
       kind: activity.kind,
-      userKey: row.userKey,
+      externalId: row.externalId,
       sandboxId,
       detail: `${activity.cause}; archive object deleted`,
     });
@@ -107,7 +107,7 @@ export async function releaseSandbox(
   if (row) {
     recordActivity(db, {
       kind: activity.kind,
-      userKey: row.userKey,
+      externalId: row.externalId,
       sandboxId,
       detail: activity.cause,
     });
@@ -132,7 +132,7 @@ export async function rebuildSandbox(
   await executor.removeContainer(row.sandboxId);
   recordActivity(db, {
     kind: 'rebuilt',
-    userKey: row.userKey,
+    externalId: row.externalId,
     sandboxId: row.sandboxId,
     detail:
       'shell removed, disk kept — next wake builds from the current image',
@@ -185,7 +185,7 @@ function awaken(db: Db, row: SandboxRow, how: string): SandboxRow {
   const awake = transition(db, row.sandboxId, 'active');
   recordActivity(db, {
     kind: 'woken',
-    userKey: row.userKey,
+    externalId: row.externalId,
     sandboxId: row.sandboxId,
     detail: how,
   });

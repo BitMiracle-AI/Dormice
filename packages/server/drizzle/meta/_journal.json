@@ -43,6 +43,13 @@
       "when": 1783917759390,
       "tag": "0005_console-account",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1783919540066,
+      "tag": "0006_external-id",
+      "breakpoints": true
     }
   ]
 }

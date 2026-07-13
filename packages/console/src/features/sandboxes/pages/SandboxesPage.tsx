@@ -48,12 +48,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { releaseSandbox } from '@/lib/api';
+import { destroySandbox } from '@/lib/api';
 import { formatBytes, pctOf } from '@/lib/format';
 import { queryClient } from '@/lib/queryClient';
 import { cn } from '@/lib/utils';
 import { CreateSandboxDialog } from '../components/CreateSandboxDialog';
-import { ReleaseSandboxButton } from '../components/ReleaseSandboxButton';
+import { DestroySandboxButton } from '../components/DestroySandboxButton';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { policyLine, STATE_LABELS, since } from '../format';
 import { useFleetMetrics, useSandboxes } from '../hooks/useSandboxes';
@@ -66,8 +66,8 @@ const STATE_FILTERS: Array<SandboxState> = [
   'restoring',
 ];
 
-/** 可排序的列:字符串比较对 userKey 和 ISO 时间戳同样成立。 */
-type SortKey = 'userKey' | 'lastActiveAt' | 'createdAt';
+/** 可排序的列:字符串比较对 externalId 和 ISO 时间戳同样成立。 */
+type SortKey = 'externalId' | 'lastActiveAt' | 'createdAt';
 type Sort = { key: SortKey; dir: 1 | -1 };
 
 /**
@@ -137,34 +137,34 @@ function SortableHead({
 }
 
 /**
- * 批量释放:逐个调用 releaseSandbox(daemon 的 per-key 锁本来就是逐个
+ * 批量销毁:逐个调用 destroySandbox(daemon 的 per-key 锁本来就是逐个
  * 裁决的,并发只是把失败搅在一起),结束后一次性汇报成败。
  */
-function BulkReleaseButton({
-  userKeys,
+function BulkDestroyButton({
+  externalIds,
   onDone,
 }: {
-  userKeys: string[];
+  externalIds: string[];
   onDone: () => void;
 }) {
   const [pending, setPending] = useState(false);
 
-  const releaseAll = async () => {
+  const destroyAll = async () => {
     setPending(true);
     const failures: string[] = [];
-    for (const userKey of userKeys) {
+    for (const externalId of externalIds) {
       try {
-        await releaseSandbox(userKey);
+        await destroySandbox(externalId);
       } catch {
-        failures.push(userKey);
+        failures.push(externalId);
       }
     }
     setPending(false);
     void queryClient.invalidateQueries({ queryKey: ['sandboxes'] });
     if (failures.length === 0) {
-      toast.success(`已释放 ${userKeys.length} 个沙箱`);
+      toast.success(`已销毁  个沙箱`);
     } else {
-      toast.error(`${failures.length} 个释放失败:${failures.join('、')}`);
+      toast.error(`${failures.length} 个销毁失败:${failures.join('、')}`);
     }
     onDone();
   };
@@ -175,13 +175,13 @@ function BulkReleaseButton({
         render={
           <Button variant="destructive" size="sm" disabled={pending}>
             {pending && <Spinner />}
-            释放选中({userKeys.length})
+            销毁选中({externalIds.length})
           </Button>
         }
       />
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>释放 {userKeys.length} 个沙箱?</AlertDialogTitle>
+          <AlertDialogTitle>销毁 {externalIds.length} 个沙箱?</AlertDialogTitle>
           <AlertDialogDescription>
             沙箱连同磁盘一起销毁,不可恢复。key 依然有效 — 下次 acquire
             会得到一个全新的空白沙箱。
@@ -189,8 +189,8 @@ function BulkReleaseButton({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>先留着</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={releaseAll}>
-            释放
+          <AlertDialogAction variant="destructive" onClick={destroyAll}>
+            销毁
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -205,7 +205,7 @@ export function SandboxesPage() {
   const fleet = useFleetMetrics();
   const metricsOf = useMemo(
     () =>
-      new Map((fleet.data?.samples ?? []).map((s) => [s.userKey, s.sample])),
+      new Map((fleet.data?.samples ?? []).map((s) => [s.externalId, s.sample])),
     [fleet.data],
   );
   const [search, setSearch] = useState('');
@@ -225,7 +225,7 @@ export function SandboxesPage() {
       (sandbox) =>
         (stateFilter === 'all' || sandbox.state === stateFilter) &&
         (search === '' ||
-          sandbox.userKey.toLowerCase().includes(search.toLowerCase())),
+          sandbox.externalId.toLowerCase().includes(search.toLowerCase())),
     );
     if (!sort) return matched;
     return [...matched].sort(
@@ -233,21 +233,21 @@ export function SandboxesPage() {
     );
   }, [sandboxes, stateFilter, search, sort]);
 
-  // 选中集随现实收敛:被别处释放的沙箱不该留在选中里撑数字。
-  const selectedVisible = filtered.filter((s) => selected.has(s.userKey));
+  // 选中集随现实收敛:被别处销毁的沙箱不该留在选中里撑数字。
+  const selectedVisible = filtered.filter((s) => selected.has(s.externalId));
   const allVisibleSelected =
     filtered.length > 0 && selectedVisible.length === filtered.length;
 
   const toggleAll = () => {
     setSelected(
-      allVisibleSelected ? new Set() : new Set(filtered.map((s) => s.userKey)),
+      allVisibleSelected ? new Set() : new Set(filtered.map((s) => s.externalId)),
     );
   };
-  const toggleOne = (userKey: string) => {
+  const toggleOne = (externalId: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(userKey)) next.delete(userKey);
-      else next.add(userKey);
+      if (next.has(externalId)) next.delete(externalId);
+      else next.add(externalId);
       return next;
     });
   };
@@ -275,7 +275,7 @@ export function SandboxesPage() {
           <InputGroupInput
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="按 userKey 搜索"
+            placeholder="按 externalId 搜索"
           />
         </InputGroup>
         <NativeSelect
@@ -297,8 +297,8 @@ export function SandboxesPage() {
         </span>
         {selectedVisible.length > 0 && (
           <div className="ml-auto">
-            <BulkReleaseButton
-              userKeys={selectedVisible.map((s) => s.userKey)}
+            <BulkDestroyButton
+              externalIds={selectedVisible.map((s) => s.externalId)}
               onDone={() => setSelected(new Set())}
             />
           </div>
@@ -348,8 +348,8 @@ export function SandboxesPage() {
                 </TableHead>
                 <TableHead>
                   <SortableHead
-                    label="userKey"
-                    sortKey="userKey"
+                    label="externalId"
+                    sortKey="externalId"
                     sort={sort}
                     onSort={toggleSort}
                   />
@@ -385,24 +385,24 @@ export function SandboxesPage() {
                 <TableRow
                   key={sandbox.sandboxId}
                   data-state={
-                    selected.has(sandbox.userKey) ? 'selected' : undefined
+                    selected.has(sandbox.externalId) ? 'selected' : undefined
                   }
                 >
                   <TableCell>
                     <Checkbox
-                      aria-label={`选中 ${sandbox.userKey}`}
-                      checked={selected.has(sandbox.userKey)}
-                      onCheckedChange={() => toggleOne(sandbox.userKey)}
+                      aria-label={`选中 ${sandbox.externalId}`}
+                      checked={selected.has(sandbox.externalId)}
+                      onCheckedChange={() => toggleOne(sandbox.externalId)}
                     />
                   </TableCell>
                   <TableCell>
                     <Link
-                      to="/sandboxes/$userKey"
-                      params={{ userKey: sandbox.userKey }}
+                      to="/sandboxes/$externalId"
+                      params={{ externalId: sandbox.externalId }}
                       search={{ tab: 'overview' }}
                       className="font-mono font-medium hover:underline"
                     >
-                      {sandbox.userKey}
+                      {sandbox.externalId}
                     </Link>
                   </TableCell>
                   <TableCell>
@@ -412,7 +412,7 @@ export function SandboxesPage() {
                     {sandbox.template ?? '基础镜像'}
                   </TableCell>
                   {(() => {
-                    const m = metricsOf.get(sandbox.userKey);
+                    const m = metricsOf.get(sandbox.externalId);
                     if (!m) {
                       return (
                         <>
@@ -458,7 +458,7 @@ export function SandboxesPage() {
                     {since(sandbox.createdAt)}
                   </TableCell>
                   <TableCell className="text-right">
-                    <ReleaseSandboxButton userKey={sandbox.userKey} />
+                    <DestroySandboxButton externalId={sandbox.externalId} />
                   </TableCell>
                 </TableRow>
               ))}

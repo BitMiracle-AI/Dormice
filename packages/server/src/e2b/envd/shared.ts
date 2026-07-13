@@ -186,7 +186,7 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
 
   /**
    * Wake under the key's slot, like every native verb: physical wake-ups
-   * take seconds and must not race the scanner or a release.
+   * take seconds and must not race the scanner or a destroy.
    */
   async function wakeForUse(sandboxId: string): Promise<SandboxRow> {
     // The logical gate first: a paused-by-deadline sandbox answers 502
@@ -194,7 +194,7 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
     // will be refused anyway would waste a whole restore.
     const before = requireRunningRow(sandboxId);
     await joinRestore(sandboxId);
-    return locks.run(before.userKey, async () => {
+    return locks.run(before.externalId, async () => {
       const fresh = requireRunningRow(sandboxId);
       const awake = await wakeSandbox(db, executor, fresh);
       return touch(db, awake.sandboxId);
@@ -207,7 +207,7 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
   ): Promise<T> {
     const before = requireRunningRow(sandboxId);
     await joinRestore(sandboxId);
-    return locks.run(before.userKey, async () => {
+    return locks.run(before.externalId, async () => {
       const fresh = requireRunningRow(sandboxId);
       const awake = await wakeSandbox(db, executor, fresh);
       const row = touch(db, awake.sandboxId);

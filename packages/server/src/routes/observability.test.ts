@@ -157,7 +157,7 @@ describe('listActivity', () => {
   it('records create, wake, cooling and release, newest first', async () => {
     const { app, db, executor, locks } = testApp();
     const res = await rpc(app, '/acquireSandbox', {
-      userKey: 'story',
+      externalId: 'story',
       policy: { freezeAfterSeconds: 5, stopAfterSeconds: 10 },
     });
     expect(res.statusCode).toBe(200);
@@ -176,19 +176,19 @@ describe('listActivity', () => {
       locks,
       new Date(Date.parse(created.lastActiveAt) + 11_000),
     );
-    await rpc(app, '/acquireSandbox', { userKey: 'story' });
-    await rpc(app, '/releaseSandbox', { userKey: 'story' });
+    await rpc(app, '/acquireSandbox', { externalId: 'story' });
+    await rpc(app, '/destroySandbox', { externalId: 'story' });
 
     const log = await events(app);
     expect(log.map((e) => e.kind)).toEqual([
-      'released',
+      'destroyed',
       'woken',
       'stopped',
       'frozen',
       'created',
     ]);
     // Every event names its sandbox, and the scanner names its threshold.
-    expect(new Set(log.map((e) => e.userKey))).toEqual(new Set(['story']));
+    expect(new Set(log.map((e) => e.externalId))).toEqual(new Set(['story']));
     expect(log.find((e) => e.kind === 'frozen')?.detail).toContain('scanner');
     expect(log.find((e) => e.kind === 'created')?.detail).toContain(
       'acquireSandbox',
@@ -197,14 +197,14 @@ describe('listActivity', () => {
 
   it('records what reconciliation repaired', async () => {
     const { app, db, executor, locks } = testApp();
-    await rpc(app, '/acquireSandbox', { userKey: 'doomed' });
+    await rpc(app, '/acquireSandbox', { externalId: 'doomed' });
     const { sandboxes } = (await rpc(app, '/listSandboxes')).json();
     // Reality loses both container and disk behind the ledger's back.
     await executor.destroy(sandboxes[0].sandboxId);
     await reconcile(db, executor, locks);
 
     const log = await events(app);
-    expect(log[0]).toMatchObject({ kind: 'reconciled', userKey: 'doomed' });
+    expect(log[0]).toMatchObject({ kind: 'reconciled', externalId: 'doomed' });
     expect(log[0]?.detail).toContain('row deleted');
   });
 
@@ -242,8 +242,8 @@ describe('listActivity', () => {
 describe('getSandboxMetrics', () => {
   it('answers a single sample for a running sandbox', async () => {
     const { app } = testApp();
-    await rpc(app, '/acquireSandbox', { userKey: 'measured' });
-    const res = await rpc(app, '/getSandboxMetrics', { userKey: 'measured' });
+    await rpc(app, '/acquireSandbox', { externalId: 'measured' });
+    const res = await rpc(app, '/getSandboxMetrics', { externalId: 'measured' });
     expect(res.statusCode).toBe(200);
     const { sample } = getSandboxMetricsResponseSchema.parse(res.json());
     expect(sample).not.toBeNull();
@@ -253,12 +253,12 @@ describe('getSandboxMetrics', () => {
 
   it('answers null for a stopped sandbox instead of waking it', async () => {
     const { app, db, executor } = testApp();
-    const res = await rpc(app, '/acquireSandbox', { userKey: 'cold' });
+    const res = await rpc(app, '/acquireSandbox', { externalId: 'cold' });
     const { sandboxId } = res.json().sandbox;
     await freezeSandbox(db, executor, sandboxId);
     await stopSandbox(db, executor, sandboxId);
 
-    const metrics = await rpc(app, '/getSandboxMetrics', { userKey: 'cold' });
+    const metrics = await rpc(app, '/getSandboxMetrics', { externalId: 'cold' });
     expect(getSandboxMetricsResponseSchema.parse(metrics.json()).sample).toBe(
       null,
     );
@@ -269,7 +269,7 @@ describe('getSandboxMetrics', () => {
 
   it('404s an unknown key instead of inventing a sandbox', async () => {
     const { app } = testApp();
-    const res = await rpc(app, '/getSandboxMetrics', { userKey: 'nobody' });
+    const res = await rpc(app, '/getSandboxMetrics', { externalId: 'nobody' });
     expect(res.statusCode).toBe(404);
   });
 });
@@ -277,10 +277,10 @@ describe('getSandboxMetrics', () => {
 describe('listSandboxMetrics', () => {
   it('measures active and frozen sandboxes; colder states are absent', async () => {
     const { app, db, executor } = testApp();
-    await rpc(app, '/acquireSandbox', { userKey: 'hot' });
-    const frozen = await rpc(app, '/acquireSandbox', { userKey: 'napping' });
+    await rpc(app, '/acquireSandbox', { externalId: 'hot' });
+    const frozen = await rpc(app, '/acquireSandbox', { externalId: 'napping' });
     await freezeSandbox(db, executor, frozen.json().sandbox.sandboxId);
-    const cold = await rpc(app, '/acquireSandbox', { userKey: 'cold' });
+    const cold = await rpc(app, '/acquireSandbox', { externalId: 'cold' });
     const coldId = cold.json().sandbox.sandboxId;
     await freezeSandbox(db, executor, coldId);
     await stopSandbox(db, executor, coldId);
@@ -288,7 +288,7 @@ describe('listSandboxMetrics', () => {
     const res = await rpc(app, '/listSandboxMetrics', {});
     expect(res.statusCode).toBe(200);
     const { samples } = listSandboxMetricsResponseSchema.parse(res.json());
-    const keys = samples.map((s) => s.userKey).sort();
+    const keys = samples.map((s) => s.externalId).sort();
     // The frozen sandbox is measured as it sleeps; the stopped one has no
     // container to measure and is honestly absent, not null-stuffed.
     expect(keys).toEqual(['hot', 'napping']);
@@ -299,8 +299,8 @@ describe('listSandboxMetrics', () => {
     // Observation is not activity: nobody woke or cooled further.
     const { sandboxes } = (await rpc(app, '/listSandboxes')).json();
     const byKey = new Map<string, string>(
-      sandboxes.map((s: { userKey: string; state: string }) => [
-        s.userKey,
+      sandboxes.map((s: { externalId: string; state: string }) => [
+        s.externalId,
         s.state,
       ]),
     );
@@ -310,8 +310,8 @@ describe('listSandboxMetrics', () => {
 
   it('skips a sandbox whose container vanished instead of failing the sweep', async () => {
     const { app, executor } = testApp();
-    await rpc(app, '/acquireSandbox', { userKey: 'alive' });
-    const doomed = await rpc(app, '/acquireSandbox', { userKey: 'doomed' });
+    await rpc(app, '/acquireSandbox', { externalId: 'alive' });
+    const doomed = await rpc(app, '/acquireSandbox', { externalId: 'doomed' });
     // The container dies physically, past the ledger (gVisor OOM does this
     // for real) — the row still says active, the reading throws, the sweep
     // reports what it could see.
@@ -321,7 +321,7 @@ describe('listSandboxMetrics', () => {
 
     const res = await rpc(app, '/listSandboxMetrics', {});
     const { samples } = listSandboxMetricsResponseSchema.parse(res.json());
-    expect(samples.map((s) => s.userKey)).toEqual(['alive']);
+    expect(samples.map((s) => s.externalId)).toEqual(['alive']);
   });
 
   it('answers an empty list on an empty ledger', async () => {

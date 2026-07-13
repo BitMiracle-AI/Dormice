@@ -31,7 +31,7 @@ export interface CreateSandboxInput {
    * container is created under this id), then the ledger records it.
    */
   sandboxId: string;
-  userKey: string;
+  externalId: string;
   nodeId: string;
   policy: LifecyclePolicy;
   /** Template the sandbox is created from; absent/null means the base image. */
@@ -46,12 +46,12 @@ export interface CreateSandboxInput {
   };
 }
 
-/** Inserts a new sandbox row in `active` state. Throws if the user key is taken. */
+/** Inserts a new sandbox row in `active` state. Throws if the external id is taken. */
 export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
   const now = new Date().toISOString();
   const row: SandboxRow = {
     sandboxId: input.sandboxId,
-    userKey: input.userKey,
+    externalId: input.externalId,
     state: 'active',
     nodeId: input.nodeId,
     freezeAfterSeconds: input.policy.freezeAfterSeconds,
@@ -70,7 +70,7 @@ export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
   // The one place every creation passes through, whichever face asked.
   recordActivity(db, {
     kind: 'created',
-    userKey: row.userKey,
+    externalId: row.externalId,
     sandboxId: row.sandboxId,
     detail: `${input.e2b ? 'via E2B create' : 'via acquireSandbox'}${
       input.template ? `, template ${input.template}` : ''
@@ -160,7 +160,7 @@ export function setDeadline(
 
 /**
  * Rewrites the three lifecycle thresholds. Ledger-only: no container work,
- * no state change, and deliberately no touch — setPolicy is not activity,
+ * no state change, and deliberately no touch — updatePolicy is not activity,
  * the new thresholds judge the idle time already on the clock.
  */
 export function updatePolicy(
@@ -195,11 +195,11 @@ export function setPausedByUser(
     .run();
 }
 
-export function findByUserKey(db: Db, userKey: string): SandboxRow | undefined {
+export function findByExternalId(db: Db, externalId: string): SandboxRow | undefined {
   return db
     .select()
     .from(sandboxes)
-    .where(eq(sandboxes.userKey, userKey))
+    .where(eq(sandboxes.externalId, externalId))
     .get();
 }
 

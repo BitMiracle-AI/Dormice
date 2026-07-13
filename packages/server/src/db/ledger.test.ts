@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { type Db, migrateDb, openDb } from './db';
-import { createSandbox, findByUserKey, touch, transition } from './ledger';
+import { createSandbox, findByExternalId, touch, transition } from './ledger';
 
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 
@@ -13,25 +13,25 @@ function testDb(): Db {
   return db;
 }
 
-function create(db: Db, userKey = 'user-1') {
+function create(db: Db, externalId = 'user-1') {
   return createSandbox(db, {
     sandboxId: randomUUID(),
-    userKey,
+    externalId,
     nodeId: 'node-1',
     policy: DEFAULT_LIFECYCLE_POLICY,
   });
 }
 
 describe('ledger', () => {
-  it('creates a sandbox in active state and finds it by user key', () => {
+  it('creates a sandbox in active state and finds it by external id', () => {
     const db = testDb();
     const created = create(db);
     expect(created.state).toBe('active');
-    expect(findByUserKey(db, 'user-1')).toEqual(created);
-    expect(findByUserKey(db, 'someone-else')).toBeUndefined();
+    expect(findByExternalId(db, 'user-1')).toEqual(created);
+    expect(findByExternalId(db, 'someone-else')).toBeUndefined();
   });
 
-  it('enforces one sandbox per user key at the database level', () => {
+  it('enforces one sandbox per external id at the database level', () => {
     const db = testDb();
     create(db);
     expect(() => create(db)).toThrow(/UNIQUE/);
@@ -49,7 +49,7 @@ describe('ledger', () => {
     ] as const) {
       expect(transition(db, sandboxId, to).state).toBe(to);
     }
-    expect(findByUserKey(db, 'user-1')?.state).toBe('active');
+    expect(findByExternalId(db, 'user-1')?.state).toBe('active');
   });
 
   it('wakes a frozen sandbox straight back to active', () => {

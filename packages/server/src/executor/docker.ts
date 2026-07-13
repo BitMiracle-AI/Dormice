@@ -389,7 +389,7 @@ export class DockerExecutor implements Executor {
       try {
         s = await stat(path.join(disksDir, name));
       } catch (err) {
-        // Torn down by a concurrent release between readdir and stat —
+        // Torn down by a concurrent destroy between readdir and stat —
         // a snapshot simply does not count what is no longer there.
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
         throw err;

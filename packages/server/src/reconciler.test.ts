@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { type Db, migrateDb, openDb } from './db/db';
-import { createSandbox, findByUserKey, transition } from './db/ledger';
+import { createSandbox, findByExternalId, transition } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
@@ -34,13 +34,13 @@ function setup() {
 async function seed(
   db: Db,
   executor: FakeExecutor,
-  userKey: string,
+  externalId: string,
 ): Promise<SandboxRow> {
   const sandboxId = randomUUID();
   await executor.create(sandboxId);
   return createSandbox(db, {
     sandboxId,
-    userKey,
+    externalId,
     nodeId: 'node-test',
     policy: DEFAULT_LIFECYCLE_POLICY,
   });
@@ -51,7 +51,7 @@ describe('startup reconcile', () => {
     const { db, executor, locks } = setup();
     const row = await seed(db, executor, 'alice');
     expect(await reconcile(db, executor, locks)).toEqual(NONE);
-    expect(findByUserKey(db, 'alice')?.state).toBe('active');
+    expect(findByExternalId(db, 'alice')?.state).toBe('active');
     expect(executor.stateOf(row.sandboxId)).toBe('running');
   });
 
@@ -63,7 +63,7 @@ describe('startup reconcile', () => {
 
     const result = await reconcile(db, executor, locks);
     expect(result).toEqual({ ...NONE, repairedStates: 1 });
-    expect(findByUserKey(db, 'alice')?.state).toBe('frozen');
+    expect(findByExternalId(db, 'alice')?.state).toBe('frozen');
   });
 
   it('repairs across rungs the transition table would forbid', async () => {
@@ -76,7 +76,7 @@ describe('startup reconcile', () => {
 
     const result = await reconcile(db, executor, locks);
     expect(result).toEqual({ ...NONE, repairedStates: 1 });
-    expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
+    expect(findByExternalId(db, 'alice')?.state).toBe('stopped');
   });
 
   it('keeps the row of a pruned container: the disk is the sandbox', async () => {
@@ -89,9 +89,9 @@ describe('startup reconcile', () => {
 
     const result = await reconcile(db, executor, locks);
     // Not a death: the sandbox is recorded as stopped, its row keeps the
-    // user key, and the next acquire rebuilds the container from the disk.
+    // external id, and the next acquire rebuilds the container from the disk.
     expect(result).toEqual({ ...NONE, repairedStates: 1 });
-    expect(findByUserKey(db, 'alice')?.state).toBe('stopped');
+    expect(findByExternalId(db, 'alice')?.state).toBe('stopped');
     expect(await executor.listDisks()).toContain(row.sandboxId);
   });
 
@@ -105,13 +105,13 @@ describe('startup reconcile', () => {
 
     const result = await reconcile(db, executor, locks);
     expect(result).toEqual({ ...NONE, deletedRows: 1 });
-    expect(findByUserKey(db, 'alice')).toBeUndefined();
+    expect(findByExternalId(db, 'alice')).toBeUndefined();
   });
 
   it('destroys a container no row points at', async () => {
     const { db, executor, locks } = setup();
     // Crash between executor.create() and createSandbox(): a container was
-    // born but never entered the ledger, so no user key can ever reach it.
+    // born but never entered the ledger, so no external id can ever reach it.
     await executor.create('orphan');
 
     const result = await reconcile(db, executor, locks);
@@ -135,7 +135,7 @@ describe('startup reconcile', () => {
       ...NONE,
       archivedSwept: 1,
     });
-    expect(findByUserKey(db, 'alice')?.state).toBe('archived');
+    expect(findByExternalId(db, 'alice')?.state).toBe('archived');
     expect(executor.stateOf(row.sandboxId)).toBeUndefined();
     expect(await executor.listDisks()).not.toContain(row.sandboxId);
   });
@@ -154,7 +154,7 @@ describe('startup reconcile', () => {
       ...NONE,
       archivedSwept: 1,
     });
-    expect(findByUserKey(db, 'alice')?.state).toBe('archived');
+    expect(findByExternalId(db, 'alice')?.state).toBe('archived');
     expect(await executor.listDisks()).not.toContain(row.sandboxId);
   });
 
@@ -171,7 +171,7 @@ describe('startup reconcile', () => {
     // Nothing local, and crucially NOT deletedRows: an archived row with no
     // local remains is the normal state, not drift.
     expect(await reconcile(db, executor, locks)).toEqual(NONE);
-    expect(findByUserKey(db, 'alice')?.state).toBe('archived');
+    expect(findByExternalId(db, 'alice')?.state).toBe('archived');
   });
 
   it('reverts a restoring zombie with no live task to archived', async () => {
@@ -192,7 +192,7 @@ describe('startup reconcile', () => {
     // The disk is the task's garbage; the S3 object is intact, so archived
     // makes the next acquire a clean retry.
     expect(result).toEqual({ ...NONE, repairedStates: 1 });
-    expect(findByUserKey(db, 'alice')?.state).toBe('archived');
+    expect(findByExternalId(db, 'alice')?.state).toBe('archived');
     expect(await executor.listDisks()).not.toContain(row.sandboxId);
   });
 
@@ -212,7 +212,7 @@ describe('startup reconcile', () => {
 
     const result = await reconcile(db, executor, locks);
     expect(result).toEqual({ ...NONE, repairedStates: 1 });
-    expect(findByUserKey(db, 'alice')?.state).toBe('active');
+    expect(findByExternalId(db, 'alice')?.state).toBe('active');
     expect(executor.stateOf(row.sandboxId)).toBe('running');
   });
 
@@ -233,7 +233,7 @@ describe('startup reconcile', () => {
       hasLiveRestore: () => true,
     });
     expect(result).toEqual(NONE);
-    expect(findByUserKey(db, 'alice')?.state).toBe('restoring');
+    expect(findByExternalId(db, 'alice')?.state).toBe('restoring');
     // The mid-flight disk also dodges the orphan pass: the row owns it.
     expect(await executor.listDisks()).toContain(row.sandboxId);
   });
@@ -259,10 +259,10 @@ describe('startup reconcile', () => {
       archivedSwept: 0,
       suspects: [],
     });
-    expect(findByUserKey(db, 'healthy')?.state).toBe('active');
-    expect(findByUserKey(db, 'drifted')?.state).toBe('frozen');
-    expect(findByUserKey(db, 'pruned')?.state).toBe('stopped');
-    expect(findByUserKey(db, 'dead')).toBeUndefined();
+    expect(findByExternalId(db, 'healthy')?.state).toBe('active');
+    expect(findByExternalId(db, 'drifted')?.state).toBe('frozen');
+    expect(findByExternalId(db, 'pruned')?.state).toBe('stopped');
+    expect(findByExternalId(db, 'dead')).toBeUndefined();
     expect(executor.stateOf(healthy.sandboxId)).toBe('running');
     expect(executor.stateOf('orphan')).toBeUndefined();
   });
@@ -300,7 +300,7 @@ describe('runtime reconcile (two-strike orphans)', () => {
     // The acquire finished: the row is in the ledger now.
     createSandbox(db, {
       sandboxId: 'in-flight',
-      userKey: 'alice',
+      externalId: 'alice',
       nodeId: 'node-test',
       policy: DEFAULT_LIFECYCLE_POLICY,
     });
@@ -313,7 +313,7 @@ describe('runtime reconcile (two-strike orphans)', () => {
     );
     expect(second).toEqual(NONE);
     expect(executor.stateOf('in-flight')).toBe('running');
-    expect(findByUserKey(db, 'alice')?.state).toBe('active');
+    expect(findByExternalId(db, 'alice')?.state).toBe('active');
   });
 
   it('still repairs and buries on every runtime pass, not only at boot', async () => {
@@ -324,7 +324,7 @@ describe('runtime reconcile (two-strike orphans)', () => {
 
     const result = await reconcile(db, executor, locks, new Set());
     expect(result).toEqual({ ...NONE, deletedRows: 1 });
-    expect(findByUserKey(db, 'alice')).toBeUndefined();
+    expect(findByExternalId(db, 'alice')).toBeUndefined();
   });
 
   it('skips a row whose key is busy instead of repairing from a stale view', async () => {
@@ -345,14 +345,14 @@ describe('runtime reconcile (two-strike orphans)', () => {
 
     const result = await reconcile(db, executor, locks, new Set());
     expect(result.repairedStates).toBe(0);
-    expect(findByUserKey(db, 'alice')?.state).toBe('active');
+    expect(findByExternalId(db, 'alice')?.state).toBe('active');
 
     release();
     await holder;
     // Next tick, with the key free, the repair lands.
     const next = await reconcile(db, executor, locks, new Set());
     expect(next).toEqual({ ...NONE, repairedStates: 1 });
-    expect(findByUserKey(db, 'alice')?.state).toBe('frozen');
+    expect(findByExternalId(db, 'alice')?.state).toBe('frozen');
   });
 });
 

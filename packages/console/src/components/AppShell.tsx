@@ -16,7 +16,7 @@ import {
   SidebarTrigger,
 } from '@/components/ui/sidebar';
 
-// 路径段 → 中文名。没在表里的段(比如 userKey)原样展示 — 它就是名字本身。
+// 路径段 → 中文名。没在表里的段(比如 externalId)原样展示 — 它就是名字本身。
 const SEGMENT_LABELS: Record<string, string> = {
   sandboxes: '沙箱',
   templates: '模板',

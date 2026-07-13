@@ -11,7 +11,7 @@ const features: { title: string; body: ReactNode }[] = [
     title: 'Sandboxes are permanent',
     body: (
       <>
-        <code>acquireSandbox(userKey)</code> is the entire mental model — the
+        <code>acquireSandbox(externalId)</code> is the entire mental model — the
         same key always comes back to the same sandbox: created, woken or
         restarted as needed.
       </>

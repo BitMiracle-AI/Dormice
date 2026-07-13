@@ -48,16 +48,16 @@ export function removeTemplate(db: Db, name: string): boolean {
 }
 
 /**
- * User keys of sandboxes still created from this template — removal is
+ * External ids of sandboxes still created from this template — removal is
  * refused while this is non-empty, so wakes never resolve a dangling name.
  */
-export function sandboxKeysUsingTemplate(db: Db, name: string): string[] {
+export function externalIdsUsingTemplate(db: Db, name: string): string[] {
   return db
-    .select({ userKey: sandboxes.userKey })
+    .select({ externalId: sandboxes.externalId })
     .from(sandboxes)
     .where(eq(sandboxes.template, name))
     .all()
-    .map((row) => row.userKey);
+    .map((row) => row.externalId);
 }
 
 /**

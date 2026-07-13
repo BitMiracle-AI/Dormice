@@ -15,7 +15,7 @@ export const ACTIVITY_KINDS = [
   'frozen',
   'stopped',
   'rebuilt',
-  'released',
+  'destroyed',
   /** An E2B deadline with the kill action passed: destroyed, disk and all. */
   'expired-killed',
   'archived',
@@ -24,7 +24,7 @@ export const ACTIVITY_KINDS = [
   'restore-failed',
   /** The reconciler corrected the ledger (or reality) to match the other. */
   'reconciled',
-  /** setPolicy rewrote a sandbox's lifecycle thresholds (ledger-only). */
+  /** updatePolicy rewrote a sandbox's lifecycle thresholds (ledger-only). */
   'policy-changed',
   'daemon-started',
   /** An operator bound or cleared the console domain through setIngress. */
@@ -41,7 +41,7 @@ export const activityEventSchema = z.object({
   at: z.string(),
   kind: activityKindSchema,
   /** Null for events with no owning sandbox (orphan sweeps, daemon start). */
-  userKey: z.string().nullable(),
+  externalId: z.string().nullable(),
   sandboxId: z.string().nullable(),
   /** One short line of context: which actor, which threshold, what was repaired. */
   detail: z.string(),

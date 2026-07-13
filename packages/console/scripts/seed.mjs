@@ -41,9 +41,9 @@ async function rpc(path, body = {}) {
   return res.json();
 }
 
-const write = (userKey, files) =>
+const write = (externalId, files) =>
   rpc('/writeFiles', {
-    userKey,
+    externalId,
     files: files.map(([path, text]) => ({
       path,
       contentBase64: Buffer.from(text, 'utf8').toString('base64'),
@@ -66,46 +66,46 @@ for (const [name, image] of templates) {
 // stopAfterSeconds: null 是常驻 agent 档,永远停在 frozen。
 const sandboxes = [
   {
-    userKey: 'demo-agent',
+    externalId: 'demo-agent',
     policy: { freezeAfterSeconds: 300, stopAfterSeconds: null },
     template: 'claude-code',
   },
   {
-    userKey: 'web-scraper',
+    externalId: 'web-scraper',
     policy: { freezeAfterSeconds: 5 },
     template: 'python-ml',
   },
   {
-    userKey: 'build-runner',
+    externalId: 'build-runner',
     policy: { freezeAfterSeconds: 3, stopAfterSeconds: 8 },
   },
   {
-    userKey: 'docs-writer',
+    externalId: 'docs-writer',
     policy: { freezeAfterSeconds: 5 },
     template: 'node-agent',
   },
   {
-    userKey: 'email-triage',
+    externalId: 'email-triage',
     policy: { freezeAfterSeconds: 600, stopAfterSeconds: null },
   },
   {
-    userKey: 'ci-check',
+    externalId: 'ci-check',
     policy: { freezeAfterSeconds: 4, stopAfterSeconds: 10 },
   },
   {
-    userKey: 'data-pipeline',
+    externalId: 'data-pipeline',
     policy: { freezeAfterSeconds: 900 },
     template: 'python-ml',
   },
-  { userKey: 'scratch' },
+  { externalId: 'scratch' },
 ];
-for (const { userKey, policy, template } of sandboxes) {
+for (const { externalId, policy, template } of sandboxes) {
   await rpc('/acquireSandbox', {
-    userKey,
+    externalId,
     ...(policy ? { policy } : {}),
     ...(template ? { template } : {}),
   });
-  console.log(`沙箱  ${userKey}`);
+  console.log(`沙箱  ${externalId}`);
 }
 
 // ---- 文件(给文件浏览器一些可看的内容)---------------------------------

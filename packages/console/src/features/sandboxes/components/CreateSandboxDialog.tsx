@@ -45,7 +45,7 @@ import { useAcquireSandbox } from '../hooks/useSandboxes';
  */
 export function CreateSandboxDialog() {
   const [open, setOpen] = useState(false);
-  const [userKey, setUserKey] = useState('');
+  const [externalId, setExternalId] = useState('');
   const [template, setTemplate] = useState('');
   const [freezeAfter, setFreezeAfter] = useState('');
   const [neverStop, setNeverStop] = useState(false);
@@ -57,7 +57,7 @@ export function CreateSandboxDialog() {
   const archive = useConfig().data?.archive;
 
   const reset = () => {
-    setUserKey('');
+    setExternalId('');
     setTemplate('');
     setFreezeAfter('');
     setNeverStop(false);
@@ -80,13 +80,13 @@ export function CreateSandboxDialog() {
 
     mutation.mutate(
       {
-        userKey,
+        externalId,
         ...(template !== '' ? { template } : {}),
         ...(Object.keys(policy).length > 0 ? { policy } : {}),
       },
       {
         onSuccess: ({ sandbox }) => {
-          toast.success(`「${sandbox.userKey}」的沙箱已就绪`);
+          toast.success(`「${sandbox.externalId}」的沙箱已就绪`);
           setOpen(false);
           reset();
         },
@@ -126,11 +126,11 @@ export function CreateSandboxDialog() {
         >
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="create-user-key">userKey</FieldLabel>
+              <FieldLabel htmlFor="create-user-key">externalId</FieldLabel>
               <Input
                 id="create-user-key"
-                value={userKey}
-                onChange={(event) => setUserKey(event.target.value)}
+                value={externalId}
+                onChange={(event) => setExternalId(event.target.value)}
                 placeholder="my-agent"
                 maxLength={128}
                 className="font-mono"
@@ -249,7 +249,7 @@ export function CreateSandboxDialog() {
           <DialogFooter className="mt-6">
             <Button
               type="submit"
-              disabled={userKey.length === 0 || mutation.isPending}
+              disabled={externalId.length === 0 || mutation.isPending}
             >
               {mutation.isPending && <Spinner />}
               创建
