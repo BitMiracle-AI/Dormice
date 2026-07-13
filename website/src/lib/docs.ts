@@ -16,6 +16,7 @@ import * as httpApi from '../../content/docs/http-api.mdx';
 import * as indexDoc from '../../content/docs/index.mdx';
 import * as installation from '../../content/docs/installation.mdx';
 import * as lifecycle from '../../content/docs/lifecycle.mdx';
+import * as llms from '../../content/docs/llms.mdx';
 import meta from '../../content/docs/meta.json';
 import * as metrics from '../../content/docs/metrics.mdx';
 import * as persistence from '../../content/docs/persistence.mdx';
@@ -57,6 +58,7 @@ const modules: Record<string, DocModule> = {
   cli,
   'http-api': httpApi,
   console: consoleDoc,
+  llms,
   doctor,
   upgrading,
   troubleshooting,
