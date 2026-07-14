@@ -191,7 +191,7 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
   if (isPending) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Spinner /> 读取指标…
+        <Spinner /> 读取指标
       </div>
     );
   }

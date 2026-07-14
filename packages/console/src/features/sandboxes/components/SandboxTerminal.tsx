@@ -35,7 +35,7 @@ function LiveTerminal({ sandboxId }: { sandboxId: string }) {
     fit.fit();
     // Waking a stopped sandbox is a cold start — seconds, not ms. Say so
     // in the terminal itself instead of leaving a dead black box.
-    term.writeln('\x1b[2m连接中 — 沉睡的沙箱会先被唤醒…\x1b[0m');
+    term.writeln('\x1b[2m连接中 — 沉睡的沙箱会先被唤醒\x1b[0m');
 
     let session: PtySession | undefined;
     let cancelled = false;

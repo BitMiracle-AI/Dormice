@@ -9,6 +9,7 @@ import { HugeiconsIcon } from '@hugeicons/react';
 import { Link } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { FilterMenu } from '@/components/FilterMenu';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   AlertDialog,
@@ -35,10 +36,6 @@ import {
   InputGroupAddon,
   InputGroupInput,
 } from '@/components/ui/input-group';
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from '@/components/ui/native-select';
 import { Spinner } from '@/components/ui/spinner';
 import {
   Table,
@@ -167,7 +164,7 @@ function BulkDestroyButton({
     setPending(false);
     void queryClient.invalidateQueries({ queryKey: ['sandboxes'] });
     if (failures.length === 0) {
-      toast.success(`已销毁  个沙箱`);
+      toast.success(`已销毁 ${externalIds.length} 个沙箱`);
     } else {
       toast.error(`${failures.length} 个销毁失败:${failures.join('、')}`);
     }
@@ -269,7 +266,7 @@ export function SandboxesPage() {
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold">沙箱</h1>
+          <h1 className="text-2xl font-semibold">沙箱</h1>
           <p className="text-sm text-muted-foreground">
             账本里的全部沙箱,每 2 秒刷新 — 看着不会吵醒任何一个。
           </p>
@@ -291,20 +288,17 @@ export function SandboxesPage() {
             placeholder="按 externalId 搜索"
           />
         </InputGroup>
-        <NativeSelect
-          aria-label="按状态筛选"
-          value={stateFilter}
-          onChange={(event) =>
-            setStateFilter(event.target.value as 'all' | SandboxState)
+        <FilterMenu
+          label="状态"
+          value={stateFilter === 'all' ? '' : stateFilter}
+          options={STATE_FILTERS.map((state) => ({
+            value: state,
+            label: STATE_LABELS[state],
+          }))}
+          onChange={(value) =>
+            setStateFilter(value === '' ? 'all' : (value as SandboxState))
           }
-        >
-          <NativeSelectOption value="all">全部状态</NativeSelectOption>
-          {STATE_FILTERS.map((state) => (
-            <NativeSelectOption key={state} value={state}>
-              {STATE_LABELS[state]}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
+        />
         <span className="text-sm text-muted-foreground">
           {filtered.length} / {sandboxes.length} 个
         </span>
@@ -348,9 +342,11 @@ export function SandboxesPage() {
       )}
 
       {filtered.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
+        // 限高让长列表在框内滚,表头 sticky 才有得贴 — 列名滚不丢。
+        <div className="max-h-[70vh] overflow-auto rounded-lg border">
+          {/* 行上的 transition-colors 在 2 秒轮询重渲下会微闪 — 关掉。 */}
+          <Table className="[&_tr]:transition-none">
+            <TableHeader className="sticky top-0 z-10 bg-background">
               <TableRow>
                 <TableHead className="w-10">
                   <Checkbox

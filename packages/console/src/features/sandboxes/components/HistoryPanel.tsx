@@ -39,7 +39,7 @@ export function HistoryPanel({ externalId }: { externalId: string }) {
   if (isPending) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Spinner /> 读取历史…
+        <Spinner /> 读取历史
       </div>
     );
   }

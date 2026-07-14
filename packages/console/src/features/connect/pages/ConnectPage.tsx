@@ -76,7 +76,7 @@ dor sandbox exec my-project 'uname -r'`;
   return (
     <div className="mx-auto w-full max-w-3xl">
       <div className="mb-1">
-        <h1 className="text-lg font-semibold">连接</h1>
+        <h1 className="text-2xl font-semibold">连接</h1>
       </div>
       <p className="mb-6 text-sm text-muted-foreground">
         这个 daemon 的地址是 <code className="font-mono">{origin}</code> —
