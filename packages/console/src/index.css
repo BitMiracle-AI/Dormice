@@ -2,3 +2,11 @@
    owned by the shadcn CLI (rewritten wholesale by `shadcn apply`) — custom
    styles live here, never there. */
 @import "./shadcn.css";
+
+@layer base {
+  body {
+    /* macOS 浏览器默认亚像素渲染把字形描粗,medium/semibold 都显臃肿;
+       灰度平滑(antialiased)才是 Inter 设计稿上的粗细。 */
+    @apply antialiased;
+  }
+}
