@@ -8,7 +8,7 @@ export function OverviewPage() {
   return (
     <>
       <div>
-        <h1 className="text-lg font-semibold">总览</h1>
+        <h1 className="text-2xl font-semibold">总览</h1>
         <p className="text-sm text-muted-foreground">
           这台机器的健康状况,与沙箱群花掉的资源。
         </p>

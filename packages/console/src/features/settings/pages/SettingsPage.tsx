@@ -74,7 +74,7 @@ export function SettingsPage() {
   if (isPending) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Spinner /> 读取生效配置…
+        <Spinner /> 读取生效配置
       </div>
     );
   }
@@ -90,9 +90,10 @@ export function SettingsPage() {
   }
 
   return (
-    <>
+    // 四列窄表,铺满宽屏一行字拉太长 — 限宽居中,读起来是一页文档。
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
       <div>
-        <h1 className="text-lg font-semibold">设置</h1>
+        <h1 className="text-2xl font-semibold">设置</h1>
         <p className="text-sm text-muted-foreground">
           daemon 的生效配置,只读。改配置在主机的{' '}
           <code className="font-mono">/etc/dormice/env</code>,改完{' '}
@@ -138,6 +139,6 @@ export function SettingsPage() {
           </TableBody>
         </Table>
       </div>
-    </>
+    </div>
   );
 }

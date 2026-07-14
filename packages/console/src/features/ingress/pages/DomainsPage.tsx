@@ -247,10 +247,11 @@ export function DomainsPage() {
   };
 
   return (
-    <>
+    // 内容是竖排的域名条目与指引,同设置页限宽居中。
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold">域名</h1>
+          <h1 className="text-2xl font-semibold">域名</h1>
           <p className="text-sm text-muted-foreground">
             给控制台(和 API)绑定域名,可以绑多个;HTTPS 证书自动申请与续期。
           </p>
@@ -262,7 +263,7 @@ export function DomainsPage() {
 
       {isPending ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner /> 读取域名配置…
+          <Spinner /> 读取域名配置
         </div>
       ) : isError ? (
         <Empty className="border border-dashed">
@@ -321,6 +322,6 @@ export function DomainsPage() {
           </p>
         </>
       )}
-    </>
+    </div>
   );
 }

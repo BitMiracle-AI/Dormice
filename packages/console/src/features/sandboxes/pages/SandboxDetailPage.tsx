@@ -91,7 +91,7 @@ export function SandboxDetailPage() {
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <h1 className="font-mono text-lg font-semibold">
+          <h1 className="font-mono text-2xl font-semibold">
             {sandbox.externalId}
           </h1>
           <SandboxStateBadge state={sandbox.state} />

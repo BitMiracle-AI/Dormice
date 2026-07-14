@@ -100,7 +100,7 @@ export function CommandMenu() {
         title="命令面板"
         description="跳转到页面或沙箱"
       >
-        <CommandInput placeholder="搜页面、沙箱…" />
+        <CommandInput placeholder="搜页面、沙箱" />
         <CommandList>
           <CommandEmpty>没有匹配的结果。</CommandEmpty>
           <CommandGroup heading="页面">

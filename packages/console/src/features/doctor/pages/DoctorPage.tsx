@@ -88,7 +88,7 @@ export function DoctorPage() {
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-lg font-semibold">
+          <h1 className="flex items-center gap-2 text-2xl font-semibold">
             体检 <SampleDataBadge />
           </h1>
           <p className="text-sm text-muted-foreground">

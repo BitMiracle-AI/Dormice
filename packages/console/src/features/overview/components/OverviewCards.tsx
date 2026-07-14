@@ -139,16 +139,28 @@ export function OverviewCards() {
   }
 
   if (!query.data) {
-    // One placeholder per card in the top row, keyed by what will load there.
+    // Skeletons mirror the real card anatomy (label / value / hint / meter)
+    // and both rows, block heights matched to the text line heights — the
+    // loading and loaded states are the same height, so nothing jumps.
+    const bones = (slot: string) => (
+      <Card key={slot} size="sm">
+        <CardContent className="flex flex-col gap-2">
+          <Skeleton className="h-5 w-16" />
+          <Skeleton className="h-8 w-24" />
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-1.5 w-full rounded-full" />
+        </CardContent>
+      </Card>
+    );
     return (
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {['cpu', 'memory', 'swap', 'data-disk'].map((slot) => (
-          <Skeleton
-            key={slot}
-            className="h-28 rounded-[min(var(--radius-4xl),24px)]"
-          />
-        ))}
-      </div>
+      <section className="flex flex-col gap-4">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {['cpu', 'memory', 'swap', 'data-disk'].map(bones)}
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          {['sandboxes', 'sandbox-disks'].map(bones)}
+        </div>
+      </section>
     );
   }
 

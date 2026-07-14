@@ -3,6 +3,7 @@ import { Search01Icon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Link } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
+import { FilterMenu } from '@/components/FilterMenu';
 import { Badge } from '@/components/ui/badge';
 import {
   Empty,
@@ -15,10 +16,6 @@ import {
   InputGroupAddon,
   InputGroupInput,
 } from '@/components/ui/input-group';
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from '@/components/ui/native-select';
 import { Spinner } from '@/components/ui/spinner';
 import {
   Table,
@@ -61,7 +58,7 @@ export function ActivityPage() {
   return (
     <>
       <div>
-        <h1 className="text-lg font-semibold">活动</h1>
+        <h1 className="text-2xl font-semibold">活动</h1>
         <p className="text-sm text-muted-foreground">
           账本的历史:谁被创建、冻结、停止、销毁,对账修了什么。保留最近 1000
           条,更老的自然滚出。
@@ -82,24 +79,18 @@ export function ActivityPage() {
             placeholder="按 externalId 搜索"
           />
         </InputGroup>
-        <NativeSelect
-          aria-label="按事件类型筛选"
-          value={kindFilter}
-          onChange={(event) =>
-            setKindFilter(event.target.value as 'all' | ActivityKind)
-          }
-        >
-          <NativeSelectOption value="all">全部事件</NativeSelectOption>
-          {(
+        <FilterMenu
+          label="事件"
+          value={kindFilter === 'all' ? '' : kindFilter}
+          options={(
             Object.entries(ACTIVITY_KIND_LABELS) as Array<
               [ActivityKind, string]
             >
-          ).map(([kind, label]) => (
-            <NativeSelectOption key={kind} value={kind}>
-              {label}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
+          ).map(([kind, label]) => ({ value: kind, label }))}
+          onChange={(value) =>
+            setKindFilter(value === '' ? 'all' : (value as ActivityKind))
+          }
+        />
         <span className="text-sm text-muted-foreground">
           {filtered.length} / {events.length} 条
         </span>
@@ -107,7 +98,7 @@ export function ActivityPage() {
 
       {isPending ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner /> 读取活动…
+          <Spinner /> 读取活动
         </div>
       ) : isError ? (
         <Empty className="border border-dashed">
@@ -133,9 +124,10 @@ export function ActivityPage() {
           </EmptyHeader>
         </Empty>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
+        // 环形记录上限 1000 条,是全站最长的表 — 限高框内滚,表头贴住。
+        <div className="max-h-[70vh] overflow-auto rounded-lg border">
+          <Table className="[&_tr]:transition-none">
+            <TableHeader className="sticky top-0 z-10 bg-background">
               <TableRow>
                 <TableHead className="w-28">时间</TableHead>
                 <TableHead className="w-28">事件</TableHead>

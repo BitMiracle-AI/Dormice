@@ -218,10 +218,11 @@ export function TemplatesPage() {
     sandboxes.filter((sandbox) => sandbox.template === name).length;
 
   return (
-    <>
+    // 五列窄表,同设置页限宽居中 — 宽屏上不摊大饼。
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold">模板</h1>
+          <h1 className="text-2xl font-semibold">模板</h1>
           <p className="text-sm text-muted-foreground">
             模板 = 命名的 Docker 镜像。名字即 E2B 的 templateID,重新注册
             即升级。
@@ -316,6 +317,6 @@ export function TemplatesPage() {
           </Table>
         </div>
       )}
-    </>
+    </div>
   );
 }
