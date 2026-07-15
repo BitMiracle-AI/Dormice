@@ -1,7 +1,4 @@
-import { Copy01Icon } from '@hugeicons/core-free-icons';
-import { HugeiconsIcon } from '@hugeicons/react';
-import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
+import { Snippet } from '@/components/Snippet';
 import {
   Card,
   CardContent,
@@ -9,31 +6,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { copyText } from '@/lib/copy';
-
-function Snippet({ code }: { code: string }) {
-  return (
-    <div className="relative rounded-md border bg-muted/30">
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="absolute top-1.5 right-1.5"
-        aria-label="复制到剪贴板"
-        onClick={() =>
-          copyText(code).then(
-            () => toast.success('已复制'),
-            () => toast.error('复制失败 — 请手动选中文本'),
-          )
-        }
-      >
-        <HugeiconsIcon icon={Copy01Icon} />
-      </Button>
-      <pre className="overflow-x-auto p-4 pr-12 font-mono text-xs leading-relaxed">
-        <code>{code}</code>
-      </pre>
-    </div>
-  );
-}
+import { cliSnippet, e2bSnippet, sdkSnippet } from '../snippets';
 
 /**
  * Read-only connection instructions. The endpoint is simply this page's
@@ -44,34 +17,6 @@ function Snippet({ code }: { code: string }) {
  */
 export function ConnectPage() {
   const origin = window.location.origin;
-
-  const e2bSnippet = `import { Sandbox } from 'e2b';
-
-const sandbox = await Sandbox.create({
-  apiKey: 'e2b_<your API token>',
-  apiUrl: '${origin}/e2b/api',
-  sandboxUrl: '${origin}/e2b/envd',
-  // Dormice 扩展:同一个 externalId 永远回到同一个沙箱。
-  metadata: { externalId: 'my-project' },
-});
-
-const result = await sandbox.commands.run('echo hello from dormice');`;
-
-  const sdkSnippet = `import { Dormice } from '@dormice/sdk';
-
-const client = new Dormice({
-  endpoint: '${origin}',
-  token: '<your API token>',
-});
-
-await client.acquireSandbox('my-project');
-const result = await client.execCommand('my-project', 'echo hello');`;
-
-  const cliSnippet = `export DORMICE_ENDPOINT=${origin}
-export DORMICE_API_TOKEN=<your API token>
-
-dor sandbox ls
-dor sandbox exec my-project 'uname -r'`;
 
   return (
     <div className="mx-auto w-full max-w-3xl">
@@ -98,7 +43,7 @@ dor sandbox exec my-project 'uname -r'`;
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Snippet code={e2bSnippet} />
+            <Snippet code={e2bSnippet(origin)} />
           </CardContent>
         </Card>
 
@@ -111,7 +56,7 @@ dor sandbox exec my-project 'uname -r'`;
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Snippet code={sdkSnippet} />
+            <Snippet code={sdkSnippet(origin)} />
           </CardContent>
         </Card>
 
@@ -124,7 +69,7 @@ dor sandbox exec my-project 'uname -r'`;
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Snippet code={cliSnippet} />
+            <Snippet code={cliSnippet(origin)} />
           </CardContent>
         </Card>
       </div>

@@ -7,6 +7,7 @@ import {
   setPausedByUser,
   transition,
 } from './db/ledger';
+import { deleteSandboxMetricsSamples } from './db/metrics';
 import type { SandboxRow } from './db/schema';
 import { resolveImage } from './db/templates';
 import type { Executor } from './executor/executor';
@@ -94,6 +95,9 @@ export async function destroySandbox(
     }
     await store.delete(objectKey(sandboxId));
     deleteSandbox(db, sandboxId);
+    // With the disk gone its metrics history has no owner; fleet snapshots
+    // belong to no sandbox and stay.
+    deleteSandboxMetricsSamples(db, sandboxId);
     recordActivity(db, {
       kind: activity.kind,
       externalId: row.externalId,
@@ -104,6 +108,7 @@ export async function destroySandbox(
   }
   await executor.destroy(sandboxId);
   deleteSandbox(db, sandboxId);
+  deleteSandboxMetricsSamples(db, sandboxId);
   if (row) {
     recordActivity(db, {
       kind: activity.kind,

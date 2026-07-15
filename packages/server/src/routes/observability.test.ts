@@ -6,6 +6,8 @@ import {
   type ActivityEvent,
   type ConfigEntry,
   getConfigResponseSchema,
+  getFleetTimelineResponseSchema,
+  getSandboxMetricsHistoryResponseSchema,
   getSandboxMetricsResponseSchema,
   listActivityResponseSchema,
   listSandboxImagesResponseSchema,
@@ -19,10 +21,12 @@ import { MemStore } from '../archive/mem-store';
 import { CONFIG_KEYS, type ConfigSources, loadConfig } from '../config';
 import { ACTIVITY_KEEP, recordActivity } from '../db/activity';
 import { migrateDb, openDb } from '../db/db';
+import { insertMetricsTick, MAX_POINTS } from '../db/metrics';
 import { activity } from '../db/schema';
 import { FAKE_BASE_IMAGE, FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
 import { freezeSandbox, stopSandbox } from '../lifecycle';
+import { sampleOnce } from '../metrics-sampler';
 import { ARCHIVE_DEFAULT_SECONDS } from '../policy';
 import { reconcile } from '../reconciler';
 import { scanOnce } from '../scanner';
@@ -276,6 +280,215 @@ describe('getSandboxMetrics', () => {
     const { app } = testApp();
     const res = await rpc(app, '/getSandboxMetrics', { externalId: 'nobody' });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('getSandboxMetricsHistory', () => {
+  /** Crafted metrics; only the fields under test vary. */
+  function reading(cpuUsedPct = 10) {
+    return {
+      cpuCount: 1,
+      cpuUsedPct,
+      memUsedBytes: 64,
+      memTotalBytes: 2048,
+      memCacheBytes: 0,
+      diskUsedBytes: 10,
+      diskTotalBytes: 100,
+    };
+  }
+
+  it('404s an unknown key instead of inventing a sandbox', async () => {
+    const { app } = testApp();
+    const res = await rpc(app, '/getSandboxMetricsHistory', {
+      externalId: 'nobody',
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('answers an empty window honestly — never a live fallback', async () => {
+    const { app } = testApp();
+    await rpc(app, '/acquireSandbox', { externalId: 'fresh' });
+    // The sandbox is running and measurable, but the sampler never ticked:
+    // the native face reports silence as silence (the E2B face is the one
+    // that takes a live reading, as compatibility politeness).
+    const res = await rpc(app, '/getSandboxMetricsHistory', {
+      externalId: 'fresh',
+    });
+    expect(res.statusCode).toBe(200);
+    const body = getSandboxMetricsHistoryResponseSchema.parse(res.json());
+    expect(body).toEqual({ samples: [], bucketSeconds: null });
+  });
+
+  it('rejects an unparseable timestamp at the door', async () => {
+    const { app } = testApp();
+    await rpc(app, '/acquireSandbox', { externalId: 'strict' });
+    const res = await rpc(app, '/getSandboxMetricsHistory', {
+      externalId: 'strict',
+      start: 'yesterday-ish',
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('slices by start/end, ascending', async () => {
+    const { app, db, executor } = testApp();
+    await rpc(app, '/acquireSandbox', { externalId: 'sliced' });
+    const t0 = Date.parse('2026-07-15T10:00:00.000Z');
+    for (let i = 0; i < 3; i += 1) {
+      await sampleOnce(db, executor, new Date(t0 + i * 30_000), {
+        retentionHours: 168,
+      });
+    }
+    const res = await rpc(app, '/getSandboxMetricsHistory', {
+      externalId: 'sliced',
+      start: new Date(t0 + 15_000).toISOString(),
+      end: new Date(t0 + 65_000).toISOString(),
+    });
+    const { samples, bucketSeconds } =
+      getSandboxMetricsHistoryResponseSchema.parse(res.json());
+    expect(bucketSeconds).toBe(null);
+    expect(samples.map((s) => s.timestamp)).toEqual([
+      new Date(t0 + 30_000).toISOString(),
+      new Date(t0 + 60_000).toISOString(),
+    ]);
+  });
+
+  it('buckets past MAX_POINTS by per-field max — the spike survives', async () => {
+    const { app, db } = testApp();
+    const created = (
+      await rpc(app, '/acquireSandbox', { externalId: 'spiky' })
+    ).json().sandbox;
+    const t0 = Date.parse('2026-07-15T00:00:00.000Z');
+    const rows = MAX_POINTS + 40;
+    for (let i = 0; i < rows; i += 1) {
+      insertMetricsTick(db, {
+        at: new Date(t0 + i * 30_000).toISOString(),
+        fleetCounts: {
+          active: 1,
+          frozen: 0,
+          stopped: 0,
+          archived: 0,
+          restoring: 0,
+          total: 1,
+        },
+        // One reading spikes; every neighbor idles. Averaging would bury it.
+        samples: [
+          {
+            sandboxId: created.sandboxId,
+            metrics: reading(i === 200 ? 95 : 5),
+          },
+        ],
+        retentionHours: 168,
+      });
+    }
+    const res = await rpc(app, '/getSandboxMetricsHistory', {
+      externalId: 'spiky',
+      start: new Date(t0).toISOString(),
+      end: new Date(t0 + rows * 30_000).toISOString(),
+    });
+    const { samples, bucketSeconds } =
+      getSandboxMetricsHistoryResponseSchema.parse(res.json());
+    expect(bucketSeconds).not.toBe(null);
+    expect(samples.length).toBeLessThanOrEqual(MAX_POINTS);
+    // Ascending, and the bucket holding the spike reports the spike.
+    const times = samples.map((s) => Date.parse(s.timestamp));
+    expect([...times].sort((a, b) => a - b)).toEqual(times);
+    expect(Math.max(...samples.map((s) => s.cpuUsedPct))).toBe(95);
+  });
+});
+
+describe('getFleetTimeline', () => {
+  it('answers an empty window with no points and a null peak', async () => {
+    const { app } = testApp();
+    const res = await rpc(app, '/getFleetTimeline', {});
+    expect(res.statusCode).toBe(200);
+    const body = getFleetTimelineResponseSchema.parse(res.json());
+    expect(body).toEqual({ points: [], bucketSeconds: null, peak: null });
+  });
+
+  it('returns snapshots ascending with byState summing to total', async () => {
+    const { app, db, executor } = testApp();
+    await rpc(app, '/acquireSandbox', { externalId: 'one' });
+    const t0 = Date.parse('2026-07-15T10:00:00.000Z');
+    await sampleOnce(db, executor, new Date(t0), { retentionHours: 168 });
+    await rpc(app, '/acquireSandbox', { externalId: 'two' });
+    await sampleOnce(db, executor, new Date(t0 + 30_000), {
+      retentionHours: 168,
+    });
+
+    const res = await rpc(app, '/getFleetTimeline', {
+      start: new Date(t0 - 1000).toISOString(),
+      end: new Date(t0 + 60_000).toISOString(),
+    });
+    const { points, bucketSeconds, peak } =
+      getFleetTimelineResponseSchema.parse(res.json());
+    expect(bucketSeconds).toBe(null);
+    expect(points.map((p) => p.at)).toEqual([
+      new Date(t0).toISOString(),
+      new Date(t0 + 30_000).toISOString(),
+    ]);
+    for (const point of points) {
+      const sum = Object.values(point.byState).reduce((a, b) => a + b, 0);
+      expect(sum).toBe(point.total);
+    }
+    expect(peak).toEqual({
+      active: 2,
+      at: new Date(t0 + 30_000).toISOString(),
+    });
+  });
+
+  it('computes the peak from raw rows — bucketing cannot flatten it', async () => {
+    const { app, db } = testApp();
+    const t0 = Date.parse('2026-07-15T00:00:00.000Z');
+    const counts = (active: number) => ({
+      active,
+      frozen: 0,
+      stopped: 0,
+      archived: 0,
+      restoring: 0,
+      total: active,
+    });
+    const rows = MAX_POINTS + 40;
+    for (let i = 0; i < rows; i += 1) {
+      insertMetricsTick(db, {
+        at: new Date(t0 + i * 30_000).toISOString(),
+        fleetCounts: counts(1),
+        samples: [],
+        retentionHours: 168,
+      });
+    }
+    // A spike squeezed between two grid rows of its own bucket: the bucket
+    // keeps its LAST whole snapshot, so no point ever shows 9 — the peak
+    // field is the only honest carrier.
+    insertMetricsTick(db, {
+      at: new Date(t0 + 200 * 30_000 + 1000).toISOString(),
+      fleetCounts: counts(9),
+      samples: [],
+      retentionHours: 168,
+    });
+    insertMetricsTick(db, {
+      at: new Date(t0 + 200 * 30_000 + 2000).toISOString(),
+      fleetCounts: counts(1),
+      samples: [],
+      retentionHours: 168,
+    });
+
+    const res = await rpc(app, '/getFleetTimeline', {
+      start: new Date(t0).toISOString(),
+      end: new Date(t0 + rows * 30_000).toISOString(),
+    });
+    const { points, bucketSeconds, peak } =
+      getFleetTimelineResponseSchema.parse(res.json());
+    expect(bucketSeconds).not.toBe(null);
+    expect(points.length).toBeLessThanOrEqual(MAX_POINTS);
+    expect(peak).toEqual({
+      active: 9,
+      at: new Date(t0 + 200 * 30_000 + 1000).toISOString(),
+    });
+    // Whole-snapshot buckets: sums still hold after bucketing.
+    for (const point of points) {
+      const sum = Object.values(point.byState).reduce((a, b) => a + b, 0);
+      expect(sum).toBe(point.total);
+    }
   });
 });
 

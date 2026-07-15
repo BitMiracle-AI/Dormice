@@ -34,6 +34,10 @@ const KEY_HINTS: Record<string, string> = {
   DORMICE_DATA_DIR: '沙箱磁盘镜像的家(disks/*.img);归档临时文件也在这里',
   DORMICE_MAX_SANDBOXES: '创建上限(撞上回 429);唤醒永不受限 — 磁盘才是真瓶颈',
   DORMICE_SCAN_INTERVAL_SECONDS: '空闲扫描周期:每一轮把到阈值的沙箱降一格温度',
+  DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS:
+    '指标采样周期:历史曲线的分辨率,总览走势与指标历史都按它落库',
+  DORMICE_METRICS_RETENTION_HOURS:
+    '逐沙箱指标样本的保留时长;舰队状态计数恒保 30 天,不随它走',
   DORMICE_SANDBOX_DISK_GB: '每个沙箱磁盘的名义大小;稀疏镜像只为真实内容付费',
   DORMICE_SANDBOX_CPUS: '每个沙箱的 CPU 配额',
   DORMICE_SANDBOX_MEMORY_GB:
