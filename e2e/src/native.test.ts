@@ -419,6 +419,34 @@ describe('native API over a real daemon', () => {
     });
   });
 
+  it('API keys: the rolling-rotation story — mint, work, revoke, the env token survives', async () => {
+    const { apiKey, token } = await client().createApiKey('rotation');
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(apiKey.prefix).toBe(token.slice(0, 8));
+
+    // A fresh client on the minted key does real work — rotation means the
+    // new credential is live before the old one dies.
+    const keyed = client(token);
+    const created = await keyed.acquireSandbox('rotation-key');
+    expect(created.sandbox.externalId).toBe('rotation-key');
+    await keyed.destroySandbox('rotation-key');
+
+    const listed = await client().listApiKeys();
+    const mine = listed.find((k) => k.name === 'rotation');
+    expect(mine?.lastUsedAt).not.toBeNull();
+
+    expect(await client().revokeApiKey('rotation')).toEqual({ revoked: true });
+    await expect(keyed.listSandboxes()).rejects.toMatchObject({
+      name: 'DormiceApiError',
+      status: 401,
+    });
+    // The env token is the bootstrap credential: revocation never touches it.
+    expect(await client().listSandboxes()).toBeDefined();
+    expect(await client().revokeApiKey('rotation')).toEqual({
+      revoked: false,
+    });
+  });
+
   it('listSandboxImages tracks a template upgrade; rebuild closes the gap', async () => {
     // The daemon's base image doubles as the template image (real in docker
     // mode, an arbitrary string for the fake). The "upgrade" points the name

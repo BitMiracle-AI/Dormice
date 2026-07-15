@@ -211,6 +211,41 @@ describe('E2B control plane', () => {
     expect(bare.statusCode).toBe(201);
   });
 
+  it('a ledger API key opens the X-API-KEY door too, until revoked', async () => {
+    const t = testApp();
+    // Minted over the native face — the same credential truth serves both.
+    const minted = await t.app.inject({
+      method: 'POST',
+      url: '/createApiKey',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { name: 'e2b-client' },
+    });
+    const { token } = minted.json();
+
+    const prefixed = await t.app.inject({
+      method: 'POST',
+      url: '/e2b/api/sandboxes',
+      headers: { 'x-api-key': `e2b_${token}` },
+      payload: {},
+    });
+    expect(prefixed.statusCode).toBe(201);
+
+    await t.app.inject({
+      method: 'POST',
+      url: '/revokeApiKey',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { name: 'e2b-client' },
+    });
+    const revoked = await t.app.inject({
+      method: 'POST',
+      url: '/e2b/api/sandboxes',
+      headers: { 'x-api-key': `e2b_${token}` },
+      payload: {},
+    });
+    expect(revoked.statusCode).toBe(401);
+    expect(revoked.json()).toEqual({ code: 401, message: 'invalid API key' });
+  });
+
   it('creates a fresh sandbox per call — E2B semantics, no key given', async () => {
     const t = testApp();
     const first = await createSandbox(t);

@@ -7,6 +7,9 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Command } from 'commander';
 import {
+  apikeyCreate,
+  apikeyLs,
+  apikeyRevoke,
   clientFromEnv,
   parseLabels,
   pullSavedMessage,
@@ -201,6 +204,37 @@ template
   .argument('<name>', 'template name to remove')
   .action(async (name: string) => {
     console.log(await templateRm(clientFromEnv(process.env), name));
+  });
+
+const apikey = program
+  .command('apikey')
+  .description(
+    'Manage API keys — rotatable peers of DORMICE_API_TOKEN, revocable without a restart',
+  );
+
+apikey
+  .command('create')
+  .description('Mint an API key; the token is printed once and never again')
+  .argument('<name>', 'a human handle for the key, e.g. ci or laptop')
+  .action(async (name: string) => {
+    console.log(await apikeyCreate(clientFromEnv(process.env), name));
+  });
+
+apikey
+  .command('ls')
+  .description('List every API key ever minted, revoked ones included')
+  .action(async () => {
+    console.log(await apikeyLs(clientFromEnv(process.env)));
+  });
+
+apikey
+  .command('revoke')
+  .description(
+    'Revoke the active API key under a name — it stops working on the next request',
+  )
+  .argument('<name>', 'name of the key to revoke')
+  .action(async (name: string) => {
+    console.log(await apikeyRevoke(clientFromEnv(process.env), name));
   });
 
 try {

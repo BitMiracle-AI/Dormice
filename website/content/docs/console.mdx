@@ -80,13 +80,25 @@ form is the same [upgrade front door](/docs/templates) as
 `dor template add`. Deleting a template a sandbox still uses is refused
 with the daemon's own message naming the sandboxes.
 
+## API keys
+
+Mint revocable credentials without leaving the browser
+([what they are](/docs/http-api#api-keys)). The create dialog shows the
+key **exactly once** — the daemon stores only a hash — with a copy
+button and no second chance. The table keeps every key ever minted,
+revoked ones included, as your rotation history: name, prefix, creation
+time, last use, status. Revoking takes effect on the key's next request.
+`DORMICE_API_TOKEN` itself never appears here — it is the bootstrap
+credential, and retiring it means editing `/etc/dormice/env`.
+
 ## Activity, domains, and settings
 
 Three more pages round out the operator view:
 
 - **Activity** — the daemon's recent history (who was created, frozen,
-  destroyed, what the reconciler repaired), filterable by event kind
-  and sandbox key. A bounded window, not an audit log.
+  destroyed, what the reconciler repaired, which API key was minted or
+  revoked), filterable by event kind and sandbox key. A bounded window,
+  not an audit log.
 - **Domains** — bind domains to the daemon's front door (the managed
   reverse proxy), with a copyable DNS record guide and a live per-domain
   probe that shows DNS and certificate progress until each one turns

@@ -10,6 +10,9 @@ import {
 } from '@dormice/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  apikeyCreate,
+  apikeyLs,
+  apikeyRevoke,
   clientFromEnv,
   parseLabels,
   pullSavedMessage,
@@ -220,6 +223,32 @@ describe('parseLabels', () => {
   });
 });
 
+describe('apikey commands over real HTTP', () => {
+  it('create, ls and revoke walk the rotation life end to end', async () => {
+    expect(await apikeyLs(client)).toBe('No API keys.');
+
+    const created = await apikeyCreate(client, 'ci');
+    const lines = created.split('\n');
+    expect(lines[0]).toMatch(/^Created API key "ci" \(prefix [0-9a-f]{8}\)\.$/);
+    expect(lines[1]).toMatch(/^[0-9a-f]{64}$/);
+    expect(lines[2]).toBe('Store it now — it will never be shown again.');
+
+    const output = await apikeyLs(client);
+    expect(output.split('\n')[0]).toMatch(
+      /^NAME\s{2,}PREFIX\s{2,}CREATED\s{2,}LAST USED\s{2,}STATUS$/,
+    );
+    expect(output).toMatch(/ci\s{2,}[0-9a-f]{8}.*never\s{2,}active/);
+
+    expect(await apikeyRevoke(client, 'ci')).toBe(
+      'Revoked API key "ci" — it stops working immediately.',
+    );
+    expect(await apikeyRevoke(client, 'ci')).toBe(
+      'No active API key named "ci" — nothing to revoke.',
+    );
+    expect(await apikeyLs(client)).toMatch(/ci\s{2,}.*revoked/);
+  });
+});
+
 describe('template commands over real HTTP', () => {
   it('add, ls and rm walk the registration life end to end', async () => {
     expect(await templateLs(client)).toBe('No templates.');
@@ -228,7 +257,9 @@ describe('template commands over real HTTP', () => {
       'Registered template "py311" -> img:py311.',
     );
     const output = await templateLs(client);
-    expect(output.split('\n')[0]).toMatch(/^NAME\s{2,}IMAGE\s{2,}CREATED$/);
+    expect(output.split('\n')[0]).toMatch(
+      /^NAME\s{2,}IMAGE\s{2,}CREATED\s{2,}UPDATED$/,
+    );
     expect(output).toMatch(/py311\s{2,}img:py311/);
 
     expect(await templateRm(client, 'py311')).toBe('Removed template "py311".');

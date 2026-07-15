@@ -1,11 +1,14 @@
 import {
   type AcquireResponse,
   type ActivityEvent,
+  type ApiKey,
   type ApplyUpgradeResponse,
   acquireResponseSchema,
   applyUpgradeResponseSchema,
   type CheckUpgradeResponse,
+  type CreateApiKeyResponse,
   checkUpgradeResponseSchema,
+  createApiKeyResponseSchema,
   DEFAULT_EXEC_TIMEOUT_SECONDS,
   type DestroySandboxResponse,
   destroySandboxResponseSchema,
@@ -28,6 +31,7 @@ import {
   type ListSandboxImagesResponse,
   type ListSandboxMetricsResponse,
   listActivityResponseSchema,
+  listApiKeysResponseSchema,
   listSandboxesResponseSchema,
   listSandboxImagesResponseSchema,
   listSandboxMetricsResponseSchema,
@@ -35,11 +39,13 @@ import {
   type RebuildSandboxResponse,
   type RegisterTemplateResponse,
   type RemoveTemplateResponse,
+  type RevokeApiKeyResponse,
   readFileResponseSchema,
   readFilesResponseSchema,
   rebuildSandboxResponseSchema,
   registerTemplateResponseSchema,
   removeTemplateResponseSchema,
+  revokeApiKeyResponseSchema,
   type Sandbox,
   type SandboxMetadata,
   type SandboxMetricsSample,
@@ -425,6 +431,34 @@ export class Dormice {
   async removeTemplate(name: string): Promise<RemoveTemplateResponse> {
     const data = await this.rpc('removeTemplate', { name });
     return removeTemplateResponseSchema.parse(data);
+  }
+
+  /**
+   * Mints an API key — a full-power peer of the daemon's env token that can
+   * be revoked without touching the server. The returned `token` (64 hex
+   * chars) is shown here EXACTLY ONCE: the daemon stores only its hash, so
+   * no later call can retrieve it. Refused with a 409 while an active key
+   * already answers to this name.
+   */
+  async createApiKey(name: string): Promise<CreateApiKeyResponse> {
+    const data = await this.rpc('createApiKey', { name });
+    return createApiKeyResponseSchema.parse(data);
+  }
+
+  /** Every key ever minted, revoked ones included, newest first. No secrets. */
+  async listApiKeys(): Promise<ApiKey[]> {
+    const data = await this.rpc('listApiKeys', {});
+    return listApiKeysResponseSchema.parse(data).apiKeys;
+  }
+
+  /**
+   * Revokes the active key under a name — the credential stops working on
+   * the very next request; the row stays listed as rotation history.
+   * Idempotent: an unknown or already-revoked name answers `revoked: false`.
+   */
+  async revokeApiKey(name: string): Promise<RevokeApiKeyResponse> {
+    const data = await this.rpc('revokeApiKey', { name });
+    return revokeApiKeyResponseSchema.parse(data);
   }
 
   /**

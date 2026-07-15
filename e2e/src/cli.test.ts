@@ -142,6 +142,46 @@ describe('dor CLI against a real daemon', () => {
     expect(again.stdout).toContain('nothing to remove');
   });
 
+  it('apikey create, ls and revoke run the rotation life through the real binary', async () => {
+    const created = await cli('apikey', 'create', 'cli-key');
+    const lines = created.stdout.trim().split('\n');
+    expect(lines[0]).toMatch(
+      /^Created API key "cli-key" \(prefix [0-9a-f]{8}\)\./,
+    );
+    const token = lines[1] ?? '';
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(lines[2]).toContain('never be shown again');
+
+    // The minted key IS a DORMICE_API_TOKEN — same variable, new value:
+    // exactly what rotation looks like from a client's shell.
+    const keyed = await run('node', [CLI, 'sandbox', 'ls'], {
+      env: {
+        ...process.env,
+        DORMICE_ENDPOINT: inject('dormiceEndpoint'),
+        DORMICE_API_TOKEN: token,
+      },
+    });
+    expect(keyed.stdout).toBeDefined();
+
+    const listed = await cli('apikey', 'ls');
+    expect(listed.stdout).toMatch(/NAME\s{2,}PREFIX\s{2,}CREATED/);
+    expect(listed.stdout).toMatch(/cli-key\s{2,}[0-9a-f]{8}.*active/);
+
+    const revoked = await cli('apikey', 'revoke', 'cli-key');
+    expect(revoked.stdout).toContain('Revoked API key "cli-key"');
+    await expect(
+      run('node', [CLI, 'sandbox', 'ls'], {
+        env: {
+          ...process.env,
+          DORMICE_ENDPOINT: inject('dormiceEndpoint'),
+          DORMICE_API_TOKEN: token,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+    const again = await cli('apikey', 'revoke', 'cli-key');
+    expect(again.stdout).toContain('nothing to revoke');
+  });
+
   it('fails honestly when the environment is missing', async () => {
     await expect(
       run('node', [CLI, 'sandbox', 'ls'], {

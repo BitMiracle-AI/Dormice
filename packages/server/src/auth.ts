@@ -136,9 +136,16 @@ export function verifySession(
 /**
  * The single arbiter of who may call the API (/healthz stays open —
  * liveness probes have no secrets). Two credentials open the same door:
- * the Bearer token (SDK, CLI, curl) and the web console's session cookie
- * (which additionally requires the console header, see above). A second
- * route surface with its own auth would be a second truth.
+ * a Bearer credential (SDK, CLI, curl — the env token or any active API
+ * key, adjudicated by verifyCredential) and the web console's session
+ * cookie (which additionally requires the console header, see above). A
+ * second route surface with its own auth would be a second truth.
+ *
+ * verifyCredential judges bare tokens, so both faces (this Bearer header
+ * and the E2B X-API-KEY hook) feed it the same canonical form — one
+ * closure, one truth, two dialects. The 'Bearer ' prefix is public
+ * framing, not a secret, so stripping it needs no constant time; the
+ * secret comparisons live inside verifyCredential.
  *
  * The session secret is fetched per request, not captured at startup: setup
  * can replace the account (and its secret) while the daemon runs, and the
@@ -146,11 +153,13 @@ export function verifySession(
  * yet — no cookie can be valid.
  */
 export function requireApiAuth(
-  token: string,
+  verifyCredential: (bareToken: string) => boolean,
   getSessionSecret: () => string | null,
 ): onRequestAsyncHookHandler {
   return async (request, reply) => {
-    if (tokensEqual(request.headers.authorization ?? '', `Bearer ${token}`)) {
+    const header = request.headers.authorization;
+    const bare = header?.startsWith('Bearer ') ? header.slice(7) : null;
+    if (bare !== null && verifyCredential(bare)) {
       return;
     }
     const cookie = request.cookies?.[SESSION_COOKIE];

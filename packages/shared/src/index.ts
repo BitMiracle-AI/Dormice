@@ -1,5 +1,6 @@
 export * from './acquire';
 export * from './activity';
+export * from './api-keys';
 export * from './config';
 export * from './destroy';
 export * from './exec';

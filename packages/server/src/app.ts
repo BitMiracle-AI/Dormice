@@ -10,9 +10,10 @@ import {
 import { type Logger, pino } from 'pino';
 import { z } from 'zod';
 import type { Archiver } from './archive/archiver';
-import { requireApiAuth } from './auth';
+import { requireApiAuth, tokensEqual } from './auth';
 import { type Config, type ConfigSources, configSources } from './config';
 import { getConsoleAccount } from './db/account';
+import { verifyApiKeyToken } from './db/api-keys';
 import type { Db } from './db/db';
 import { getOrCreateSigningSecret } from './db/secrets';
 import { registerE2bCompat } from './e2b';
@@ -23,6 +24,7 @@ import type { Ingress } from './ingress';
 import type { KeyedQueue } from './keyed-queue';
 import { ARCHIVE_DEFAULT_SECONDS } from './policy';
 import { activityRoutes } from './routes/activity';
+import { apiKeyRoutes } from './routes/api-keys';
 import { configRoutes } from './routes/config';
 import { consoleRoutes } from './routes/console';
 import { hostRoutes } from './routes/host';
@@ -185,12 +187,21 @@ export function buildApp({
   // cookie on the native routes, the /console surface mints and clears it.
   app.register(fastifyCookie);
 
+  // The one adjudication of "does this bare credential open the door":
+  // the env token (constant-time compare — the bootstrap credential, always
+  // valid) or any active ledger API key (sha256 indexed lookup, judged per
+  // request so a mint or revoke takes effect on the very next call). Both
+  // faces — the native Bearer header and the E2B X-API-KEY hook — feed this
+  // same closure: one truth, two dialects.
+  const verifyCredential = (bare: string): boolean =>
+    tokensEqual(bare, config.DORMICE_API_TOKEN) || verifyApiKeyToken(db, bare);
+
   // Built once, used by every guarded surface. The secret getter reads the
   // ledger per request because setup can replace the account (and void its
   // sessions) while the daemon runs — a captured value would keep dead
   // sessions alive until restart.
   const apiAuth = requireApiAuth(
-    config.DORMICE_API_TOKEN,
+    verifyCredential,
     () => getConsoleAccount(db)?.sessionSecret ?? null,
   );
 
@@ -210,6 +221,7 @@ export function buildApp({
       archiveDefaultSeconds,
     });
     await api.register(templateRoutes, { db });
+    await api.register(apiKeyRoutes, { db });
     await api.register(hostRoutes, { config, db, executor });
     await api.register(activityRoutes, { db });
     await api.register(ingressRoutes, { db, ingress });
@@ -251,6 +263,7 @@ export function buildApp({
       archiver,
       archiveDefaultSeconds,
       envdSigningSecret,
+      verifyCredential,
     });
   });
 

@@ -31,6 +31,10 @@ export const ACTIVITY_KINDS = [
   'daemon-started',
   /** An operator bound or cleared the console domain through setIngress. */
   'ingress-updated',
+  /** An operator minted an API key (createApiKey). The token itself is never logged. */
+  'apikey-created',
+  /** An operator revoked an API key (revokeApiKey) — the credential died here. */
+  'apikey-revoked',
   /**
    * An operator launched the one-click self-upgrade (applyUpgrade). Only
    * the launch is recorded — the outcome lives in getUpgradeStatus, and

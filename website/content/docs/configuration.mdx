@@ -27,7 +27,7 @@ Unfamiliar terms in the tables below are covered in
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `DORMICE_API_TOKEN` | — **(required)** | Bearer token for the native API, and (with an `e2b_` prefix) the E2B API key. At least 32 characters; generate with `openssl rand -hex 32`. Keep it hex: the official Python e2b SDK validates `e2b_[0-9a-f]+` client-side. |
+| `DORMICE_API_TOKEN` | — **(required)** | Bearer token for the native API, and (with an `e2b_` prefix) the E2B API key. At least 32 characters; generate with `openssl rand -hex 32`. Keep it hex: the official Python e2b SDK validates `e2b_[0-9a-f]+` client-side. This is the bootstrap credential — for day-to-day clients, mint revocable [API keys](/docs/http-api#api-keys) instead and keep this one for recovery. |
 | `DORMICE_PORT` | `3676` | The one port everything is served on: native API, E2B surface, web console. Always bound to 127.0.0.1 — there is deliberately no host setting. |
 | `DORMICE_DB_PATH` | `data/dormice.db` | Where the SQLite database lives. Must be an **absolute path** in docker mode — a relative path depends on the start directory, and a wrong start directory means an empty database facing real sandboxes. |
 | `DORMICE_NODE_ID` | `node-1` | Identifies this machine in the database. Single-machine today; the field keeps the schema shardable later. |

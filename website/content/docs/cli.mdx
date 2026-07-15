@@ -90,6 +90,22 @@ A template is a name for a Docker image already on the daemon's host.
 sandboxes named) while any sandbox still uses the template, and never
 removes the image itself.
 
+## dor apikey
+
+```sh
+dor apikey create <name>   # prints the key once — store it immediately
+dor apikey ls
+dor apikey revoke <name>
+```
+
+API keys are revocable peers of `DORMICE_API_TOKEN` — same power, but
+killable without touching the server ([details](/docs/http-api#api-keys)).
+`create` prints the 64-hex token exactly once; the daemon keeps only its
+hash. The minted key goes wherever the token goes, including this CLI's
+own `DORMICE_API_TOKEN` variable. `revoke` takes effect on the key's
+next request; revoking a name that has no active key says so honestly —
+check the spelling before assuming the leak is plugged.
+
 ## dor doctor
 
 ```sh

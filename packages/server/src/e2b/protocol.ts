@@ -84,15 +84,18 @@ export function verifyEnvdToken(
 
 /**
  * X-API-KEY check. The official SDK formats keys as `e2b_<hex>` and our
- * hex API token is compliant as `e2b_<token>`; the bare token is accepted
- * too — the prefix is the SDK's convention, not a secret.
+ * hex credentials are compliant as `e2b_<token>`; the bare token is
+ * accepted too — the prefix is the SDK's convention, not a secret. What
+ * opens the door is adjudicated by verifyCredential (buildApp's closure:
+ * env token or any active ledger API key), the same truth the native
+ * Bearer face consults.
  */
 export function verifyApiKey(
-  apiToken: string,
+  verifyCredential: (bareToken: string) => boolean,
   presented: string | undefined,
 ): boolean {
   const bare = presented?.startsWith('e2b_') ? presented.slice(4) : presented;
-  return timingSafeEqual(sha256(bare ?? ''), sha256(apiToken));
+  return bare !== undefined && verifyCredential(bare);
 }
 
 /** Connect streaming envelope flags: 0x00 = message, 0x02 = end of stream. */

@@ -1,10 +1,12 @@
 import { ACTIVITY_KINDS, SANDBOX_STATES } from '@dormice/shared';
+import { sql } from 'drizzle-orm';
 import {
   index,
   integer,
   real,
   sqliteTable,
   text,
+  uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 
 /**
@@ -73,6 +75,8 @@ export const templates = sqliteTable('templates', {
   name: text('name').primaryKey(),
   image: text('image').notNull(),
   createdAt: text('created_at').notNull(),
+  /** Bumped only when the image actually changes — see registerTemplate. */
+  updatedAt: text('updated_at').notNull(),
 });
 
 export type TemplateRow = typeof templates.$inferSelect;
@@ -210,3 +214,46 @@ export const daemonSecrets = sqliteTable('daemon_secrets', {
 });
 
 export type DaemonSecretsRow = typeof daemonSecrets.$inferSelect;
+
+/**
+ * Ledger-minted API keys: full-power peers of DORMICE_API_TOKEN that exist
+ * so credentials can rotate without an env edit and a restart. The env
+ * token itself never lives here — it stays the bootstrap/recovery
+ * credential, checked from config.
+ *
+ * keyHash is sha256 of the key material, not scrypt: a key is 256 random
+ * bits, not a human password, so offline brute force is moot and a slow
+ * KDF would only tax every authenticated request. Verification is an
+ * indexed exact-match lookup on the hash; the timing of that comparison
+ * can at worst leak sha256(key) bytes, which preimage resistance makes
+ * worthless (the same argument GitHub tokens rest on).
+ *
+ * Revocation is soft (revokedAt) — the row stays as rotation history and
+ * keeps lastUsedAt readable after the credential dies. "At most one ACTIVE
+ * key per name" is a schema fact via the partial unique index below (the
+ * console_account fixed-id philosophy); a revoked name is free for reuse.
+ */
+export const apiKeys = sqliteTable(
+  'api_keys',
+  {
+    /** UUID, never an autoincrement — ids must stay unique across machines. */
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    /** sha256 hex of the bare 64-hex key material. The key itself is never stored. */
+    keyHash: text('key_hash').notNull().unique(),
+    /** First 8 hex chars of the key, for display — 32 bits, no meaningful entropy. */
+    prefix: text('prefix').notNull(),
+    createdAt: text('created_at').notNull(),
+    /** Null = never used. Written with 60s granularity, not per request. */
+    lastUsedAt: text('last_used_at'),
+    /** Null = active. Set once by revokeApiKey; never cleared. */
+    revokedAt: text('revoked_at'),
+  },
+  (table) => [
+    uniqueIndex('api_keys_active_name_idx')
+      .on(table.name)
+      .where(sql`${table.revokedAt} IS NULL`),
+  ],
+);
+
+export type ApiKeyRow = typeof apiKeys.$inferSelect;
