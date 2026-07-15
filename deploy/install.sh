@@ -8,14 +8,21 @@
 #   --mirror cn     use mainland-China mirrors for every download
 #   --swap-gb N     size of the swapfile to create when the host has no swap
 #                   (default 16 — the configuration freezing was measured on)
+#   --status-dir D  write status.json into D as the run progresses — how the
+#                   daemon's one-click upgrade reads the outcome back; a
+#                   manual run doesn't need it
 #
-# Three promises, mirroring `dor doctor`:
+# Four promises, mirroring `dor doctor`:
 #   - Idempotent. Every step checks before it acts; a step whose outcome is
 #     already in place says [skip] and touches nothing. Re-running upgrades
 #     the code and repairs drift, and never rotates your API token.
 #   - Loud. Every step prints what it found and what it did.
 #   - Verified. The install has not succeeded until `dor doctor` says so —
 #     the same battery of checks, including the real-container probes.
+#   - Restartable. On a re-run, if the build fails after `git pull` moved
+#     the tree, the code is put back and rebuilt at the commit that was
+#     running — the daemon in memory survives a failed upgrade anyway, but
+#     it is crash-only and must stay able to restart at any moment.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
@@ -42,13 +49,16 @@ PORT=3676
 # ---- flags -----------------------------------------------------------------
 MIRROR=''
 SWAP_GB=16
+STATUS_DIR=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --mirror) MIRROR="${2:?--mirror needs a value}"; shift 2 ;;
     --mirror=*) MIRROR="${1#*=}"; shift ;;
     --swap-gb) SWAP_GB="${2:?--swap-gb needs a value}"; shift 2 ;;
     --swap-gb=*) SWAP_GB="${1#*=}"; shift ;;
-    *) echo "install.sh: unknown flag $1 (known: --mirror cn, --swap-gb N)" >&2; exit 1 ;;
+    --status-dir) STATUS_DIR="${2:?--status-dir needs a value}"; shift 2 ;;
+    --status-dir=*) STATUS_DIR="${1#*=}"; shift ;;
+    *) echo "install.sh: unknown flag $1 (known: --mirror cn, --swap-gb N, --status-dir D)" >&2; exit 1 ;;
   esac
 done
 if [ -n "$MIRROR" ] && [ "$MIRROR" != cn ]; then
@@ -56,9 +66,69 @@ if [ -n "$MIRROR" ] && [ "$MIRROR" != cn ]; then
   exit 1
 fi
 
-log()  { printf '\n==> %s\n' "$*"; }
+# log() doubles as the phase tracker: when something fails under `set -e`
+# there is no message to report, but "which step" is always known.
+PHASE='startup'
+log()  { PHASE="$*"; printf '\n==> %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
-die()  { printf '\ninstall.sh: %s\n' "$*" >&2; exit 1; }
+DIE_MSG=''
+die()  { DIE_MSG="$*"; printf '\ninstall.sh: %s\n' "$*" >&2; exit 1; }
+
+# ---- outcome reporting and the build rollback --------------------------------
+# status.json is the one file the daemon's one-click upgrade reads back;
+# without --status-dir every write is a no-op and a manual run behaves as
+# always. Written to a temp name and moved so a reader never sees a torn
+# file. Error text is flattened (JSON has no raw newlines) and truncated —
+# the full story is always the log.
+STARTED_AT=$(date -u +%FT%TZ)
+OLD_SHA=''
+NEW_SHA=''
+status_write() { # <state> [error]
+  [ -n "$STATUS_DIR" ] || return 0
+  mkdir -p "$STATUS_DIR"
+  local finished=null from=null to=null err=null safe
+  [ "$1" != running ] && finished="\"$(date -u +%FT%TZ)\""
+  [ -n "$OLD_SHA" ] && from="\"$OLD_SHA\""
+  [ -n "$NEW_SHA" ] && to="\"$NEW_SHA\""
+  if [ -n "${2:-}" ]; then
+    safe=$(printf '%s' "$2" | tr '\n\t' '  ' | sed 's/[\\"]//g' | cut -c1-500)
+    err="\"$safe\""
+  fi
+  printf '{"state":"%s","startedAt":"%s","finishedAt":%s,"fromCommit":%s,"toCommit":%s,"error":%s}\n' \
+    "$1" "$STARTED_AT" "$finished" "$from" "$to" "$err" >"$STATUS_DIR/status.json.tmp"
+  mv "$STATUS_DIR/status.json.tmp" "$STATUS_DIR/status.json"
+}
+
+# The window where a failure leaves the install broken: after `git pull`
+# moved the tree (PULLED) and before the build completed (BUILT), the dist
+# on disk is part new, part old — the running daemon still serves from
+# memory, but being crash-only it must stay restartable. The exit trap puts
+# the code back at the commit that was running and rebuilds it; the daemon
+# is deliberately NOT restarted on any failure path. A fresh clone has no
+# rollback target — a broken first install is honestly broken.
+PULLED=''
+BUILT=''
+on_exit() {
+  local code=$?
+  [ "$code" -eq 0 ] && return 0
+  local msg="${DIE_MSG:-failed during: $PHASE}"
+  if [ -n "$PULLED" ] && [ -z "$BUILT" ] && [ -n "$OLD_SHA" ]; then
+    log "build failed — rolling back to $OLD_SHA"
+    # The rollback rebuild may itself hit the same cause (it does reuse the
+    # pnpm store, so a network hiccup usually does not repeat); both
+    # outcomes are reported honestly and neither restarts the daemon.
+    if git -C "$INSTALL_DIR" reset --hard -q "$OLD_SHA" && build_repo; then
+      note "rolled back and rebuilt at $OLD_SHA — the daemon was not restarted; fix the cause and re-run"
+      status_write rolled-back "$msg"
+    else
+      status_write failed "$msg — and the rollback rebuild failed too: the daemon keeps running but must not restart until install.sh succeeds; fix the cause and re-run"
+    fi
+  else
+    status_write failed "$msg"
+  fi
+}
+trap on_exit EXIT
+status_write running
 
 # ---- preflight: the facts install.sh cannot fix ----------------------------
 log 'preflight'
@@ -236,16 +306,37 @@ else
 fi
 
 # ---- Dormice code -----------------------------------------------------------
+# Defined before the pull so the rollback in on_exit can always call it.
+# Deps then build, from a clean tree at whatever commit is checked out —
+# the same path for the fresh install, the upgrade, and the rollback.
+build_repo() {
+  cd "$INSTALL_DIR"
+  if [ "$MIRROR" = cn ]; then
+    npm_config_registry=https://registry.npmmirror.com pnpm install --frozen-lockfile
+  else
+    pnpm install --frozen-lockfile
+  fi
+  # Build only what a daemon host runs: the server (plus its workspace deps),
+  # the CLI, and the console SPA. The website package is the project's Next.js
+  # marketing site — building it here would cost minutes and import a frontend
+  # toolchain's failure modes into an installer whose job is the daemon.
+  pnpm --filter "@dormice/server..." --filter "@dormice/cli..." --filter "@dormice/console" build
+}
+
 log "Dormice code ($INSTALL_DIR)"
 clone_url=$REPO_URL
 [ "$MIRROR" = cn ] && clone_url="https://ghfast.top/$REPO_URL"
 if [ -d "$INSTALL_DIR/.git" ]; then
+  OLD_SHA=$(git -C "$INSTALL_DIR" rev-parse --short HEAD)
   git -C "$INSTALL_DIR" pull --ff-only -q
+  PULLED=1
   note "updated to $(git -C "$INSTALL_DIR" log --oneline -1)"
 else
   git clone -q "$clone_url" "$INSTALL_DIR"
   note "cloned $(git -C "$INSTALL_DIR" log --oneline -1)"
 fi
+NEW_SHA=$(git -C "$INSTALL_DIR" rev-parse --short HEAD)
+status_write running
 
 log 'build'
 pnpm_version=$(node -p "require('$INSTALL_DIR/package.json').packageManager.split('@')[1]")
@@ -261,17 +352,8 @@ if ! command -v pnpm >/dev/null || [ "$(pnpm --version)" != "$pnpm_version" ]; t
     ln -sf "/opt/node-$NODE_VERSION-linux-x64/bin/pnpm" /usr/local/bin/pnpm
   fi
 fi
-cd "$INSTALL_DIR"
-if [ "$MIRROR" = cn ]; then
-  npm_config_registry=https://registry.npmmirror.com pnpm install --frozen-lockfile
-else
-  pnpm install --frozen-lockfile
-fi
-# Build only what a daemon host runs: the server (plus its workspace deps),
-# the CLI, and the console SPA. The website package is the project's Next.js
-# marketing site — building it here would cost minutes and import a frontend
-# toolchain's failure modes into an installer whose job is the daemon.
-pnpm --filter "@dormice/server..." --filter "@dormice/cli..." --filter "@dormice/console" build
+build_repo
+BUILT=1
 ln -sf "$INSTALL_DIR/packages/cli/dist/main.js" /usr/local/bin/dormice
 ln -sf "$INSTALL_DIR/packages/cli/dist/main.js" /usr/local/bin/dor
 note "built; \`dormice\` and \`dor\` linked into /usr/local/bin"
@@ -452,6 +534,11 @@ set -a
 . "$ENV_FILE"
 set +a
 dor doctor
+
+# Written only now: succeeded means what it says — the daemon restarted on
+# the new code AND doctor proved the install whole, not merely "the script
+# reached the end".
+status_write succeeded
 
 printf '\nDormice is installed.\n'
 printf '  API token:   grep ^DORMICE_API_TOKEN %s\n' "$ENV_FILE"
