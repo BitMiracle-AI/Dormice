@@ -12,8 +12,10 @@ import { objectKey } from '../archive/store';
 import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
 import { findBySandboxId, setDeadline } from '../db/ledger';
+import { getOrCreateSigningSecret } from '../db/secrets';
 import { FAKE_BASE_IMAGE, FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
+import { sampleOnce } from '../metrics-sampler';
 import { scanOnce } from '../scanner';
 import { mintEnvdToken } from './protocol';
 
@@ -64,10 +66,12 @@ async function createSandbox(
   return res.json();
 }
 
-function envdHeaders(sandboxID: string) {
+// The envd token derives from the app's ledger-stored signing secret, not
+// the API token — get-or-create returns the one buildApp already minted.
+function envdHeaders(t: TestApp, sandboxID: string) {
   return {
     'e2b-sandbox-id': sandboxID,
-    'x-access-token': mintEnvdToken(TOKEN, sandboxID),
+    'x-access-token': mintEnvdToken(getOrCreateSigningSecret(t.db), sandboxID),
   };
 }
 
@@ -80,7 +84,7 @@ function envdRpc(
   return t.app.inject({
     method: 'POST',
     url: `/e2b/envd${url}`,
-    headers: envdHeaders(sandboxID),
+    headers: envdHeaders(t, sandboxID),
     payload,
   });
 }
@@ -135,7 +139,7 @@ function startCommand(
     method: 'POST',
     url: '/e2b/envd/process.Process/Start',
     headers: {
-      ...envdHeaders(sandboxID),
+      ...envdHeaders(t, sandboxID),
       'content-type': 'application/connect+json',
       ...opts.headers,
     },
@@ -149,7 +153,7 @@ function startPty(t: TestApp, sandboxID: string) {
     method: 'POST',
     url: '/e2b/envd/process.Process/Start',
     headers: {
-      ...envdHeaders(sandboxID),
+      ...envdHeaders(t, sandboxID),
       'content-type': 'application/connect+json',
     },
     payload: enveloped({
@@ -168,7 +172,7 @@ function connectProcess(t: TestApp, sandboxID: string, pid: number) {
     method: 'POST',
     url: '/e2b/envd/process.Process/Connect',
     headers: {
-      ...envdHeaders(sandboxID),
+      ...envdHeaders(t, sandboxID),
       'content-type': 'application/connect+json',
     },
     payload: enveloped({ process: { pid } }),
@@ -212,7 +216,11 @@ describe('E2B control plane', () => {
     const first = await createSandbox(t);
     const second = await createSandbox(t);
     expect(first.sandboxID).not.toBe(second.sandboxID);
-    expect(first.envdAccessToken).toBe(mintEnvdToken(TOKEN, first.sandboxID));
+    // Minted from the ledger's signing secret — deliberately NOT something
+    // the API token can recompute.
+    expect(first.envdAccessToken).toBe(
+      mintEnvdToken(getOrCreateSigningSecret(t.db), first.sandboxID),
+    );
     expect(t.executor.stateOf(first.sandboxID)).toBe('running');
   });
 
@@ -400,15 +408,14 @@ describe('E2B control plane', () => {
     expect(findBySandboxId(t.db, sandboxID)?.state).toBe('stopped');
   });
 
-  it('metrics answers one sample in SDK field names; start/end accepted, ignored', async () => {
+  it('metrics with no history takes one live reading, SDK field names', async () => {
     const t = testApp();
     const { sandboxID } = await createSandbox(t);
-    // start/end slice a history we do not keep — one sample, taken now.
-    const res = await control(
-      t,
-      'GET',
-      `/sandboxes/${sandboxID}/metrics?start=1&end=2`,
-    );
+    // The sampler never ticked: the window is empty, the sandbox measurable
+    // and the default window reaches "now" — the compatibility fallback
+    // answers one live sample (real E2B has data seconds after create; an
+    // empty array would read as breakage).
+    const res = await control(t, 'GET', `/sandboxes/${sandboxID}/metrics`);
     expect(res.statusCode).toBe(200);
     const samples = res.json();
     expect(samples).toHaveLength(1);
@@ -426,6 +433,43 @@ describe('E2B control plane', () => {
     expect(m.diskTotal).toBeGreaterThan(0);
   });
 
+  it('metrics slices the sampled history by start/end (unix seconds)', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    // Three sampler ticks 30s apart, in the recent past.
+    const t0 = Date.now() - 120_000;
+    for (let i = 0; i < 3; i += 1) {
+      await sampleOnce(t.db, t.executor, new Date(t0 + i * 30_000), {
+        retentionHours: 168,
+      });
+    }
+    // A window around the middle tick: exactly that sample, ISO and unix
+    // spellings agreeing.
+    const start = Math.floor((t0 + 15_000) / 1000);
+    const end = Math.floor((t0 + 45_000) / 1000);
+    const res = await control(
+      t,
+      'GET',
+      `/sandboxes/${sandboxID}/metrics?start=${start}&end=${end}`,
+    );
+    expect(res.statusCode).toBe(200);
+    const samples = res.json();
+    expect(samples).toHaveLength(1);
+    expect(samples[0].timestamp).toBe(new Date(t0 + 30_000).toISOString());
+    expect(samples[0].timestampUnix).toBe(Math.floor((t0 + 30_000) / 1000));
+
+    // An explicitly past window with no rows answers [] — the live fallback
+    // never fills a window that does not reach "now" (a reading taken now
+    // would land outside it, a lie).
+    const past = await control(
+      t,
+      'GET',
+      `/sandboxes/${sandboxID}/metrics?start=1&end=2`,
+    );
+    expect(past.statusCode).toBe(200);
+    expect(past.json()).toEqual([]);
+  });
+
   it('metrics reads a frozen sandbox without waking it; a stopped one answers []', async () => {
     const t = testApp();
     const { sandboxID } = await createSandbox(t, { timeout: 86400 });
@@ -437,13 +481,15 @@ describe('E2B control plane', () => {
     await scanOnce(t.db, t.executor, t.locks, later);
     expect(t.executor.stateOf(sandboxID)).toBe('paused');
 
+    // No history: the fallback measures the paused container as it sleeps.
     const frozen = await control(t, 'GET', `/sandboxes/${sandboxID}/metrics`);
     expect(frozen.statusCode).toBe(200);
     expect(frozen.json()).toHaveLength(1);
     // Observation is not activity: still paused afterwards.
     expect(t.executor.stateOf(sandboxID)).toBe('paused');
 
-    // keepMemory:false parks it stopped — nothing runs, so no samples.
+    // keepMemory:false parks it stopped — nothing runs, no history was
+    // sampled, and the fallback refuses to measure a dead container.
     await control(t, 'POST', `/sandboxes/${sandboxID}/pause`, {
       memory: false,
     });
@@ -560,6 +606,23 @@ describe('E2B envd surface', () => {
     expect(res.json().code).toBe('unauthenticated');
   });
 
+  it('a token derived from the API token no longer opens the envd door', async () => {
+    // The decoupling pin: envd tokens derive from the ledger's signing
+    // secret. If someone re-couples them to the API token, this goes red.
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/e2b/envd/filesystem.Filesystem/Stat',
+      headers: {
+        'e2b-sandbox-id': sandboxID,
+        'x-access-token': mintEnvdToken(TOKEN, sandboxID),
+      },
+      payload: { path: '/home/user' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
   it('files round-trip over plain HTTP: multipart up, raw bytes down, content-length exact', async () => {
     const t = testApp();
     const { sandboxID } = await createSandbox(t);
@@ -580,7 +643,7 @@ describe('E2B envd surface', () => {
       method: 'POST',
       url: '/e2b/envd/files?username=user',
       headers: {
-        ...envdHeaders(sandboxID),
+        ...envdHeaders(t, sandboxID),
         'content-type': `multipart/form-data; boundary=${boundary}`,
       },
       payload: body,
@@ -593,7 +656,7 @@ describe('E2B envd surface', () => {
     const down = await t.app.inject({
       method: 'GET',
       url: '/e2b/envd/files?path=/home/user/nested/up.txt&username=user',
-      headers: envdHeaders(sandboxID),
+      headers: envdHeaders(t, sandboxID),
     });
     expect(down.statusCode).toBe(200);
     expect(down.headers['content-length']).toBe(String(content.length));
@@ -602,7 +665,7 @@ describe('E2B envd surface', () => {
     const missing = await t.app.inject({
       method: 'GET',
       url: '/e2b/envd/files?path=/home/user/void.txt',
-      headers: envdHeaders(sandboxID),
+      headers: envdHeaders(t, sandboxID),
     });
     expect(missing.statusCode).toBe(404);
     expect(missing.json().code).toBe('not_found');
@@ -615,7 +678,7 @@ describe('E2B envd surface', () => {
       method: 'POST',
       url: '/e2b/envd/files?path=raw.bin&username=user',
       headers: {
-        ...envdHeaders(sandboxID),
+        ...envdHeaders(t, sandboxID),
         'content-type': 'application/octet-stream',
       },
       payload: Buffer.from([1, 2, 3, 250]),
@@ -637,7 +700,7 @@ describe('E2B envd surface', () => {
       method: 'POST',
       url: '/e2b/envd/files?path=zipped.txt&username=user',
       headers: {
-        ...envdHeaders(sandboxID),
+        ...envdHeaders(t, sandboxID),
         'content-type': 'application/octet-stream',
         'content-encoding': 'gzip',
       },
@@ -648,7 +711,7 @@ describe('E2B envd surface', () => {
     const down = await t.app.inject({
       method: 'GET',
       url: '/e2b/envd/files?path=zipped.txt&username=user',
-      headers: envdHeaders(sandboxID),
+      headers: envdHeaders(t, sandboxID),
     });
     expect(down.body).toBe(plain);
   });
@@ -670,7 +733,7 @@ describe('E2B envd surface', () => {
       method: 'POST',
       url: '/e2b/envd/files?path=/home/user/dir/f.txt',
       headers: {
-        ...envdHeaders(sandboxID),
+        ...envdHeaders(t, sandboxID),
         'content-type': 'application/octet-stream',
       },
       payload: 'content!',
@@ -828,14 +891,14 @@ describe('E2B envd surface', () => {
     const stat = await t.app.inject({
       method: 'POST',
       url: '/e2b/envd/filesystem.Filesystem/Stat',
-      headers: { ...envdHeaders(sandboxID), ...basic('root') },
+      headers: { ...envdHeaders(t, sandboxID), ...basic('root') },
       payload: { path: '/home/user' },
     });
     expect(stat.statusCode).toBe(200);
     const statRefused = await t.app.inject({
       method: 'POST',
       url: '/e2b/envd/filesystem.Filesystem/Stat',
-      headers: { ...envdHeaders(sandboxID), ...basic('nobody') },
+      headers: { ...envdHeaders(t, sandboxID), ...basic('nobody') },
       payload: { path: '/home/user' },
     });
     expect(statRefused.statusCode).toBe(401);
@@ -848,7 +911,7 @@ describe('E2B envd surface', () => {
     const filesRefused = await t.app.inject({
       method: 'GET',
       url: '/e2b/envd/files?path=x&username=nobody',
-      headers: envdHeaders(sandboxID),
+      headers: envdHeaders(t, sandboxID),
     });
     expect(filesRefused.statusCode).toBe(401);
     expect(filesRefused.json().message).toBe("invalid username: 'nobody'");
@@ -1176,7 +1239,7 @@ describe('E2B envd surface', () => {
       method: 'POST',
       url: '/e2b/envd/filesystem.Filesystem/WatchDir',
       headers: {
-        ...envdHeaders(sandboxID),
+        ...envdHeaders(t, sandboxID),
         'content-type': 'application/connect+json',
         'connect-timeout-ms': String(deadlineMs),
       },
@@ -1405,7 +1468,7 @@ async function putFile(
     method: 'POST',
     url: `/e2b/envd/files?path=${encodeURIComponent(path)}`,
     headers: {
-      ...envdHeaders(sandboxID),
+      ...envdHeaders(t, sandboxID),
       'content-type': 'application/octet-stream',
     },
     payload: content,
@@ -1497,7 +1560,7 @@ describe('signed file URLs at the daemon root', () => {
     const back = await t.app.inject({
       method: 'GET',
       url: '/e2b/envd/files?path=signed/oct.txt',
-      headers: envdHeaders(sandboxID),
+      headers: envdHeaders(t, sandboxID),
     });
     expect(back.body).toBe('octets through the signed door\n');
   });

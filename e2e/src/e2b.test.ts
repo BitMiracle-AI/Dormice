@@ -1,4 +1,3 @@
-import { createHmac } from 'node:crypto';
 import http from 'node:http';
 import { Dormice } from '@dormice/sdk';
 import { CommandExitError, Sandbox } from 'e2b';
@@ -244,12 +243,15 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
-  it('getMetrics answers one live sample; a killed sandbox refuses', async () => {
+  it('getMetrics answers at least one sample; a killed sandbox refuses', async () => {
     const sbx = await Sandbox.create(connection());
     try {
+      // The 1s sampler may already have rows, and the live fallback covers
+      // the window before its first tick — either way, never empty. The
+      // newest sample sits last (history is ascending).
       const metrics = await sbx.getMetrics();
-      expect(metrics).toHaveLength(1);
-      const m = metrics[0];
+      expect(metrics.length).toBeGreaterThanOrEqual(1);
+      const m = metrics.at(-1);
       if (!m) throw new Error('unreachable');
       expect(m.timestamp).toBeInstanceOf(Date);
       expect(Math.abs(m.timestamp.getTime() - Date.now())).toBeLessThan(60_000);
@@ -576,8 +578,23 @@ describe('official e2b SDK against the daemon', () => {
     const sbx = await Sandbox.create(connection());
     try {
       // The JS SDK never calls these three; drive them as raw Connect unary
-      // posts, the way a sync SDK would. The access token is the documented
-      // envd HMAC — this stays a black-box network test.
+      // posts, the way a sync SDK would. The access token comes off the
+      // wire (connect echoes it) — it derives from the daemon's signing
+      // secret, so no client can compute it locally, this test included.
+      const connectRes = await fetch(
+        `${inject('dormiceEndpoint')}/e2b/api/sandboxes/${sbx.sandboxId}/connect`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': `e2b_${inject('dormiceToken')}`,
+          },
+          body: JSON.stringify({}),
+        },
+      );
+      const { envdAccessToken } = (await connectRes.json()) as {
+        envdAccessToken: string;
+      };
       const rpc = async (method: string, body: Record<string, unknown>) => {
         const res = await fetch(
           `${inject('dormiceEndpoint')}/e2b/envd/filesystem.Filesystem/${method}`,
@@ -586,9 +603,7 @@ describe('official e2b SDK against the daemon', () => {
             headers: {
               'content-type': 'application/json',
               'e2b-sandbox-id': sbx.sandboxId,
-              'x-access-token': createHmac('sha256', inject('dormiceToken'))
-                .update(`envd:${sbx.sandboxId}`)
-                .digest('hex'),
+              'x-access-token': envdAccessToken,
             },
             body: JSON.stringify(body),
           },
@@ -752,20 +767,22 @@ describe.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
     it('metrics watch a real disk fill: dd 5 MiB and diskUsed grows', async () => {
       const sbx = await Sandbox.create(connection());
       try {
-        const before = (await sbx.getMetrics())[0];
+        // History is ascending — the NEWEST sample is last, and reading the
+        // first would keep watching a stale baseline forever.
+        const before = (await sbx.getMetrics()).at(-1);
         if (!before) throw new Error('no baseline sample');
         await sbx.commands.run(
           'dd if=/dev/zero of=/home/user/fill.bin bs=1M count=5 conv=fsync',
         );
         // Re-read until the filesystem's accounting catches up.
-        let after = (await sbx.getMetrics())[0];
+        let after = (await sbx.getMetrics()).at(-1);
         const deadline = Date.now() + 20_000;
         while (
           (after?.diskUsed ?? 0) <= before.diskUsed &&
           Date.now() < deadline
         ) {
           await sleep(0.5);
-          after = (await sbx.getMetrics())[0];
+          after = (await sbx.getMetrics()).at(-1);
         }
         expect(after?.diskUsed ?? 0).toBeGreaterThan(before.diskUsed);
       } finally {

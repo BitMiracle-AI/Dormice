@@ -26,4 +26,9 @@ export interface E2bDeps {
   archiver?: Archiver;
   /** buildApp's one adjudication of the archive policy default (null = off). */
   archiveDefaultSeconds: number | null;
+  /**
+   * HMAC key for envd access tokens and signed URLs — the ledger's
+   * signing secret, never the API token (they rotate independently).
+   */
+  envdSigningSecret: string;
 }
