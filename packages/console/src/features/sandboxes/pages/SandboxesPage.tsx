@@ -2,6 +2,9 @@ import type { Sandbox, SandboxState } from '@dormice/shared';
 import {
   ArrowDown01Icon,
   ArrowUp01Icon,
+  Copy01Icon,
+  Delete02Icon,
+  MoreVerticalIcon,
   PackageIcon,
   Search01Icon,
 } from '@hugeicons/core-free-icons';
@@ -9,6 +12,7 @@ import { HugeiconsIcon } from '@hugeicons/react';
 import { Link } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { DataTable } from '@/components/DataTable';
 import { FilterMenu } from '@/components/FilterMenu';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
@@ -25,6 +29,12 @@ import {
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -38,7 +48,6 @@ import {
 } from '@/components/ui/input-group';
 import { Spinner } from '@/components/ui/spinner';
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -50,7 +59,7 @@ import { formatBytes, pctOf } from '@/lib/format';
 import { queryClient } from '@/lib/queryClient';
 import { cn } from '@/lib/utils';
 import { CreateSandboxDialog } from '../components/CreateSandboxDialog';
-import { DestroySandboxButton } from '../components/DestroySandboxButton';
+import { DestroySandboxDialog } from '../components/DestroySandboxButton';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { UpgradableBadge } from '../components/UpgradableBadge';
 import { policyLine, STATE_LABELS, since } from '../format';
@@ -86,12 +95,14 @@ function UsageCell({
   title?: string;
 }) {
   if (value === null) {
-    return <TableCell className="text-muted-foreground">—</TableCell>;
+    return (
+      <TableCell className="text-right text-muted-foreground">—</TableCell>
+    );
   }
   return (
     <TableCell
       className={cn(
-        'tabular-nums',
+        'text-right tabular-nums',
         pct >= 90
           ? 'text-red-600 dark:text-red-400'
           : pct >= 75
@@ -135,6 +146,56 @@ function SortableHead({
         />
       )}
     </button>
+  );
+}
+
+/**
+ * 行操作收进「⋯」菜单(风格参考 openasi 表格,2026-07-15):每行一个
+ * 安静的 ghost 图标,不是一排常驻按钮。销毁的确认弹窗挂在菜单外 —
+ * 菜单关闭即卸载,弹窗放里面会跟着消失。
+ */
+function SandboxRowMenu({ externalId }: { externalId: string }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`${externalId} 的操作`}
+            >
+              <HugeiconsIcon icon={MoreVerticalIcon} />
+            </Button>
+          }
+        />
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            onClick={async () => {
+              await navigator.clipboard.writeText(externalId);
+              toast.success('externalId 已复制');
+            }}
+          >
+            <HugeiconsIcon icon={Copy01Icon} />
+            复制 externalId
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            variant="destructive"
+            onClick={() => setConfirmOpen(true)}
+          >
+            <HugeiconsIcon icon={Delete02Icon} />
+            销毁
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <DestroySandboxDialog
+        externalId={externalId}
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+      />
+    </>
   );
 }
 
@@ -342,143 +403,140 @@ export function SandboxesPage() {
       )}
 
       {filtered.length > 0 && (
-        // 限高让长列表在框内滚,表头 sticky 才有得贴 — 列名滚不丢。
-        <div className="max-h-[70vh] overflow-auto rounded-lg border">
-          {/* 行上的 transition-colors 在 2 秒轮询重渲下会微闪 — 关掉。 */}
-          <Table className="[&_tr]:transition-none">
-            <TableHeader className="sticky top-0 z-10 bg-background">
-              <TableRow>
-                <TableHead className="w-10">
+        // 限高让长列表在框内滚,表头吸顶 — 列名滚不丢。
+        <DataTable containerClassName="max-h-[70vh]">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-0">
+                <Checkbox
+                  aria-label="全选"
+                  checked={allVisibleSelected}
+                  onCheckedChange={toggleAll}
+                />
+              </TableHead>
+              <TableHead>
+                <SortableHead
+                  label="externalId"
+                  sortKey="externalId"
+                  sort={sort}
+                  onSort={toggleSort}
+                />
+              </TableHead>
+              <TableHead>状态</TableHead>
+              <TableHead>模板</TableHead>
+              <TableHead className="text-right">CPU</TableHead>
+              <TableHead className="text-right">内存</TableHead>
+              <TableHead className="text-right">磁盘</TableHead>
+              <TableHead>
+                {/* 升序 = 最久没动的排最前:回收磁盘时先看这里。 */}
+                <SortableHead
+                  label="空闲"
+                  sortKey="lastActiveAt"
+                  sort={sort}
+                  onSort={toggleSort}
+                />
+              </TableHead>
+              <TableHead>生命周期策略</TableHead>
+              <TableHead>
+                <SortableHead
+                  label="存活"
+                  sortKey="createdAt"
+                  sort={sort}
+                  onSort={toggleSort}
+                />
+              </TableHead>
+              <TableHead className="text-right">操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filtered.map((sandbox: Sandbox) => (
+              <TableRow
+                key={sandbox.sandboxId}
+                data-state={
+                  selected.has(sandbox.externalId) ? 'selected' : undefined
+                }
+              >
+                <TableCell>
                   <Checkbox
-                    aria-label="全选"
-                    checked={allVisibleSelected}
-                    onCheckedChange={toggleAll}
+                    aria-label={`选中 ${sandbox.externalId}`}
+                    checked={selected.has(sandbox.externalId)}
+                    onCheckedChange={() => toggleOne(sandbox.externalId)}
                   />
-                </TableHead>
-                <TableHead>
-                  <SortableHead
-                    label="externalId"
-                    sortKey="externalId"
-                    sort={sort}
-                    onSort={toggleSort}
-                  />
-                </TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>模板</TableHead>
-                <TableHead>CPU</TableHead>
-                <TableHead>内存</TableHead>
-                <TableHead>磁盘</TableHead>
-                <TableHead>
-                  {/* 升序 = 最久没动的排最前:回收磁盘时先看这里。 */}
-                  <SortableHead
-                    label="空闲"
-                    sortKey="lastActiveAt"
-                    sort={sort}
-                    onSort={toggleSort}
-                  />
-                </TableHead>
-                <TableHead>生命周期策略</TableHead>
-                <TableHead>
-                  <SortableHead
-                    label="存活"
-                    sortKey="createdAt"
-                    sort={sort}
-                    onSort={toggleSort}
-                  />
-                </TableHead>
-                <TableHead className="text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map((sandbox: Sandbox) => (
-                <TableRow
-                  key={sandbox.sandboxId}
-                  data-state={
-                    selected.has(sandbox.externalId) ? 'selected' : undefined
-                  }
-                >
-                  <TableCell>
-                    <Checkbox
-                      aria-label={`选中 ${sandbox.externalId}`}
-                      checked={selected.has(sandbox.externalId)}
-                      onCheckedChange={() => toggleOne(sandbox.externalId)}
+                </TableCell>
+                <TableCell>
+                  <Link
+                    to="/sandboxes/$externalId"
+                    params={{ externalId: sandbox.externalId }}
+                    search={{ tab: 'overview' }}
+                    className="font-mono font-medium hover:underline"
+                  >
+                    {sandbox.externalId}
+                  </Link>
+                </TableCell>
+                <TableCell>
+                  <SandboxStateBadge state={sandbox.state} />
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  <span className="inline-flex items-center gap-1.5">
+                    {sandbox.template ?? '基础镜像'}
+                    <UpgradableBadge
+                      lineage={lineageOf.get(sandbox.externalId)}
                     />
-                  </TableCell>
-                  <TableCell>
-                    <Link
-                      to="/sandboxes/$externalId"
-                      params={{ externalId: sandbox.externalId }}
-                      search={{ tab: 'overview' }}
-                      className="font-mono font-medium hover:underline"
-                    >
-                      {sandbox.externalId}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <SandboxStateBadge state={sandbox.state} />
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    <span className="inline-flex items-center gap-1.5">
-                      {sandbox.template ?? '基础镜像'}
-                      <UpgradableBadge
-                        lineage={lineageOf.get(sandbox.externalId)}
-                      />
-                    </span>
-                  </TableCell>
-                  {(() => {
-                    const m = metricsOf.get(sandbox.externalId);
-                    if (!m) {
-                      return (
-                        <>
-                          <UsageCell value={null} pct={0} />
-                          <UsageCell value={null} pct={0} />
-                          <UsageCell value={null} pct={0} />
-                        </>
-                      );
-                    }
+                  </span>
+                </TableCell>
+                {(() => {
+                  const m = metricsOf.get(sandbox.externalId);
+                  if (!m) {
                     return (
                       <>
-                        <UsageCell
-                          value={`${Math.round(m.cpuUsedPct)}%`}
-                          pct={m.cpuUsedPct / m.cpuCount}
-                          title={`${m.cpuCount} 核 · 百分比按单核计`}
-                        />
-                        <UsageCell
-                          value={formatBytes(m.memUsedBytes)}
-                          pct={pctOf(m.memUsedBytes, m.memTotalBytes)}
-                          title={`共 ${formatBytes(m.memTotalBytes)}`}
-                        />
-                        <UsageCell
-                          value={formatBytes(m.diskUsedBytes)}
-                          pct={pctOf(m.diskUsedBytes, m.diskTotalBytes)}
-                          title={`名义 ${formatBytes(m.diskTotalBytes)}`}
-                        />
+                        <UsageCell value={null} pct={0} />
+                        <UsageCell value={null} pct={0} />
+                        <UsageCell value={null} pct={0} />
                       </>
                     );
-                  })()}
-                  <TableCell
-                    className="tabular-nums text-muted-foreground"
-                    title={`最近活动:${new Date(sandbox.lastActiveAt).toLocaleString()}`}
-                  >
-                    {since(sandbox.lastActiveAt)}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {policyLine(sandbox.policy)}
-                  </TableCell>
-                  <TableCell
-                    className="tabular-nums text-muted-foreground"
-                    title={`创建于:${new Date(sandbox.createdAt).toLocaleString()}`}
-                  >
-                    {since(sandbox.createdAt)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <DestroySandboxButton externalId={sandbox.externalId} />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+                  }
+                  return (
+                    <>
+                      <UsageCell
+                        value={`${Math.round(m.cpuUsedPct)}%`}
+                        pct={m.cpuUsedPct / m.cpuCount}
+                        title={`${m.cpuCount} 核 · 百分比按单核计`}
+                      />
+                      <UsageCell
+                        value={formatBytes(m.memUsedBytes)}
+                        pct={pctOf(m.memUsedBytes, m.memTotalBytes)}
+                        title={`共 ${formatBytes(m.memTotalBytes)}`}
+                      />
+                      <UsageCell
+                        value={formatBytes(m.diskUsedBytes)}
+                        pct={pctOf(m.diskUsedBytes, m.diskTotalBytes)}
+                        title={`名义 ${formatBytes(m.diskTotalBytes)}`}
+                      />
+                    </>
+                  );
+                })()}
+                <TableCell
+                  className="tabular-nums text-muted-foreground"
+                  title={`最近活动:${new Date(sandbox.lastActiveAt).toLocaleString()}`}
+                >
+                  {since(sandbox.lastActiveAt)}
+                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {policyLine(sandbox.policy)}
+                </TableCell>
+                <TableCell
+                  className="tabular-nums text-muted-foreground"
+                  title={`创建于:${new Date(sandbox.createdAt).toLocaleString()}`}
+                >
+                  {since(sandbox.createdAt)}
+                </TableCell>
+                <TableCell className="text-right">
+                  <SandboxRowMenu externalId={sandbox.externalId} />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </DataTable>
       )}
     </>
   );

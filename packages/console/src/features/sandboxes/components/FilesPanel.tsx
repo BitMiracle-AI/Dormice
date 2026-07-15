@@ -13,6 +13,7 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Fragment, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { DataTable } from '@/components/DataTable';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   AlertDialog,
@@ -55,7 +56,6 @@ import {
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -290,113 +290,111 @@ export function FilesPanel({ sandbox }: { sandbox: Sandbox }) {
       )}
 
       {entries.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>名称</TableHead>
-                <TableHead>大小</TableHead>
-                <TableHead>权限</TableHead>
-                <TableHead>修改时间</TableHead>
-                <TableHead className="w-12" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {entries.map((entry) => {
-                const isDir = entry.type === 'FILE_TYPE_DIRECTORY';
-                return (
-                  <TableRow key={entry.path}>
-                    <TableCell>
-                      {isDir ? (
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-2 font-medium hover:underline"
-                          onClick={() => setPath(entry.path)}
-                        >
-                          <HugeiconsIcon
-                            icon={Folder01Icon}
-                            className="size-4 text-sky-500"
-                          />
-                          {entry.name}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-2 hover:underline"
-                          onClick={() => setViewing(entry)}
-                        >
-                          <HugeiconsIcon
-                            icon={File01Icon}
-                            className="size-4 text-muted-foreground"
-                          />
-                          {entry.name}
-                        </button>
-                      )}
-                    </TableCell>
-                    <TableCell className="tabular-nums text-muted-foreground">
-                      {isDir ? '—' : formatBytes(Number(entry.size))}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {entry.permissions}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {new Date(entry.modifiedTime).toLocaleString()}
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger
-                          render={
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label={`${entry.name} 的操作`}
-                            >
-                              <HugeiconsIcon icon={MoreVerticalIcon} />
-                            </Button>
-                          }
+        <DataTable>
+          <TableHeader>
+            <TableRow>
+              <TableHead>名称</TableHead>
+              <TableHead className="text-right">大小</TableHead>
+              <TableHead>权限</TableHead>
+              <TableHead>修改时间</TableHead>
+              <TableHead className="w-12" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {entries.map((entry) => {
+              const isDir = entry.type === 'FILE_TYPE_DIRECTORY';
+              return (
+                <TableRow key={entry.path}>
+                  <TableCell>
+                    {isDir ? (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-2 font-medium hover:underline"
+                        onClick={() => setPath(entry.path)}
+                      >
+                        <HugeiconsIcon
+                          icon={Folder01Icon}
+                          className="size-4 text-sky-500"
                         />
-                        <DropdownMenuContent align="end">
-                          {!isDir && (
-                            <DropdownMenuItem
-                              onClick={() =>
-                                mutations.download.mutate(
-                                  { path: entry.path, name: entry.name },
-                                  {
-                                    onError: (error) =>
-                                      toast.error(error.message),
-                                  },
-                                )
-                              }
-                            >
-                              <HugeiconsIcon icon={Download01Icon} />
-                              下载
-                            </DropdownMenuItem>
-                          )}
-                          <DropdownMenuItem
-                            onClick={() => {
-                              setRenaming(entry);
-                              setRenameTo(entry.name);
-                            }}
+                        {entry.name}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-2 hover:underline"
+                        onClick={() => setViewing(entry)}
+                      >
+                        <HugeiconsIcon
+                          icon={File01Icon}
+                          className="size-4 text-muted-foreground"
+                        />
+                        {entry.name}
+                      </button>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                    {isDir ? '—' : formatBytes(Number(entry.size))}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">
+                    {entry.permissions}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {new Date(entry.modifiedTime).toLocaleString()}
+                  </TableCell>
+                  <TableCell>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`${entry.name} 的操作`}
                           >
-                            <HugeiconsIcon icon={Edit02Icon} />
-                            重命名
-                          </DropdownMenuItem>
+                            <HugeiconsIcon icon={MoreVerticalIcon} />
+                          </Button>
+                        }
+                      />
+                      <DropdownMenuContent align="end">
+                        {!isDir && (
                           <DropdownMenuItem
-                            variant="destructive"
-                            onClick={() => setDeleting(entry)}
+                            onClick={() =>
+                              mutations.download.mutate(
+                                { path: entry.path, name: entry.name },
+                                {
+                                  onError: (error) =>
+                                    toast.error(error.message),
+                                },
+                              )
+                            }
                           >
-                            <HugeiconsIcon icon={Delete02Icon} />
-                            删除
+                            <HugeiconsIcon icon={Download01Icon} />
+                            下载
                           </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
+                        )}
+                        <DropdownMenuItem
+                          onClick={() => {
+                            setRenaming(entry);
+                            setRenameTo(entry.name);
+                          }}
+                        >
+                          <HugeiconsIcon icon={Edit02Icon} />
+                          重命名
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={() => setDeleting(entry)}
+                        >
+                          <HugeiconsIcon icon={Delete02Icon} />
+                          删除
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </DataTable>
       )}
 
       {/* 预览/编辑 */}

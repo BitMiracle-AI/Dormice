@@ -3,6 +3,7 @@ import { Search01Icon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Link } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
+import { DataTable } from '@/components/DataTable';
 import { FilterMenu } from '@/components/FilterMenu';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -18,7 +19,6 @@ import {
 } from '@/components/ui/input-group';
 import { Spinner } from '@/components/ui/spinner';
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -124,60 +124,58 @@ export function ActivityPage() {
           </EmptyHeader>
         </Empty>
       ) : (
-        // 环形记录上限 1000 条,是全站最长的表 — 限高框内滚,表头贴住。
-        <div className="max-h-[70vh] overflow-auto rounded-lg border">
-          <Table className="[&_tr]:transition-none">
-            <TableHeader className="sticky top-0 z-10 bg-background">
-              <TableRow>
-                <TableHead className="w-28">时间</TableHead>
-                <TableHead className="w-28">事件</TableHead>
-                <TableHead className="w-40">externalId</TableHead>
-                <TableHead>详情</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map((event) => (
-                <TableRow key={event.id}>
-                  <TableCell
-                    className="tabular-nums text-muted-foreground"
-                    // 相对时间好扫读,绝对时间才对得上日志 — hover 给后者。
-                    title={new Date(event.at).toLocaleString()}
-                  >
-                    {since(event.at)}前
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        'font-medium',
-                        ACTIVITY_KIND_STYLES[event.kind],
-                      )}
-                    >
-                      {ACTIVITY_KIND_LABELS[event.kind]}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    {event.externalId ? (
-                      <Link
-                        to="/sandboxes/$externalId"
-                        params={{ externalId: event.externalId }}
-                        search={{ tab: 'overview' as const }}
-                        className="font-mono hover:underline"
-                      >
-                        {event.externalId}
-                      </Link>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
+        // 环形记录上限 1000 条,是全站最长的表 — 限高框内滚,表头吸顶。
+        <DataTable containerClassName="max-h-[70vh]">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-28">时间</TableHead>
+              <TableHead className="w-28">事件</TableHead>
+              <TableHead className="w-40">externalId</TableHead>
+              <TableHead>详情</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filtered.map((event) => (
+              <TableRow key={event.id}>
+                <TableCell
+                  className="tabular-nums text-muted-foreground"
+                  // 相对时间好扫读,绝对时间才对得上日志 — hover 给后者。
+                  title={new Date(event.at).toLocaleString()}
+                >
+                  {since(event.at)}前
+                </TableCell>
+                <TableCell>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      'font-medium',
+                      ACTIVITY_KIND_STYLES[event.kind],
                     )}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {event.detail}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+                  >
+                    {ACTIVITY_KIND_LABELS[event.kind]}
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  {event.externalId ? (
+                    <Link
+                      to="/sandboxes/$externalId"
+                      params={{ externalId: event.externalId }}
+                      search={{ tab: 'overview' as const }}
+                      className="font-mono hover:underline"
+                    >
+                      {event.externalId}
+                    </Link>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {event.detail}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </DataTable>
       )}
     </>
   );

@@ -1,4 +1,5 @@
 import type { ConfigEntry } from '@dormice/shared';
+import { DataTable } from '@/components/DataTable';
 import { Badge } from '@/components/ui/badge';
 import {
   Empty,
@@ -8,7 +9,6 @@ import {
 } from '@/components/ui/empty';
 import { Spinner } from '@/components/ui/spinner';
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -105,40 +105,38 @@ export function SettingsPage() {
         </p>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>旋钮</TableHead>
-              <TableHead>生效值</TableHead>
-              <TableHead>来源</TableHead>
-              <TableHead>说明</TableHead>
+      <DataTable>
+        <TableHeader>
+          <TableRow>
+            <TableHead>旋钮</TableHead>
+            <TableHead>生效值</TableHead>
+            <TableHead>来源</TableHead>
+            <TableHead>说明</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {data.entries.map((entry) => (
+            <TableRow key={entry.key}>
+              <TableCell className="font-mono text-xs font-medium">
+                {entry.key}
+              </TableCell>
+              <TableCell className="font-mono text-xs">
+                <ValueCell entry={entry} />
+              </TableCell>
+              <TableCell>
+                <Badge
+                  variant={entry.source === 'env' ? 'outline' : 'secondary'}
+                >
+                  {entry.source === 'env' ? '环境变量' : '默认值'}
+                </Badge>
+              </TableCell>
+              <TableCell className="text-sm text-muted-foreground">
+                {KEY_HINTS[entry.key] ?? ''}
+              </TableCell>
             </TableRow>
-          </TableHeader>
-          <TableBody>
-            {data.entries.map((entry) => (
-              <TableRow key={entry.key}>
-                <TableCell className="font-mono text-xs font-medium">
-                  {entry.key}
-                </TableCell>
-                <TableCell className="font-mono text-xs">
-                  <ValueCell entry={entry} />
-                </TableCell>
-                <TableCell>
-                  <Badge
-                    variant={entry.source === 'env' ? 'outline' : 'secondary'}
-                  >
-                    {entry.source === 'env' ? '环境变量' : '默认值'}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-sm text-muted-foreground">
-                  {KEY_HINTS[entry.key] ?? ''}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+          ))}
+        </TableBody>
+      </DataTable>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { Clock01Icon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
+import { DataTable } from '@/components/DataTable';
 import { Badge } from '@/components/ui/badge';
 import {
   Empty,
@@ -10,7 +11,6 @@ import {
 } from '@/components/ui/empty';
 import { Spinner } from '@/components/ui/spinner';
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -71,43 +71,41 @@ export function HistoryPanel({ externalId }: { externalId: string }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="overflow-x-auto rounded-lg border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-28">时间</TableHead>
-              <TableHead className="w-28">事件</TableHead>
-              <TableHead>详情</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {events.map((event) => (
-              <TableRow key={event.id}>
-                <TableCell
-                  className="tabular-nums text-muted-foreground"
-                  title={new Date(event.at).toLocaleString()}
+      <DataTable>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-28">时间</TableHead>
+            <TableHead className="w-28">事件</TableHead>
+            <TableHead>详情</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {events.map((event) => (
+            <TableRow key={event.id}>
+              <TableCell
+                className="tabular-nums text-muted-foreground"
+                title={new Date(event.at).toLocaleString()}
+              >
+                {since(event.at)}前
+              </TableCell>
+              <TableCell>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    'font-medium',
+                    ACTIVITY_KIND_STYLES[event.kind],
+                  )}
                 >
-                  {since(event.at)}前
-                </TableCell>
-                <TableCell>
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      'font-medium',
-                      ACTIVITY_KIND_STYLES[event.kind],
-                    )}
-                  >
-                    {ACTIVITY_KIND_LABELS[event.kind]}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {event.detail}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+                  {ACTIVITY_KIND_LABELS[event.kind]}
+                </Badge>
+              </TableCell>
+              <TableCell className="text-muted-foreground">
+                {event.detail}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </DataTable>
       <p className="text-sm text-muted-foreground">
         销毁沙箱后 key 会重新可用 — 这里可能同时看到新旧两代沙箱的事件。
       </p>
