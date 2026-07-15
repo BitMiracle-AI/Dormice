@@ -31,6 +31,7 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | Route | Does | Errors worth knowing |
 | --- | --- | --- |
 | `POST /acquireSandbox` | create, wake, or restore — idempotent per key | 400 invalid policy/unknown template, 429 at the sandbox limit |
+| `POST /updatePolicy` | patch an existing sandbox's [lifecycle policy](/docs/lifecycle#change-the-policy-later) in place; never wakes, never resets the idle clock | 404 unknown key, 400 invalid merged policy |
 | `POST /listSandboxes` | every sandbox and its state; never wakes anything | — |
 | `POST /execCommand` | run a command, buffered | 404 unknown key, 409 archived/restoring |
 | `POST /writeFiles` | batch write, base64 in JSON | 404/409 as above; body over 48 MiB refused |
@@ -43,7 +44,13 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | `POST /listTemplates` | every registered template | — |
 | `POST /removeTemplate` | unregister; idempotent | 409 while sandboxes still use it (names them) |
 | `POST /getHostMetrics` | host snapshot; never wakes anything | — |
+| `POST /getSandboxMetrics` | one sandbox's live CPU/memory/disk sample; `sample` is `null` when nothing is running | 404 unknown key |
+| `POST /listSandboxMetrics` | every measurable sandbox's sample in one answer | — |
 | `POST /listSandboxImages` | each sandbox's born image vs its template's current one | — |
+| `POST /listActivity` | the daemon's recent history, newest first — a bounded ring, not an audit log | — |
+| `POST /getConfig` | effective configuration, read-only; secrets reported present-or-absent, value never sent | — |
+| `POST /getIngress` | domains bound on the daemon's managed reverse proxy, with live DNS and certificate probes | — |
+| `POST /setIngress` | rewrite the managed proxy config to exactly this domain list (empty list unbinds all) | 400 when the daemon manages no proxy |
 
 **Only `acquireSandbox` creates.** The use verbs (`execCommand`, files,
 `rebuildSandbox`) answer 404 for an unknown key rather than creating a

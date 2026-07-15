@@ -3,6 +3,10 @@ title: Moving files
 description: Learn how to write and read files in a sandbox, from the SDK or the CLI — and what to do with files over the 16 MiB limit.
 ---
 
+Sandboxes do real work on real files — input data going in, results
+coming out. This page covers the native file verbs, their size limits,
+and the escape hatches for anything bigger.
+
 ## Write files
 
 You can write files into a sandbox with `writeFile` (one file) or
@@ -48,8 +52,9 @@ dor sandbox pull my-agent results/out.csv       # no local path: raw bytes to st
 
 ## Size limits: 16 MiB per file
 
-File content crosses the wire as base64 inside JSON, so each file is
-capped at 16 MiB, write and read alike. A `writeFiles` batch tops out at
+File content travels as base64 (an encoding that turns any bytes into
+plain text, so they fit inside a JSON request), so each file is capped
+at 16 MiB, write and read alike. A `writeFiles` batch tops out at
 48 MiB of request body, and a `readFiles` batch at 48 MiB total.
 
 Reading a file over the cap returns a **413 naming the file's actual
@@ -81,7 +86,7 @@ For bigger files, use one of these instead:
 
 File operations execute *inside* the sandbox, streamed through an
 in-container process — never as host-side writes into the disk image.
-This means a hostile symlink planted in the sandbox can only point at
-the sandbox's own filesystem, and ownership lands on the sandbox user
-naturally. See [Architecture](/docs/architecture) for the boundary this
+This means a hostile symlink (a file that is really a pointer to
+another path) planted in the sandbox can only point at the sandbox's
+own filesystem, and ownership lands on the sandbox user naturally. See [Architecture](/docs/architecture) for the boundary this
 preserves.

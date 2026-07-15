@@ -17,16 +17,20 @@ active ── idle ──▶ frozen ── idle ──▶ stopped ── idle �
 
 - **active** — the container is running, normally.
 - **frozen** — every process is suspended and its memory pushed out to
-  swap. Measured on real hardware: an idle sandbox holding 1 GiB drops to
-  about 5 MiB of resident memory, and wakes in about 50 ms with all its
-  processes still running, exactly where they were.
+  [swap](/docs/core-concepts#swap-and-freezing), the disk space the
+  operating system uses as overflow memory. Measured on real hardware:
+  an idle sandbox holding 1 GiB drops to about 5 MiB of actual RAM, and
+  wakes in about 50 ms with all its processes still running, exactly
+  where they were.
 - **stopped** — the container is shut down; only the disk remains.
   Waking is a cold start from the surviving disk — seconds rather than
   milliseconds. Processes do not survive this step; files do.
-- **archived** — the disk is compressed and shipped to an S3-compatible
-  bucket; nothing remains on the host. This state only exists when you
-  [configure archiving](/docs/archiving). Waking downloads and unpacks
-  the disk, with real progress reporting.
+- **archived** — the disk is compressed and shipped to rented internet
+  storage (an [S3-compatible
+  bucket](/docs/core-concepts#object-storage-s3)); nothing remains on
+  the host. This state only exists when you [configure
+  archiving](/docs/archiving). Waking downloads and unpacks the disk,
+  with real progress reporting.
 
 ## Set the lifecycle policy
 
@@ -53,9 +57,11 @@ freeze ≤ stop ≤ archive.
 
 **Good to know:**
 
-- **Policy is fixed at creation.** A policy sent while acquiring an
-  *existing* sandbox is not applied — the sandbox keeps the policy it was
-  born with. (An invalid policy is still rejected with a 400.)
+- **Acquire never changes an existing sandbox's policy.** A policy sent
+  while acquiring an *existing* sandbox is not applied — the sandbox
+  keeps the policy it was born with. (An invalid policy is still
+  rejected with a 400.) To change it later, use
+  [`updatePolicy`](#change-the-policy-later).
 - **Archiving requires stopping.** Only a stopped sandbox can archive,
   so `archiveAfterSeconds` needs a non-null `stopAfterSeconds`. On a
   daemon without S3 configured, a policy asking to archive is rejected
@@ -68,6 +74,27 @@ freeze ≤ stop ≤ archive.
 A background scanner checks every `DORMICE_SCAN_INTERVAL_SECONDS`
 (default 60) and moves each idle sandbox down at most one state per
 sweep.
+
+## Change the policy later
+
+`updatePolicy` adjusts an existing sandbox's thresholds in place — no
+destroying, no recreating, files untouched:
+
+```ts
+// Promote a sandbox that has been running for days into a
+// resident agent that never cold-starts:
+await client.updatePolicy('my-agent', { stopAfterSeconds: null });
+```
+
+It is a patch: fields you omit keep their current values, and `null`
+still means "never take that step". The merged result is validated by
+the same rules as at creation (ordering included), so an update can
+never produce a policy that creation would have refused.
+
+**Note:** Changing the policy is not sandbox activity. Nothing is woken
+and the idle clock is not reset — the new thresholds apply immediately,
+counting the idle time already accumulated. A frozen sandbox can be
+promoted to never-stop in its sleep.
 
 ## Keep a sandbox warm forever
 

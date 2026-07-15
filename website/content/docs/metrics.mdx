@@ -15,22 +15,43 @@ exactly as cheap as if you ignored them.
 
 ## Get metrics for one sandbox
 
-The E2B SDK's `getMetrics()` returns an array with one live sample —
-CPU count and usage, memory, and disk:
+The native `getSandboxMetrics` verb returns one live sample — CPU count
+and usage, memory, and disk:
 
 ```ts
-const [m] = await sbx.getMetrics();
-m.memUsed;  // bytes
-m.memTotal;
-m.diskUsed; // real occupancy of the sandbox's disk
-m.diskTotal;
+const sample = await client.getSandboxMetrics('my-agent');
+if (sample) {
+  sample.cpuUsedPct;    // percent of one CPU; can exceed 100
+  sample.memUsedBytes;
+  sample.memTotalBytes;
+  sample.diskUsedBytes; // real occupancy of the sandbox's disk
+  sample.diskTotalBytes;
+}
 ```
 
+The E2B SDK's `getMetrics()` reads the same numbers, returned as an
+array with one sample. Either way:
+
 - A **frozen** sandbox is readable without waking it.
-- A **stopped** sandbox answers an empty array: no container, honestly
-  no sample — never zeros pretending to be measurements.
-- The SDK's `start` / `end` range parameters are accepted and ignored —
-  there is no metrics history, only now.
+- A **stopped** (or archived, or restoring) sandbox has no running
+  container, so the answer is honestly empty — `null` natively, an
+  empty array through E2B — never zeros pretending to be measurements.
+- The E2B SDK's `start` / `end` range parameters are accepted and
+  ignored — there is no metrics history, only now.
+
+## Get metrics for every sandbox at once
+
+`listSandboxMetrics` answers for the whole fleet in a single request —
+a dashboard over N sandboxes costs one call, not N:
+
+```ts
+const samples = await client.listSandboxMetrics();
+// [{ externalId, sandboxId, sample }, …]
+```
+
+Only sandboxes with a running or frozen container appear; colder
+sandboxes are simply absent — the same honesty as `null`, expressed as
+absence.
 
 ## Get metrics for the host
 

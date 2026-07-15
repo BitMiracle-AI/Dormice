@@ -3,6 +3,10 @@ title: Running commands
 description: Learn how to run shell commands inside a sandbox — timeouts, working directory, environment variables, and output limits.
 ---
 
+Running commands is how your code (or your agent) actually does things
+inside a sandbox — install packages, run scripts, execute whatever the
+agent wrote. This page covers the native `execCommand` verb end to end.
+
 ## Run a command
 
 You can run a shell command inside a sandbox with `execCommand`. It
@@ -36,7 +40,8 @@ dor sandbox exec my-agent 'npm ci && npm test' -t 3600
 ## Set a timeout
 
 Pass `timeoutSeconds` (default 300, maximum 86400). On expiry the
-command is killed and returns exit code 137, like any SIGKILLed process:
+command is forcibly killed and returns exit code 137 — the Linux
+convention for a process that was killed rather than allowed to finish:
 
 ```ts
 await client.execCommand('my-agent', 'npm ci && npm test', {

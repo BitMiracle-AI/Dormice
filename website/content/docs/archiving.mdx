@@ -4,10 +4,12 @@ description: Learn how to move long-idle sandboxes off the host into any S3-comp
 ---
 
 Frozen costs a few MiB of RAM; stopped costs only disk. Archiving takes
-the last step: the sandbox's disk is compressed (`tar` + `zstd`) and
-shipped to an S3-compatible bucket, and the host keeps **nothing**. A
-machine with a modest disk can hold a long tail of dormant sandboxes for
-the price of object storage.
+the last step: the sandbox's disk is packed into one compressed file
+(with `tar` + `zstd`) and shipped to an [S3-compatible
+bucket](/docs/core-concepts#object-storage-s3) — rented internet
+storage — and the host keeps **nothing**. A machine with a modest disk
+can hold a long tail of dormant sandboxes for the price of object
+storage.
 
 ## Enable archiving
 

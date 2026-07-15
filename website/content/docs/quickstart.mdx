@@ -3,10 +3,17 @@ title: Quick start
 description: This guide shows you how to acquire your first sandbox, run commands in it, and write files — with the SDK, curl, or the CLI.
 ---
 
+By the end of this page you will have created a sandbox, run a command
+inside it, written a file into it, and destroyed it — from TypeScript,
+from plain `curl`, or from your terminal. It assumes a daemon is
+already running (from [Installation](/docs/installation)).
+
 ## 1. Set your environment variables
 
-You need the daemon's address and its API token
-(from [Installation](/docs/installation)):
+Clients find the daemon through two environment variables — named
+values your shell passes to every program you start. You need the
+daemon's address and its [API
+token](/docs/core-concepts#tokens-sdks-and-the-cli):
 
 ```sh
 export DORMICE_ENDPOINT=http://127.0.0.1:3676
@@ -51,9 +58,10 @@ inside the sandbox, files persist until you destroy it.
 
 ## Use curl instead
 
-Every operation is a plain HTTP RPC route named after the SDK method
-(`POST /acquireSandbox`, `POST /execCommand`, …), authenticated with a
-Bearer token — so curl works anywhere the SDK doesn't reach:
+Every operation is a plain HTTP request named after the SDK method
+(`POST /acquireSandbox`, `POST /execCommand`, …), with the API token
+sent in the `Authorization` header — so curl works anywhere the SDK
+doesn't reach:
 
 ```sh
 curl -X POST http://127.0.0.1:3676/listSandboxes \

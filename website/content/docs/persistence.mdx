@@ -3,10 +3,11 @@ title: Sandbox persistence
 description: Everything under /home/user survives freezes, stops, restarts, and archiving. Learn what persists, what doesn't, and how rebuilds work.
 ---
 
-Every sandbox owns a disk: an image file on the host
-(`DORMICE_SANDBOX_DISK_GB`, default 10 GB) mounted at `/home/user`. The
-container around it is replaceable machinery. That gives you one rule to
-remember:
+Every sandbox owns a disk: a single large file on the host that acts as
+a complete private disk (`DORMICE_SANDBOX_DISK_GB`, default 10 GB),
+appearing inside the sandbox as `/home/user`. The
+[container](/docs/core-concepts#containers-and-images) around it is
+replaceable machinery. That gives you one rule to remember:
 
 > **What lives in `/home/user` survives everything short of destroying
 > the sandbox. Everything outside it is container state, and containers
@@ -24,13 +25,14 @@ gVisor host:
   transition.
 - **Daemon restarts and host reboots** — the daemon checks its records
   against reality at boot, and the next wake re-attaches the disk.
-- **`docker container prune`** deleting the container — the next acquire
-  builds a fresh container from the surviving disk: same sandbox ID,
+- **`docker container prune`** (a Docker cleanup command that deletes
+  stopped containers) removing the container — the next acquire builds
+  a fresh container from the surviving disk: same sandbox ID,
   `/home/user` intact.
 - **Out-of-memory** — a sandbox that hits its memory cap
-  (`DORMICE_SANDBOX_MEMORY_GB`, default 2 GB) is killed by gVisor with
-  exit code 137 and recorded as stopped. The same key acquires it right
-  back, files intact.
+  (`DORMICE_SANDBOX_MEMORY_GB`, default 2 GB) is killed with exit
+  code 137, the Linux convention for "forcibly killed", and recorded as
+  stopped. The same key acquires it right back, files intact.
 - **Archive → restore** — the disk round-trips through S3 and comes
   back byte-for-byte.
 
@@ -69,10 +71,12 @@ sandbox sits in the bucket and it comes back bigger — for free.
 
 ## How the disk quota works
 
-The quota is physical: the disk image file is simply that big. A sandbox
-that fills its disk gets `ENOSPC` from its own filesystem — there is no
-accounting layer to game, and the host's disk stays healthy. The image
-is sparse, so a 10 GB promise occupies only what has actually been
-written; disk is overcommitted by default, and
-[`getHostMetrics`](/docs/metrics) reports both the promised and the real
-total so you can watch it.
+The quota is physical: the disk image file is simply that big. A
+sandbox that fills its disk gets `ENOSPC` ("no space left on device")
+from its own filesystem — there is no accounting layer to game, and the
+host's disk stays healthy. The disk file is sparse — the operating
+system only stores the parts that have actually been written — so a
+10 GB promise occupies only what the sandbox really uses. This means
+the promises can add up to more than the host's disk (overcommit), and
+[`getHostMetrics`](/docs/metrics) reports both the promised and the
+real total so you can watch it.

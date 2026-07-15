@@ -26,6 +26,12 @@ Checks are gated: when a prerequisite fails, dependent checks report
 *skip* with the blocker's name instead of piling on noise. Any failure
 exits 1; warnings don't affect the exit code.
 
+**You don't need to understand the checks to act on them.** A failed
+check prints the exact fix to run — copy it, re-run doctor, done. The
+list below explains what each check is protecting, for when you want to
+know why; the Linux terms in it are covered in
+[Core concepts](/docs/core-concepts).
+
 ## Platform
 
 - **operating system** — Linux, full stop: loop mounts, cgroups and

@@ -10,11 +10,18 @@ Everything has a default except the API token and, in docker mode, the
 base image.
 
 On a host set up by `install.sh`, the variables live in
-`/etc/dormice/env`. Edit the file and restart:
+`/etc/dormice/env`. Edit the file and restart the daemon:
 
 ```sh
 systemctl restart dormice
 ```
+
+To see the values actually in force, use the
+[console](/docs/console)'s settings page or the `getConfig` verb — both
+report every knob with its effective value and whether it came from the
+environment or a default (secrets are reported present-or-absent only).
+Unfamiliar terms in the tables below are covered in
+[Core concepts](/docs/core-concepts).
 
 ## Core
 

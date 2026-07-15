@@ -3,6 +3,11 @@ title: Upgrading
 description: Re-run the installer to upgrade the daemon — learn what survives, what restarts, and how sandbox images move separately.
 ---
 
+Upgrading Dormice is the same one command as installing it, and it
+never touches your sandboxes or their files. This page covers what an
+upgrade changes, what it leaves alone, and how sandbox images upgrade
+on their own separate schedule.
+
 ## Upgrade the daemon
 
 Re-running the installer is the upgrade. It pulls the latest code,
@@ -66,6 +71,7 @@ rebuild simply keep running on the image they were born with.
 The installer refuses to call itself done until the daemon answers
 `/healthz` and `dor doctor` passes. If it stops early, the failed step
 prints what it found; fix that and re-run — it continues from where it
-left off. The daemon's own story is in `journalctl -u dormice -f`, and
+left off. The daemon's own story is in its live log — read it with
+`journalctl -u dormice -f` — and
 [Troubleshooting](/docs/troubleshooting) collects the failures that have
 actually happened.
