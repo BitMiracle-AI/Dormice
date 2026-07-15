@@ -34,6 +34,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { STATE_COLORS, STATE_LABELS } from '@/features/sandboxes/format';
+import { withGapBreaks } from '@/lib/chart-gaps';
 import { pctOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import {
@@ -65,10 +66,8 @@ const chartConfig = Object.fromEntries(
 type ChartRow = { at: number } & Record<SandboxState, number | null>;
 
 /**
- * 时间线点 → 图表行,并在采样断档处插一行 null:daemon 停机的时段
- * 曲线要如实断开(connectNulls 关着),不许把空窗连成一条谎线。断档
- * 的判据是点距超过期望间距的 3 倍 — 期望间距优先用服务端的桶宽,原始
- * 样本则取中位点距(采样间隔是服务端配置,客户端不猜死值)。
+ * 时间线点 → 图表行;断档处由 withGapBreaks 插一行全 null,daemon
+ * 停机的时段曲线如实断开(connectNulls 关着)。
  */
 function toChartRows(
   points: GetFleetTimelineResponse['points'],
@@ -78,39 +77,19 @@ function toChartRows(
     at: Date.parse(p.at),
     ...p.byState,
   }));
-  const first = rows[0];
-  if (rows.length < 2 || first === undefined) return rows;
-
-  const deltas: number[] = [];
-  for (let i = 1; i < rows.length; i++) {
-    const prev = rows[i - 1];
-    const cur = rows[i];
-    if (prev !== undefined && cur !== undefined) deltas.push(cur.at - prev.at);
-  }
-  deltas.sort((a, b) => a - b);
-  const expectedMs =
-    bucketSeconds !== null
-      ? bucketSeconds * 1000
-      : (deltas[Math.floor(deltas.length / 2)] ?? 0);
-
-  const withGaps: ChartRow[] = [first];
-  for (let i = 1; i < rows.length; i++) {
-    const prev = rows[i - 1];
-    const cur = rows[i];
-    if (prev === undefined || cur === undefined) continue;
-    if (expectedMs > 0 && cur.at - prev.at > 3 * expectedMs) {
-      withGaps.push({
-        at: Math.round((prev.at + cur.at) / 2),
-        active: null,
-        frozen: null,
-        stopped: null,
-        archived: null,
-        restoring: null,
-      });
-    }
-    withGaps.push(cur);
-  }
-  return withGaps;
+  return withGapBreaks(
+    rows,
+    bucketSeconds,
+    (row) => row.at,
+    (at) => ({
+      at,
+      active: null,
+      frozen: null,
+      stopped: null,
+      archived: null,
+      restoring: null,
+    }),
+  );
 }
 
 /** 长窗口给日期,短窗口给钟点 — 刻度只说这个窗口内有区分度的部分。 */
@@ -294,7 +273,7 @@ export function FleetOverview() {
               <EmptyHeader>
                 <EmptyTitle>窗口内还没有走势可画</EmptyTitle>
                 <EmptyDescription>
-                  daemon 每 30 秒落一次采样,攒够两个点就开始画;daemon
+                  daemon 定期落采样(默认每 30 秒),攒够两个点就开始画; daemon
                   停机的时段没有采样,曲线会如实断开。
                 </EmptyDescription>
               </EmptyHeader>

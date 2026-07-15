@@ -407,8 +407,22 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       schema: {
         querystring: z
           .object({
-            start: z.coerce.number().int().optional(),
-            end: z.coerce.number().int().optional(),
+            // Bounded to what a JS Date can represent (±8.64e15 ms, so
+            // ±8.64e12 s): past it new Date().toISOString() throws, and
+            // garbage input deserves a 400 at the door, never a 500 — the
+            // same rejection the native verbs get from isoTimestampSchema.
+            start: z.coerce
+              .number()
+              .int()
+              .gte(-8_640_000_000_000)
+              .lte(8_640_000_000_000)
+              .optional(),
+            end: z.coerce
+              .number()
+              .int()
+              .gte(-8_640_000_000_000)
+              .lte(8_640_000_000_000)
+              .optional(),
           })
           .loose(),
       },
