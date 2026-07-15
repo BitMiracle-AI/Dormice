@@ -2,6 +2,8 @@ import {
   type AcquireResponse,
   type ActivityEvent,
   acquireResponseSchema,
+  type CheckUpgradeResponse,
+  checkUpgradeResponseSchema,
   DEFAULT_EXEC_TIMEOUT_SECONDS,
   type DestroySandboxResponse,
   destroySandboxResponseSchema,
@@ -218,6 +220,24 @@ export class Dormice {
   async getConfig(): Promise<GetConfigResponse> {
     const data = await this.rpc('getConfig', {});
     return getConfigResponseSchema.parse(data);
+  }
+
+  /**
+   * Is a newer Dormice available for this daemon? Versions are git
+   * commits (trunk-based, no tags yet): the commit baked into the running
+   * build is compared against the origin's main, fetched through the
+   * checkout's own remote. The answer is served from a short-lived
+   * server-side cache; `force: true` is the "check now" button. A failed
+   * check comes back as `checkError` with `check: null` — never invented
+   * freshness.
+   */
+  async checkUpgrade(options?: {
+    force?: boolean;
+  }): Promise<CheckUpgradeResponse> {
+    const data = await this.rpc('checkUpgrade', {
+      force: options?.force,
+    });
+    return checkUpgradeResponseSchema.parse(data);
   }
 
   /**

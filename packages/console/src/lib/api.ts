@@ -1,6 +1,7 @@
 import type {
   AcquireRequest,
   AcquireResponse,
+  CheckUpgradeResponse,
   GetConfigResponse,
   GetIngressResponse,
   GetSandboxMetricsResponse,
@@ -139,6 +140,12 @@ export const listActivity = (limit?: number) =>
 // Effective configuration, read-only. Secrets come back as "set", never as
 // their value; archive.enabled is the daemon's own adjudication.
 export const getConfig = () => rpc<GetConfigResponse>('/getConfig');
+
+// Is a newer Dormice available? The daemon compares its built commit
+// against the origin's main and caches the answer for an hour; force is
+// the "check now" button. A failed check is data (checkError), not a 500.
+export const checkUpgrade = (force = false) =>
+  rpc<CheckUpgradeResponse>('/checkUpgrade', { force });
 
 // The daemon's front door: whether it manages a reverse proxy config, and
 // every bound domain with live probes (DNS record, certificate served).

@@ -15,3 +15,4 @@ export * from './sandbox';
 export * from './states';
 export * from './templates';
 export * from './update-policy';
+export * from './upgrade';

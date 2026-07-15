@@ -16,6 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatDuration } from '@/features/sandboxes/format';
+import { VersionCard } from '../components/VersionCard';
 import { useConfig } from '../hooks/useConfig';
 
 /**
@@ -104,6 +105,8 @@ export function SettingsPage() {
           。
         </p>
       </div>
+
+      <VersionCard />
 
       <DataTable>
         <TableHeader>
