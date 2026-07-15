@@ -69,41 +69,50 @@ const sandboxes = [
     externalId: 'demo-agent',
     policy: { freezeAfterSeconds: 300, stopAfterSeconds: null },
     template: 'claude-code',
+    metadata: { app: 'assistant', env: 'prod' },
   },
   {
     externalId: 'web-scraper',
     policy: { freezeAfterSeconds: 5 },
     template: 'python-ml',
+    metadata: { app: 'crawler', env: 'prod' },
   },
   {
     externalId: 'build-runner',
     policy: { freezeAfterSeconds: 3, stopAfterSeconds: 8 },
+    metadata: { app: 'ci' },
   },
   {
     externalId: 'docs-writer',
     policy: { freezeAfterSeconds: 5 },
     template: 'node-agent',
+    metadata: { app: 'assistant', env: 'staging' },
   },
   {
     externalId: 'email-triage',
     policy: { freezeAfterSeconds: 600, stopAfterSeconds: null },
+    metadata: { app: 'assistant', env: 'prod' },
   },
   {
     externalId: 'ci-check',
     policy: { freezeAfterSeconds: 4, stopAfterSeconds: 10 },
+    metadata: { app: 'ci' },
   },
   {
     externalId: 'data-pipeline',
     policy: { freezeAfterSeconds: 900 },
     template: 'python-ml',
+    metadata: { app: 'crawler', env: 'staging' },
   },
+  // 刻意不带标签:列表的标签列该有留白的样子,筛选也筛得掉它。
   { externalId: 'scratch' },
 ];
-for (const { externalId, policy, template } of sandboxes) {
+for (const { externalId, policy, template, metadata } of sandboxes) {
   await rpc('/acquireSandbox', {
     externalId,
     ...(policy ? { policy } : {}),
     ...(template ? { template } : {}),
+    ...(metadata ? { metadata } : {}),
   });
   console.log(`沙箱  ${externalId}`);
 }

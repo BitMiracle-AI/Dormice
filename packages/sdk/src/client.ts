@@ -12,10 +12,14 @@ import {
   type ExecCommandResponse,
   execCommandResponseSchema,
   type GetConfigResponse,
+  type GetFleetTimelineResponse,
   type GetIngressResponse,
+  type GetSandboxMetricsHistoryResponse,
   type GetUpgradeStatusResponse,
   getConfigResponseSchema,
+  getFleetTimelineResponseSchema,
   getIngressResponseSchema,
+  getSandboxMetricsHistoryResponseSchema,
   getSandboxMetricsResponseSchema,
   getUpgradeStatusResponseSchema,
   type HostMetricsResponse,
@@ -37,11 +41,14 @@ import {
   registerTemplateResponseSchema,
   removeTemplateResponseSchema,
   type Sandbox,
+  type SandboxMetadata,
   type SandboxMetricsSample,
   type SetIngressResponse,
   setIngressResponseSchema,
   type Template,
+  type UpdateMetadataResponse,
   type UpdatePolicyResponse,
+  updateMetadataResponseSchema,
   updatePolicyResponseSchema,
   type WriteFileResponse,
   type WriteFilesResponse,
@@ -105,6 +112,12 @@ export interface AcquireSandboxOptions {
    * unknown name is a 400.
    */
   template?: string;
+  /**
+   * Labels stored when this acquire creates the sandbox. Same rules as
+   * policy: creation-time only — relabel an existing sandbox through
+   * updateMetadata.
+   */
+  metadata?: SandboxMetadata;
 }
 
 /** A non-2xx answer from the daemon, carrying the HTTP status and the server's message. */
@@ -143,6 +156,7 @@ export class Dormice {
       externalId,
       policy: options?.policy,
       template: options?.template,
+      metadata: options?.metadata,
     });
     // Never trust the wire blindly: parsing against the shared schema makes
     // a version-skewed or misbehaving server fail loudly right here.
@@ -168,16 +182,54 @@ export class Dormice {
   }
 
   /**
-   * One sandbox's point-in-time resource reading (CPU, memory, disk) — a
-   * single sample, the daemon keeps no history. Observation never wakes:
-   * a frozen sandbox is measured as it sleeps, and with no running
-   * container (stopped, archived, restoring) the sample is null.
+   * One sandbox's point-in-time resource reading (CPU, memory, disk).
+   * Observation never wakes: a frozen sandbox is measured as it sleeps,
+   * and with no running container (stopped, archived, restoring) the
+   * sample is null. For the past, see getSandboxMetricsHistory.
    */
   async getSandboxMetrics(
     externalId: string,
   ): Promise<SandboxMetricsSample | null> {
     const data = await this.rpc('getSandboxMetrics', { externalId });
     return getSandboxMetricsResponseSchema.parse(data).sample;
+  }
+
+  /**
+   * One sandbox's sampled history, sliced by an optional ISO window
+   * (default: the last hour). Past 360 points the server buckets the
+   * answer — `bucketSeconds` says how wide — and each bucket reports its
+   * per-field maxima, so spikes survive. An unsampled window answers an
+   * empty array, never an invented reading; a window the daemon was down
+   * for shows the gap.
+   */
+  async getSandboxMetricsHistory(
+    externalId: string,
+    options?: { start?: string; end?: string },
+  ): Promise<GetSandboxMetricsHistoryResponse> {
+    const data = await this.rpc('getSandboxMetricsHistory', {
+      externalId,
+      start: options?.start,
+      end: options?.end,
+    });
+    return getSandboxMetricsHistoryResponseSchema.parse(data);
+  }
+
+  /**
+   * Fleet state counts over time (default window: the last 24 hours) —
+   * how many sandboxes sat active/frozen/stopped/archived/restoring at
+   * each sampler tick. Bucketed points are whole raw snapshots (byState
+   * always sums to total); `peak` carries the window's highest active
+   * count from raw rows, immune to bucketing.
+   */
+  async getFleetTimeline(options?: {
+    start?: string;
+    end?: string;
+  }): Promise<GetFleetTimelineResponse> {
+    const data = await this.rpc('getFleetTimeline', {
+      start: options?.start,
+      end: options?.end,
+    });
+    return getFleetTimelineResponseSchema.parse(data);
   }
 
   /**
@@ -321,6 +373,19 @@ export class Dormice {
   ): Promise<UpdatePolicyResponse> {
     const data = await this.rpc('updatePolicy', { externalId, policy });
     return updatePolicyResponseSchema.parse(data);
+  }
+
+  /**
+   * Replaces the sandbox's label set in place — full replacement, `{}`
+   * clears every label. A pure ledger write: nothing is woken, and the
+   * idle clock is not refreshed. Unknown key: 404 — not a creator.
+   */
+  async updateMetadata(
+    externalId: string,
+    metadata: SandboxMetadata,
+  ): Promise<UpdateMetadataResponse> {
+    const data = await this.rpc('updateMetadata', { externalId, metadata });
+    return updateMetadataResponseSchema.parse(data);
   }
 
   /**

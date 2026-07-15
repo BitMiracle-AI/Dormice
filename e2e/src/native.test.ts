@@ -57,6 +57,34 @@ describe('native API over a real daemon', () => {
     });
   });
 
+  it('labels a sandbox at acquire, relabels through updateMetadata, and the list shows it', async () => {
+    const created = await client().acquireSandbox('meta-key', {
+      metadata: { app: 'crawler', env: 'prod' },
+    });
+    expect(created.sandbox.metadata).toEqual({ app: 'crawler', env: 'prod' });
+
+    // Creation-time only: a second acquire's labels do not apply.
+    const again = await client().acquireSandbox('meta-key', {
+      metadata: { app: 'other' },
+    });
+    expect(again.sandbox.metadata).toEqual({ app: 'crawler', env: 'prod' });
+
+    // Full replacement through the update verb — env is gone, not merged.
+    const updated = await client().updateMetadata('meta-key', {
+      app: 'assistant',
+    });
+    expect(updated.sandbox.metadata).toEqual({ app: 'assistant' });
+
+    const listed = await client().listSandboxes();
+    expect(listed.find((s) => s.externalId === 'meta-key')?.metadata).toEqual({
+      app: 'assistant',
+    });
+
+    // {} clears; a label-less sandbox still reads {} — never null.
+    const cleared = await client().updateMetadata('meta-key', {});
+    expect(cleared.sandbox.metadata).toEqual({});
+  });
+
   it('rejects a policy override that breaks the ordering rule', async () => {
     await expect(
       client().acquireSandbox('bad-policy-key', {
@@ -559,5 +587,52 @@ describe('the observability verbs over a real daemon', () => {
     const mine = events.filter((e) => e.externalId === 'obs-story-key');
     expect(mine.map((e) => e.kind)).toEqual(['destroyed', 'created']);
     expect(mine[1]?.detail).toContain('acquireSandbox');
+  });
+
+  it('getSandboxMetricsHistory fills up as the sampler ticks, and 404s after destroy', async () => {
+    await client().acquireSandbox('obs-history-key');
+    // The exam daemon samples every second — wait for the first row to
+    // land, on real wall-clock time.
+    const deadline = Date.now() + 15_000;
+    let history = await client().getSandboxMetricsHistory('obs-history-key');
+    while (history.samples.length < 1 && Date.now() < deadline) {
+      await sleep(0.5);
+      history = await client().getSandboxMetricsHistory('obs-history-key');
+    }
+    expect(history.samples.length).toBeGreaterThanOrEqual(1);
+    // The SDK already validated the shape against the shared schema;
+    // spot-check the readings are real.
+    const newest = history.samples.at(-1);
+    expect(newest?.memTotalBytes).toBeGreaterThan(0);
+    expect(newest?.diskTotalBytes).toBeGreaterThan(0);
+    // A short window comes back raw, not bucketed.
+    expect(history.bucketSeconds).toBe(null);
+
+    await client().destroySandbox('obs-history-key');
+    await expect(
+      client().getSandboxMetricsHistory('obs-history-key'),
+    ).rejects.toMatchObject({ name: 'DormiceApiError', status: 404 });
+  });
+
+  it('getFleetTimeline reports points and a peak once the fleet was seen', async () => {
+    await client().acquireSandbox('obs-timeline-key');
+    const deadline = Date.now() + 15_000;
+    let timeline = await client().getFleetTimeline();
+    // Wait for a tick that observed at least one sandbox alive.
+    while (
+      (timeline.points.length < 1 || (timeline.peak?.active ?? 0) < 1) &&
+      Date.now() < deadline
+    ) {
+      await sleep(0.5);
+      timeline = await client().getFleetTimeline();
+    }
+    expect(timeline.points.length).toBeGreaterThanOrEqual(1);
+    expect(timeline.peak?.active).toBeGreaterThanOrEqual(1);
+    // Whole-snapshot points: byState always sums to total.
+    for (const point of timeline.points) {
+      const sum = Object.values(point.byState).reduce((a, b) => a + b, 0);
+      expect(sum).toBe(point.total);
+    }
+    await client().destroySandbox('obs-timeline-key');
   });
 });

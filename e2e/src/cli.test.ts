@@ -44,6 +44,39 @@ describe('dor CLI against a real daemon', () => {
     expect(stdout).toContain(created.sandbox.sandboxId);
   });
 
+  it('sandbox meta shows, replaces and clears labels through the real binary', async () => {
+    const sdk = new Dormice({
+      endpoint: inject('dormiceEndpoint'),
+      token: inject('dormiceToken'),
+    });
+    await sdk.acquireSandbox('cli-meta-key', {
+      metadata: { app: 'crawler', env: 'prod' },
+    });
+
+    // ls renders the labels in the METADATA column.
+    const listed = await cli('sandbox', 'ls');
+    expect(listed.stdout).toMatch(/METADATA/);
+    expect(listed.stdout).toContain('app=crawler,env=prod');
+
+    const shown = await cli('sandbox', 'meta', 'cli-meta-key');
+    expect(shown.stdout).toBe('app=crawler,env=prod\n');
+
+    const replaced = await cli('sandbox', 'meta', 'cli-meta-key', 'app=ci');
+    expect(replaced.stdout).toContain('is now app=ci.');
+
+    const cleared = await cli('sandbox', 'meta', 'cli-meta-key', '--clear');
+    expect(cleared.stdout).toContain('Cleared metadata');
+    const empty = await cli('sandbox', 'meta', 'cli-meta-key');
+    expect(empty.stdout).toBe('No metadata.\n');
+
+    // A word that is not key=value is named in the error, before any RPC.
+    await expect(
+      cli('sandbox', 'meta', 'cli-meta-key', 'not-a-label'),
+    ).rejects.toMatchObject({
+      stderr: expect.stringContaining('not key=value'),
+    });
+  });
+
   it('sandbox destroy destroys and is idempotent', async () => {
     const sdk = new Dormice({
       endpoint: inject('dormiceEndpoint'),

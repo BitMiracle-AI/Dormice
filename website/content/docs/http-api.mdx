@@ -32,6 +32,7 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | --- | --- | --- |
 | `POST /acquireSandbox` | create, wake, or restore — idempotent per key | 400 invalid policy/unknown template, 429 at the sandbox limit |
 | `POST /updatePolicy` | patch an existing sandbox's [lifecycle policy](/docs/lifecycle#change-the-policy-later) in place; never wakes, never resets the idle clock | 404 unknown key, 400 invalid merged policy |
+| `POST /updateMetadata` | replace an existing sandbox's label set wholesale (`{}` clears); never wakes, never resets the idle clock | 404 unknown key |
 | `POST /listSandboxes` | every sandbox and its state; never wakes anything | — |
 | `POST /execCommand` | run a command, buffered | 404 unknown key, 409 archived/restoring |
 | `POST /writeFiles` | batch write, base64 in JSON | 404/409 as above; body over 48 MiB refused |
@@ -66,9 +67,19 @@ Everything that returns a sandbox returns this shape:
   "sandboxId": "8b1e…-uuid", "externalId": "my-agent",
   "state": "active", "nodeId": "…", "endpoint": "http://127.0.0.1:3676",
   "policy": { "freezeAfterSeconds": 600, "stopAfterSeconds": 259200, "archiveAfterSeconds": null },
-  "template": null, "createdAt": "…", "lastActiveAt": "…"
+  "template": null, "metadata": { "app": "crawler", "env": "prod" },
+  "createdAt": "…", "lastActiveAt": "…"
 }
 ```
+
+`metadata` is your own string-to-string labels — pass it to
+`acquireSandbox` at creation (`{"externalId": "…", "metadata": {"app": "crawler"}}`),
+relabel later with `updateMetadata`, group and filter on it in the
+console or your own `listSandboxes` loop. The daemon never interprets
+it; a sandbox without labels reads `{}`, never `null`. Like `policy`
+and `template`, the value on `acquireSandbox` applies only when that
+call creates the sandbox — an existing sandbox keeps its stored labels,
+which is what `updateMetadata` is for.
 
 `state` is one of `active | frozen | stopped | archived | restoring`
 (the [lifecycle states](/docs/lifecycle)). `acquireSandbox` wraps it in

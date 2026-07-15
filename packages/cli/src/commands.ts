@@ -31,11 +31,19 @@ export function clientFromEnv(
   return new Dormice({ endpoint, token });
 }
 
+/** One line per label set, `k=v,k=v`; shared by ls and meta. */
+function formatMetadata(metadata: Record<string, string>): string {
+  return Object.entries(metadata)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(',');
+}
+
 const COLUMNS: { header: string; value: (s: Sandbox) => string }[] = [
   { header: 'USER KEY', value: (s) => s.externalId },
   { header: 'STATE', value: (s) => s.state },
   { header: 'SANDBOX ID', value: (s) => s.sandboxId },
   { header: 'LAST ACTIVE', value: (s) => s.lastActiveAt },
+  { header: 'METADATA', value: (s) => formatMetadata(s.metadata) },
 ];
 
 /**
@@ -71,6 +79,52 @@ export async function sandboxLs(client: Dormice): Promise<string> {
     COLUMNS.map((column) => column.header),
     sandboxes.map((s) => COLUMNS.map((column) => printable(column.value(s)))),
   );
+}
+
+/**
+ * Parses `key=value` label arguments for `dor sandbox meta`. Split on the
+ * FIRST `=` only — values may contain `=` (base64, URLs), keys may not.
+ */
+export function parseLabels(args: string[]): Record<string, string> {
+  const labels: Record<string, string> = {};
+  for (const arg of args) {
+    const eq = arg.indexOf('=');
+    if (eq <= 0) {
+      throw new Error(
+        `label "${arg}" is not key=value — e.g. dor sandbox meta my-key app=crawler env=prod`,
+      );
+    }
+    labels[arg.slice(0, eq)] = arg.slice(eq + 1);
+  }
+  return labels;
+}
+
+/**
+ * `dor sandbox meta <externalId> [key=value ...]`: no labels = show the
+ * current set; labels (or --clear) = full replacement, the verb's wire
+ * semantics stated plainly. A pure ledger write — nothing is woken.
+ */
+export async function sandboxMeta(
+  client: Dormice,
+  externalId: string,
+  labels: Record<string, string> | null,
+): Promise<string> {
+  if (labels === null) {
+    // Read path: the native list is the one read the daemon offers.
+    const sandbox = (await client.listSandboxes()).find(
+      (s) => s.externalId === externalId,
+    );
+    if (!sandbox) {
+      throw new Error(`no sandbox for key "${externalId}" — acquire it first`);
+    }
+    const line = formatMetadata(sandbox.metadata);
+    return line ? printable(line) : 'No metadata.';
+  }
+  const { sandbox } = await client.updateMetadata(externalId, labels);
+  const line = formatMetadata(sandbox.metadata);
+  return line
+    ? `Metadata for key "${printable(externalId)}" is now ${printable(line)}.`
+    : `Cleared metadata for key "${printable(externalId)}".`;
 }
 
 export interface ExecOutput {

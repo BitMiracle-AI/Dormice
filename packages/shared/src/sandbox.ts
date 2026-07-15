@@ -13,6 +13,17 @@ import { templateNameSchema } from './templates';
 export const externalIdSchema = z.string().min(1).max(128);
 
 /**
+ * Caller-owned labels on a sandbox — a string→string map, opaque to the
+ * daemon. Grouping is a tagging problem, not an entity problem: no project
+ * table, no tenancy, just labels the caller filters on. String values (not
+ * arbitrary JSON) because the E2B surface's metadata filter compares them
+ * as strings, and one column serves both surfaces.
+ */
+export const sandboxMetadataSchema = z.record(z.string(), z.string());
+
+export type SandboxMetadata = z.infer<typeof sandboxMetadataSchema>;
+
+/**
  * A sandbox as reported by the daemon — the wire shape shared by the HTTP
  * API, the SDK, and the web console.
  */
@@ -38,6 +49,8 @@ export const sandboxSchema = z.object({
    * shell always boots the template's *current* image.
    */
   template: templateNameSchema.nullable(),
+  /** Always an object — `{}` when the sandbox carries no labels. */
+  metadata: sandboxMetadataSchema,
   createdAt: z.iso.datetime(),
   lastActiveAt: z.iso.datetime(),
 });

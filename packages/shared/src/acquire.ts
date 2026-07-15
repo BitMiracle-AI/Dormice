@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { lifecyclePolicyOverrideSchema } from './policy';
-import { externalIdSchema, sandboxSchema } from './sandbox';
+import {
+  externalIdSchema,
+  sandboxMetadataSchema,
+  sandboxSchema,
+} from './sandbox';
 import { templateNameSchema } from './templates';
 
 /**
@@ -24,6 +28,13 @@ export const acquireRequestSchema = z.object({
    * template name is still answered with a 400, never silently ignored.
    */
   template: templateNameSchema.optional(),
+  /**
+   * Labels stored when this acquire creates the sandbox; omitted means no
+   * labels. Same rules as policy: an existing sandbox keeps its stored
+   * metadata — acquire is not an update verb, updateMetadata is — but a
+   * malformed value is still answered with a 400, never silently ignored.
+   */
+  metadata: sandboxMetadataSchema.optional(),
 });
 
 export type AcquireRequest = z.infer<typeof acquireRequestSchema>;

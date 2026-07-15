@@ -26,6 +26,8 @@ export const ACTIVITY_KINDS = [
   'reconciled',
   /** updatePolicy rewrote a sandbox's lifecycle thresholds (ledger-only). */
   'policy-changed',
+  /** updateMetadata replaced a sandbox's label set (ledger-only). */
+  'metadata-changed',
   'daemon-started',
   /** An operator bound or cleared the console domain through setIngress. */
   'ingress-updated',
