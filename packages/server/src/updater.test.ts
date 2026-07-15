@@ -237,19 +237,41 @@ describe('Updater.apply and status', () => {
     expect(calls.at(-1)).toContain("--mirror' 'cn'");
   });
 
-  it('maps a live unit to an honest 409', async () => {
+  it('maps a refused launch with a live unit to an honest 409', async () => {
+    // The refusal wording is systemd 255's, verbatim from the real machine
+    // — the adjudication must not depend on it: the unit's liveness is
+    // what makes this a "someone is already upgrading", not the prose.
     const updater = updaterFor({
-      run: async (_file, args) =>
-        args[0] === '--version'
+      run: async (file, args) =>
+        file === 'systemctl' || args[0] === '--version'
           ? { exitCode: 0, stdout: '', stderr: '' }
           : {
               exitCode: 1,
               stdout: '',
               stderr:
-                'Failed to start transient service unit: Unit dormice-upgrade.service already exists.',
+                'Failed to start transient service unit: Unit dormice-upgrade.service was already loaded or has a fragment file.',
             },
     });
     await expect(updater.apply()).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('maps a failed launch with no live unit to a 500 carrying stderr', async () => {
+    const updater = updaterFor({
+      run: async (file, args) =>
+        args[0] === '--version'
+          ? { exitCode: 0, stdout: '', stderr: '' }
+          : file === 'systemctl'
+            ? { exitCode: 3, stdout: '', stderr: '' }
+            : {
+                exitCode: 1,
+                stdout: '',
+                stderr: 'Interactive authentication required.',
+              },
+    });
+    await expect(updater.apply()).rejects.toMatchObject({
+      statusCode: 500,
+      message: expect.stringContaining('Interactive authentication required'),
+    });
   });
 
   it('adjudicates a dead runner into a failure and tails the log', async () => {
