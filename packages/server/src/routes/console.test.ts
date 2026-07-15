@@ -361,6 +361,38 @@ describe('POST /console/auth/logout', () => {
   });
 });
 
+describe('GET / — the bare-origin redirect', () => {
+  it('sends a browser (html Accept) to /console/', async () => {
+    const res = await testApp(fixtureDist()).inject({
+      method: 'GET',
+      url: '/',
+      headers: { accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8' },
+    });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe('/console/');
+  });
+
+  it('keeps the honest 404 for non-browser clients', async () => {
+    // curl's default is Accept: */* — no html, no redirect.
+    const res = await testApp(fixtureDist()).inject({
+      method: 'GET',
+      url: '/',
+      headers: { accept: '*/*' },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toContain('not found');
+  });
+
+  it('redirects even when the console is not built — the 404 there points at pnpm build', async () => {
+    const res = await testApp().inject({
+      method: 'GET',
+      url: '/',
+      headers: { accept: 'text/html' },
+    });
+    expect(res.statusCode).toBe(302);
+  });
+});
+
 describe('static console at /console', () => {
   it('serves index.html and assets from the injected dist', async () => {
     const app = testApp(fixtureDist());

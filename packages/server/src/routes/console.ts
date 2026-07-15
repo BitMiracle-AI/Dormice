@@ -213,6 +213,17 @@ export const consoleRoutes: FastifyPluginAsyncZod<
     }),
   );
 
+  // The bare-origin convenience: a browser landing on / is a human looking
+  // for the console — send them there (even unbuilt, /console's "run pnpm
+  // build" 404 beats "route not found"). Machines never GET / with an html
+  // Accept, so they keep the honest 404 from the app-wide arbiter.
+  app.get('/', async (request, reply) => {
+    if (request.headers.accept?.includes('text/html')) {
+      return reply.redirect('/console/');
+    }
+    return reply.callNotFound();
+  });
+
   if (consoleDistDir) {
     await app.register(
       async (scope) => {
