@@ -18,6 +18,8 @@ import { KeyedQueue } from './keyed-queue';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
 import { locallyClaimedCount, startupGuard } from './startup-guard';
+import { Updater } from './updater';
+import { readBuildInfo } from './version';
 
 // One logger, created before everything that needs it: the executor logs
 // through it directly and Fastify adopts it as its own.
@@ -121,6 +123,23 @@ if (!existsSync(consoleDistDir)) {
   log.warn(`web console not found at ${consoleDistDir} — /console disabled`);
 }
 
+// The daemon's own upgrade window compares the commit baked into this
+// build against the checkout it runs from — main.js sits at
+// packages/server/dist (src/main.ts at packages/server/src: same depth),
+// so three hops up is the repo root either way. No checkout (a dist
+// copied elsewhere) means checking is honestly unavailable, not guessed.
+const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
+const build = readBuildInfo();
+const updater = new Updater({
+  repoDir: existsSync(path.join(repoRoot, '.git')) ? repoRoot : null,
+  build,
+});
+log.info(
+  build
+    ? `dormice build ${build.commit} (${build.title})`
+    : 'dormice build: no version identity (built outside a git checkout)',
+);
+
 const app = buildApp({
   config,
   db,
@@ -130,6 +149,7 @@ const app = buildApp({
   consoleDistDir: existsSync(consoleDistDir) ? consoleDistDir : undefined,
   archiver,
   ingress,
+  updater,
 });
 
 // Before trusting the pairing of this ledger and this reality, check it:

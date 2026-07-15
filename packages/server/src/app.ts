@@ -27,7 +27,10 @@ import { hostRoutes } from './routes/host';
 import { ingressRoutes } from './routes/ingress';
 import { sandboxRoutes } from './routes/sandboxes';
 import { templateRoutes } from './routes/templates';
+import { upgradeRoutes } from './routes/upgrade';
 import { createSandboxProxy } from './sandbox-proxy';
+import { Updater } from './updater';
+import { readBuildInfo } from './version';
 
 export interface AppDeps {
   config: Config;
@@ -71,6 +74,14 @@ export interface AppDeps {
    * assert on sources inject a fixed map instead of trusting the shell.
    */
   sources?: ConfigSources;
+  /**
+   * The daemon's own upgrade window. main.ts injects one that knows the
+   * checkout the daemon runs from; the default knows no checkout, so
+   * checkUpgrade answers an honest checkError instead of comparing (or
+   * fetching over) whatever repository the process happens to sit in —
+   * tests must never reach the network by accident.
+   */
+  updater?: Updater;
 }
 
 /**
@@ -92,6 +103,7 @@ export function buildApp({
   archiver,
   ingress,
   sources = configSources(),
+  updater = new Updater({ repoDir: null, build: readBuildInfo() }),
 }: AppDeps) {
   // The archive default is adjudicated once, here, by the archiver's
   // presence: with one, new sandboxes archive after a week of idleness;
@@ -194,6 +206,7 @@ export function buildApp({
       sources,
       archiveDefaultSeconds,
     });
+    await api.register(upgradeRoutes, { updater });
   });
 
   // The web console: account + session endpoints (open — setup and login
