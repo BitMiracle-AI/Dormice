@@ -6,30 +6,36 @@ import { sandboxes, type TemplateRow, templates } from './schema';
  * Upsert: registering an existing name re-points it at the new image. That
  * is the template upgrade front door — build a new image, re-register the
  * name, then rebuildSandbox the stock that should move onto it.
+ *
+ * updatedAt is the upgrade timestamp: stamped only when the image actually
+ * changes. A re-register of the same image writes nothing at all — the
+ * timestamp must not claim an upgrade that didn't happen. Read-then-write
+ * needs no lock: better-sqlite3 is synchronous, there is no await between.
  */
 export function registerTemplate(
   db: Db,
   input: { name: string; image: string },
 ): TemplateRow {
-  const row: TemplateRow = {
-    name: input.name,
-    image: input.image,
-    createdAt: new Date().toISOString(),
-  };
-  db.insert(templates)
-    .values(row)
-    .onConflictDoUpdate({
-      target: templates.name,
-      set: { image: input.image },
-    })
-    .run();
-  // Re-read instead of returning the literal: an upsert on an existing name
-  // keeps its original createdAt.
-  const stored = findTemplate(db, input.name);
-  if (!stored) {
-    throw new Error(`template ${input.name} vanished mid-register`);
+  const now = new Date().toISOString();
+  const existing = findTemplate(db, input.name);
+  if (!existing) {
+    const row: TemplateRow = {
+      name: input.name,
+      image: input.image,
+      createdAt: now,
+      updatedAt: now,
+    };
+    db.insert(templates).values(row).run();
+    return row;
   }
-  return stored;
+  if (existing.image === input.image) {
+    return existing;
+  }
+  db.update(templates)
+    .set({ image: input.image, updatedAt: now })
+    .where(eq(templates.name, input.name))
+    .run();
+  return { ...existing, image: input.image, updatedAt: now };
 }
 
 export function listTemplates(db: Db): TemplateRow[] {

@@ -286,7 +286,7 @@ export function TemplatesPage() {
     sandboxes.filter((sandbox) => sandbox.template === name).length;
 
   return (
-    // 五列窄表,同设置页限宽居中 — 宽屏上不摊大饼。
+    // 六列窄表,同设置页限宽居中 — 宽屏上不摊大饼。
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -335,6 +335,7 @@ export function TemplatesPage() {
               <TableHead>镜像</TableHead>
               <TableHead className="text-right">引用沙箱</TableHead>
               <TableHead>注册于</TableHead>
+              <TableHead>更新于</TableHead>
               <TableHead className="text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
@@ -363,6 +364,16 @@ export function TemplatesPage() {
                   </TableCell>
                   <TableCell className="tabular-nums text-muted-foreground">
                     {since(template.createdAt)}前
+                  </TableCell>
+                  {/* updatedAt 只在镜像真的换过时才走动;等于 createdAt
+                      = 从没升级过,直说比重复注册时间更诚实。 */}
+                  <TableCell
+                    className="tabular-nums text-muted-foreground"
+                    title={new Date(template.updatedAt).toLocaleString()}
+                  >
+                    {template.updatedAt === template.createdAt
+                      ? '还没升级'
+                      : `${since(template.updatedAt)}前`}
                   </TableCell>
                   <TableCell className="text-right">
                     <TemplateRowMenu template={template} />
