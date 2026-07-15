@@ -29,7 +29,7 @@ const SEGMENT_LABELS: Record<string, string> = {
 
 function crumbsOf(pathname: string): string[] {
   const segments = pathname.split('/').filter(Boolean);
-  if (segments.length === 0) return ['总览'];
+  if (segments.length === 0) return ['仪表盘'];
   return segments.map(
     (segment) => SEGMENT_LABELS[segment] ?? decodeURIComponent(segment),
   );

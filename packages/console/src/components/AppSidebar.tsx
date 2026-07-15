@@ -45,7 +45,7 @@ export const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
   {
     label: '平台',
     items: [
-      { to: '/', label: '总览', icon: DashboardSquare01Icon },
+      { to: '/', label: '仪表盘', icon: DashboardSquare01Icon },
       { to: '/sandboxes', label: '沙箱', icon: PackageIcon },
       { to: '/templates', label: '模板', icon: Layers01Icon },
     ],
@@ -73,7 +73,9 @@ async function signOut() {
 }
 
 // 侧栏按钮统一药丸形 + medium 字重(风格参考 openasi 侧栏,2026-07-12)。
-const menuButtonClass = 'rounded-full font-medium';
+// cursor-default 抹平 Link(手型)与 button(箭头)的光标分裂 — 侧栏是
+// 应用 chrome,不是网页链接。
+const menuButtonClass = 'rounded-full font-medium cursor-default';
 
 function isActivePath(pathname: string, to: string): boolean {
   if (to === '/') return pathname === '/';
@@ -90,7 +92,10 @@ export function AppSidebar() {
     <Sidebar variant="inset" className="px-1">
       <SidebarHeader>
         {/* 纯文字 wordmark:侧栏融在页面底色里,不需要图标方块撑品牌。 */}
-        <Link to="/" className="flex items-center px-2.5 pt-2 pb-1.5">
+        <Link
+          to="/"
+          className="flex cursor-default items-center px-2.5 pt-2 pb-1.5"
+        >
           <span className="text-lg font-semibold leading-none [font-family:'Google_Sans',sans-serif]">
             Dormice
           </span>
