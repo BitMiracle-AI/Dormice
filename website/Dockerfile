@@ -10,7 +10,14 @@ RUN corepack enable
 WORKDIR /repo
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.base.json ./
 COPY website/package.json website/
-RUN pnpm install --frozen-lockfile --filter @dormice/website
+# Override for building where registry.npmjs.org is slow or unreachable
+# (mainland China): --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+# The store lives in a BuildKit cache mount: downloaded tarballs survive
+# failed and repeated builds instead of starting over.
+RUN --mount=type=cache,target=/pnpm-store \
+    pnpm install --frozen-lockfile --filter @dormice/website \
+      --store-dir /pnpm-store --registry "$NPM_REGISTRY"
 COPY website/ website/
 RUN pnpm --filter @dormice/website build
 
