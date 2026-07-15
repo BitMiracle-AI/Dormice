@@ -208,14 +208,17 @@ export class Updater {
       command,
     ]);
     if (launch.exitCode !== 0) {
-      const stderr = launch.stderr.trim();
-      // The unit name is the mutex: systemd refuses a second one.
-      if (stderr.includes('already exists')) {
+      // The unit name is the mutex, but systemd phrases the refusal more
+      // than one way ("already exists"; "was already loaded or has a
+      // fragment file" on systemd 255, caught on real hardware) — so ask
+      // systemd whether the unit is alive instead of parsing prose.
+      if (await this.unitActive()) {
         throw httpError(
           409,
           'an upgrade is already running — wait for it to finish (systemd unit dormice-upgrade)',
         );
       }
+      const stderr = launch.stderr.trim();
       throw httpError(
         500,
         `failed to launch the upgrade: ${stderr.slice(0, 300) || 'systemd-run gave no reason'}`,
