@@ -3,10 +3,16 @@ title: Using the official E2B SDKs
 description: Learn how to run the official e2b packages — JavaScript and Python, unmodified — against Dormice by changing two URLs.
 ---
 
-Dormice speaks the E2B protocol, so the official `e2b` SDKs work against
-it without modification. Migrating an application is configuration, not
-code: point the SDK at your daemon's two URL prefixes and prefix your
-API token with `e2b_`.
+[E2B](https://e2b.dev) is a popular commercial sandbox cloud, and its
+official `e2b` SDKs (JavaScript and Python) are what many agent
+frameworks already build on ([what is
+E2B?](/docs/core-concepts#what-is-e2b)). Dormice speaks the E2B
+protocol, so those SDKs work against it without modification.
+Migrating an application is configuration, not code: point the SDK at
+your daemon's two URL prefixes and prefix your API token with `e2b_`.
+
+If you have never used E2B, you don't need this page — the [native
+API](/docs/quickstart) covers everything.
 
 Everything documented here is exercised by black-box test suites
 *through the official packages* (e2b 2.31.0, JavaScript and Python)

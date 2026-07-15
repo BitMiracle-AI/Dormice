@@ -6,7 +6,9 @@ description: How the daemon works, what the sandbox isolation boundary actually 
 This page is the deep end: how Dormice works underneath, and the
 security properties you are relying on. You don't need it to use
 Dormice — start with the [Quick start](/docs/quickstart) — but read it
-before you run untrusted code in production.
+before you run untrusted code in production. It assumes the vocabulary
+from [Core concepts](/docs/core-concepts); unfamiliar terms are
+explained there.
 
 ## One daemon, one database
 
@@ -37,7 +39,8 @@ but today the simplicity is the feature.
 
 ## What a sandbox is
 
-Each sandbox is a Docker container running under **gVisor** (`runsc`),
+Each sandbox is a Docker container running under
+**[gVisor](/docs/core-concepts#gvisor)** (`runsc`),
 with its `/home/user` on a dedicated disk image (see
 [Sandbox persistence](/docs/persistence)). Every sandbox runs with the
 same non-negotiable parameters: non-root (uid 1000), `--init`,

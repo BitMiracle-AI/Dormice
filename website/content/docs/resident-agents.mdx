@@ -28,9 +28,9 @@ processes. A runnable version of this pattern lives at
 ## Freezing suspends processes — it does not kill them
 
 A frozen sandbox's processes stop mid-flight and resume exactly where
-they were: a REPL keeps its state, a dev server its sockets, an agent
-process its memory. Nothing running in a resident sandbox is ever killed
-by idleness.
+they were: a REPL (an interactive language session) keeps its state, a
+dev server its connections, an agent process its memory. Nothing
+running in a resident sandbox is ever killed by idleness.
 
 **The flip side:** a background process does not *keep* its sandbox
 warm. Once nothing is watching it, the idle clock runs, the sandbox
@@ -41,8 +41,9 @@ cost a few MiB.
 
 ## What an idle sandbox costs
 
-A frozen sandbox costs a few MiB of resident memory (the rest sits in
-swap), plus a sparse disk that occupies only what was actually written.
+A frozen sandbox costs a few MiB of actual RAM (the rest sits in
+[swap](/docs/core-concepts#swap-and-freezing)), plus a sparse disk that
+occupies only what was actually written.
 That is the entire idle bill — which is why one modest machine can hold
 a long tail of dormant agents.
 

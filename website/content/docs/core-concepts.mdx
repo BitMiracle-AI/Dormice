@@ -1,0 +1,149 @@
+---
+title: Core concepts
+description: Learn what the recurring terms in these docs mean — servers, containers, images, swap, object storage, reverse proxies, and E2B — with no Docker or Linux background assumed.
+---
+
+These docs use a handful of infrastructure terms without stopping to
+re-explain them on every page. This page is the one place they are all
+explained in plain language. You do not need to memorize it — other pages
+link back here the first time a term appears, so you can also just read
+on and return when a word is unfamiliar.
+
+## The host
+
+The host is the Linux server Dormice runs on — typically a machine you
+rent from a cloud provider and reach over the network. Everything in
+these docs lives on that one machine: the sandboxes, their data, and the
+program that manages them. When a page says "on the host", it means "on
+that server, as opposed to inside a sandbox or on your laptop".
+
+## Containers and images
+
+A container is a lightweight, isolated computer running inside the host.
+It has its own files, its own processes, and its own network — programs
+inside it cannot see the rest of the machine. Unlike a full virtual
+machine it shares the host's Linux kernel, which is what makes it cheap:
+starting one takes about a second, and an idle one costs almost nothing.
+Containers are treated as disposable — deleted and recreated freely.
+
+An image is the template a container starts from: a read-only snapshot
+of a filesystem with an operating system and preinstalled tools. Think
+of the image as an install disk and the container as a computer freshly
+booted from it. One image can start any number of containers, and the
+containers never modify the image.
+
+Docker is the standard tool that stores images and runs containers. The
+Dormice [installer](/docs/installation) sets it up for you; you only
+need to touch Docker directly if you build your own images for
+[templates](/docs/templates).
+
+## gVisor
+
+Containers alone are not a strong enough wall for running untrusted or
+AI-generated code, because every container talks to the host's real
+Linux kernel — and kernel bugs are how programs escape. gVisor is an
+extra isolation layer that puts a fake, userspace kernel between each
+sandbox and the real one. Malicious code attacks the decoy instead of
+your machine. Every Dormice sandbox runs under gVisor; the installer
+sets this up too. [Architecture & security](/docs/architecture) covers
+the full boundary.
+
+## Sandboxes
+
+A Dormice sandbox is a container plus one thing containers do not
+normally have: **a permanent disk of its own**. The disk is a file on
+the host that appears inside the sandbox as `/home/user`, and it is the
+sandbox's real body — the container around it can be deleted, upgraded,
+or lost to a crash, and the sandbox's files survive every time. Only
+`destroySandbox` deletes the disk. [Sandbox
+persistence](/docs/persistence) is the full story.
+
+## The daemon
+
+A daemon is a program that runs in the background forever rather than
+doing one job and exiting. The Dormice daemon is the single program that
+manages everything: it creates sandboxes, runs your commands in them,
+cools idle ones down, and serves the API, the E2B surface, and the web
+console — all on one port. The installer registers it with systemd, the
+Linux service manager, so it starts on boot and restarts if it crashes.
+
+The daemon keeps its records in SQLite, a database that lives in a
+single ordinary file — no database server to install or operate.
+
+## Swap and freezing
+
+Swap is disk space the operating system uses as overflow memory: when
+RAM runs short, memory that has not been touched recently is written out
+to disk, and read back the moment it is needed.
+
+Dormice's signature trick is built on it. When a sandbox sits idle, the
+daemon suspends its processes mid-flight and pushes their memory out to
+swap. Measured on real hardware, an idle sandbox holding 1 GiB of memory
+drops to about 5 MiB of RAM — and wakes in about 50 ms with every
+process exactly where it was. That is a **frozen** sandbox, and it is
+why keeping sandboxes forever is affordable. [Sandbox
+lifecycle](/docs/lifecycle) explains the full cool-down ladder.
+
+## Object storage (S3)
+
+Object storage is rented internet disk space: you upload files ("objects")
+into a named bucket and pay only for what is stored. S3 is Amazon's
+object storage service, and its API became the industry standard — many
+providers (Cloudflare R2, MinIO, Alibaba Cloud OSS, and others) speak
+the same protocol, so tools say "S3-compatible" to mean "works with any
+of them".
+
+Dormice uses object storage for exactly one optional feature:
+[archiving](/docs/archiving), which packs a long-idle sandbox's disk into a single
+compressed file, ships it to your bucket, and frees the host's disk. If
+you never configure S3, archiving simply stays off.
+
+## Reverse proxies, domains, and HTTPS
+
+The daemon only accepts connections from the host itself — that is a
+security default, not a limitation. To reach it from elsewhere you put a
+reverse proxy in front: a small program that stands at the machine's
+public door, receives requests from the internet, and forwards them to a
+program inside. The installer sets up [Caddy](https://caddyserver.com)
+for this role.
+
+Two related terms appear wherever proxies do:
+
+- **A DNS record** is the public phonebook entry that points a domain
+  name (like `dormice.example.com`) at your server's IP address. You
+  create it in the dashboard of whoever sold you the domain.
+- **TLS (the padlock behind `https://`)** encrypts traffic so tokens
+  and session cookies cannot be read in transit. It requires a
+  certificate per domain; Caddy obtains and renews certificates
+  automatically once the DNS record points at your server.
+
+## What is E2B
+
+[E2B](https://e2b.dev) is a popular commercial cloud service for running
+AI-generated code in sandboxes, with official SDKs (`e2b` on npm and
+PyPI) that many agent frameworks already use. Dormice speaks the E2B
+protocol: the unmodified official SDKs work against your own server by
+changing two URLs, which makes Dormice a drop-in, self-hosted
+alternative — see [Using the official E2B SDKs](/docs/e2b-sdks). If you
+have never used E2B, you can ignore every E2B mention in these docs and
+use the native API instead; nothing is behind it.
+
+## Tokens, SDKs, and the CLI
+
+The API token is a long random string the installer generates — a
+password for programs. Every client presents it with every request;
+anyone holding it controls your sandboxes, so it belongs in environment
+variables and secret stores, never in code.
+
+There are three ways to talk to the daemon, all equivalent:
+
+- **The native API** — plain HTTP requests; works from any language,
+  even `curl` in a shell. See the [HTTP API](/docs/http-api).
+- **An SDK** (software development kit) — a library that wraps the API
+  in ready-made functions for your programming language:
+  `@dormice/sdk` for TypeScript, or the official `e2b` packages.
+- **The CLI** (command-line interface) — the `dor` command you type in
+  a terminal, for looking around and one-off operations. See the [CLI
+  reference](/docs/cli).
+
+[Quick start](/docs/quickstart) walks all three.

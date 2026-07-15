@@ -13,11 +13,19 @@ explicit click.**
 
 ## Signing in
 
-Paste the API token once. The browser trades it for an `httpOnly`
-session cookie (valid 7 days) and never stores the token anywhere page
-JavaScript can read — a script injected into the console cannot steal
-your long-term credential. Sessions are derived from the API token, so
-rotating the token signs every browser out at once.
+The console has one account with a username and password. On first
+visit it walks you through creating it — you prove you are the operator
+by pasting the API token once, then choose the credentials you will
+actually sign in with. Forgot the password? Present the token again and
+set a new one; repeated wrong guesses are slowed down with increasing
+delays.
+
+Signing in sets an `httpOnly` session cookie (valid 7 days) — a cookie
+page JavaScript cannot read, so a script injected into the console
+cannot steal your credential. The API token and the console password
+rotate independently: changing the password does not break SDK clients,
+and rotating the token does not sign browsers out. Resetting the
+account (via the token) invalidates every existing session.
 
 ## Overview
 
@@ -32,30 +40,38 @@ at 90%; a host without swap gets an amber warning pointing at
 
 ## Sandboxes
 
-The live list — every sandbox with its state, refreshed every 2 seconds,
-with search, a state filter, and multi-select batch destroy. Creating a
-sandbox from here is exactly `acquireSandbox`: a key, the lifecycle
-knobs (including the never-stop
-[resident-agent switch](/docs/resident-agents)), and a template dropdown
-when templates are registered. After a
+The live list — every sandbox with its state and live CPU, memory, and
+disk columns, refreshed every few seconds, with search, a state filter,
+sorting, and multi-select batch destroy. Creating a sandbox from here
+is exactly `acquireSandbox`: a key, the lifecycle knobs (including the
+never-stop [resident-agent switch](/docs/resident-agents)), and a
+template dropdown when templates are registered. After a
 [template upgrade](/docs/templates#update-a-template), sandboxes still
 running the old image carry an "upgradable" marker next to their
 template name — rebuild them to move.
 
-A sandbox's detail page is a workspace with four tabs:
+A sandbox's detail page is a workspace:
 
-- **Overview** — identity, policy thresholds, last activity; destroy
-  and [rebuild](/docs/persistence#rebuild-a-sandbox) buttons, each
-  behind a confirmation dialog.
+- **Overview** — identity, policy thresholds with a countdown to the
+  next lifecycle step, last activity; an adjust-policy dialog (the
+  console's face of
+  [`updatePolicy`](/docs/lifecycle#change-the-policy-later)), plus
+  destroy and [rebuild](/docs/persistence#rebuild-a-sandbox) buttons,
+  each behind a confirmation dialog.
 - **Terminal** — a real interactive shell, kept behind an explicit
   "open" button because opening one *wakes* the sandbox. The browser
   speaks the same wire the official E2B SDK does. Closing the terminal
   kills its shell rather than leaving an orphan behind.
-- **Files** — browse, upload, download, rename, delete under
-  `/home/user`. File operations wake the sandbox too, so a cold sandbox
-  shows an explicit "open" gate first.
+- **Files** — browse, preview, edit, upload (drag and drop works),
+  download, rename, delete under `/home/user`, refreshing live while
+  the sandbox runs. File operations wake the sandbox too, so a cold
+  sandbox shows an explicit "open" gate first.
 - **Processes** — the E2B process table, polled without waking (a
   stopped sandbox honestly shows none).
+- **Metrics** — the sandbox's live resource snapshot, with an
+  in-session trend chart (the browser accumulates it — the daemon
+  [keeps no history](/docs/metrics)).
+- **History** — this sandbox's recent lifecycle events.
 
 ## Templates
 
@@ -64,12 +80,30 @@ form is the same [upgrade front door](/docs/templates) as
 `dor template add`. Deleting a template a sandbox still uses is refused
 with the daemon's own message naming the sandboxes.
 
+## Activity, domains, and settings
+
+Three more pages round out the operator view:
+
+- **Activity** — the daemon's recent history (who was created, frozen,
+  destroyed, what the reconciler repaired), filterable by event kind
+  and sandbox key. A bounded window, not an audit log.
+- **Domains** — bind domains to the daemon's front door (the managed
+  reverse proxy), with a copyable DNS record guide and a live per-domain
+  probe that shows DNS and certificate progress until each one turns
+  green. See
+  [Installation](/docs/installation#connect-from-another-machine).
+- **Settings** — the daemon's effective configuration, read-only, with
+  secrets shown as present-or-absent only. Changing configuration
+  happens in `/etc/dormice/env` plus a restart, never from the browser.
+
+A command palette (⌘K) jumps to any page or sandbox.
+
 ## Connect
 
 Copy-paste snippets for the SDK, the official E2B packages, and curl,
 pre-filled with the endpoint the browser itself is using. The API token
-is never displayed — the console traded it for a cookie at sign-in and
-cannot read it back; fetch it from the daemon host
+is never displayed — the console does not hold it and cannot read it
+back; fetch it from the daemon host
 (`grep ^DORMICE_API_TOKEN /etc/dormice/env`).
 
 ## What you will not find

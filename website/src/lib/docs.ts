@@ -8,6 +8,7 @@ import * as cli from '../../content/docs/cli.mdx';
 import * as commands from '../../content/docs/commands.mdx';
 import * as configuration from '../../content/docs/configuration.mdx';
 import * as consoleDoc from '../../content/docs/console.mdx';
+import * as coreConcepts from '../../content/docs/core-concepts.mdx';
 import * as doctor from '../../content/docs/doctor.mdx';
 import * as e2bDifferences from '../../content/docs/e2b-differences.mdx';
 import * as e2bSdks from '../../content/docs/e2b-sdks.mdx';
@@ -40,6 +41,7 @@ interface DocModule {
 // meta.json name -> module ('index' is the /docs landing page, slug '').
 const modules: Record<string, DocModule> = {
   index: indexDoc,
+  'core-concepts': coreConcepts,
   installation,
   quickstart,
   lifecycle,

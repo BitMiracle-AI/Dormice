@@ -108,10 +108,17 @@ curl -X POST http://127.0.0.1:3676/acquireSandbox \
   -d '{"externalId": "my-agent"}'
 ```
 
-Verbs: `acquireSandbox`, `listSandboxes`, `execCommand`, `writeFiles` /
-`writeFile`, `readFile` / `readFiles`, `rebuildSandbox` (fresh container,
-`/home/user` kept), `destroySandbox`, `registerTemplate` / `listTemplates` /
-`removeTemplate`, `getHostMetrics`. `execCommand` takes
+Verbs: `acquireSandbox`, `updatePolicy` (patch an existing sandbox's
+lifecycle policy in place — no wake, no destroy), `listSandboxes`,
+`execCommand`, `writeFiles` / `writeFile`, `readFile` / `readFiles`,
+`rebuildSandbox` (fresh container, `/home/user` kept), `destroySandbox`,
+`registerTemplate` / `listTemplates` / `removeTemplate`,
+`getHostMetrics`, `getSandboxMetrics` / `listSandboxMetrics` (live
+resource samples; never wake anything), `listSandboxImages` (who still
+runs an old template image), `listActivity` (recent daemon history),
+`getConfig` (effective config, secrets redacted), `getIngress` /
+`setIngress` (bind domains on the daemon's managed reverse proxy).
+`execCommand` takes
 `{ externalId, command, timeoutSeconds?, cwd?, env? }` and returns
 `{ exitCode, stdout, stderr, ... }` — **a non-zero exit code is a result,
 not an HTTP error**. When a sandbox is coming back from S3, `acquireSandbox`
@@ -143,8 +150,10 @@ stream uncapped; `uploadUrl()` / `downloadUrl()` mint signed URLs).
 
 ## Lifecycle policy — three knobs
 
-Set at **creation only** (overrides on an existing sandbox are not applied);
-all count seconds since last activity, ordering freeze ≤ stop ≤ archive:
+Set at creation (overrides while acquiring an existing sandbox are not
+applied — change an existing sandbox's policy with `updatePolicy`, a
+patch that never wakes and never resets the idle clock); all count
+seconds since last activity, ordering freeze ≤ stop ≤ archive:
 
 | Knob | Default | `null` means |
 | --- | --- | --- |

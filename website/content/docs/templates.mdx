@@ -3,9 +3,21 @@ title: Templates
 description: Learn how to create sandboxes from your own Docker images by registering them as templates.
 ---
 
-A template is a name pointing at a Docker image. Dormice deliberately
-has no build pipeline — the host's Docker daemon is already an image
-store, and `docker build` is already the build tool.
+A template is a name pointing at a [Docker
+image](/docs/core-concepts#containers-and-images) — the read-only
+snapshot a sandbox starts from. Register your own image as a template
+and sandboxes created from it come with your tools preinstalled.
+Dormice deliberately has no build pipeline — the host's Docker daemon
+is already an image store, and `docker build` is already the build
+tool.
+
+**Never built a Docker image?** The three-line version: you write a
+`Dockerfile` — a recipe that starts from an existing image and adds
+your tools (`FROM ubuntu:24.04`, then `RUN apt-get install …`) — and
+`docker build -t name:v1 .` bakes it into an image tagged `name:v1`.
+The `:v1` part is the tag: a version label you choose. Docker's own
+[getting-started guide](https://docs.docker.com/get-started/) covers
+the rest.
 
 ## Create a template
 

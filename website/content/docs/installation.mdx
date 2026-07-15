@@ -3,29 +3,47 @@ title: Installation
 description: Install the Dormice daemon on a Linux host with one command.
 ---
 
+Installing Dormice is one command on a fresh Linux server. The command
+downloads an installer script that sets up everything the platform
+needs; you do not need to know Docker or Linux administration — this
+page tells you what to type, and explains what happened afterwards.
+
 ## Install the daemon
 
-Run this as root on a bare Ubuntu/Debian x86_64 host:
+You need a Linux server ([the host](/docs/core-concepts#the-host))
+running Ubuntu or Debian on a regular Intel/AMD CPU (`x86_64`), ideally
+freshly created. Log in as root — the administrator account, which most
+cloud providers give you by default — and run:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/BitMiracle-AI/Dormice/main/deploy/install.sh | bash
 ```
 
-If your host has a slow connection to GitHub and the usual package
-sources, add `-s -- --mirror cn`.
+The command downloads the install script and runs it in one step. If
+your host has a slow connection to GitHub and the usual package sources
+(common on servers in mainland China), add `-s -- --mirror cn`.
 
-The installer sets up everything — Docker, gVisor, swap, the network
-hardening, the daemon as a systemd service — and finishes by running
-`dor doctor`, a battery of read-only checks that verifies the install
-actually works. You can re-run `dor doctor` at any time.
+The installer sets up everything —
+[Docker](/docs/core-concepts#containers-and-images) (the container
+runtime), [gVisor](/docs/core-concepts#gvisor) (the extra isolation
+layer around each sandbox),
+[swap](/docs/core-concepts#swap-and-freezing) (the disk-as-overflow-memory
+that makes freezing work), the network hardening, and the daemon itself
+as a systemd service (so it starts on boot and restarts after a crash).
+It finishes by running `dor doctor`, a battery of read-only checks that
+verifies the install actually works. You can re-run `dor doctor` at any
+time.
 
 **The installer is safe to re-run.** Running it again upgrades the code
 and repairs anything that drifted, and never rotates your API token.
 
 ## Get your API token
 
-The installer generates an API token and stores it in the daemon's
-config file. You need it for every client — SDK, CLI, and console:
+The installer generates an [API
+token](/docs/core-concepts#tokens-sdks-and-the-cli) — a long random
+string that acts as the password for programs — and stores it in the
+daemon's config file. You need it for every client — SDK, CLI, and
+console. Print it with:
 
 ```sh
 grep ^DORMICE_API_TOKEN /etc/dormice/env
@@ -36,53 +54,77 @@ grep ^DORMICE_API_TOKEN /etc/dormice/env
 The daemon listens on `127.0.0.1` only — reaching it from another
 machine is a choice you make explicitly, one of two ways.
 
-**Option 1: SSH tunnel** (private, zero setup):
+**Option 1: SSH tunnel** (private, zero setup). SSH — the tool you
+already use to log in to the server — can also carry other traffic
+through its encrypted connection, making a port on the server appear on
+your own machine:
 
 ```sh
 ssh -L 3676:127.0.0.1:3676 root@your-host
 ```
 
-Then use `http://127.0.0.1:3676` as your endpoint, as if the daemon were
-local.
+Keep that command running, and use `http://127.0.0.1:3676` as your
+endpoint, as if the daemon were local.
 
-**Option 2: Reverse proxy** — serves the API, the E2B surface, and the
-web console at once. With Caddy, TLS certificates are automatic once you
+**Option 2: Bind a domain** — serves the API, the E2B surface, and the
+web console at once, over HTTPS. The installer already placed a reverse
+proxy ([Caddy](https://caddyserver.com)) at the server's public door —
+a small program that receives internet requests and forwards them to
+the daemon ([what's a reverse
+proxy?](/docs/core-concepts#reverse-proxies-domains-and-https)). To
 give it a domain:
 
-```text
-your-domain.example {
-	reverse_proxy 127.0.0.1:3676 {
-		flush_interval -1
-	}
-}
-```
+1. Create a DNS A record pointing your domain (say,
+   `dormice.example.com`) at the server's public IP — in the dashboard
+   of whoever sold you the domain.
+2. Bind the domain on the web console's domains page (or with the
+   `setIngress` API verb). The daemon rewrites its managed Caddy
+   config, and Caddy obtains and renews the HTTPS certificate on its
+   own. The domains page shows each domain's real progress — DNS
+   resolution and certificate status — until it turns green.
 
-**Note:** `flush_interval -1` matters — streamed command output is
-written frame by frame, and a buffering proxy would hold it all back
-until the end. Use HTTPS for anything exposed beyond localhost: the API
-token and the session cookie travel in every request.
+**Note:** Do not hand-edit the managed Caddy config — the next bind
+rewrites it. If you run your own proxy instead, forward to
+`127.0.0.1:3676` with buffering disabled (`flush_interval -1` in
+Caddy): streamed command output is written frame by frame, and a
+buffering proxy would hold it all back until the end. Use HTTPS for
+anything exposed beyond localhost — the API token and the session
+cookie travel in every request.
 
 ## What the host needs
 
-The installer handles all of this and `dor doctor` verifies it, but
-these are the requirements underneath:
+The installer handles all of this and `dor doctor` verifies it — you
+never need to set any of it up by hand. This section just explains what
+the installer changed on your machine and why; skipping it does not
+affect using Dormice.
 
-- **Docker + gVisor (`runsc`)**, and root — sandboxes are gVisor
-  containers, and the daemon needs loop mounts and cgroup writes.
-- **Swap, with `vm.swappiness=100`.** Freezing works by pushing idle
-  sandbox memory to swap. gVisor holds sandbox memory in a form the
-  kernel refuses to swap at the default setting — measured on real
-  hardware: 0 bytes reclaimed at the default, 99.5% reclaimed at 100.
-  Some cloud images (Alibaba Cloud, for one) ship `vm.swappiness=0`;
-  check the effective value with `sysctl vm.swappiness`.
-- **Network hardening.** Sandboxes run untrusted code, so the installer
-  blocks the cloud metadata service from containers
-  (`iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP`, persisted) and
-  disables inter-container traffic (`"icc": false` in `daemon.json`).
+- **Docker + gVisor (`runsc`), and root.** Sandboxes are
+  [containers](/docs/core-concepts#containers-and-images) hardened with
+  [gVisor](/docs/core-concepts#gvisor), and managing them takes
+  administrator privileges (the daemon attaches each sandbox's disk and
+  adjusts its memory accounting, both root-only operations).
+- **Swap, with `vm.swappiness=100`.** Swap is disk space the operating
+  system uses as overflow memory, and
+  [freezing](/docs/core-concepts#swap-and-freezing) works by pushing
+  idle sandbox memory out to it. The `vm.swappiness` setting is the
+  kernel's willingness to do that — and gVisor holds sandbox memory in
+  a form the kernel refuses to swap at the default setting. Measured on
+  real hardware: 0 bytes reclaimed at the default, 99.5% reclaimed
+  at 100. Some cloud images (Alibaba Cloud, for one) ship
+  `vm.swappiness=0`; check the effective value with
+  `sysctl vm.swappiness`.
+- **Network hardening.** Sandboxes run untrusted code, and a cloud
+  server exposes a special internal address that hands out the
+  machine's cloud credentials to anything that asks (the metadata
+  service). The installer adds a firewall rule so containers can never
+  reach it (`iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP`,
+  persisted), and stops sandboxes from talking to each other
+  (`"icc": false` in Docker's `daemon.json`).
 - **One machine, one daemon.** The daemon enforces this with a lock and
   refuses to start when its database and the machine's reality don't
   match.
 
 Without a prepared Linux host, the daemon still runs anywhere Node 22+
-runs using an in-memory fake executor — useful for development, not for
-real sandboxes.
+runs using a fake executor — a stand-in that simulates sandboxes in
+memory instead of starting real containers. Useful for developing
+against the API on a laptop, not for real sandboxes.

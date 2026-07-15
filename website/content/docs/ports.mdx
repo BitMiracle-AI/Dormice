@@ -5,7 +5,19 @@ description: Learn how to reach a server running inside a sandbox from the outsi
 
 Anything listening on a port inside a sandbox — a dev server, a
 notebook, an agent's UI — can be reached from outside through the
-daemon's sandbox proxy.
+daemon's sandbox proxy: each sandbox port gets its own preview URL like
+`8000-<sandboxId>.sbx.example.com`.
+
+Setting this up takes three ingredients, each explained in [Core
+concepts](/docs/core-concepts#reverse-proxies-domains-and-https): a
+domain dedicated to sandbox traffic, one wildcard DNS record (a
+phonebook entry matching *every* name under that domain, so each
+sandbox URL resolves without its own record), and a reverse proxy to
+receive the traffic and handle HTTPS.
+
+**Note:** this domain is for sandbox preview traffic only — it is
+separate from the domain you may have bound for the API and console in
+[Installation](/docs/installation#connect-from-another-machine).
 
 ## 1. Set the sandbox domain
 
@@ -32,8 +44,10 @@ one wildcard DNS record plus a reverse proxy that terminates TLS:
 ```
 
 **Note:** `flush_interval -1` keeps streaming responses unbuffered —
-verified with a real terminal session through Caddy. A wildcard
-certificate needs Caddy's DNS challenge; plain HTTP works for a LAN.
+verified with a real terminal session through Caddy. An HTTPS
+certificate covering `*.sbx.example.com` needs Caddy's DNS challenge
+(Caddy proves domain ownership through your DNS provider's API instead
+of per-name web checks); plain HTTP works for a LAN.
 
 ## 3. Get the URL with `getHost()`
 

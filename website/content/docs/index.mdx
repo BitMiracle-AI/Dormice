@@ -5,8 +5,13 @@ description: Dormice is a self-hosted sandbox platform for AI agents — run it 
 
 Dormice gives your AI agents isolated Linux sandboxes where they can
 safely run code, process data, and keep a long-lived workspace — on a
-machine you already own. You install one daemon; it manages the sandboxes
-for you.
+machine you already own. You install one daemon (a program that runs in
+the background continuously); it manages the sandboxes for you.
+
+**New to Docker or self-hosting?** These docs explain every term the
+first time it matters, and [Core concepts](/docs/core-concepts) collects
+them all in one place — start there if words like container, image, or
+reverse proxy are new to you.
 
 Start a sandbox and run a command in a few lines:
 
@@ -31,25 +36,33 @@ console.log(result.stdout); // Hello from Dormice!
   sandbox for the same key — today, tomorrow, next month — with all its
   files intact.
 - **Idle costs almost nothing.** Idle sandboxes cool down on their own
-  (`active → frozen → stopped → archived`), and any acquire brings them
-  back. Measured on real hardware: freezing takes an idle sandbox holding
+  (`active → frozen → stopped → archived` — the
+  [lifecycle](/docs/lifecycle)), and any acquire brings them back.
+  Measured on real hardware: freezing takes an idle sandbox holding
   1 GiB of memory down to ~5 MiB, and waking it takes ~50 ms.
-- **Deploys like a single binary.** One daemon, one SQLite database, one
-  port. No Kubernetes, no external database.
-- **Works with the official E2B SDKs.** The unmodified `e2b` packages
-  (JavaScript and Python) run against Dormice by changing two URLs — see
+- **Deploys like a single binary.** One daemon, one SQLite database (a
+  database that lives in a single file), one port. No Kubernetes, no
+  external database.
+- **Works with the official E2B SDKs.** [E2B](https://e2b.dev) is a
+  popular commercial sandbox cloud that many agent frameworks build on;
+  its unmodified `e2b` packages (JavaScript and Python) run against
+  Dormice by changing two URLs — see
   [Using the official E2B SDKs](/docs/e2b-sdks).
 
 ## How it works
 
-The daemon runs each sandbox as a Docker container under
-[gVisor](https://gvisor.dev), with its own disk. When a sandbox sits
-idle, the daemon suspends its processes and squeezes their memory out to
-swap — so it costs a few megabytes of RAM and wakes in about 50 ms,
-processes still running. The sandbox's data lives on its own disk, not in
-the container, so it survives daemon restarts, host reboots, and even the
-container being deleted. [Architecture](/docs/architecture) has the full
-picture.
+The daemon runs each sandbox as a Docker
+[container](/docs/core-concepts#containers-and-images) hardened with
+[gVisor](/docs/core-concepts#gvisor) (an extra isolation layer that
+keeps untrusted code away from your real machine), and gives each one a
+disk of its own. When a sandbox sits idle, the daemon suspends its
+processes and squeezes their memory out to
+[swap](/docs/core-concepts#swap-and-freezing) — disk space the
+operating system uses as overflow memory — so it costs a few megabytes
+of RAM and wakes in about 50 ms, processes still running. The sandbox's
+data lives on its own disk, not in the container, so it survives daemon
+restarts, host reboots, and even the container being deleted.
+[Architecture](/docs/architecture) has the full picture.
 
 ## Status
 
@@ -60,9 +73,11 @@ production yet.
 
 ## Next steps
 
-1. [Installation](/docs/installation) — set up the daemon on a Linux
+1. [Core concepts](/docs/core-concepts) — the terms these docs use,
+   explained from zero.
+2. [Installation](/docs/installation) — set up the daemon on a Linux
    host with one command.
-2. [Quick start](/docs/quickstart) — acquire your first sandbox and run
+3. [Quick start](/docs/quickstart) — acquire your first sandbox and run
    commands in it.
-3. [Using the official E2B SDKs](/docs/e2b-sdks) — if you already have
+4. [Using the official E2B SDKs](/docs/e2b-sdks) — if you already have
    an E2B application, point it at Dormice.
