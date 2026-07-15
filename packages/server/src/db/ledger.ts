@@ -1,4 +1,8 @@
-import type { LifecyclePolicy, SandboxState } from '@dormice/shared';
+import {
+  type LifecyclePolicy,
+  SANDBOX_STATES,
+  type SandboxState,
+} from '@dormice/shared';
 import { count, eq } from 'drizzle-orm';
 import { recordActivity } from './activity';
 import type { Db } from './db';
@@ -36,10 +40,15 @@ export interface CreateSandboxInput {
   policy: LifecyclePolicy;
   /** Template the sandbox is created from; absent/null means the base image. */
   template?: string | null;
+  /**
+   * Caller labels, JSON-serialized, stored verbatim. Both faces write it:
+   * native acquire and E2B create carry the same string→string map into the
+   * same column.
+   */
+  metadata?: string | null;
   /** E2B-surface extras; native acquire never sets them. */
   e2b?: {
-    /** JSON-serialized objects, stored verbatim. */
-    metadata: string | null;
+    /** JSON-serialized object, stored verbatim. */
     envs: string | null;
     deadlineAt: string;
     onDeadline: 'kill' | 'pause';
@@ -60,7 +69,7 @@ export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
     template: input.template ?? null,
     createdAt: now,
     lastActiveAt: now,
-    metadata: input.e2b?.metadata ?? null,
+    metadata: input.metadata ?? null,
     envs: input.e2b?.envs ?? null,
     deadlineAt: input.e2b?.deadlineAt ?? null,
     onDeadline: input.e2b?.onDeadline ?? null,
@@ -107,6 +116,18 @@ export function touch(
 /** Full table scan — the idle scanner's sweep. Fine at single-machine scale. */
 export function listSandboxes(db: Db): SandboxRow[] {
   return db.select().from(sandboxes).all();
+}
+
+/** State census over a listing — getHostMetrics and the metrics sampler share it. */
+export function countByState(rows: SandboxRow[]): {
+  byState: Record<SandboxState, number>;
+  total: number;
+} {
+  const byState = Object.fromEntries(
+    SANDBOX_STATES.map((state) => [state, 0]),
+  ) as Record<SandboxState, number>;
+  for (const row of rows) byState[row.state] += 1;
+  return { byState, total: rows.length };
 }
 
 /** How many sandboxes exist, for the capacity check at acquire. */
@@ -174,6 +195,27 @@ export function updatePolicy(
       stopAfterSeconds: policy.stopAfterSeconds,
       archiveAfterSeconds: policy.archiveAfterSeconds,
     })
+    .where(eq(sandboxes.sandboxId, sandboxId))
+    .run();
+  const row = findBySandboxId(db, sandboxId);
+  if (!row) {
+    throw new Error(`sandbox ${sandboxId} not found`);
+  }
+  return row;
+}
+
+/**
+ * Replaces the label set wholesale. Ledger-only, same manners as
+ * updatePolicy: no container work, no state change, and deliberately no
+ * touch — relabeling is not sandbox activity.
+ */
+export function updateMetadata(
+  db: Db,
+  sandboxId: string,
+  metadata: string | null,
+): SandboxRow {
+  db.update(sandboxes)
+    .set({ metadata })
     .where(eq(sandboxes.sandboxId, sandboxId))
     .run();
   const row = findBySandboxId(db, sandboxId);

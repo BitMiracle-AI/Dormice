@@ -11,10 +11,12 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   clientFromEnv,
+  parseLabels,
   pullSavedMessage,
   sandboxDestroy,
   sandboxExec,
   sandboxLs,
+  sandboxMeta,
   sandboxPull,
   sandboxPush,
   sandboxRebuild,
@@ -96,17 +98,40 @@ describe('sandbox commands over real HTTP', () => {
   });
 
   it('ls renders one aligned row per sandbox', async () => {
-    const alice = await client.acquireSandbox('alice');
+    const alice = await client.acquireSandbox('alice', {
+      metadata: { app: 'demo' },
+    });
     await client.acquireSandbox('bob');
 
     const output = await sandboxLs(client);
     const lines = output.split('\n');
     expect(lines[0]).toMatch(
-      /^USER KEY\s{2,}STATE\s{2,}SANDBOX ID\s{2,}LAST ACTIVE$/,
+      /^USER KEY\s{2,}STATE\s{2,}SANDBOX ID\s{2,}LAST ACTIVE\s{2,}METADATA$/,
     );
     expect(output).toMatch(/alice\s{2,}active/);
     expect(output).toMatch(/bob\s{2,}active/);
     expect(output).toContain(alice.sandbox.sandboxId);
+    expect(output).toContain('app=demo');
+  });
+
+  it('meta shows, replaces and clears the label set', async () => {
+    await client.acquireSandbox('labeled', {
+      metadata: { app: 'demo', env: 'prod' },
+    });
+    expect(await sandboxMeta(client, 'labeled', null)).toBe(
+      'app=demo,env=prod',
+    );
+    expect(await sandboxMeta(client, 'labeled', { app: 'ci' })).toBe(
+      'Metadata for key "labeled" is now app=ci.',
+    );
+    expect(await sandboxMeta(client, 'labeled', {})).toBe(
+      'Cleared metadata for key "labeled".',
+    );
+    expect(await sandboxMeta(client, 'labeled', null)).toBe('No metadata.');
+    await expect(sandboxMeta(client, 'nobody', null)).rejects.toThrow(
+      /acquire it first/,
+    );
+    await client.destroySandbox('labeled');
   });
 
   it('neutralizes control characters a hostile external id smuggles in', async () => {
@@ -178,6 +203,20 @@ describe('sandbox commands over real HTTP', () => {
     expect(await sandboxDestroy(client, 'carol')).toBe(
       'No sandbox for key "carol" — nothing to destroy.',
     );
+  });
+});
+
+describe('parseLabels', () => {
+  it('splits on the first = only — values keep their own', () => {
+    expect(parseLabels(['app=crawler', 'note=a=b'])).toEqual({
+      app: 'crawler',
+      note: 'a=b',
+    });
+  });
+
+  it('names the offending word when it is not key=value', () => {
+    expect(() => parseLabels(['nope'])).toThrow(/"nope" is not key=value/);
+    expect(() => parseLabels(['=value'])).toThrow(/not key=value/);
   });
 });
 

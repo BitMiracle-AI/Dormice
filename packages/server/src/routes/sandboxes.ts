@@ -6,6 +6,8 @@ import {
   destroySandboxResponseSchema,
   execCommandRequestSchema,
   execCommandResponseSchema,
+  getSandboxMetricsHistoryRequestSchema,
+  getSandboxMetricsHistoryResponseSchema,
   getSandboxMetricsRequestSchema,
   getSandboxMetricsResponseSchema,
   type LifecyclePolicy,
@@ -24,6 +26,9 @@ import {
   rebuildSandboxResponseSchema,
   resolveSandboxPath,
   type Sandbox,
+  type SandboxMetadata,
+  updateMetadataRequestSchema,
+  updateMetadataResponseSchema,
   updatePolicyRequestSchema,
   updatePolicyResponseSchema,
   WRITE_FILES_BODY_LIMIT_BYTES,
@@ -44,8 +49,15 @@ import {
   findByExternalId,
   listSandboxes,
   touch,
+  updateMetadata,
   updatePolicy,
 } from '../db/ledger';
+import {
+  bucketSamples,
+  querySandboxSamples,
+  resolveBucketSeconds,
+  resolveWindow,
+} from '../db/metrics';
 import type { SandboxRow } from '../db/schema';
 import { findTemplate, resolveImage } from '../db/templates';
 import { startExecHeartbeat } from '../exec-heartbeat';
@@ -90,9 +102,23 @@ function toSandbox(row: SandboxRow, endpoint: string): Sandbox {
       archiveAfterSeconds: row.archiveAfterSeconds,
     },
     template: row.template,
+    metadata: row.metadata ? JSON.parse(row.metadata) : {},
     createdAt: row.createdAt,
     lastActiveAt: row.lastActiveAt,
   };
+}
+
+/**
+ * Label map -> column value. An empty set is stored as NULL, not "{}": the
+ * column has meant "no labels = NULL" since the E2B surface introduced it,
+ * and the view normalizes both spellings to {} anyway.
+ */
+function serializeMetadata(
+  metadata: SandboxMetadata | undefined,
+): string | null {
+  return metadata && Object.keys(metadata).length > 0
+    ? JSON.stringify(metadata)
+    : null;
 }
 
 export const sandboxRoutes: FastifyPluginAsyncZod<
@@ -116,6 +142,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     externalId: string,
     policy: LifecyclePolicy,
     template: string | null,
+    metadata: string | null,
   ): Promise<AcquireOutcome> {
     const existing = findByExternalId(db, externalId);
     if (existing?.state === 'archived' || existing?.state === 'restoring') {
@@ -153,8 +180,9 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     if (existing) {
       // Wake whatever cold state it is in (a single jump back to active),
       // then refresh the idle clock — an acquire is what "activity" means.
-      // A requested template is not applied: like policy, it takes effect
-      // only when this acquire creates the sandbox.
+      // Requested template and metadata are not applied: like policy, they
+      // take effect only when this acquire creates the sandbox (metadata
+      // has its own update verb, updateMetadata).
       const awake = await wakeSandbox(db, executor, existing);
       return { status: 'ready', row: touch(db, awake.sandboxId) };
     }
@@ -187,6 +215,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         nodeId: config.DORMICE_NODE_ID,
         policy,
         template,
+        metadata,
       }),
     };
   }
@@ -232,7 +261,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request, reply) => {
-      const { externalId, policy: override, template } = request.body;
+      const { externalId, policy: override, template, metadata } = request.body;
 
       // Validate the policy before taking the key's slot, so a queued
       // rejection can only come from the work itself, never from another
@@ -270,7 +299,12 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       }
 
       const outcome = await locks.run(externalId, () =>
-        findOrCreate(externalId, policy, template ?? null),
+        findOrCreate(
+          externalId,
+          policy,
+          template ?? null,
+          serializeMetadata(metadata),
+        ),
       );
       if (outcome.status === 'restoring') {
         return {
@@ -301,10 +335,11 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   );
 
   // One sandbox's point-in-time resource reading — the native twin of the
-  // E2B metrics endpoint, same rules: a single sample (no history kept),
-  // and observation never wakes anything. A frozen sandbox is measured as
-  // it sleeps (its cgroup accounting stays readable); with no running
-  // container there is nothing to measure and the answer is an honest null.
+  // E2B metrics endpoint. Observation never wakes anything: a frozen
+  // sandbox is measured as it sleeps (its cgroup accounting stays
+  // readable); with no running container there is nothing to measure and
+  // the answer is an honest null. The past lives one verb down, in
+  // getSandboxMetricsHistory.
   app.post(
     '/getSandboxMetrics',
     {
@@ -327,6 +362,52 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       }
       const m = await executor.metrics(row.sandboxId);
       return { sample: { timestamp: new Date().toISOString(), ...m } };
+    },
+  );
+
+  // The sampled past of one sandbox, sliced by an optional ISO window
+  // (default: the last hour) and bucketed past 360 points — each bucket
+  // reporting per-field maxima, because history readers hunt spikes and
+  // averages erase them. An unsampled window answers an empty array; the
+  // native face never takes a live reading to fill silence (the E2B face
+  // does, as compatibility politeness — the asymmetry is deliberate).
+  // History is keyed by sandboxId under the hood, so it survives rebuilds.
+  app.post(
+    '/getSandboxMetricsHistory',
+    {
+      schema: {
+        body: getSandboxMetricsHistoryRequestSchema,
+        response: { 200: getSandboxMetricsHistoryResponseSchema },
+      },
+    },
+    async (request) => {
+      const { externalId, start, end } = request.body;
+      const row = findByExternalId(db, externalId);
+      if (!row) {
+        throw httpError(
+          404,
+          `no sandbox for key "${externalId}" — acquire it first`,
+        );
+      }
+      const { startIso, endIso, startMs, endMs } = resolveWindow(
+        start,
+        end,
+        3600_000,
+        new Date(),
+      );
+      const rows = querySandboxSamples(db, row.sandboxId, startIso, endIso);
+      const bucketSeconds = resolveBucketSeconds(rows.length, startMs, endMs);
+      const sliced =
+        bucketSeconds === null
+          ? rows
+          : bucketSamples(rows, startMs, bucketSeconds);
+      return {
+        samples: sliced.map(({ sandboxId: _, at, ...metrics }) => ({
+          timestamp: at,
+          ...metrics,
+        })),
+        bucketSeconds,
+      };
     },
   );
 
@@ -735,6 +816,48 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         return reply.code(400).send({ message: outcome.error });
       }
       return { sandbox: toSandbox(outcome.row, endpoint) };
+    },
+  );
+
+  app.post(
+    '/updateMetadata',
+    {
+      schema: {
+        body: updateMetadataRequestSchema,
+        response: { 200: updateMetadataResponseSchema },
+      },
+    },
+    async (request) => {
+      const { externalId, metadata } = request.body;
+      const serialized = serializeMetadata(metadata);
+      // Inside the slot for the same reason as updatePolicy: a concurrent
+      // destroy must not delete the row between check and write.
+      const row = await locks.run(externalId, async () => {
+        const existing = findByExternalId(db, externalId);
+        if (!existing) {
+          // Not a creator: an unknown key is a typo, same manners as rebuild.
+          throw httpError(
+            404,
+            `no sandbox for key "${externalId}" — acquire it first`,
+          );
+        }
+        if ((existing.metadata ?? null) === serialized) {
+          // The goal state already holds; a no-op writes no history.
+          return existing;
+        }
+        const updated = updateMetadata(db, existing.sandboxId, serialized);
+        recordActivity(db, {
+          kind: 'metadata-changed',
+          externalId,
+          sandboxId: updated.sandboxId,
+          detail:
+            Object.entries(metadata)
+              .map(([key, value]) => `${key}=${value}`)
+              .join(', ') || 'cleared',
+        });
+        return updated;
+      });
+      return { sandbox: toSandbox(row, endpoint) };
     },
   );
 

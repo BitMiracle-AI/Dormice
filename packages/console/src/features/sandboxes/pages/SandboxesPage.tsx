@@ -26,6 +26,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -80,6 +81,33 @@ const STATE_FILTERS: Array<SandboxState> = [
 /** 可排序的列:字符串比较对 externalId 和 ISO 时间戳同样成立。 */
 type SortKey = 'externalId' | 'lastActiveAt' | 'createdAt';
 type Sort = { key: SortKey; dir: 1 | -1 };
+
+/** 一个沙箱的标签摊平成 "key=value" 串 — 筛选项与展示共用同一拼法。 */
+function labelPairs(sandbox: Sandbox): string[] {
+  return Object.entries(sandbox.metadata).map(
+    ([key, value]) => `${key}=${value}`,
+  );
+}
+
+/** 标签列的一格:小 chips,长值截断、全文挂 hover;没标签就空着不占眼睛。 */
+function MetadataChips({ sandbox }: { sandbox: Sandbox }) {
+  const pairs = labelPairs(sandbox);
+  if (pairs.length === 0) return null;
+  return (
+    <span className="inline-flex max-w-[16rem] flex-wrap gap-1">
+      {pairs.map((pair) => (
+        <Badge
+          key={pair}
+          variant="outline"
+          className="max-w-[10rem] truncate font-mono text-xs font-normal text-muted-foreground"
+          title={pair}
+        >
+          {pair}
+        </Badge>
+      ))}
+    </span>
+  );
+}
 
 /**
  * 资源列的一格:数值紧凑,细节挂 hover;占比过线换警示色,和指标 tab
@@ -279,8 +307,16 @@ export function SandboxesPage() {
   );
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState<'all' | SandboxState>('all');
+  // 值是 "key=value" 串,'' = 全部。选项从舰队现有标签去重而来 —
+  // 分组不是实体,就是按标签筛,所以没有可维护的"组列表"要管。
+  const [metadataFilter, setMetadataFilter] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<Sort | null>(null);
+
+  const metadataOptions = useMemo(() => {
+    const pairs = new Set(sandboxes.flatMap(labelPairs));
+    return [...pairs].sort().map((pair) => ({ value: pair, label: pair }));
+  }, [sandboxes]);
 
   const toggleSort = (key: SortKey) =>
     setSort((prev) =>
@@ -293,6 +329,8 @@ export function SandboxesPage() {
     const matched = sandboxes.filter(
       (sandbox) =>
         (stateFilter === 'all' || sandbox.state === stateFilter) &&
+        (metadataFilter === '' ||
+          labelPairs(sandbox).includes(metadataFilter)) &&
         (search === '' ||
           sandbox.externalId.toLowerCase().includes(search.toLowerCase())),
     );
@@ -300,7 +338,7 @@ export function SandboxesPage() {
     return [...matched].sort(
       (a, b) => a[sort.key].localeCompare(b[sort.key]) * sort.dir,
     );
-  }, [sandboxes, stateFilter, search, sort]);
+  }, [sandboxes, stateFilter, metadataFilter, search, sort]);
 
   // 选中集随现实收敛:被别处销毁的沙箱不该留在选中里撑数字。
   const selectedVisible = filtered.filter((s) => selected.has(s.externalId));
@@ -360,6 +398,14 @@ export function SandboxesPage() {
             setStateFilter(value === '' ? 'all' : (value as SandboxState))
           }
         />
+        {metadataOptions.length > 0 && (
+          <FilterMenu
+            label="标签"
+            value={metadataFilter}
+            options={metadataOptions}
+            onChange={setMetadataFilter}
+          />
+        )}
         <span className="text-sm text-muted-foreground">
           {filtered.length} / {sandboxes.length} 个
         </span>
@@ -424,6 +470,7 @@ export function SandboxesPage() {
               </TableHead>
               <TableHead>状态</TableHead>
               <TableHead>模板</TableHead>
+              <TableHead>标签</TableHead>
               <TableHead className="text-right">CPU</TableHead>
               <TableHead className="text-right">内存</TableHead>
               <TableHead className="text-right">磁盘</TableHead>
@@ -483,6 +530,9 @@ export function SandboxesPage() {
                       lineage={lineageOf.get(sandbox.externalId)}
                     />
                   </span>
+                </TableCell>
+                <TableCell>
+                  <MetadataChips sandbox={sandbox} />
                 </TableCell>
                 {(() => {
                   const m = metricsOf.get(sandbox.externalId);

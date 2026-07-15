@@ -5,6 +5,7 @@ import {
   useSearch,
 } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import {
@@ -147,6 +148,22 @@ export function SandboxDetailPage() {
                       : lineage.upgradable
                         ? `${lineage.image} → Rebuild 后 ${lineage.nextImage}`
                         : lineage.image}
+                  </Row>
+                )}
+                {Object.keys(sandbox.metadata).length > 0 && (
+                  <Row label="标签">
+                    <span className="inline-flex flex-wrap justify-end gap-1">
+                      {Object.entries(sandbox.metadata).map(([key, value]) => (
+                        <Badge
+                          key={key}
+                          variant="outline"
+                          className="max-w-[14rem] truncate font-mono text-xs font-normal text-muted-foreground"
+                          title={`${key}=${value}`}
+                        >
+                          {key}={value}
+                        </Badge>
+                      ))}
+                    </span>
                   </Row>
                 )}
                 <Row label="节点">{sandbox.nodeId}</Row>

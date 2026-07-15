@@ -180,6 +180,41 @@ describe('POST /acquireSandbox', () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it('stores metadata at creation and echoes {} when none was given', async () => {
+    const { app } = testApp();
+    const labeled = await acquire(app, {
+      externalId: 'alice',
+      metadata: { app: 'crawler', env: 'prod' },
+    });
+    expect(labeled.json().sandbox.metadata).toEqual({
+      app: 'crawler',
+      env: 'prod',
+    });
+    const bare = await acquire(app, { externalId: 'bob' });
+    expect(bare.json().sandbox.metadata).toEqual({});
+  });
+
+  it('keeps stored metadata on the idempotent path, but a malformed value is still a 400', async () => {
+    const { app } = testApp();
+    await acquire(app, {
+      externalId: 'alice',
+      metadata: { app: 'crawler' },
+    });
+    // Same rule as policy/template: creation-time only, never an update.
+    const again = await acquire(app, {
+      externalId: 'alice',
+      metadata: { app: 'other' },
+    });
+    expect(again.json().sandbox.metadata).toEqual({ app: 'crawler' });
+    // Non-string values are outside the label contract — the caller's
+    // mistake even though it would not have applied.
+    const bad = await acquire(app, {
+      externalId: 'alice',
+      metadata: { app: 42 },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
 });
 
 describe('error shape', () => {
@@ -942,6 +977,97 @@ describe('POST /updatePolicy', () => {
     const events = (await rpc(app, '/listActivity')).json().events;
     expect(
       events.some((e: { kind: string }) => e.kind === 'policy-changed'),
+    ).toBe(false);
+  });
+});
+
+describe('POST /updateMetadata', () => {
+  it('replaces the label set wholesale and does not refresh the idle clock', async () => {
+    const { app } = testApp();
+    const created = (
+      await acquire(app, {
+        externalId: 'alice',
+        metadata: { app: 'crawler', env: 'staging' },
+      })
+    ).json();
+
+    // Full replacement: env is gone, not merged.
+    const res = await rpc(app, '/updateMetadata', {
+      externalId: 'alice',
+      metadata: { app: 'assistant' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sandbox.metadata).toEqual({ app: 'assistant' });
+    // Relabeling is not activity: the idle countdown keeps running.
+    expect(res.json().sandbox.lastActiveAt).toBe(created.sandbox.lastActiveAt);
+
+    const events = (await rpc(app, '/listActivity')).json().events;
+    expect(events[0]).toMatchObject({
+      kind: 'metadata-changed',
+      externalId: 'alice',
+      detail: 'app=assistant',
+    });
+  });
+
+  it('clears every label with {} and says so in the history', async () => {
+    const { app } = testApp();
+    await acquire(app, { externalId: 'alice', metadata: { app: 'crawler' } });
+    const res = await rpc(app, '/updateMetadata', {
+      externalId: 'alice',
+      metadata: {},
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sandbox.metadata).toEqual({});
+    const events = (await rpc(app, '/listActivity')).json().events;
+    expect(events[0]).toMatchObject({
+      kind: 'metadata-changed',
+      detail: 'cleared',
+    });
+  });
+
+  it('relabels a frozen sandbox without waking it — a pure ledger write', async () => {
+    const { app, db, executor, locks } = testApp();
+    const created = (await acquire(app, { externalId: 'alice' })).json();
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(
+        created.sandbox.lastActiveAt,
+        DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+      ),
+    );
+    expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
+
+    const res = await rpc(app, '/updateMetadata', {
+      externalId: 'alice',
+      metadata: { team: 'blue' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sandbox.state).toBe('frozen');
+    expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
+  });
+
+  it('answers 404 for an unknown key — updateMetadata is not a creator', async () => {
+    const res = await rpc(testApp().app, '/updateMetadata', {
+      externalId: 'nobody',
+      metadata: { app: 'x' },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toMatch(/acquire it first/);
+  });
+
+  it('treats a no-change replacement as the goal state and writes no history', async () => {
+    const { app } = testApp();
+    await acquire(app, { externalId: 'alice', metadata: { app: 'crawler' } });
+    const res = await rpc(app, '/updateMetadata', {
+      externalId: 'alice',
+      metadata: { app: 'crawler' },
+    });
+    expect(res.statusCode).toBe(200);
+    const events = (await rpc(app, '/listActivity')).json().events;
+    expect(
+      events.some((e: { kind: string }) => e.kind === 'metadata-changed'),
     ).toBe(false);
   });
 });

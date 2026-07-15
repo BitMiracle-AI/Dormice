@@ -8,10 +8,12 @@ import path from 'node:path';
 import { Command } from 'commander';
 import {
   clientFromEnv,
+  parseLabels,
   pullSavedMessage,
   sandboxDestroy,
   sandboxExec,
   sandboxLs,
+  sandboxMeta,
   sandboxPull,
   sandboxPush,
   sandboxRebuild,
@@ -122,6 +124,32 @@ sandbox
       }
       await writeFile(localPath, result.content);
       console.log(pullSavedMessage(result, localPath));
+    },
+  );
+
+sandbox
+  .command('meta')
+  .description(
+    'Show or replace the labels on the sandbox behind a key (replacement is total; a pure ledger write, nothing is woken)',
+  )
+  .argument('<externalId>', 'the external id whose sandbox to label')
+  .argument(
+    '[labels...]',
+    'key=value pairs forming the NEW complete label set; omitted = show the current one',
+  )
+  .option('--clear', 'remove every label')
+  .action(
+    async (externalId: string, labels: string[], opts: { clear?: boolean }) => {
+      if (opts.clear && labels.length > 0) {
+        throw new Error('--clear and key=value labels are mutually exclusive');
+      }
+      console.log(
+        await sandboxMeta(
+          clientFromEnv(process.env),
+          externalId,
+          opts.clear ? {} : labels.length > 0 ? parseLabels(labels) : null,
+        ),
+      );
     },
   );
 

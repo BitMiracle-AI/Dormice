@@ -108,8 +108,11 @@ curl -X POST http://127.0.0.1:3676/acquireSandbox \
   -d '{"externalId": "my-agent"}'
 ```
 
-Verbs: `acquireSandbox`, `updatePolicy` (patch an existing sandbox's
-lifecycle policy in place — no wake, no destroy), `listSandboxes`,
+Verbs: `acquireSandbox` (optionally with `metadata` — string-to-string
+labels stored at creation for grouping/filtering), `updatePolicy` (patch
+an existing sandbox's lifecycle policy in place — no wake, no destroy),
+`updateMetadata` (replace an existing sandbox's label set wholesale,
+`{}` clears — same no-wake manners), `listSandboxes`,
 `execCommand`, `writeFiles` / `writeFile`, `readFile` / `readFiles`,
 `rebuildSandbox` (fresh container, `/home/user` kept), `destroySandbox`,
 `registerTemplate` / `listTemplates` / `removeTemplate`,
@@ -133,6 +136,7 @@ dor sandbox exec my-agent 'uname -r'  # exit code passes through
 dor sandbox push my-agent ./data.csv  # → /home/user/data.csv
 dor sandbox pull my-agent notes.txt
 dor sandbox rebuild my-agent          # fresh container, /home/user kept
+dor sandbox meta my-agent app=crawler # replace labels (no args = show)
 dor sandbox destroy my-agent
 dor doctor                            # can this machine run sandboxes?
 ```

@@ -18,6 +18,7 @@ export const ACTIVITY_KIND_LABELS: Record<ActivityKind, string> = {
   'restore-failed': '恢复失败',
   reconciled: '对账修复',
   'policy-changed': '策略调整',
+  'metadata-changed': '标签调整',
   'daemon-started': 'daemon 启动',
   'ingress-updated': '域名配置',
   'upgrade-started': '发起升级',
@@ -48,6 +49,8 @@ export const ACTIVITY_KIND_STYLES: Record<ActivityKind, string> = {
   reconciled:
     'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400',
   'policy-changed':
+    'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
+  'metadata-changed':
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
   'daemon-started': 'border-border bg-muted text-muted-foreground',
   'ingress-updated':

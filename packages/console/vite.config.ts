@@ -29,6 +29,7 @@ export default defineConfig({
       '/acquireSandbox': 'http://127.0.0.1:3676',
       '/rebuildSandbox': 'http://127.0.0.1:3676',
       '/updatePolicy': 'http://127.0.0.1:3676',
+      '/updateMetadata': 'http://127.0.0.1:3676',
       '/listTemplates': 'http://127.0.0.1:3676',
       '/registerTemplate': 'http://127.0.0.1:3676',
       '/removeTemplate': 'http://127.0.0.1:3676',
