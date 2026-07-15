@@ -1357,11 +1357,24 @@ describe('templates', () => {
     const first = (
       await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' })
     ).json().template;
+    // Born un-upgraded: the upgrade timestamp starts at the birth date.
+    expect(first.updatedAt).toBe(first.createdAt);
+    // Millisecond timestamps need real time to pass to tell apart.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // Same image again: idempotent, and updatedAt must not claim an upgrade.
+    const same = (
+      await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' })
+    ).json().template;
+    expect(same.updatedAt).toBe(first.updatedAt);
     const second = (
       await rpc(app, '/registerTemplate', { name: 'py', image: 'img-b' })
     ).json().template;
     expect(second.image).toBe('img-b');
     expect(second.createdAt).toBe(first.createdAt);
+    // A real image change stamps the upgrade time.
+    expect(Date.parse(second.updatedAt)).toBeGreaterThan(
+      Date.parse(first.updatedAt),
+    );
     expect((await rpc(app, '/listTemplates')).json().templates).toHaveLength(1);
   });
 
@@ -1537,5 +1550,125 @@ describe('POST /getHostMetrics', () => {
     expect(body.sandboxes.byState.frozen).toBe(1);
     // Observation is not activity: reading metrics woke nothing.
     expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
+  });
+});
+
+describe('API keys', () => {
+  it('mints a 64-hex token, shown once and never stored in the view', async () => {
+    const { app } = testApp();
+    const res = await rpc(app, '/createApiKey', { name: 'ci' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(body.apiKey).toMatchObject({
+      name: 'ci',
+      prefix: body.token.slice(0, 8),
+      lastUsedAt: null,
+      revokedAt: null,
+    });
+    // The view carries no secret — not the token, not its hash.
+    expect(JSON.stringify(body.apiKey)).not.toContain(body.token);
+    expect(Object.keys(body.apiKey)).not.toContain('keyHash');
+  });
+
+  it('a minted key opens the Bearer door; revoking closes it on the next request', async () => {
+    const { app } = testApp();
+    const { token } = (await rpc(app, '/createApiKey', { name: 'ci' })).json();
+    const asKey = { authorization: `Bearer ${token}` };
+
+    const before = await app.inject({
+      method: 'POST',
+      url: '/listSandboxes',
+      headers: asKey,
+      payload: {},
+    });
+    expect(before.statusCode).toBe(200);
+
+    expect((await rpc(app, '/revokeApiKey', { name: 'ci' })).json()).toEqual({
+      revoked: true,
+    });
+    const afterRevoke = await app.inject({
+      method: 'POST',
+      url: '/listSandboxes',
+      headers: asKey,
+      payload: {},
+    });
+    expect(afterRevoke.statusCode).toBe(401);
+
+    // The env token is the bootstrap credential: revocation never touches it.
+    expect((await rpc(app, '/listSandboxes')).statusCode).toBe(200);
+  });
+
+  it('refuses a second active key under the same name with a 409, and frees the name after revoke', async () => {
+    const { app } = testApp();
+    await rpc(app, '/createApiKey', { name: 'ci' });
+    const dup = await rpc(app, '/createApiKey', { name: 'ci' });
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json().message).toMatch(/'ci' already exists/);
+
+    await rpc(app, '/revokeApiKey', { name: 'ci' });
+    expect((await rpc(app, '/createApiKey', { name: 'ci' })).statusCode).toBe(
+      200,
+    );
+  });
+
+  it('revoke is idempotent: an unknown or already-revoked name answers { revoked: false }', async () => {
+    const { app } = testApp();
+    expect((await rpc(app, '/revokeApiKey', { name: 'ghost' })).json()).toEqual(
+      { revoked: false },
+    );
+    await rpc(app, '/createApiKey', { name: 'ci' });
+    await rpc(app, '/revokeApiKey', { name: 'ci' });
+    expect((await rpc(app, '/revokeApiKey', { name: 'ci' })).json()).toEqual({
+      revoked: false,
+    });
+  });
+
+  it('lists every key ever minted, revoked rows included, newest first', async () => {
+    const { app } = testApp();
+    await rpc(app, '/createApiKey', { name: 'old' });
+    await rpc(app, '/revokeApiKey', { name: 'old' });
+    await rpc(app, '/createApiKey', { name: 'new' });
+
+    const keys = (await rpc(app, '/listApiKeys')).json().apiKeys;
+    expect(keys).toHaveLength(2);
+    expect(keys[0].name).toBe('new');
+    expect(keys[0].revokedAt).toBeNull();
+    expect(keys[1].name).toBe('old');
+    expect(keys[1].revokedAt).not.toBeNull();
+  });
+
+  it('stamps lastUsedAt on first use and throttles the write to 60s granularity', async () => {
+    const { app } = testApp();
+    const { token } = (await rpc(app, '/createApiKey', { name: 'ci' })).json();
+    const asKey = { authorization: `Bearer ${token}` };
+    const use = () =>
+      app.inject({
+        method: 'POST',
+        url: '/listSandboxes',
+        headers: asKey,
+        payload: {},
+      });
+
+    await use();
+    const first = (await rpc(app, '/listApiKeys')).json().apiKeys[0];
+    expect(first.lastUsedAt).not.toBeNull();
+
+    // A second use inside the 60s window must not move the stamp.
+    await use();
+    const second = (await rpc(app, '/listApiKeys')).json().apiKeys[0];
+    expect(second.lastUsedAt).toBe(first.lastUsedAt);
+  });
+
+  it('records mint and revoke in the activity ring, token nowhere in sight', async () => {
+    const { app } = testApp();
+    const { token } = (await rpc(app, '/createApiKey', { name: 'ci' })).json();
+    await rpc(app, '/revokeApiKey', { name: 'ci' });
+
+    const events = (await rpc(app, '/listActivity')).json().events;
+    const kinds = events.map((e: { kind: string }) => e.kind);
+    expect(kinds).toContain('apikey-created');
+    expect(kinds).toContain('apikey-revoked');
+    expect(JSON.stringify(events)).not.toContain(token);
   });
 });

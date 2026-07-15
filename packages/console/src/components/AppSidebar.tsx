@@ -2,6 +2,7 @@ import {
   Activity01Icon,
   DashboardSquare01Icon,
   Globe02Icon,
+  Key01Icon,
   Layers01Icon,
   Logout01Icon,
   Moon02Icon,
@@ -55,6 +56,7 @@ export const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
     label: '运维',
     items: [
       { to: '/activity', label: '活动', icon: Activity01Icon },
+      { to: '/api-keys', label: 'API 密钥', icon: Key01Icon },
       { to: '/domains', label: '域名', icon: Globe02Icon },
       { to: '/doctor', label: '体检', icon: StethoscopeIcon, mock: true },
       { to: '/settings', label: '设置', icon: Settings01Icon },

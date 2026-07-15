@@ -31,4 +31,10 @@ export interface E2bDeps {
    * signing secret, never the API token (they rotate independently).
    */
   envdSigningSecret: string;
+  /**
+   * buildApp's one adjudication of "does this bare credential open the
+   * door" (env token or any active ledger API key) — the same closure the
+   * native Bearer face uses, consulted here by the X-API-KEY hook.
+   */
+  verifyCredential: (bareToken: string) => boolean;
 }

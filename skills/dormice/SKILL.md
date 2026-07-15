@@ -28,6 +28,8 @@ the operator has either an SSH tunnel
 or a reverse-proxy domain (then use `https://their-domain`). Auth is one
 API token (created by the installer, hex): ask the user for the endpoint
 and token, conventionally held in `DORMICE_ENDPOINT` / `DORMICE_API_TOKEN`.
+API keys minted in the console (or with `dor apikey create <name>`) work
+everywhere the token does — same variables, revocable per client.
 
 ## Pick an entry path
 
@@ -116,6 +118,8 @@ an existing sandbox's lifecycle policy in place — no wake, no destroy),
 `execCommand`, `writeFiles` / `writeFile`, `readFile` / `readFiles`,
 `rebuildSandbox` (fresh container, `/home/user` kept), `destroySandbox`,
 `registerTemplate` / `listTemplates` / `removeTemplate`,
+`createApiKey` / `listApiKeys` / `revokeApiKey` (revocable peers of the
+API token; the create response shows the key once, never again),
 `getHostMetrics`, `getSandboxMetrics` / `listSandboxMetrics` (live
 resource samples; never wake anything), `listSandboxImages` (who still
 runs an old template image), `listActivity` (recent daemon history),
@@ -138,6 +142,7 @@ dor sandbox pull my-agent notes.txt
 dor sandbox rebuild my-agent          # fresh container, /home/user kept
 dor sandbox meta my-agent app=crawler # replace labels (no args = show)
 dor sandbox destroy my-agent
+dor apikey create ci                  # mint a revocable key (printed once)
 dor doctor                            # can this machine run sandboxes?
 ```
 

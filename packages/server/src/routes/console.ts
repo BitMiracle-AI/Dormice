@@ -110,6 +110,11 @@ export const consoleRoutes: FastifyPluginAsyncZod<
           message: `too many failed attempts — retry in ${wait}s`,
         });
       }
+      // Deliberately the env token only, never a ledger API key: this verb
+      // resets the human account, and a leaked machine credential must not
+      // escalate into a console takeover. The token's root of trust is
+      // filesystem access to /etc/dormice/env — exactly what a recovery
+      // path should require.
       if (!tokensEqual(request.body.token, config.DORMICE_API_TOKEN)) {
         throttle.recordFailure(request.ip);
         return reply.code(401).send({ message: 'invalid API token' });

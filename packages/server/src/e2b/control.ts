@@ -100,6 +100,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     archiver,
     archiveDefaultSeconds,
     envdSigningSecret,
+    verifyCredential,
   },
 ) => {
   /**
@@ -131,7 +132,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   app.addHook('onRequest', async (request, reply) => {
     const presented = request.headers['x-api-key'];
     const key = Array.isArray(presented) ? presented[0] : presented;
-    if (!verifyApiKey(config.DORMICE_API_TOKEN, key)) {
+    if (!verifyApiKey(verifyCredential, key)) {
       await reply.code(401).send({ code: 401, message: 'invalid API key' });
     }
   });

@@ -72,6 +72,35 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
+  it('a ledger API key drives the official SDK exactly like the env token', async () => {
+    // Minted over the native face; the E2B face accepts it as e2b_<key> —
+    // pure hex by construction, so even the Python SDK's client-side
+    // e2b_[0-9a-f]+ validation would let it through.
+    const dormice = new Dormice({
+      endpoint: inject('dormiceEndpoint'),
+      token: inject('dormiceToken'),
+    });
+    const { token } = await dormice.createApiKey('e2b-face');
+    try {
+      const sbx = await Sandbox.create({
+        ...connection(),
+        apiKey: `e2b_${token}`,
+      });
+      try {
+        const result = await sbx.commands.run('echo keyed');
+        expect(result.stdout).toBe('keyed\n');
+      } finally {
+        await sbx.kill();
+      }
+    } finally {
+      await dormice.revokeApiKey('e2b-face');
+    }
+    // Revoked: the same key is refused at the control-plane door.
+    await expect(
+      Sandbox.create({ ...connection(), apiKey: `e2b_${token}` }),
+    ).rejects.toThrow(/invalid API key/);
+  });
+
   it('throws CommandExitError on a nonzero exit — the SDK’s own contract', async () => {
     const sbx = await Sandbox.create(connection());
     try {

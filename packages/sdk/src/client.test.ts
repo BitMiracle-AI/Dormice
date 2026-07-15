@@ -358,6 +358,40 @@ describe('templates over real HTTP', () => {
   });
 });
 
+describe('API keys over real HTTP', () => {
+  it('mints a key a fresh client can use, revokes it, and the door closes', async () => {
+    const { apiKey, token } = await client.createApiKey('sdk-rotation');
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(apiKey.prefix).toBe(token.slice(0, 8));
+
+    // The rotation story: a new client on the minted key does real work.
+    const keyed = new Dormice({ endpoint, token });
+    await keyed.acquireSandbox('keyed-user');
+    await keyed.destroySandbox('keyed-user');
+
+    const listed = await client.listApiKeys();
+    const mine = listed.find((k) => k.name === 'sdk-rotation');
+    expect(mine?.lastUsedAt).not.toBeNull();
+
+    expect(await client.revokeApiKey('sdk-rotation')).toEqual({
+      revoked: true,
+    });
+    await expect(keyed.listSandboxes()).rejects.toMatchObject({ status: 401 });
+    expect(await client.revokeApiKey('sdk-rotation')).toEqual({
+      revoked: false,
+    });
+  });
+
+  it("surfaces the server's 409 for a duplicate active name", async () => {
+    await client.createApiKey('sdk-dup');
+    await expect(client.createApiKey('sdk-dup')).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringMatching(/sdk-dup/),
+    });
+    await client.revokeApiKey('sdk-dup');
+  });
+});
+
 describe('the observability verbs over real HTTP', () => {
   it('getConfig reports the knobs and withholds the token', async () => {
     // Source attribution is asserted server-side with injected sources;

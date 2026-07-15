@@ -1,4 +1,5 @@
 import {
+  type ApiKey,
   Dormice,
   type ReadFileResult,
   type Sandbox,
@@ -250,6 +251,8 @@ export async function templateLs(client: Dormice): Promise<string> {
     { header: 'NAME', value: (t) => t.name },
     { header: 'IMAGE', value: (t) => t.image },
     { header: 'CREATED', value: (t) => t.createdAt },
+    // Moves only on a real image change; equal to CREATED = never upgraded.
+    { header: 'UPDATED', value: (t) => t.updatedAt },
   ];
   return renderTable(
     columns.map((column) => column.header),
@@ -266,4 +269,55 @@ export async function templateRm(
   return removed
     ? `Removed template "${printable(name)}".`
     : `No template named "${printable(name)}" — nothing to remove.`;
+}
+
+/**
+ * `dor apikey create <name>`: mint an API key. The token line is the one
+ * and only time the key material exists outside the daemon's hash — the
+ * warning is part of the output, not decoration.
+ */
+export async function apikeyCreate(
+  client: Dormice,
+  name: string,
+): Promise<string> {
+  const { apiKey, token } = await client.createApiKey(name);
+  return (
+    `Created API key "${printable(apiKey.name)}" (prefix ${apiKey.prefix}).\n` +
+    `${token}\n` +
+    'Store it now — it will never be shown again.'
+  );
+}
+
+/** `dor apikey ls`: every key ever minted, revoked ones included, as plain columns. */
+export async function apikeyLs(client: Dormice): Promise<string> {
+  const keys = await client.listApiKeys();
+  if (keys.length === 0) {
+    return 'No API keys.';
+  }
+  const columns: { header: string; value: (k: ApiKey) => string }[] = [
+    { header: 'NAME', value: (k) => k.name },
+    { header: 'PREFIX', value: (k) => k.prefix },
+    { header: 'CREATED', value: (k) => k.createdAt },
+    { header: 'LAST USED', value: (k) => k.lastUsedAt ?? 'never' },
+    { header: 'STATUS', value: (k) => (k.revokedAt ? 'revoked' : 'active') },
+  ];
+  return renderTable(
+    columns.map((column) => column.header),
+    keys.map((k) => columns.map((column) => printable(column.value(k)))),
+  );
+}
+
+/**
+ * `dor apikey revoke <name>`: kill the active key under a name. The false
+ * branch is said out loud — a silent miss here would leave a leaked key
+ * alive behind a typo.
+ */
+export async function apikeyRevoke(
+  client: Dormice,
+  name: string,
+): Promise<string> {
+  const { revoked } = await client.revokeApiKey(name);
+  return revoked
+    ? `Revoked API key "${printable(name)}" — it stops working immediately.`
+    : `No active API key named "${printable(name)}" — nothing to revoke.`;
 }

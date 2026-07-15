@@ -55,6 +55,10 @@ against `e2b_[0-9a-f]+` on the client side, before any request leaves
 the machine — a token with other characters fails in the SDK, not on the
 wire.
 
+[API keys](/docs/http-api#api-keys) minted through the daemon work here
+too — `e2b_<key>` anywhere the token goes, and they are pure hex by
+construction, so the Python SDK's validation never bites.
+
 ## Reuse the same sandbox across creates
 
 A Dormice extension: pass `metadata: { externalId: '...' }` and

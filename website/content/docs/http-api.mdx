@@ -18,7 +18,9 @@ Two rules cover the whole surface:
 
 - **Auth** is `Authorization: Bearer <token>` on every route except
   `GET /healthz`, the open liveness probe (it answers
-  `{"status":"ok"}`).
+  `{"status":"ok"}`). The token is `DORMICE_API_TOKEN` — or any active
+  [API key](#api-keys), the revocable credentials minted through
+  `createApiKey` or the console.
 - **Every non-2xx body is `{ "message": "..." }`** — one error shape,
   whoever produced the error. 4xx name your mistake; 5xx are the
   daemon's.
@@ -44,6 +46,9 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | `POST /registerTemplate` | upsert name → image | 400 `'base'` is reserved |
 | `POST /listTemplates` | every registered template | — |
 | `POST /removeTemplate` | unregister; idempotent | 409 while sandboxes still use it (names them) |
+| `POST /createApiKey` | mint an [API key](#api-keys); the token appears in this response once, never again | 409 while an active key already has this name |
+| `POST /listApiKeys` | every key ever minted, revoked ones included, newest first — no secrets | — |
+| `POST /revokeApiKey` | soft-revoke the active key under a name; idempotent (`revoked: false` when none was) | — |
 | `POST /getHostMetrics` | host snapshot; never wakes anything | — |
 | `POST /getSandboxMetrics` | one sandbox's live CPU/memory/disk sample; `sample` is `null` when nothing is running | 404 unknown key |
 | `POST /listSandboxMetrics` | every measurable sandbox's sample in one answer | — |
@@ -88,6 +93,26 @@ coming back from S3 —
 `{ "status": "restoring", "sandbox": …, "progress": { "phase": "downloading" | "extracting", "percent": … } }`;
 poll acquire until it flips to `ready` (see
 [Archiving](/docs/archiving)).
+
+## API keys
+
+`DORMICE_API_TOKEN` works forever, but rotating it means editing
+`/etc/dormice/env` and restarting the daemon. API keys are its
+full-power, revocable peers: mint one per client with
+`POST /createApiKey {"name": "ci"}`, hand out the returned 64-hex
+`token`, and when a key leaks, `POST /revokeApiKey {"name": "ci"}` kills
+exactly that credential on its next request — no config edit, no
+restart, no other client disturbed.
+
+The token appears in the create response **once**. The daemon stores
+only its hash, so nothing can ever show it again — copy it then. Keys
+open every door the env token does, the
+[E2B surface](/docs/e2b-sdks) included (`e2b_<key>` works as an E2B API
+key); the one exception is console account setup/reset, which accepts
+only the env token — a leaked machine credential must not be able to
+take over the human account. Each key row carries `lastUsedAt` (written
+with 60-second granularity), and revoked rows stay in `listApiKeys` as
+your rotation history.
 
 ## Commands and files on the wire
 
