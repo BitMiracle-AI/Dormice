@@ -133,6 +133,8 @@ const build = readBuildInfo();
 const updater = new Updater({
   repoDir: existsSync(path.join(repoRoot, '.git')) ? repoRoot : null,
   build,
+  statusDir: path.join(config.DORMICE_DATA_DIR, 'upgrade'),
+  executor: config.DORMICE_EXECUTOR,
 });
 log.info(
   build

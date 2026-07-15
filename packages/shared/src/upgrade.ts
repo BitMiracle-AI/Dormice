@@ -76,3 +76,75 @@ export const checkUpgradeResponseSchema = z.object({
 });
 
 export type CheckUpgradeResponse = z.infer<typeof checkUpgradeResponseSchema>;
+
+/**
+ * applyUpgrade() — the one-click upgrade. The daemon launches install.sh
+ * (re-running it IS the upgrade — one script for manual and one-click) in
+ * a systemd transient unit, detached from its own lifetime: the upgrade's
+ * last step restarts the daemon, and a child process would die with its
+ * parent mid-build. The unit name doubles as the mutex — a second apply
+ * while one runs is refused with 409, the Coolify double-click corruption
+ * made structural. The verb takes no parameters on purpose: nothing from
+ * the request ever reaches a root command line.
+ *
+ * Refused (400) when one-click is unavailable — fake executor, no git
+ * checkout, no systemd. Watch progress with getUpgradeStatus.
+ */
+export const applyUpgradeRequestSchema = z.object({});
+
+export type ApplyUpgradeRequest = z.infer<typeof applyUpgradeRequestSchema>;
+
+export const applyUpgradeResponseSchema = z.object({
+  started: z.literal(true),
+});
+
+export type ApplyUpgradeResponse = z.infer<typeof applyUpgradeResponseSchema>;
+
+/**
+ * What install.sh reports into status.json (--status-dir): the whole
+ * truth of one run. `rolled-back` means the build failed after git pull
+ * and the code was put back and rebuilt at the commit that was running —
+ * the daemon was not restarted and keeps serving.
+ */
+export const upgradeRunSchema = z.object({
+  state: z.enum(['running', 'succeeded', 'failed', 'rolled-back']),
+  startedAt: z.iso.datetime(),
+  finishedAt: z.iso.datetime().nullable(),
+  /** The commit that was running before the pull; null on a fresh install. */
+  fromCommit: z.string().nullable(),
+  /** The commit the checkout moved to; null until the pull happened. */
+  toCommit: z.string().nullable(),
+  error: z.string().nullable(),
+});
+
+export type UpgradeRun = z.infer<typeof upgradeRunSchema>;
+
+/**
+ * getUpgradeStatus() — the upgrade execution window. `running` is read
+ * from systemd (the unit's liveness, not the status file's claim): a
+ * status file stuck at "running" with no live unit means the process died
+ * without reporting, and the daemon adjudicates that into an honest
+ * failure instead of showing an upgrade that never ends.
+ */
+export const getUpgradeStatusRequestSchema = z.object({});
+
+export type GetUpgradeStatusRequest = z.infer<
+  typeof getUpgradeStatusRequestSchema
+>;
+
+export const getUpgradeStatusResponseSchema = z.object({
+  /** Can this daemon one-click upgrade itself at all? */
+  available: z.boolean(),
+  /** Why not, when available is false — the console shows the manual path instead. */
+  unavailableReason: z.string().nullable(),
+  /** Is the systemd unit alive right now? */
+  running: z.boolean(),
+  /** The most recent run's report; null when no one-click upgrade ever ran. */
+  last: upgradeRunSchema.nullable(),
+  /** The tail of the run's output — real progress, straight from the script. */
+  log: z.string().nullable(),
+});
+
+export type GetUpgradeStatusResponse = z.infer<
+  typeof getUpgradeStatusResponseSchema
+>;

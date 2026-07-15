@@ -27,6 +27,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar';
+import { useCachedUpgradable } from '@/features/settings/hooks/useUpgrade';
 import { logout } from '@/lib/api';
 import { MOCK_PAGES_ENABLED } from '@/lib/mock';
 import { clearSessionMarker } from '@/lib/session';
@@ -87,6 +88,8 @@ export function AppSidebar() {
     select: (state) => state.location.pathname,
   });
   const { resolvedTheme, setTheme } = useTheme();
+  // 只读缓存:设置页查过且有新版本才亮,角标自己绝不发请求。
+  const upgradable = useCachedUpgradable();
 
   return (
     <Sidebar variant="inset" className="px-1">
@@ -124,6 +127,14 @@ export function AppSidebar() {
                         <span>{item.label}</span>
                       </SidebarMenuButton>
                       {item.mock && <SidebarMenuBadge>预览</SidebarMenuBadge>}
+                      {item.to === '/settings' && upgradable && (
+                        <SidebarMenuBadge>
+                          <span
+                            className="size-2 rounded-full bg-amber-500"
+                            title="有新版本可升级"
+                          />
+                        </SidebarMenuBadge>
+                      )}
                     </SidebarMenuItem>
                   ))}
                 </SidebarMenu>

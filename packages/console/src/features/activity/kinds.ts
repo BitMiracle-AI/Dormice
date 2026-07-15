@@ -20,6 +20,7 @@ export const ACTIVITY_KIND_LABELS: Record<ActivityKind, string> = {
   'policy-changed': '策略调整',
   'daemon-started': 'daemon 启动',
   'ingress-updated': '域名配置',
+  'upgrade-started': '发起升级',
 };
 
 // 事件色与沙箱状态徽章同一色系:落到哪个状态就穿哪个颜色;
@@ -50,5 +51,7 @@ export const ACTIVITY_KIND_STYLES: Record<ActivityKind, string> = {
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
   'daemon-started': 'border-border bg-muted text-muted-foreground',
   'ingress-updated':
+    'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
+  'upgrade-started':
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
 };

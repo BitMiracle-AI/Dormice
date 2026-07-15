@@ -1,7 +1,9 @@
 import {
   type AcquireResponse,
   type ActivityEvent,
+  type ApplyUpgradeResponse,
   acquireResponseSchema,
+  applyUpgradeResponseSchema,
   type CheckUpgradeResponse,
   checkUpgradeResponseSchema,
   DEFAULT_EXEC_TIMEOUT_SECONDS,
@@ -11,9 +13,11 @@ import {
   execCommandResponseSchema,
   type GetConfigResponse,
   type GetIngressResponse,
+  type GetUpgradeStatusResponse,
   getConfigResponseSchema,
   getIngressResponseSchema,
   getSandboxMetricsResponseSchema,
+  getUpgradeStatusResponseSchema,
   type HostMetricsResponse,
   hostMetricsResponseSchema,
   type LifecyclePolicyOverride,
@@ -238,6 +242,31 @@ export class Dormice {
       force: options?.force,
     });
     return checkUpgradeResponseSchema.parse(data);
+  }
+
+  /**
+   * The one-click upgrade: the daemon launches install.sh (re-running it
+   * IS the upgrade) in a systemd transient unit that outlives the daemon's
+   * own restart. Returns as soon as the unit started — watch it land with
+   * getUpgradeStatus. 400 when one-click is unavailable (fake executor, no
+   * git checkout, no systemd); 409 when an upgrade is already running.
+   * Expect the daemon to restart near the end: in-flight execs, terminals
+   * and watchers break, sandboxes and their disks are untouched.
+   */
+  async applyUpgrade(): Promise<ApplyUpgradeResponse> {
+    const data = await this.rpc('applyUpgrade', {});
+    return applyUpgradeResponseSchema.parse(data);
+  }
+
+  /**
+   * The upgrade execution window: whether one-click is available at all,
+   * whether the systemd unit is alive right now, the last run's report
+   * (state, commits, error) as install.sh wrote it, and the log tail. A
+   * run that died without reporting comes back as an honest failure.
+   */
+  async getUpgradeStatus(): Promise<GetUpgradeStatusResponse> {
+    const data = await this.rpc('getUpgradeStatus', {});
+    return getUpgradeStatusResponseSchema.parse(data);
   }
 
   /**
