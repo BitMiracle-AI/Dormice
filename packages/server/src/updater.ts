@@ -336,6 +336,11 @@ export class Updater {
       reject: false,
     });
     if (result.exitCode !== 0) {
+      // A hung fetch (unreachable mirror, packet-dropping middlebox) is the
+      // most common failure here — name it instead of "exit unknown".
+      if (result.timedOut) {
+        throw new Error(`git ${args[0]} timed out after ${timeout / 1000}s`);
+      }
       const stderr = (result.stderr ?? '').trim();
       throw new Error(
         `git ${args[0]} failed: ${stderr.slice(0, 300) || `exit ${result.exitCode ?? 'unknown'}`}`,

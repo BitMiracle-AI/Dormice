@@ -28,7 +28,9 @@ export function useForceCheckUpgrade() {
  * 升级执行窗:一键升级可不可用、systemd unit 是否活着、上一次运行的
  * 报告。全是本机读数(systemctl + 状态文件),不打网络 — 版本卡拿它
  * 决定「升级」按钮还是手动指引。升级弹窗里的 2 秒轮询是弹窗自己的
- * setTimeout 链(daemon 重启的失联是预期环节,查询库的重试语义不合身)。
+ * setTimeout 链(daemon 重启的失联是预期环节,查询库的重试语义不合身);
+ * 这里只在有升级在跑时自轮询 — 横幅与「上次运行」的结局要能自愈,
+ * 不能指望弹窗一直开着。
  */
 export function useUpgradeStatus() {
   return useQuery({
@@ -36,6 +38,7 @@ export function useUpgradeStatus() {
     queryFn: getUpgradeStatus,
     staleTime: 15_000,
     retry: false,
+    refetchInterval: (query) => (query.state.data?.running ? 5000 : false),
   });
 }
 

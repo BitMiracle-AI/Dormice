@@ -21,20 +21,25 @@ import { ApiError, applyUpgrade, getUpgradeStatus } from '@/lib/api';
  * 而不是当错误处理。终局以 install.sh 写下的报告为准 — succeeded 意味
  * 着 daemon 已带着新版本回来并通过 doctor,不是"脚本跑完了"。
  *
- * 防「上一次的旧报告」误判:观察态先要见过进行中(unit 活着或报告说
- * running)才接受终局 — applyUpgrade 刚返回时状态文件可能还是上一轮的。
+ * 防「上一次的旧报告」误判靠报告身份:发起前记下现存报告的 startedAt
+ * 作基线,只接受非基线的终局 — applyUpgrade 刚返回时读到的还是上一轮
+ * 的旧报告(等于基线,拒);升级进程若在第一次轮询前就死掉,daemon 会
+ * 把它裁决成带新 startedAt 的 failed 报告(非基线,收),不会永远转圈。
  */
 interface UpgradeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** 打开时升级已在跑(上次没看完/别处发起)— 跳过确认直接观察。 */
   alreadyRunning: boolean;
+  /** 打开时现存报告的 startedAt(没有 = null)— 终局裁决的基线。 */
+  baselineStartedAt: string | null;
 }
 
 export function UpgradeDialog({
   open,
   onOpenChange,
   alreadyRunning,
+  baselineStartedAt,
 }: UpgradeDialogProps) {
   const queryClient = useQueryClient();
   const [phase, setPhase] = useState<'confirm' | 'watch'>('confirm');
@@ -45,19 +50,25 @@ export function UpgradeDialog({
   );
   const [unreachable, setUnreachable] = useState(false);
   const [outcome, setOutcome] = useState<UpgradeRun | null>(null);
-  const sawProgress = useRef(false);
+  const baseline = useRef<string | null>(null);
 
-  // 每次打开都是一场新的升级:上一场的快照与终局不许串场。
+  // 弹窗状态只在打开那一刻初始化(effect 只依赖 open):上一场的快照与
+  // 终局不许串场;而观察期间查询失效会翻动 alreadyRunning 等 prop,那是
+  // 轮询的回声,不是重新打开 — 决不能把正在显示的终局重置回确认幕。
+  const openedWith = useRef({ alreadyRunning, baselineStartedAt });
+  openedWith.current = { alreadyRunning, baselineStartedAt };
   useEffect(() => {
     if (!open) return;
-    setPhase(alreadyRunning ? 'watch' : 'confirm');
+    const opened = openedWith.current;
+    setPhase(opened.alreadyRunning ? 'watch' : 'confirm');
     setLaunching(false);
     setLaunchError(null);
     setSnapshot(null);
     setUnreachable(false);
     setOutcome(null);
-    sawProgress.current = alreadyRunning;
-  }, [open, alreadyRunning]);
+    // 已在跑的那场不是这里发起的,没有基线可对照:见到什么终局收什么。
+    baseline.current = opened.alreadyRunning ? null : opened.baselineStartedAt;
+  }, [open]);
 
   useEffect(() => {
     if (!open || phase !== 'watch' || outcome !== null) return;
@@ -69,9 +80,13 @@ export function UpgradeDialog({
         if (stopped) return;
         setUnreachable(false);
         setSnapshot(status);
-        if (status.running || status.last?.state === 'running') {
-          sawProgress.current = true;
-        } else if (sawProgress.current && status.last !== null) {
+        // 终局 = unit 已死且报告不是基线那份。startedAt 即报告身份:同一
+        // 场运行的中途与终局报告共享它,上一场的旧报告则等于基线被拒。
+        if (
+          !status.running &&
+          status.last !== null &&
+          status.last.startedAt !== baseline.current
+        ) {
           setOutcome(status.last);
           // 成功后重新问一次版本(新 daemon 的缓存是空的,会真查一次
           // 并显示已是最新);无论成败,执行窗与配置都过期了。
@@ -107,12 +122,11 @@ export function UpgradeDialog({
     setLaunchError(null);
     try {
       await applyUpgrade();
-      sawProgress.current = false;
       setPhase('watch');
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
-        // 已经有一场在跑 — 那就看它。
-        sawProgress.current = true;
+        // 已经有一场在跑 — 那就看它:不是这里发起的,没有基线可对照。
+        baseline.current = null;
         setPhase('watch');
       } else {
         setLaunchError(error instanceof Error ? error.message : String(error));
@@ -218,7 +232,7 @@ function WatchBody({
                   <code className="font-mono">{outcome.toCommit}</code>
                 </>
               )}
-              。
+              。当前页面还是旧版控制台,点「刷新控制台」加载新版。
             </>
           ) : outcome.state === 'rolled-back' ? (
             '构建失败,代码已回退到升级前的版本并重新构建,daemon 未重启、照常服务。修复原因后可再试。'
@@ -247,12 +261,14 @@ function WatchBody({
       )}
 
       <DialogFooter>
-        <Button
-          variant={outcome?.state === 'succeeded' ? 'default' : 'outline'}
-          onClick={onClose}
-        >
+        <Button variant="outline" onClick={onClose}>
           {outcome === null ? '转到后台(升级继续)' : '关闭'}
         </Button>
+        {outcome?.state === 'succeeded' && (
+          // 升级重建了控制台:路由块按内容哈希按需加载,旧构建的块已被
+          // 清掉,不刷新的话继续导航会撞 404。
+          <Button onClick={() => window.location.reload()}>刷新控制台</Button>
+        )}
       </DialogFooter>
     </>
   );
