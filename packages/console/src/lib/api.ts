@@ -1,10 +1,12 @@
 import type {
   AcquireRequest,
   AcquireResponse,
+  ApplyUpgradeResponse,
   CheckUpgradeResponse,
   GetConfigResponse,
   GetIngressResponse,
   GetSandboxMetricsResponse,
+  GetUpgradeStatusResponse,
   HostMetricsResponse,
   LifecyclePolicyOverride,
   ListActivityResponse,
@@ -146,6 +148,17 @@ export const getConfig = () => rpc<GetConfigResponse>('/getConfig');
 // the "check now" button. A failed check is data (checkError), not a 500.
 export const checkUpgrade = (force = false) =>
   rpc<CheckUpgradeResponse>('/checkUpgrade', { force });
+
+// The one-click upgrade: the daemon hands install.sh to a systemd unit
+// that outlives its own restart, then answers { started: true }. Progress
+// lives in getUpgradeStatus; expect the daemon to restart near the end.
+export const applyUpgrade = () =>
+  rpc<ApplyUpgradeResponse>('/applyUpgrade', {});
+
+// The upgrade execution window: availability, unit liveness (from systemd,
+// not the status file's claim), the last run's report and the log tail.
+export const getUpgradeStatus = () =>
+  rpc<GetUpgradeStatusResponse>('/getUpgradeStatus', {});
 
 // The daemon's front door: whether it manages a reverse proxy config, and
 // every bound domain with live probes (DNS record, certificate served).

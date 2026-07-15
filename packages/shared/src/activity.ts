@@ -29,6 +29,12 @@ export const ACTIVITY_KINDS = [
   'daemon-started',
   /** An operator bound or cleared the console domain through setIngress. */
   'ingress-updated',
+  /**
+   * An operator launched the one-click self-upgrade (applyUpgrade). Only
+   * the launch is recorded — the outcome lives in getUpgradeStatus, and
+   * the daemon that would record "finished" is the one being replaced.
+   */
+  'upgrade-started',
 ] as const;
 
 export const activityKindSchema = z.enum(ACTIVITY_KINDS);

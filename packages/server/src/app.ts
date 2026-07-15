@@ -1,4 +1,5 @@
 import http from 'node:http';
+import nodePath from 'node:path';
 import fastifyCookie from '@fastify/cookie';
 import fastify, { type FastifyError, type FastifyServerFactory } from 'fastify';
 import {
@@ -103,7 +104,12 @@ export function buildApp({
   archiver,
   ingress,
   sources = configSources(),
-  updater = new Updater({ repoDir: null, build: readBuildInfo() }),
+  updater = new Updater({
+    repoDir: null,
+    build: readBuildInfo(),
+    statusDir: nodePath.join(config.DORMICE_DATA_DIR, 'upgrade'),
+    executor: config.DORMICE_EXECUTOR,
+  }),
 }: AppDeps) {
   // The archive default is adjudicated once, here, by the archiver's
   // presence: with one, new sandboxes archive after a week of idleness;
@@ -206,7 +212,7 @@ export function buildApp({
       sources,
       archiveDefaultSeconds,
     });
-    await api.register(upgradeRoutes, { updater });
+    await api.register(upgradeRoutes, { updater, db });
   });
 
   // The web console: account + session endpoints (open — setup and login
