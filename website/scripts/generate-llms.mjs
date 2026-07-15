@@ -6,10 +6,10 @@
 //
 // content/docs/meta.json stays the single decision point for grouping and
 // order (same as src/lib/docs.ts); the assertions below fail the build when
-// the directory and meta.json drift. Links are root-relative so the output
-// works before the deployment domain is decided — set SITE_URL to make them
-// absolute. No fallback origin: a made-up domain in a published file is
-// worse than a relative link.
+// the directory and meta.json drift. Links default to the production origin
+// (the same literal as SITE_URL in src/lib/site.ts — this script cannot
+// import TS); set SITE_URL in the environment only to preview against
+// another origin.
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,7 +21,10 @@ const websiteDir = path.resolve(
 const contentDir = path.join(websiteDir, 'content/docs');
 const outDir = path.join(websiteDir, 'out');
 
-const siteUrl = (process.env.SITE_URL ?? '').replace(/\/+$/, '');
+const siteUrl = (process.env.SITE_URL ?? 'https://dormice.dev').replace(
+  /\/+$/,
+  '',
+);
 
 /** Parse an .mdx file into { title, description, body } or throw naming the file. */
 async function parseDoc(name) {

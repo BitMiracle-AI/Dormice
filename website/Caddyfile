@@ -1,0 +1,22 @@
+# Serves the static export inside the website container. The platform's
+# reverse proxy (Dokploy's Traefik) owns TLS and routes all four hostnames
+# here, so HTTPS stays off and hostname redirects match on the Host header.
+{
+	auto_https off
+}
+
+:80 {
+	# dormice.dev is the one canonical origin.
+	@alias host www.dormice.dev dormice.app www.dormice.app
+	redir @alias https://dormice.dev{uri} 301
+
+	root * /srv
+	encode zstd gzip
+	# The export writes docs/quickstart.html while links say /docs/quickstart.
+	try_files {path} {path}.html
+	file_server
+	handle_errors {
+		rewrite * /404.html
+		file_server
+	}
+}
