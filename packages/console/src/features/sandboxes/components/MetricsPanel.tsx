@@ -5,8 +5,9 @@ import {
   RamMemoryIcon,
 } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon, type HugeiconsProps } from '@hugeicons/react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent } from '@/components/ui/card';
 import {
   type ChartConfig,
@@ -21,10 +22,14 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty';
 import { Spinner } from '@/components/ui/spinner';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { formatBytes, pctOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { since } from '../format';
-import { useSandboxMetrics } from '../hooks/useSandboxes';
+import {
+  useSandboxMetrics,
+  useSandboxMetricsHistory,
+} from '../hooks/useSandboxes';
 
 function Meter({ pct }: { pct: number }) {
   const clamped = Math.min(100, Math.max(0, pct));
@@ -72,39 +77,85 @@ function MetricCard({
   );
 }
 
-/** 滚动窗口容量:5 秒一拍 × 120 点 ≈ 最近 10 分钟。 */
-const HISTORY_CAP = 120;
+/** 历史档位 — daemon 留 7 天逐沙箱样本,档位到 7 天为止。 */
+const HISTORY_RANGES = [
+  { key: '1h', label: '1 小时', spanMs: 3600_000 },
+  { key: '24h', label: '24 小时', spanMs: 24 * 3600_000 },
+  { key: '7d', label: '7 天', spanMs: 7 * 86_400_000 },
+] as const;
 
-/**
- * 面板打开期间的采样累积。daemon 刻意不存指标历史(观察窗不是监控
- * 系统),但"刚才那一下是不是内存尖峰"值得回答 — 历史就攒在浏览器里,
- * 换沙箱清零,关面板即忘。
- */
-function useSampleHistory(
-  sandboxId: string,
-  latest: SandboxMetricsSample | null | undefined,
-): SandboxMetricsSample[] {
-  const [history, setHistory] = useState<SandboxMetricsSample[]>([]);
-  // 换沙箱清零:render 期重置(React 官方推荐形),不多跑一轮 effect。
-  const [prevId, setPrevId] = useState(sandboxId);
-  if (prevId !== sandboxId) {
-    setPrevId(sandboxId);
-    setHistory([]);
+type HistoryRangeKey = (typeof HISTORY_RANGES)[number]['key'];
+
+/** 短窗口给钟点,7 天窗口给日期 — 刻度只说窗口内有区分度的部分。 */
+function clockFor(range: HistoryRangeKey): (ms: number) => string {
+  if (range === '7d') {
+    return (ms) => {
+      const d = new Date(ms);
+      return `${d.getMonth() + 1}/${d.getDate()}`;
+    };
   }
-  useEffect(() => {
-    if (!latest) return;
-    setHistory((prev) =>
-      prev.at(-1)?.timestamp === latest.timestamp
-        ? prev
-        : [...prev.slice(-(HISTORY_CAP - 1)), latest],
-    );
-  }, [latest]);
-  return history;
+  return (ms) =>
+    new Date(ms).toLocaleTimeString('zh-CN', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
 }
 
-/** 时间轴刻度:HH:MM:SS,窗口只有分钟级,日期是噪声。 */
-const clock = (ms: number) =>
-  new Date(ms).toLocaleTimeString('zh-CN', { hour12: false });
+/** tooltip 用的完整时刻。 */
+const fullClock = (ms: number) =>
+  new Date(ms).toLocaleString('zh-CN', {
+    hour12: false,
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+type SeriesPoint = { at: number; value: number | null };
+
+/**
+ * 样本 → 单序列,并在采样断档处插一个 null 点:沙箱停着或 daemon 停机
+ * 的时段没有样本,曲线要如实断开(connectNulls 关着),不许连成谎线。
+ * 断档判据 = 点距超过期望间距 3 倍;期望间距优先用服务端桶宽,原始样本
+ * 取中位点距。
+ */
+function toSeries(
+  samples: SandboxMetricsSample[],
+  pick: (s: SandboxMetricsSample) => number,
+  bucketSeconds: number | null,
+): SeriesPoint[] {
+  const points: SeriesPoint[] = samples.map((s) => ({
+    at: Date.parse(s.timestamp),
+    value: pick(s),
+  }));
+  const first = points[0];
+  if (points.length < 2 || first === undefined) return points;
+
+  const deltas: number[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const cur = points[i];
+    if (prev !== undefined && cur !== undefined) deltas.push(cur.at - prev.at);
+  }
+  deltas.sort((a, b) => a - b);
+  const expectedMs =
+    bucketSeconds !== null
+      ? bucketSeconds * 1000
+      : (deltas[Math.floor(deltas.length / 2)] ?? 0);
+
+  const withGaps: SeriesPoint[] = [first];
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const cur = points[i];
+    if (prev === undefined || cur === undefined) continue;
+    if (expectedMs > 0 && cur.at - prev.at > 3 * expectedMs) {
+      withGaps.push({ at: Math.round((prev.at + cur.at) / 2), value: null });
+    }
+    withGaps.push(cur);
+  }
+  return withGaps;
+}
 
 /**
  * 一个度量一张小图,单系列单轴(不同量纲绝不共轴)。线色用主题的
@@ -114,12 +165,14 @@ const clock = (ms: number) =>
 function HistoryChart({
   title,
   data,
+  xTickFormatter,
   tickFormatter,
   valueFormatter,
   domainMax,
 }: {
   title: string;
-  data: Array<{ at: number; value: number }>;
+  data: SeriesPoint[];
+  xTickFormatter: (ms: number) => string;
   tickFormatter: (value: number) => string;
   valueFormatter: (value: number) => string;
   domainMax?: number;
@@ -138,7 +191,7 @@ function HistoryChart({
               dataKey="at"
               type="number"
               domain={['dataMin', 'dataMax']}
-              tickFormatter={clock}
+              tickFormatter={xTickFormatter}
               tickLine={false}
               axisLine={false}
               minTickGap={48}
@@ -155,7 +208,7 @@ function HistoryChart({
               content={
                 <ChartTooltipContent
                   labelFormatter={(_, payload) =>
-                    clock((payload?.[0]?.payload as { at: number }).at)
+                    fullClock((payload?.[0]?.payload as { at: number }).at)
                   }
                   formatter={(value) => valueFormatter(Number(value))}
                 />
@@ -168,6 +221,7 @@ function HistoryChart({
               strokeWidth={2}
               dot={false}
               isAnimationActive={false}
+              connectNulls={false}
             />
           </LineChart>
         </ChartContainer>
@@ -177,110 +231,150 @@ function HistoryChart({
 }
 
 /**
- * 单沙箱指标:5 秒一拍的单次快照(观察窗不是监控系统)。观察不唤醒 —
- * 冻结的沙箱睡着也能读(cgroup 记账还在),停了的沙箱没有容器可测,
- * daemon 答 null,这里出空态而不是把它吵醒。
+ * 单沙箱指标:上半是 5 秒一拍的当前值(观察不唤醒 — 冻结的沙箱睡着
+ * 也能读,停了的沙箱没有容器可测,daemon 答 null,这里出空态而不是把
+ * 它吵醒);下半是 daemon 采样器落库的历史(30 秒一刷)。两半各自处理
+ * 空态:沙箱停着时当前值区出空态,历史照常在 — 历史是历史。
  */
 export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
-  const { data, isPending, isError, error } = useSandboxMetrics(
-    sandbox.externalId,
-  );
-  // Hook 在任何 early return 之前:面板打开期间持续累积,换沙箱清零。
-  const history = useSampleHistory(sandbox.sandboxId, data?.sample);
+  const [range, setRange] = useState<HistoryRangeKey>('1h');
+  const live = useSandboxMetrics(sandbox.externalId);
+  const spanMs =
+    HISTORY_RANGES.find((r) => r.key === range)?.spanMs ?? 3600_000;
+  const history = useSandboxMetricsHistory(sandbox.externalId, spanMs);
 
-  if (isPending) {
+  if (live.isPending) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Spinner /> 读取指标
       </div>
     );
   }
-  if (isError) {
+  if (live.isError) {
     return (
       <Empty className="border border-dashed">
         <EmptyHeader>
           <EmptyTitle>读取失败</EmptyTitle>
-          <EmptyDescription>{error.message}</EmptyDescription>
+          <EmptyDescription>{live.error.message}</EmptyDescription>
         </EmptyHeader>
       </Empty>
     );
   }
-  const sample = data.sample;
-  if (sample === null) {
-    return (
-      <Empty className="border border-dashed">
-        <EmptyHeader>
-          <EmptyTitle>没有运行中的容器可测</EmptyTitle>
-          <EmptyDescription>
-            沙箱现在没有活着的容器(已停止/已归档)。观察不唤醒 —
-            打开终端或执行命令才会把它叫醒。
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    );
-  }
+  const sample = live.data.sample;
+  const samples = history.data?.samples ?? [];
+  const bucketSeconds = history.data?.bucketSeconds ?? null;
+  const lastSample = samples.at(-1) ?? sample;
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        <MetricCard
-          icon={CpuIcon}
-          label="CPU"
-          value={`${Math.round(sample.cpuUsedPct)}%`}
-          hint={`${sample.cpuCount} 核 · 百分比按单核计`}
-          pct={sample.cpuUsedPct / sample.cpuCount}
-        />
-        <MetricCard
-          icon={RamMemoryIcon}
-          label="内存"
-          value={formatBytes(sample.memUsedBytes)}
-          hint={`共 ${formatBytes(sample.memTotalBytes)} · 缓存 ${formatBytes(sample.memCacheBytes)}`}
-          pct={pctOf(sample.memUsedBytes, sample.memTotalBytes)}
-        />
-        <MetricCard
-          icon={HardDriveIcon}
-          label="磁盘"
-          value={formatBytes(sample.diskUsedBytes)}
-          hint={`名义 ${formatBytes(sample.diskTotalBytes)} — 稀疏镜像只为真实内容付费`}
-          pct={pctOf(sample.diskUsedBytes, sample.diskTotalBytes)}
-        />
+      {sample === null ? (
+        <Empty className="border border-dashed">
+          <EmptyHeader>
+            <EmptyTitle>没有运行中的容器可测</EmptyTitle>
+            <EmptyDescription>
+              沙箱现在没有活着的容器(已停止/已归档)。观察不唤醒 —
+              打开终端或执行命令才会把它叫醒。下方的历史走势还在。
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <MetricCard
+            icon={CpuIcon}
+            label="CPU"
+            value={`${Math.round(sample.cpuUsedPct)}%`}
+            hint={`${sample.cpuCount} 核 · 百分比按单核计`}
+            pct={sample.cpuUsedPct / sample.cpuCount}
+          />
+          <MetricCard
+            icon={RamMemoryIcon}
+            label="内存"
+            value={formatBytes(sample.memUsedBytes)}
+            hint={`共 ${formatBytes(sample.memTotalBytes)} · 缓存 ${formatBytes(sample.memCacheBytes)}`}
+            pct={pctOf(sample.memUsedBytes, sample.memTotalBytes)}
+          />
+          <MetricCard
+            icon={HardDriveIcon}
+            label="磁盘"
+            value={formatBytes(sample.diskUsedBytes)}
+            hint={`名义 ${formatBytes(sample.diskTotalBytes)} — 稀疏镜像只为真实内容付费`}
+            pct={pctOf(sample.diskUsedBytes, sample.diskTotalBytes)}
+          />
+        </div>
+      )}
+
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm font-medium">历史走势</div>
+        <ToggleGroup
+          value={[range]}
+          onValueChange={(value: unknown[]) => {
+            // base-ui 允许再点一下取消选中(空数组)— 档位必须常有,忽略。
+            const next = value[0];
+            if (typeof next === 'string') setRange(next as HistoryRangeKey);
+          }}
+          variant="outline"
+          size="sm"
+        >
+          {HISTORY_RANGES.map((r) => (
+            <ToggleGroupItem key={r.key} value={r.key}>
+              {r.label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
       </div>
-      {history.length >= 2 && (
+
+      {history.isError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{history.error.message}</AlertDescription>
+        </Alert>
+      ) : samples.length < 2 ? (
+        <Empty className="border border-dashed">
+          <EmptyHeader>
+            <EmptyTitle>窗口内还没有走势可画</EmptyTitle>
+            <EmptyDescription>
+              daemon 每 30 秒采一次样,攒够两个点就开始画;沙箱停着或 daemon
+              停机的时段没有样本,曲线会如实断开。
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
         <div className="grid gap-4 xl:grid-cols-3">
           <HistoryChart
             title="CPU 走势"
-            data={history.map((s) => ({
-              at: Date.parse(s.timestamp),
-              value: Math.round(s.cpuUsedPct),
-            }))}
+            data={toSeries(
+              samples,
+              (s) => Math.round(s.cpuUsedPct),
+              bucketSeconds,
+            )}
+            xTickFormatter={clockFor(range)}
             tickFormatter={(v) => `${v}%`}
             valueFormatter={(v) => `${v}%(按单核计)`}
           />
           <HistoryChart
             title="内存走势"
-            data={history.map((s) => ({
-              at: Date.parse(s.timestamp),
-              value: s.memUsedBytes,
-            }))}
+            data={toSeries(samples, (s) => s.memUsedBytes, bucketSeconds)}
+            xTickFormatter={clockFor(range)}
             tickFormatter={(v) => formatBytes(v)}
             valueFormatter={(v) => formatBytes(v)}
-            domainMax={sample.memTotalBytes}
+            domainMax={lastSample?.memTotalBytes}
           />
           <HistoryChart
             title="磁盘走势"
-            data={history.map((s) => ({
-              at: Date.parse(s.timestamp),
-              value: s.diskUsedBytes,
-            }))}
+            data={toSeries(samples, (s) => s.diskUsedBytes, bucketSeconds)}
+            xTickFormatter={clockFor(range)}
             tickFormatter={(v) => formatBytes(v)}
             valueFormatter={(v) => formatBytes(v)}
           />
         </div>
       )}
+
       <p className="text-xs text-muted-foreground">
-        单次快照,5 秒刷新;本次读数取自 {since(sample.timestamp)}前。
-        {history.length >= 2 &&
-          `走势为本面板打开以来的采样(最多约 ${Math.round((HISTORY_CAP * 5) / 60)} 分钟),daemon 不存历史。`}
+        {sample !== null &&
+          `当前值 5 秒刷新,本次读数取自 ${since(sample.timestamp)}前。`}
+        历史由 daemon
+        后台采样落库;沙箱睡着照样测(观察不唤醒),停止后曲线如实断流。
+        {bucketSeconds !== null &&
+          `窗口较长,已按每 ${Math.round(bucketSeconds / 60)} 分钟一桶聚合,每点为桶内峰值。`}
       </p>
     </div>
   );

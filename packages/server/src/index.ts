@@ -13,5 +13,6 @@ export {
 export type { ContainerState, Executor } from './executor/executor';
 export { FakeExecutor } from './executor/fake';
 export { KeyedQueue, SKIPPED } from './keyed-queue';
+export { type SampleResult, sampleOnce } from './metrics-sampler';
 export { type ReconcileResult, reconcile } from './reconciler';
 export { type ScanResult, scanOnce } from './scanner';

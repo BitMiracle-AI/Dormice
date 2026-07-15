@@ -12,6 +12,12 @@ import {
   setPausedByUser,
   touch,
 } from '../db/ledger';
+import {
+  bucketSamples,
+  querySandboxSamples,
+  resolveBucketSeconds,
+  resolveWindow,
+} from '../db/metrics';
 import type { SandboxRow } from '../db/schema';
 import { findTemplate, resolveImage } from '../db/templates';
 import {
@@ -86,7 +92,15 @@ const notFound = (sandboxId: string) =>
 
 export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   app,
-  { config, db, executor, locks, archiver, archiveDefaultSeconds },
+  {
+    config,
+    db,
+    executor,
+    locks,
+    archiver,
+    archiveDefaultSeconds,
+    envdSigningSecret,
+  },
 ) => {
   /**
    * The archive detour, taken before any slot work: E2B has no restoring
@@ -174,7 +188,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       clientID: row.nodeId,
       ...templateFields(row),
       envdVersion: ENVD_VERSION,
-      envdAccessToken: mintEnvdToken(config.DORMICE_API_TOKEN, row.sandboxId),
+      envdAccessToken: mintEnvdToken(envdSigningSecret, row.sandboxId),
       ...domainField,
     };
   }
@@ -320,8 +334,11 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           nodeId: config.DORMICE_NODE_ID,
           policy: resolvePolicy(undefined, archiveDefaultSeconds),
           template,
+          metadata:
+            body.metadata && Object.keys(body.metadata).length > 0
+              ? JSON.stringify(body.metadata)
+              : null,
           e2b: {
-            metadata: body.metadata ? JSON.stringify(body.metadata) : null,
             envs:
               body.envVars && Object.keys(body.envVars).length > 0
                 ? JSON.stringify(body.envVars)
@@ -371,23 +388,78 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     return infoView(row, state);
   });
 
-  // The SDK sends start/end (unix seconds) to slice a metrics history; we
-  // keep none — the daemon is an observation window, not a monitoring
-  // system — so the answer is always one sample, taken now. loose() admits
-  // the query without acting on it.
+  // The SDK sends start/end (unix seconds) to slice a metrics history, and
+  // since the sampler landed we have one — the slice is answered from the
+  // ledger's samples, bucketed past 360 points like the native history
+  // verb (per-field maxima; one ceiling for every consumer). Unix seconds
+  // are this surface's dialect: translated to ISO here at the boundary,
+  // never inside. loose() still admits the query fields we ignore.
+  //
+  // A sandbox created moments ago has no samples yet; when the window comes
+  // back empty and the sandbox is physically measurable, we take one live
+  // reading — real E2B answers data within seconds of creation, and an
+  // empty array would read as breakage. The native verb deliberately does
+  // NOT do this: the native face reports silence as silence, the fallback
+  // is this compatibility surface's politeness alone.
   app.get(
     '/sandboxes/:id/metrics',
-    { schema: { querystring: z.object({}).loose() } },
+    {
+      schema: {
+        querystring: z
+          .object({
+            start: z.coerce.number().int().optional(),
+            end: z.coerce.number().int().optional(),
+          })
+          .loose(),
+      },
+    },
     async (request) => {
       const { id } = request.params as { id: string };
+      const { start, end } = request.query as {
+        start?: number;
+        end?: number;
+      };
       const { row } = findLive(id);
-      // Physical stopped/archived: nothing is running to measure, and
-      // measuring must never wake a sandbox (observation is not activity —
-      // the same principle that keeps list from waking). [] is the honest
-      // answer, and a legal one to the SDK.
-      if (row.state !== 'active' && row.state !== 'frozen') return [];
-      const m = await executor.metrics(row.sandboxId);
+      const measurable = row.state === 'active' || row.state === 'frozen';
+
       const now = new Date();
+      const { startIso, endIso, startMs, endMs } = resolveWindow(
+        start === undefined ? undefined : new Date(start * 1000).toISOString(),
+        end === undefined ? undefined : new Date(end * 1000).toISOString(),
+        3600_000,
+        now,
+      );
+      const rows = querySandboxSamples(db, row.sandboxId, startIso, endIso);
+      const bucketSeconds = resolveBucketSeconds(rows.length, startMs, endMs);
+      const sliced =
+        bucketSeconds === null
+          ? rows
+          : bucketSamples(rows, startMs, bucketSeconds);
+
+      if (sliced.length > 0) {
+        return sliced.map((sample) => ({
+          timestamp: sample.at,
+          timestampUnix: Math.floor(Date.parse(sample.at) / 1000),
+          cpuCount: sample.cpuCount,
+          cpuUsedPct: sample.cpuUsedPct,
+          memUsed: sample.memUsedBytes,
+          memTotal: sample.memTotalBytes,
+          memCache: sample.memCacheBytes,
+          diskUsed: sample.diskUsedBytes,
+          diskTotal: sample.diskTotalBytes,
+        }));
+      }
+
+      // Physical stopped/archived with no history in the window: nothing is
+      // running to measure, and measuring must never wake a sandbox
+      // (observation is not activity — the same principle that keeps list
+      // from waking). [] is the honest answer, and a legal one to the SDK.
+      // The live fallback also only applies when the window reaches "now" —
+      // a reading taken now must not answer for an explicitly past window.
+      const windowIncludesNow =
+        now.getTime() >= startMs && now.getTime() <= endMs;
+      if (!measurable || !windowIncludesNow) return [];
+      const m = await executor.metrics(row.sandboxId);
       return [
         {
           timestamp: now.toISOString(),

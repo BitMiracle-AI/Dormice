@@ -1,9 +1,7 @@
-import type { HostMetricsResponse } from '@dormice/shared';
 import {
   CpuIcon,
   Database01Icon,
   HardDriveIcon,
-  PackageIcon,
   RamMemoryIcon,
   SnowIcon,
 } from '@hugeicons/core-free-icons';
@@ -13,10 +11,10 @@ import type { ReactNode } from 'react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { STATE_LABELS } from '@/features/sandboxes/format';
 import { formatBytes, pctOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useHostMetrics } from '../hooks/useHostMetrics';
+import { QuickConnectCard } from './QuickConnectCard';
 
 /**
  * Usage meter: the fill carries severity (quiet below 75%, amber to 90%,
@@ -84,48 +82,15 @@ function StatCard({
   );
 }
 
-// The lifecycle rungs shown in the fleet card, coldest last — same hues as
-// SandboxStateBadge so the two read as one system. archived and restoring
-// only appear once they exist (no archiver yet — nothing is promised).
-const STATE_DOTS: Array<{
-  key: keyof HostMetricsResponse['sandboxes']['byState'];
-  dot: string;
-  alwaysShown: boolean;
-}> = [
-  { key: 'active', dot: 'bg-emerald-500', alwaysShown: true },
-  { key: 'frozen', dot: 'bg-sky-500', alwaysShown: true },
-  { key: 'stopped', dot: 'bg-muted-foreground/50', alwaysShown: true },
-  { key: 'archived', dot: 'bg-violet-500', alwaysShown: false },
-  { key: 'restoring', dot: 'bg-amber-500', alwaysShown: false },
-];
-
-function StateCounts({
-  byState,
-}: {
-  byState: HostMetricsResponse['sandboxes']['byState'];
-}) {
-  return (
-    <span className="flex flex-wrap gap-x-3 gap-y-1">
-      {STATE_DOTS.filter((s) => s.alwaysShown || byState[s.key] > 0).map(
-        (s) => (
-          <span key={s.key} className="inline-flex items-center gap-1.5">
-            <span className={cn('size-2 rounded-full', s.dot)} />
-            <span className="font-medium text-foreground">
-              {byState[s.key]}
-            </span>
-            {STATE_LABELS[s.key]}
-          </span>
-        ),
-      )}
-    </span>
-  );
-}
-
 /**
- * The dashboard's card row: is the host healthy, and what does the fleet
- * cost it? Swap and the data disk get equal billing with CPU and memory
- * because on this platform they are the two that kill: full swap ends
- * "idle is free", a full data disk ends creation entirely.
+ * The dashboard's host rows: is the machine healthy, and what do the
+ * sandbox disks cost it? Swap and the data disk get equal billing with CPU
+ * and memory because on this platform they are the two that kill: full
+ * swap ends "idle is free", a full data disk ends creation entirely. The
+ * fleet's own numbers (counts, states, the concurrency curve) live in
+ * FleetOverview above — this section is the machine's story. The quick
+ * connect card is static and shares the bottom row, so loading and loaded
+ * states keep the same shape.
  */
 export function OverviewCards() {
   const query = useHostMetrics();
@@ -158,13 +123,14 @@ export function OverviewCards() {
           {['cpu', 'memory', 'swap', 'data-disk'].map(bones)}
         </div>
         <div className="grid gap-4 md:grid-cols-2">
-          {['sandboxes', 'sandbox-disks'].map(bones)}
+          {bones('sandbox-disks')}
+          <QuickConnectCard />
         </div>
       </section>
     );
   }
 
-  const { host, dataDisk, sandboxes, sandboxDisks } = query.data;
+  const { host, dataDisk, sandboxDisks } = query.data;
   const memUsed = host.memTotalBytes - host.memAvailableBytes;
 
   return (
@@ -237,14 +203,6 @@ export function OverviewCards() {
 
       <div className="grid gap-4 md:grid-cols-2">
         <StatCard
-          icon={PackageIcon}
-          label="沙箱"
-          value={`${sandboxes.total} / ${sandboxes.maxSandboxes}`}
-          hint={<StateCounts byState={sandboxes.byState} />}
-          pct={pctOf(sandboxes.total, sandboxes.maxSandboxes)}
-          to="/sandboxes"
-        />
-        <StatCard
           icon={Database01Icon}
           label="沙箱磁盘"
           value={formatBytes(sandboxDisks.actualBytes)}
@@ -252,6 +210,7 @@ export function OverviewCards() {
           pct={pctOf(sandboxDisks.actualBytes, sandboxDisks.nominalBytes)}
           to="/sandboxes"
         />
+        <QuickConnectCard />
       </div>
     </section>
   );

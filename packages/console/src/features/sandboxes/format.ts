@@ -9,6 +9,36 @@ export const STATE_LABELS: Record<SandboxState, string> = {
   restoring: '恢复中',
 };
 
+/**
+ * 五态的颜色,单一来源:dot 是文字旁小圆点的 tailwind 类,chart 是
+ * 堆叠面积图的填充色(明暗两面各自过了 dataviz 验证器:亮面 600 级、
+ * 暗面紫色升回 500——相邻对 CVD 分离与 3:1 对比度全过)。stopped 刻意
+ * 是灰:熄灭态读作灰正是它的含义,身份另由图例、tooltip 与固定堆叠位
+ * 承载。色相与 SandboxStateBadge 同族,整站读作一套系统。
+ */
+export const STATE_COLORS: Record<
+  SandboxState,
+  { dot: string; chart: { light: string; dark: string } }
+> = {
+  active: {
+    dot: 'bg-emerald-500',
+    chart: { light: '#059669', dark: '#059669' },
+  },
+  frozen: { dot: 'bg-sky-500', chart: { light: '#0284c7', dark: '#0284c7' } },
+  stopped: {
+    dot: 'bg-muted-foreground/50',
+    chart: { light: '#64748b', dark: '#64748b' },
+  },
+  archived: {
+    dot: 'bg-violet-500',
+    chart: { light: '#7c3aed', dark: '#8b5cf6' },
+  },
+  restoring: {
+    dot: 'bg-amber-500',
+    chart: { light: '#d97706', dark: '#d97706' },
+  },
+};
+
 /** 时长的中文写法:45秒 / 5分12秒 / 3小时20分 / 2天4小时,最多两段。 */
 export function formatDuration(totalSeconds: number): string {
   const s = Math.max(0, Math.floor(totalSeconds));

@@ -4,7 +4,9 @@ import type {
   ApplyUpgradeResponse,
   CheckUpgradeResponse,
   GetConfigResponse,
+  GetFleetTimelineResponse,
   GetIngressResponse,
+  GetSandboxMetricsHistoryResponse,
   GetSandboxMetricsResponse,
   GetUpgradeStatusResponse,
   HostMetricsResponse,
@@ -126,6 +128,26 @@ export const getSandboxMetrics = (externalId: string) =>
 // means measured: colder states are simply absent.
 export const listSandboxMetrics = () =>
   rpc<ListSandboxMetricsResponse>('/listSandboxMetrics');
+
+// One sandbox's sampled past, sliced by an ISO window. Past 360 points the
+// daemon buckets the answer (per-field maxima — spikes survive); a window
+// the daemon was down for shows the gap, never an interpolation.
+export const getSandboxMetricsHistory = (
+  externalId: string,
+  start: string,
+  end: string,
+) =>
+  rpc<GetSandboxMetricsHistoryResponse>('/getSandboxMetricsHistory', {
+    externalId,
+    start,
+    end,
+  });
+
+// Fleet state counts over time — the concurrency curve's data. Bucketed
+// points are whole raw snapshots (byState always sums to total); peak is
+// computed from raw rows and immune to bucketing.
+export const getFleetTimeline = (start: string, end: string) =>
+  rpc<GetFleetTimelineResponse>('/getFleetTimeline', { start, end });
 
 // Every sandbox's image lineage: the born image of the current shell (null
 // when no shell exists), the image the next shell would boot, and whether a

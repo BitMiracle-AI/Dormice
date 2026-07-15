@@ -3,9 +3,12 @@ import { z } from 'zod';
 /**
  * getHostMetrics() — the observation window into the machine itself: is the
  * host healthy, and what do the sandboxes collectively cost it? A single
- * point-in-time snapshot, deliberately not a metrics history (that is a
- * monitoring system's job — point Prometheus at the box for trends).
- * Observation never wakes a sandbox and never touches lifecycle.
+ * point-in-time snapshot: host-level trends (CPU, memory, disk) remain a
+ * monitoring system's job — point Prometheus at the box. What the daemon
+ * does keep is its own domain history — per-sandbox samples and fleet state
+ * counts (getFleetTimeline in metrics.ts), which no external monitor can
+ * reconstruct from outside the ledger. Observation never wakes a sandbox
+ * and never touches lifecycle.
  *
  * Readings a platform cannot produce are null, honestly — never zero, never
  * invented: swap and /proc are Linux facts, and the data directory only

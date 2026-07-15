@@ -78,6 +78,9 @@ export default async function setup(project: TestProject) {
       // Sweep every second so lifecycle tests run on second-scale policies
       // instead of the production default of days.
       DORMICE_SCAN_INTERVAL_SECONDS: '1',
+      // Sample every second so history verbs have rows to answer with
+      // inside a test's lifetime.
+      DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS: '1',
       // A wildcard sandbox domain so getHost() and the port proxy are
       // exercised — no DNS needed, tests spoof the Host header locally.
       DORMICE_SANDBOX_DOMAIN: 'sbx.dormice.test',

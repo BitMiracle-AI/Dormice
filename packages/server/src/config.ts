@@ -20,6 +20,27 @@ const envSchema = z.object({
   /** How often the idle scanner sweeps the ledger. */
   DORMICE_SCAN_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
   /**
+   * How often the metrics sampler persists a reading per measurable sandbox
+   * plus one fleet state-count row — the resolution of every history curve.
+   */
+  DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30),
+  /**
+   * How long per-sandbox samples live (fleet rows are fixed at 30 days —
+   * FLEET_SNAPSHOT_KEEP_DAYS). A knob because volume scales with the fleet:
+   * at the 30s default, a worst-case 100 always-hot sandboxes over the
+   * default 7 days is ~2M rows — fine for SQLite, but the operator of such
+   * a box may want to trade history depth for disk.
+   */
+  DORMICE_METRICS_RETENTION_HOURS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(168),
+  /**
    * How many sandboxes may exist at once. The binding resource is disk:
    * every sandbox holds a disk image, and an unbounded acquire loop fills
    * the host until the ledger itself can no longer write — the daemon dying
@@ -194,6 +215,8 @@ export const CONFIG_KEYS: Record<keyof Config, { sensitive: boolean }> = {
   DORMICE_DATA_DIR: { sensitive: false },
   DORMICE_MAX_SANDBOXES: { sensitive: false },
   DORMICE_SCAN_INTERVAL_SECONDS: { sensitive: false },
+  DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS: { sensitive: false },
+  DORMICE_METRICS_RETENTION_HOURS: { sensitive: false },
   DORMICE_SANDBOX_DISK_GB: { sensitive: false },
   DORMICE_SANDBOX_CPUS: { sensitive: false },
   DORMICE_SANDBOX_MEMORY_GB: { sensitive: false },

@@ -4,6 +4,7 @@ import {
   acquireSandbox,
   destroySandbox,
   getSandboxMetrics,
+  getSandboxMetricsHistory,
   listSandboxes,
   listSandboxImages,
   listSandboxMetrics,
@@ -45,6 +46,27 @@ export function useSandboxMetrics(externalId: string) {
     queryKey: ['sandbox-metrics', externalId],
     queryFn: () => getSandboxMetrics(externalId),
     refetchInterval: 5000,
+    retry: false,
+  });
+}
+
+/**
+ * 单沙箱指标历史,30 秒一刷 — 与 daemon 采样间隔同步,更快只是重复读到
+ * 同一批样本。窗口每次 queryFn 现算,长开的面板窗口随时间滑动;历史键
+ * 在 sandboxId 上,换壳(rebuild)不断线。
+ */
+export function useSandboxMetricsHistory(externalId: string, spanMs: number) {
+  return useQuery({
+    queryKey: ['sandbox-metrics-history', externalId, spanMs],
+    queryFn: () => {
+      const end = Date.now();
+      return getSandboxMetricsHistory(
+        externalId,
+        new Date(end - spanMs).toISOString(),
+        new Date(end).toISOString(),
+      );
+    },
+    refetchInterval: 30_000,
     retry: false,
   });
 }

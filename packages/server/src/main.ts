@@ -15,6 +15,7 @@ import type { Executor } from './executor/executor';
 import { FakeExecutor } from './executor/fake';
 import { Ingress } from './ingress';
 import { KeyedQueue } from './keyed-queue';
+import { sampleOnce } from './metrics-sampler';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
 import { locallyClaimedCount, startupGuard } from './startup-guard';
@@ -229,3 +230,25 @@ async function tick() {
   }
 }
 setTimeout(tick, config.DORMICE_SCAN_INTERVAL_SECONDS * 1000);
+
+// The metrics sampler's own chained ticker — deliberately not a passenger
+// on the heartbeat, whose ticks legitimately run 45s+ (memory.reclaim) and
+// would turn the sampling cadence into jitter. The first shot fires
+// immediately: a restart's gap in the curves should equal the downtime, not
+// downtime plus one interval. Same failure stance as the heartbeat: log,
+// never fatal, next tick retries.
+async function metricsTick() {
+  try {
+    await sampleOnce(db, executor, new Date(), {
+      retentionHours: config.DORMICE_METRICS_RETENTION_HOURS,
+    });
+  } catch (error) {
+    app.log.error(error, 'metrics sampler tick failed');
+  } finally {
+    setTimeout(
+      metricsTick,
+      config.DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS * 1000,
+    );
+  }
+}
+setTimeout(metricsTick, 0);

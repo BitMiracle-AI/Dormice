@@ -56,6 +56,27 @@ describe('loadConfig executor knobs', () => {
   });
 });
 
+describe('the metrics sampler knobs', () => {
+  it('defaults: 30s interval, 168h retention', () => {
+    const config = loadConfig(TOKEN);
+    expect(config.DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS).toBe(30);
+    expect(config.DORMICE_METRICS_RETENTION_HOURS).toBe(168);
+  });
+
+  it('parses overrides and rejects a non-positive interval', () => {
+    const config = loadConfig({
+      ...TOKEN,
+      DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS: '5',
+      DORMICE_METRICS_RETENTION_HOURS: '24',
+    });
+    expect(config.DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS).toBe(5);
+    expect(config.DORMICE_METRICS_RETENTION_HOURS).toBe(24);
+    expect(() =>
+      loadConfig({ ...TOKEN, DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS: '0' }),
+    ).toThrow();
+  });
+});
+
 describe('the S3 set', () => {
   const S3 = {
     DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
