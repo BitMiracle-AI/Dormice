@@ -25,6 +25,14 @@ export const templateSchema = z.object({
   /** Docker image reference on the daemon's host, e.g. my-python:3.11. */
   image: z.string().min(1),
   createdAt: z.iso.datetime(),
+  /**
+   * When the name was last re-pointed at a *different* image — the upgrade
+   * timestamp, the ledger half of the "upgradable" verdict on sandboxes.
+   * Equals createdAt until the first upgrade; an idempotent re-register of
+   * the same image deliberately does not bump it (nothing changed, so the
+   * timestamp must not claim otherwise).
+   */
+  updatedAt: z.iso.datetime(),
 });
 
 export type Template = z.infer<typeof templateSchema>;
