@@ -468,6 +468,15 @@ describe('E2B control plane', () => {
     );
     expect(past.statusCode).toBe(200);
     expect(past.json()).toEqual([]);
+
+    // Seconds beyond what a JS Date can represent are rejected at the door
+    // as a 400 — never a RangeError-turned-500 deep in the handler.
+    const absurd = await control(
+      t,
+      'GET',
+      `/sandboxes/${sandboxID}/metrics?start=9000000000000`,
+    );
+    expect(absurd.statusCode).toBe(400);
   });
 
   it('metrics reads a frozen sandbox without waking it; a stopped one answers []', async () => {

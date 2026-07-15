@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/empty';
 import { Spinner } from '@/components/ui/spinner';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { withGapBreaks } from '@/lib/chart-gaps';
 import { formatBytes, pctOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { since } from '../format';
@@ -115,10 +116,8 @@ const fullClock = (ms: number) =>
 type SeriesPoint = { at: number; value: number | null };
 
 /**
- * 样本 → 单序列,并在采样断档处插一个 null 点:沙箱停着或 daemon 停机
- * 的时段没有样本,曲线要如实断开(connectNulls 关着),不许连成谎线。
- * 断档判据 = 点距超过期望间距 3 倍;期望间距优先用服务端桶宽,原始样本
- * 取中位点距。
+ * 样本 → 单序列;断档处由 withGapBreaks 插一个 null 点,沙箱停着或
+ * daemon 停机的时段曲线如实断开(connectNulls 关着)。
  */
 function toSeries(
   samples: SandboxMetricsSample[],
@@ -129,32 +128,12 @@ function toSeries(
     at: Date.parse(s.timestamp),
     value: pick(s),
   }));
-  const first = points[0];
-  if (points.length < 2 || first === undefined) return points;
-
-  const deltas: number[] = [];
-  for (let i = 1; i < points.length; i++) {
-    const prev = points[i - 1];
-    const cur = points[i];
-    if (prev !== undefined && cur !== undefined) deltas.push(cur.at - prev.at);
-  }
-  deltas.sort((a, b) => a - b);
-  const expectedMs =
-    bucketSeconds !== null
-      ? bucketSeconds * 1000
-      : (deltas[Math.floor(deltas.length / 2)] ?? 0);
-
-  const withGaps: SeriesPoint[] = [first];
-  for (let i = 1; i < points.length; i++) {
-    const prev = points[i - 1];
-    const cur = points[i];
-    if (prev === undefined || cur === undefined) continue;
-    if (expectedMs > 0 && cur.at - prev.at > 3 * expectedMs) {
-      withGaps.push({ at: Math.round((prev.at + cur.at) / 2), value: null });
-    }
-    withGaps.push(cur);
-  }
-  return withGaps;
+  return withGapBreaks(
+    points,
+    bucketSeconds,
+    (p) => p.at,
+    (at) => ({ at, value: null }),
+  );
 }
 
 /**
@@ -327,13 +306,18 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
         <Alert variant="destructive">
           <AlertDescription>{history.error.message}</AlertDescription>
         </Alert>
+      ) : history.isPending ? (
+        // 历史还在路上时不许说"没有走势"— 空态是断言,loading 不是。
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner /> 读取历史走势
+        </div>
       ) : samples.length < 2 ? (
         <Empty className="border border-dashed">
           <EmptyHeader>
             <EmptyTitle>窗口内还没有走势可画</EmptyTitle>
             <EmptyDescription>
-              daemon 每 30 秒采一次样,攒够两个点就开始画;沙箱停着或 daemon
-              停机的时段没有样本,曲线会如实断开。
+              daemon 定期采样(默认每 30 秒),攒够两个点就开始画;沙箱停着 或
+              daemon 停机的时段没有样本,曲线会如实断开。
             </EmptyDescription>
           </EmptyHeader>
         </Empty>

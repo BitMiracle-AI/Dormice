@@ -1,5 +1,10 @@
 import type { AcquireRequest, LifecyclePolicyOverride } from '@dormice/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import {
   acquireSandbox,
   destroySandbox,
@@ -51,9 +56,10 @@ export function useSandboxMetrics(externalId: string) {
 }
 
 /**
- * 单沙箱指标历史,30 秒一刷 — 与 daemon 采样间隔同步,更快只是重复读到
- * 同一批样本。窗口每次 queryFn 现算,长开的面板窗口随时间滑动;历史键
- * 在 sandboxId 上,换壳(rebuild)不断线。
+ * 单沙箱指标历史,30 秒一刷 — 与 daemon 的默认采样间隔同步,更快只是
+ * 重复读到同一批样本。窗口每次 queryFn 现算,长开的面板窗口随时间滑动;
+ * 历史键在 sandboxId 上,换壳(rebuild)不断线。切换档位时沿用上一档
+ * 的数据顶住新答案到来(keepPreviousData),图表不塌回空态。
  */
 export function useSandboxMetricsHistory(externalId: string, spanMs: number) {
   return useQuery({
@@ -68,6 +74,7 @@ export function useSandboxMetricsHistory(externalId: string, spanMs: number) {
     },
     refetchInterval: 30_000,
     retry: false,
+    placeholderData: keepPreviousData,
   });
 }
 

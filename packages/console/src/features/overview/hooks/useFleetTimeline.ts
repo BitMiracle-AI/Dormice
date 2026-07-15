@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { getFleetTimeline } from '@/lib/api';
 
 /** 时间档位与其毫秒宽度 — 切换器与查询共用一份。 */
@@ -19,9 +19,10 @@ export function rangeSpanMs(key: TimelineRangeKey): number {
 }
 
 /**
- * 舰队时间线,跟随档位轮询。30 秒一刷 — 与 daemon 的采样间隔同步,
+ * 舰队时间线,跟随档位轮询。30 秒一刷 — 与 daemon 的默认采样间隔同步,
  * 更快只是重复读到同一批快照。窗口在每次 queryFn 里现算,所以长开的
- * 页面窗口会随时间滑动。
+ * 页面窗口会随时间滑动。切换档位时沿用上一档的数据顶住新答案到来
+ * (keepPreviousData),整卡不塌回骨架屏。
  */
 export function useFleetTimeline(range: TimelineRangeKey) {
   return useQuery({
@@ -36,5 +37,6 @@ export function useFleetTimeline(range: TimelineRangeKey) {
     },
     refetchInterval: 30_000,
     retry: false,
+    placeholderData: keepPreviousData,
   });
 }
