@@ -90,9 +90,10 @@ export function AppSidebar() {
     <Sidebar variant="inset" className="px-1">
       <SidebarHeader>
         {/* 纯文字 wordmark:侧栏融在页面底色里,不需要图标方块撑品牌。 */}
-        <Link to="/" className="flex items-baseline gap-1.5 px-2.5 pt-2 pb-1.5">
-          <span className="text-lg font-semibold leading-none">Dormice</span>
-          <span className="text-xs text-muted-foreground">控制台</span>
+        <Link to="/" className="flex items-center px-2.5 pt-2 pb-1.5">
+          <span className="text-lg font-semibold leading-none [font-family:'Google_Sans',sans-serif]">
+            Dormice
+          </span>
         </Link>
       </SidebarHeader>
 
