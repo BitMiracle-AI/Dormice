@@ -3,6 +3,10 @@
    styles live here, never there. */
 @import "./shadcn.css";
 
+/* Google Sans 只给品牌 wordmark(Dormice)用,只引 latin 600 子集控体积;
+   正文照旧 Inter(shadcn.css 里)。 */
+@import "@fontsource/google-sans/latin-600.css";
+
 @layer base {
   body {
     /* macOS 浏览器默认亚像素渲染把字形描粗,medium/semibold 都显臃肿;
