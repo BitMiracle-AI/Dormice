@@ -1,9 +1,16 @@
 import type { Template } from '@dormice/shared';
-import { Add01Icon, Layers01Icon } from '@hugeicons/core-free-icons';
+import {
+  Add01Icon,
+  Delete02Icon,
+  Edit02Icon,
+  Layers01Icon,
+  MoreVerticalIcon,
+} from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { DataTable } from '@/components/DataTable';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   AlertDialog,
@@ -14,7 +21,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import {
@@ -26,6 +32,12 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   Empty,
   EmptyDescription,
@@ -43,7 +55,6 @@ import {
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -61,32 +72,39 @@ import {
 /**
  * 注册/升级共用一个对话框:模板是 upsert,对已有名字注册就是把它指向
  * 新镜像 — 那正是升级的正门(升级完对引用它的沙箱逐个 rebuild)。
+ * 页头用 trigger 形态;表格行从「⋯」菜单打开,传受控 open — 菜单关闭
+ * 即卸载,trigger 放里面会跟着消失。
  */
 function RegisterTemplateDialog({
   trigger,
   initial,
+  open: controlledOpen,
+  onOpenChange,
 }: {
-  trigger: React.ReactElement;
+  trigger?: React.ReactElement;
   initial?: Template;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
   const [name, setName] = useState(initial?.name ?? '');
   const [image, setImage] = useState(initial?.image ?? '');
   const mutation = useRegisterTemplate();
 
+  const setOpen = (next: boolean) => {
+    if (controlledOpen === undefined) setInternalOpen(next);
+    onOpenChange?.(next);
+    if (next) {
+      setName(initial?.name ?? '');
+      setImage(initial?.image ?? '');
+      mutation.reset();
+    }
+  };
+
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (next) {
-          setName(initial?.name ?? '');
-          setImage(initial?.image ?? '');
-          mutation.reset();
-        }
-      }}
-    >
-      <DialogTrigger render={trigger} />
+    <Dialog open={open} onOpenChange={setOpen}>
+      {trigger && <DialogTrigger render={trigger} />}
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
@@ -164,7 +182,15 @@ function RegisterTemplateDialog({
   );
 }
 
-function RemoveTemplateButton({ name }: { name: string }) {
+function RemoveTemplateDialog({
+  name,
+  open,
+  onOpenChange,
+}: {
+  name: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const mutation = useRemoveTemplate();
 
   const remove = () =>
@@ -178,15 +204,7 @@ function RemoveTemplateButton({ name }: { name: string }) {
     });
 
   return (
-    <AlertDialog>
-      <AlertDialogTrigger
-        render={
-          <Button variant="destructive" size="sm" disabled={mutation.isPending}>
-            {mutation.isPending && <Spinner />}
-            删除
-          </Button>
-        }
-      />
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>删除模板「{name}」?</AlertDialogTitle>
@@ -202,6 +220,56 @@ function RemoveTemplateButton({ name }: { name: string }) {
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+/**
+ * 行操作收进「⋯」菜单(风格参考 openasi 表格,2026-07-15):两个弹窗都
+ * 挂在菜单外受控 — 菜单关闭即卸载,放里面会跟着消失。
+ */
+function TemplateRowMenu({ template }: { template: Template }) {
+  const [editOpen, setEditOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`${template.name} 的操作`}
+            >
+              <HugeiconsIcon icon={MoreVerticalIcon} />
+            </Button>
+          }
+        />
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={() => setEditOpen(true)}>
+            <HugeiconsIcon icon={Edit02Icon} />
+            更新镜像
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            variant="destructive"
+            onClick={() => setRemoveOpen(true)}
+          >
+            <HugeiconsIcon icon={Delete02Icon} />
+            删除
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <RegisterTemplateDialog
+        initial={template}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+      />
+      <RemoveTemplateDialog
+        name={template.name}
+        open={removeOpen}
+        onOpenChange={setRemoveOpen}
+      />
+    </>
   );
 }
 
@@ -260,62 +328,50 @@ export function TemplatesPage() {
       )}
 
       {list.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>名字</TableHead>
-                <TableHead>镜像</TableHead>
-                <TableHead>引用沙箱</TableHead>
-                <TableHead>注册于</TableHead>
-                <TableHead className="text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {list.map((template) => {
-                const references = referenceCount(template.name);
-                return (
-                  <TableRow key={template.name}>
-                    <TableCell className="font-mono font-medium">
-                      {template.name}
-                    </TableCell>
-                    <TableCell className="font-mono text-muted-foreground">
-                      {template.image}
-                    </TableCell>
-                    <TableCell className="tabular-nums">
-                      {references > 0 ? (
-                        <Link
-                          to="/sandboxes"
-                          className="text-foreground hover:underline"
-                        >
-                          {references} 个
-                        </Link>
-                      ) : (
-                        <span className="text-muted-foreground">0 个</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="tabular-nums text-muted-foreground">
-                      {since(template.createdAt)}前
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="inline-flex gap-2">
-                        <RegisterTemplateDialog
-                          initial={template}
-                          trigger={
-                            <Button variant="outline" size="sm">
-                              更新镜像
-                            </Button>
-                          }
-                        />
-                        <RemoveTemplateButton name={template.name} />
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
+        <DataTable>
+          <TableHeader>
+            <TableRow>
+              <TableHead>名字</TableHead>
+              <TableHead>镜像</TableHead>
+              <TableHead className="text-right">引用沙箱</TableHead>
+              <TableHead>注册于</TableHead>
+              <TableHead className="text-right">操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {list.map((template) => {
+              const references = referenceCount(template.name);
+              return (
+                <TableRow key={template.name}>
+                  <TableCell className="font-mono font-medium">
+                    {template.name}
+                  </TableCell>
+                  <TableCell className="font-mono text-muted-foreground">
+                    {template.image}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {references > 0 ? (
+                      <Link
+                        to="/sandboxes"
+                        className="text-foreground hover:underline"
+                      >
+                        {references} 个
+                      </Link>
+                    ) : (
+                      <span className="text-muted-foreground">0 个</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="tabular-nums text-muted-foreground">
+                    {since(template.createdAt)}前
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <TemplateRowMenu template={template} />
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </DataTable>
       )}
     </div>
   );

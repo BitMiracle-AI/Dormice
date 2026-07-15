@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { toast } from 'sonner';
 import {
   AlertDialog,
@@ -8,21 +9,26 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { Spinner } from '@/components/ui/spinner';
 import { useDestroySandbox } from '../hooks/useSandboxes';
 
 /**
  * Destroy removes the sandbox AND its disk — the one irreversible action in
- * the console, so it is the one action behind a confirmation dialog.
+ * the console, so it is the one action behind a confirmation dialog. The
+ * dialog is controlled: the detail page composes it with a red button below,
+ * table rows open it from a dropdown menu item (the menu unmounts on close,
+ * so the dialog must live outside it — a trigger inside would vanish).
  */
-export function DestroySandboxButton({
+export function DestroySandboxDialog({
   externalId,
+  open,
+  onOpenChange,
   onDestroyed,
 }: {
   externalId: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   onDestroyed?: () => void;
 }) {
   const mutation = useDestroySandbox();
@@ -39,15 +45,7 @@ export function DestroySandboxButton({
     });
 
   return (
-    <AlertDialog>
-      <AlertDialogTrigger
-        render={
-          <Button variant="destructive" size="sm" disabled={mutation.isPending}>
-            {mutation.isPending && <Spinner />}
-            销毁
-          </Button>
-        }
-      />
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>销毁「{externalId}」?</AlertDialogTitle>
@@ -64,5 +62,29 @@ export function DestroySandboxButton({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+export function DestroySandboxButton({
+  externalId,
+  onDestroyed,
+}: {
+  externalId: string;
+  onDestroyed?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <Button variant="destructive" size="sm" onClick={() => setOpen(true)}>
+        销毁
+      </Button>
+      <DestroySandboxDialog
+        externalId={externalId}
+        open={open}
+        onOpenChange={setOpen}
+        onDestroyed={onDestroyed}
+      />
+    </>
   );
 }

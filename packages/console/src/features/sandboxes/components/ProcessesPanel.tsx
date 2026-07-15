@@ -1,9 +1,16 @@
 import type { Sandbox } from '@dormice/shared';
-import { ListViewIcon } from '@hugeicons/core-free-icons';
+import { ListViewIcon, MoreVerticalIcon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { toast } from 'sonner';
+import { DataTable } from '@/components/DataTable';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   Empty,
   EmptyDescription,
@@ -12,7 +19,6 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty';
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -100,51 +106,61 @@ export function ProcessesPanel({ sandbox }: { sandbox: Sandbox }) {
       )}
 
       {list.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-20">PID</TableHead>
-                <TableHead>命令</TableHead>
-                <TableHead className="text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {list.map((process) => (
-                <TableRow key={process.pid}>
-                  <TableCell className="tabular-nums">{process.pid}</TableCell>
-                  <TableCell className="max-w-md truncate font-mono text-xs">
-                    {[process.config.cmd, ...process.config.args].join(' ')}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="inline-flex gap-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
+        <DataTable>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-20">PID</TableHead>
+              <TableHead>命令</TableHead>
+              <TableHead className="text-right">操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {list.map((process) => (
+              <TableRow key={process.pid}>
+                <TableCell className="tabular-nums">{process.pid}</TableCell>
+                <TableCell className="max-w-md truncate font-mono text-xs">
+                  {[process.config.cmd, ...process.config.args].join(' ')}
+                </TableCell>
+                <TableCell className="text-right">
+                  {/* 两个信号收进「⋯」菜单:SIGTERM 是常规请求,
+                        SIGKILL 不可拒绝 — 才配 destructive 红。 */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`进程 ${process.pid} 的操作`}
+                        >
+                          <HugeiconsIcon icon={MoreVerticalIcon} />
+                        </Button>
+                      }
+                    />
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
                         disabled={kill.isPending}
                         onClick={() =>
                           sendSignal(process.pid, 'SIGNAL_SIGTERM')
                         }
                       >
-                        SIGTERM
-                      </Button>
-                      <Button
+                        发送 SIGTERM
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
                         variant="destructive"
-                        size="sm"
                         disabled={kill.isPending}
                         onClick={() =>
                           sendSignal(process.pid, 'SIGNAL_SIGKILL')
                         }
                       >
-                        SIGKILL
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+                        发送 SIGKILL
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </DataTable>
       )}
     </div>
   );
