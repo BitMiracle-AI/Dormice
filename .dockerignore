@@ -1,0 +1,8 @@
+# Keeps local docker builds of website/Dockerfile from uploading build
+# artifacts and dependency trees; a CI/Dokploy clone is clean anyway.
+**/node_modules
+**/dist
+**/.next
+**/out
+.git
+e2e
