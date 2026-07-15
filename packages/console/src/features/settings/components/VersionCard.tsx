@@ -1,7 +1,8 @@
 import type { CheckUpgradeResponse } from '@dormice/shared';
 import { RefreshIcon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -33,6 +34,19 @@ export function VersionCard() {
   const status = useUpgradeStatus();
   const [dialogOpen, setDialogOpen] = useState(false);
   const running = status.data?.running ?? false;
+  const last = status.data?.last ?? null;
+
+  // 升级跑完(running 翻回 false)重新裁决版本与配置。弹窗开着时它自己
+  // 会做这次失效;这里兜住弹窗已关、升级在后台跑完的那条路。
+  const queryClient = useQueryClient();
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && !running) {
+      queryClient.invalidateQueries({ queryKey: ['checkUpgrade'] });
+      queryClient.invalidateQueries({ queryKey: ['config'] });
+    }
+    wasRunning.current = running;
+  }, [running, queryClient]);
 
   return (
     <Card>
@@ -72,6 +86,23 @@ export function VersionCard() {
             </Button>
           </div>
         )}
+        {/* 后台跑完的失败/回退不能无声消失:上一份报告就在这里说话。 */}
+        {!running &&
+          last !== null &&
+          (last.state === 'failed' || last.state === 'rolled-back') && (
+            <p className="text-sm text-destructive">
+              上次一键升级
+              {last.state === 'rolled-back' ? '构建失败,已自动回退' : '失败'}
+              {last.finishedAt !== null &&
+                `(${new Date(last.finishedAt).toLocaleString()})`}
+              {last.error !== null && <>:{last.error}</>}
+            </p>
+          )}
+        {force.isError && (
+          <p className="text-sm text-destructive">
+            检查失败:{force.error.message}
+          </p>
+        )}
         {isPending ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Spinner /> 检查版本
@@ -82,9 +113,12 @@ export function VersionCard() {
           <VersionBody
             data={data}
             oneClick={
-              status.data?.available
-                ? { onUpgrade: () => setDialogOpen(true), running }
-                : { reason: status.data?.unavailableReason ?? null }
+              status.data === undefined
+                ? // 执行窗还没答复:既不许诺按钮,也不指控「不可用」。
+                  null
+                : status.data.available
+                  ? { onUpgrade: () => setDialogOpen(true), running }
+                  : { reason: status.data.unavailableReason }
             }
           />
         )}
@@ -93,15 +127,17 @@ export function VersionCard() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         alreadyRunning={running}
+        baselineStartedAt={last?.startedAt ?? null}
       />
     </Card>
   );
 }
 
-/** 一键可用 → 按钮;不可用 → 手动指引 + daemon 自报的原因。 */
+/** 一键可用 → 按钮;不可用 → 手动指引 + daemon 自报的原因;null = 还不知道。 */
 type OneClick =
   | { onUpgrade: () => void; running: boolean }
-  | { reason: string | null };
+  | { reason: string | null }
+  | null;
 
 function VersionBody({
   data,
@@ -178,7 +214,7 @@ function UpgradePreview({
             <code className="font-mono">{check.latest.commit}</code>
           </span>
         </div>
-        {'onUpgrade' in oneClick && (
+        {oneClick !== null && 'onUpgrade' in oneClick && (
           <Button
             size="sm"
             disabled={oneClick.running}
@@ -205,7 +241,7 @@ function UpgradePreview({
           </li>
         )}
       </ul>
-      {'reason' in oneClick && (
+      {oneClick !== null && 'reason' in oneClick && (
         <p className="text-sm text-muted-foreground">
           一键升级在这台 daemon 上不可用
           {oneClick.reason !== null && (
