@@ -54,7 +54,7 @@ const sha256 = (value: string) => createHash('sha256').update(value).digest();
  */
 export function findRowBySignature(
   db: Db,
-  apiToken: string,
+  signingSecret: string,
   material: SignatureMaterial,
   presented: string,
 ): SandboxRow | undefined {
@@ -62,7 +62,7 @@ export function findRowBySignature(
   for (const row of listSandboxes(db)) {
     if (e2bView(row, now) === 'dead') continue;
     const expected = fileSignature(
-      mintEnvdToken(apiToken, row.sandboxId),
+      mintEnvdToken(signingSecret, row.sandboxId),
       material,
     );
     if (timingSafeEqual(sha256(expected), sha256(presented))) return row;

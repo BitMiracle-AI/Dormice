@@ -24,7 +24,6 @@ export const signedFileRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   app,
   deps,
 ) => {
-  const { config } = deps;
   // Same parser set as the envd surface: the upload shapes are identical.
   await app.register(multipart, {
     limits: {
@@ -87,7 +86,7 @@ export const signedFileRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         : Number(query.signature_expiration);
     const row = findRowBySignature(
       deps.db,
-      config.DORMICE_API_TOKEN,
+      deps.envdSigningSecret,
       {
         path: query.path ?? '',
         operation,

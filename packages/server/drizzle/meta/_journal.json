@@ -50,6 +50,20 @@
       "when": 1783919540066,
       "tag": "0006_external-id",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1784125951820,
+      "tag": "0007_metrics-history",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1784127595513,
+      "tag": "0008_daemon-secrets",
+      "breakpoints": true
     }
   ]
 }

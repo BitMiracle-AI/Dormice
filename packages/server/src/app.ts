@@ -14,6 +14,7 @@ import { requireApiAuth } from './auth';
 import { type Config, type ConfigSources, configSources } from './config';
 import { getConsoleAccount } from './db/account';
 import type { Db } from './db/db';
+import { getOrCreateSigningSecret } from './db/secrets';
 import { registerE2bCompat } from './e2b';
 import { ProcessTable } from './e2b/process-table';
 import { WatcherTable } from './e2b/watcher-table';
@@ -193,6 +194,11 @@ export function buildApp({
     () => getConsoleAccount(db)?.sessionSecret ?? null,
   );
 
+  // The envd/signed-URL derivation base. Captured once — unlike the session
+  // secret there is no verb that rotates it (see db/secrets.ts) — and NOT
+  // the API token: the two credentials must rotate independently.
+  const envdSigningSecret = getOrCreateSigningSecret(db);
+
   app.register(async (api) => {
     api.addHook('onRequest', apiAuth);
     await api.register(sandboxRoutes, {
@@ -224,6 +230,7 @@ export function buildApp({
       db,
       apiAuth,
       consoleDistDir,
+      envdSigningSecret,
     });
   });
 
@@ -243,6 +250,7 @@ export function buildApp({
       watchers,
       archiver,
       archiveDefaultSeconds,
+      envdSigningSecret,
     });
   });
 

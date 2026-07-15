@@ -55,25 +55,30 @@ export function connectError(code: string, message: string): E2bError {
 const sha256 = (value: string) => createHash('sha256').update(value).digest();
 
 /**
- * The per-sandbox envd access token: HMAC(API token, sandbox id). Stateless
- * — any daemon holding the API token can verify it without a lookup, and
- * the SDK treats the value as opaque (it just echoes what create returned).
+ * The per-sandbox envd access token: HMAC(signing secret, sandbox id).
+ * Stateless — the daemon verifies without a lookup, and the SDK treats the
+ * value as opaque (it just echoes what create returned). Keyed by the
+ * ledger's signing secret, not the API token, so the two credentials
+ * rotate independently — no client can (or should) recompute this.
  */
-export function mintEnvdToken(apiToken: string, sandboxId: string): string {
-  return createHmac('sha256', apiToken)
+export function mintEnvdToken(
+  signingSecret: string,
+  sandboxId: string,
+): string {
+  return createHmac('sha256', signingSecret)
     .update(`envd:${sandboxId}`)
     .digest('hex');
 }
 
 export function verifyEnvdToken(
-  apiToken: string,
+  signingSecret: string,
   sandboxId: string,
   presented: string,
 ): boolean {
   // Hash both sides so timingSafeEqual gets equal lengths, constant-time.
   return timingSafeEqual(
     sha256(presented),
-    sha256(mintEnvdToken(apiToken, sandboxId)),
+    sha256(mintEnvdToken(signingSecret, sandboxId)),
   );
 }
 

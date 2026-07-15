@@ -16,7 +16,6 @@ import {
 } from '../auth';
 import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
-import { verifyEnvdToken } from '../e2b/protocol';
 import { FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
 
@@ -320,16 +319,29 @@ describe('POST /console/envdToken', () => {
     });
   }
 
-  it('a session cookie mints the exact token the envd surface verifies', async () => {
+  it('a session cookie mints the exact token the envd surface accepts', async () => {
     const app = testApp();
     await setup(app);
     const cookie = sessionCookie(await login(app));
     const res = await mint(app, cookie.value);
     expect(res.statusCode).toBe(200);
     const { envdAccessToken } = res.json() as { envdAccessToken: string };
-    expect(verifyEnvdToken(TOKEN, 'sb-terminal', envdAccessToken)).toBe(true);
+    // The envd surface itself is the judge — the token derives from the
+    // ledger's signing secret, which nothing outside the daemon (this test
+    // included) can recompute. Auth passing shows as anything-but-401.
+    const probe = (sandboxId: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/e2b/envd/filesystem.Filesystem/Stat',
+        headers: {
+          'e2b-sandbox-id': sandboxId,
+          'x-access-token': envdAccessToken,
+        },
+        payload: { path: '/home/user' },
+      });
+    expect((await probe('sb-terminal')).statusCode).not.toBe(401);
     // Per-sandbox: the same token opens no other sandbox.
-    expect(verifyEnvdToken(TOKEN, 'sb-other', envdAccessToken)).toBe(false);
+    expect((await probe('sb-other')).statusCode).toBe(401);
   });
 
   it('goes through the API-wide arbiter: no console header, no token', async () => {

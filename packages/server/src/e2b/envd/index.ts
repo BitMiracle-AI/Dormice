@@ -25,7 +25,7 @@ export const e2bEnvdRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   app,
   deps,
 ) => {
-  const { config, db } = deps;
+  const { db } = deps;
   await app.register(multipart, {
     limits: {
       // The disk quota is the ceiling; a route-level cap would just be a
@@ -84,10 +84,7 @@ export const e2bEnvdRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     const sandboxId = sandboxIdOf(request);
     const header = request.headers['x-access-token'];
     const token = Array.isArray(header) ? header[0] : header;
-    if (
-      !token ||
-      !verifyEnvdToken(config.DORMICE_API_TOKEN, sandboxId, token)
-    ) {
+    if (!token || !verifyEnvdToken(deps.envdSigningSecret, sandboxId, token)) {
       throw new E2bError(401, 'unauthenticated', 'invalid envd access token');
     }
   });

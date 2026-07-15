@@ -28,6 +28,11 @@ export interface ConsoleRoutesOptions {
    * /console answers an honest 404 instead of guessing at paths.
    */
   consoleDistDir?: string;
+  /**
+   * HMAC key for the envd tokens this surface mints — the ledger's signing
+   * secret, never the API token (they rotate independently).
+   */
+  envdSigningSecret: string;
 }
 
 // No Secure flag: the daemon speaks plain http on 127.0.0.1 by design, and
@@ -54,7 +59,7 @@ const messageResponse = z.object({ message: z.string() });
  */
 export const consoleRoutes: FastifyPluginAsyncZod<
   ConsoleRoutesOptions
-> = async (app, { config, db, apiAuth, consoleDistDir }) => {
+> = async (app, { config, db, apiAuth, consoleDistDir, envdSigningSecret }) => {
   // Per-app, not module-global: each daemon (and each test app) gets its
   // own counters. Shared by login and setup — both are credential guesses.
   const throttle = new LoginThrottle();
@@ -188,12 +193,13 @@ export const consoleRoutes: FastifyPluginAsyncZod<
   );
 
   // The console's terminal speaks to the envd surface directly — the same
-  // wire the e2b SDK uses — but envd auth is the per-sandbox HMAC, which
-  // only an API-token holder can compute and the browser deliberately is
-  // not one. This trades the session for exactly one sandbox's token; the
-  // API-wide arbiter guards it, so the cookie path also needs the console
-  // header. Minting is stateless on purpose (like the token itself): a
-  // made-up sandboxId yields a token that opens nothing.
+  // wire the e2b SDK uses — but envd auth is the per-sandbox HMAC keyed by
+  // the daemon's signing secret, which never leaves the daemon and the
+  // browser deliberately never holds. This trades the session for exactly
+  // one sandbox's token; the API-wide arbiter guards it, so the cookie path
+  // also needs the console header. Minting is stateless on purpose (like
+  // the secret itself): a made-up sandboxId yields a token that opens
+  // nothing.
   app.post(
     '/console/envdToken',
     {
@@ -206,10 +212,7 @@ export const consoleRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => ({
-      envdAccessToken: mintEnvdToken(
-        config.DORMICE_API_TOKEN,
-        request.body.sandboxId,
-      ),
+      envdAccessToken: mintEnvdToken(envdSigningSecret, request.body.sandboxId),
     }),
   );
 
