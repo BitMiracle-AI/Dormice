@@ -120,7 +120,7 @@ export function AppSidebar() {
                         isActive={isActivePath(pathname, item.to)}
                         render={<Link to={item.to} />}
                       >
-                        <HugeiconsIcon icon={item.icon} strokeWidth={1.8} />
+                        <HugeiconsIcon icon={item.icon} strokeWidth={2} />
                         <span>{item.label}</span>
                       </SidebarMenuButton>
                       {item.mock && <SidebarMenuBadge>预览</SidebarMenuBadge>}
@@ -144,14 +144,14 @@ export function AppSidebar() {
             >
               <HugeiconsIcon
                 icon={resolvedTheme === 'dark' ? Sun02Icon : Moon02Icon}
-                strokeWidth={1.8}
+                strokeWidth={2}
               />
               <span>{resolvedTheme === 'dark' ? '浅色模式' : '深色模式'}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton className={menuButtonClass} onClick={signOut}>
-              <HugeiconsIcon icon={Logout01Icon} strokeWidth={1.8} />
+              <HugeiconsIcon icon={Logout01Icon} strokeWidth={2} />
               <span>退出登录</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
