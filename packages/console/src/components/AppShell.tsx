@@ -5,7 +5,7 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 
 /**
  * 登录后的应用外壳:侧边栏 + 页面内容。顶栏 2026-07-16 用户拍板删除:
- * 面包屑只是页面自带页头的第二份真相,⌘K 搜索入口随之移进侧栏
+ * 面包屑只是页面自带页头的第二份真相,⌘K 命令面板成为纯键盘入口
  * (CommandMenu),侧栏开关保留键盘位(⌘B,vendored sidebar 自带)。
  */
 export function AppShell() {

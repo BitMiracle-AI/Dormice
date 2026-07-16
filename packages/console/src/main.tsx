@@ -20,7 +20,9 @@ declare module '@tanstack/react-router' {
 // biome-ignore lint/style/noNonNullAssertion: index.html always has #root
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+    {/* 控制台恒定暗色(2026-07-16 用户拍板),forcedTheme 让 sonner 等
+        useTheme 消费者拿到一致答案,不给亮色留后门。 */}
+    <ThemeProvider attribute="class" defaultTheme="dark" forcedTheme="dark">
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
       </QueryClientProvider>
