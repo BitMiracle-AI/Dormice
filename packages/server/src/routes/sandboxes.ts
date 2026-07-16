@@ -46,7 +46,7 @@ import type { Db } from '../db/db';
 import {
   countSandboxes,
   createSandbox,
-  findByExternalId,
+  findByName,
   listSandboxes,
   touch,
   updateMetadata,
@@ -85,14 +85,15 @@ export interface SandboxRoutesOptions {
 
 /** What acquire's slot work resolves to — the wire union's two arms. */
 type AcquireOutcome =
-  | { status: 'ready'; row: SandboxRow }
+  /** `created` — names converge instead of erroring, so this flag is how a caller sees which happened. */
+  | { status: 'ready'; created: boolean; row: SandboxRow }
   | { status: 'restoring'; row: SandboxRow; progress: RestoreProgress };
 
 /** Ledger row -> wire shape: nest the flat policy columns, attach the endpoint. */
 function toSandbox(row: SandboxRow, endpoint: string): Sandbox {
   return {
-    sandboxId: row.sandboxId,
-    externalId: row.externalId,
+    id: row.id,
+    name: row.name,
     state: row.state,
     nodeId: row.nodeId,
     endpoint,
@@ -139,12 +140,12 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   // request queues, finds the row the first one wrote, and comes back with
   // the same sandbox instead of racing a duplicate create.
   async function findOrCreate(
-    externalId: string,
+    name: string,
     policy: LifecyclePolicy,
     template: string | null,
     metadata: string | null,
   ): Promise<AcquireOutcome> {
-    const existing = findByExternalId(db, externalId);
+    const existing = findByName(db, name);
     if (existing?.state === 'archived' || existing?.state === 'restoring') {
       // The protocol's promise: acquire never blocks on a slow wake-up. An
       // archived sandbox starts its restore and answers `restoring` with
@@ -152,18 +153,15 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       if (!archiver) {
         throw httpError(
           503,
-          `sandbox for key "${externalId}" is ${existing.state} but the daemon has no S3 configured (DORMICE_S3_*) — restore is impossible until it is`,
+          `sandbox "${name}" is ${existing.state} but the daemon has no S3 configured (DORMICE_S3_*) — restore is impossible until it is`,
         );
       }
       if (existing.state === 'archived') {
         archiver.beginRestore(existing);
       }
-      const restoring = findByExternalId(db, externalId);
+      const restoring = findByName(db, name);
       if (!restoring) {
-        throw httpError(
-          500,
-          `sandbox for key "${externalId}" vanished mid-slot`,
-        );
+        throw httpError(500, `sandbox "${name}" vanished mid-slot`);
       }
       return {
         status: 'restoring',
@@ -171,7 +169,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         // The fallback covers the crash-zombie instant before the next
         // reconcile flips the row back to archived; at runtime a restoring
         // row always has a live task.
-        progress: archiver.progressOf(existing.sandboxId) ?? {
+        progress: archiver.progressOf(existing.id) ?? {
           phase: 'downloading',
           percent: 0,
         },
@@ -184,7 +182,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       // take effect only when this acquire creates the sandbox (metadata
       // has its own update verb, updateMetadata).
       const awake = await wakeSandbox(db, executor, existing);
-      return { status: 'ready', row: touch(db, awake.sandboxId) };
+      return { status: 'ready', created: false, row: touch(db, awake.id) };
     }
 
     // The capacity check lives at the only verb that creates — wakes of
@@ -205,13 +203,14 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     // UUID, never an autoincrement (ids must survive sharding); its
     // alphabet is safe everywhere an id will land — Docker names, file
     // names, DNS labels.
-    const sandboxId = randomUUID();
-    await executor.create(sandboxId, { image: resolveImage(db, template) });
+    const id = randomUUID();
+    await executor.create(id, { image: resolveImage(db, template) });
     return {
       status: 'ready',
+      created: true,
       row: createSandbox(db, {
-        sandboxId,
-        externalId,
+        id,
+        name,
         nodeId: config.DORMICE_NODE_ID,
         policy,
         template,
@@ -225,24 +224,21 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   // is more likely a typo than an intent to build a sandbox as a side
   // effect — then wake whatever cold state the sandbox is in and refresh
   // its idle clock. Must be called while holding the key's queue slot.
-  async function wakeForUse(externalId: string): Promise<SandboxRow> {
-    const existing = findByExternalId(db, externalId);
+  async function wakeForUse(name: string): Promise<SandboxRow> {
+    const existing = findByName(db, name);
     if (!existing) {
-      throw httpError(
-        404,
-        `no sandbox for key "${externalId}" — acquire it first`,
-      );
+      throw httpError(404, `no sandbox named "${name}" — acquire it first`);
     }
     if (existing.state === 'archived' || existing.state === 'restoring') {
       // The native restore path is acquire's poll loop; a use verb neither
       // blocks for minutes nor starts restores on the side.
       throw httpError(
         409,
-        `sandbox for key "${externalId}" is ${existing.state} — call acquireSandbox and poll until it is ready`,
+        `sandbox "${name}" is ${existing.state} — call acquireSandbox and poll until it is ready`,
       );
     }
     const awake = await wakeSandbox(db, executor, existing);
-    return touch(db, awake.sandboxId);
+    return touch(db, awake.id);
   }
 
   // Native API convention: RPC style — every operation is a POST to a
@@ -261,7 +257,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request, reply) => {
-      const { externalId, policy: override, template, metadata } = request.body;
+      const { name, policy: override, template, metadata } = request.body;
 
       // Validate the policy before taking the key's slot, so a queued
       // rejection can only come from the work itself, never from another
@@ -298,9 +294,9 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         });
       }
 
-      const outcome = await locks.run(externalId, () =>
+      const outcome = await locks.run(name, () =>
         findOrCreate(
-          externalId,
+          name,
           policy,
           template ?? null,
           serializeMetadata(metadata),
@@ -309,12 +305,15 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       if (outcome.status === 'restoring') {
         return {
           status: 'restoring' as const,
+          // Only an already-archived sandbox restores — never a fresh one.
+          created: false,
           sandbox: toSandbox(outcome.row, endpoint),
           progress: outcome.progress,
         };
       }
       return {
         status: 'ready' as const,
+        created: outcome.created,
         sandbox: toSandbox(outcome.row, endpoint),
       };
     },
@@ -349,18 +348,15 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { externalId } = request.body;
-      const row = findByExternalId(db, externalId);
+      const { name } = request.body;
+      const row = findByName(db, name);
       if (!row) {
-        throw httpError(
-          404,
-          `no sandbox for key "${externalId}" — acquire it first`,
-        );
+        throw httpError(404, `no sandbox named "${name}" — acquire it first`);
       }
       if (row.state !== 'active' && row.state !== 'frozen') {
         return { sample: null };
       }
-      const m = await executor.metrics(row.sandboxId);
+      const m = await executor.metrics(row.id);
       return { sample: { timestamp: new Date().toISOString(), ...m } };
     },
   );
@@ -371,7 +367,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   // averages erase them. An unsampled window answers an empty array; the
   // native face never takes a live reading to fill silence (the E2B face
   // does, as compatibility politeness — the asymmetry is deliberate).
-  // History is keyed by sandboxId under the hood, so it survives rebuilds.
+  // History is keyed by the sandbox id under the hood, so it survives rebuilds.
   app.post(
     '/getSandboxMetricsHistory',
     {
@@ -381,13 +377,10 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { externalId, start, end } = request.body;
-      const row = findByExternalId(db, externalId);
+      const { name, start, end } = request.body;
+      const row = findByName(db, name);
       if (!row) {
-        throw httpError(
-          404,
-          `no sandbox for key "${externalId}" — acquire it first`,
-        );
+        throw httpError(404, `no sandbox named "${name}" — acquire it first`);
       }
       const { startIso, endIso, startMs, endMs } = resolveWindow(
         start,
@@ -395,7 +388,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         3600_000,
         new Date(),
       );
-      const rows = querySandboxSamples(db, row.sandboxId, startIso, endIso);
+      const rows = querySandboxSamples(db, row.id, startIso, endIso);
       const bucketSeconds = resolveBucketSeconds(rows.length, startMs, endMs);
       const sliced =
         bucketSeconds === null
@@ -432,10 +425,10 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       const samples = await Promise.all(
         rows.map(async (row) => {
           try {
-            const m = await executor.metrics(row.sandboxId);
+            const m = await executor.metrics(row.id);
             return {
-              externalId: row.externalId,
-              sandboxId: row.sandboxId,
+              sandboxName: row.name,
+              sandboxId: row.id,
               sample: { timestamp: new Date().toISOString(), ...m },
             };
           } catch {
@@ -473,15 +466,15 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           let image: string | null = null;
           if (row.state !== 'archived' && row.state !== 'restoring') {
             try {
-              image = await executor.imageOf(row.sandboxId);
+              image = await executor.imageOf(row.id);
             } catch {
               // Reading failed mid-vanish: no shell to report, same as null.
               image = null;
             }
           }
           return {
-            externalId: row.externalId,
-            sandboxId: row.sandboxId,
+            sandboxName: row.name,
+            sandboxId: row.id,
             image,
             nextImage,
             // A row without a shell is not upgradable: its very next boot
@@ -504,7 +497,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { externalId, command, timeoutSeconds, cwd, env } = request.body;
+      const { name, command, timeoutSeconds, cwd, env } = request.body;
 
       // Only the wake takes the key's queue slot — seconds of executor
       // work, the same serialization story as acquire. The exec itself
@@ -513,15 +506,15 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       // whole duration. The heartbeat keeps the scanner away; a concurrent
       // destroy mid-exec removes the container and this exec fails with
       // the executor's honest error — accepted, not defended against.
-      const row = await locks.run(externalId, () => wakeForUse(externalId));
+      const row = await locks.run(name, () => wakeForUse(name));
 
       const stopHeartbeat = startExecHeartbeat(
         db,
-        row.sandboxId,
+        row.id,
         row.freezeAfterSeconds,
       );
       try {
-        return await executor.exec(row.sandboxId, {
+        return await executor.exec(row.id, {
           command,
           timeoutSeconds,
           cwd,
@@ -532,7 +525,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         try {
           // The command itself was the activity: the idle countdown starts
           // when it ends, not when it started.
-          touch(db, row.sandboxId);
+          touch(db, row.id);
         } catch {
           // Released mid-exec; the exec's own result or error tells the story.
         }
@@ -565,12 +558,12 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { externalId, files } = request.body;
-      return locks.run(externalId, async () => {
-        const row = await wakeForUse(externalId);
+      const { name, files } = request.body;
+      return locks.run(name, async () => {
+        const row = await wakeForUse(name);
         try {
           await executor.writeFiles(
-            row.sandboxId,
+            row.id,
             files.map((file) => ({
               path: file.path,
               content: Buffer.from(file.contentBase64, 'base64'),
@@ -579,7 +572,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         } catch (error) {
           throwFileHttpError(error);
         }
-        touch(db, row.sandboxId);
+        touch(db, row.id);
         return {
           files: files.map((file) => ({ path: resolveSandboxPath(file.path) })),
         };
@@ -600,17 +593,17 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { externalId, path, contentBase64 } = request.body;
-      return locks.run(externalId, async () => {
-        const row = await wakeForUse(externalId);
+      const { name, path, contentBase64 } = request.body;
+      return locks.run(name, async () => {
+        const row = await wakeForUse(name);
         try {
-          await executor.writeFiles(row.sandboxId, [
+          await executor.writeFiles(row.id, [
             { path, content: Buffer.from(contentBase64, 'base64') },
           ]);
         } catch (error) {
           throwFileHttpError(error);
         }
-        touch(db, row.sandboxId);
+        touch(db, row.id);
         return { path: resolveSandboxPath(path) };
       });
     },
@@ -625,16 +618,16 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { externalId, path } = request.body;
-      return locks.run(externalId, async () => {
-        const row = await wakeForUse(externalId);
+      const { name, path } = request.body;
+      return locks.run(name, async () => {
+        const row = await wakeForUse(name);
         let content: Buffer;
         try {
-          content = await executor.readFile(row.sandboxId, path);
+          content = await executor.readFile(row.id, path);
         } catch (error) {
           throwFileHttpError(error);
         }
-        touch(db, row.sandboxId);
+        touch(db, row.id);
         return {
           path: resolveSandboxPath(path),
           contentBase64: content.toString('base64'),
@@ -655,15 +648,15 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { externalId, paths } = request.body;
-      return locks.run(externalId, async () => {
-        const row = await wakeForUse(externalId);
+      const { name, paths } = request.body;
+      return locks.run(name, async () => {
+        const row = await wakeForUse(name);
         const files: { path: string; contentBase64: string }[] = [];
         let totalBytes = 0;
         for (const path of paths) {
           let content: Buffer;
           try {
-            content = await executor.readFile(row.sandboxId, path);
+            content = await executor.readFile(row.id, path);
           } catch (error) {
             throwFileHttpError(error);
           }
@@ -679,7 +672,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
             contentBase64: content.toString('base64'),
           });
         }
-        touch(db, row.sandboxId);
+        touch(db, row.id);
         return { files };
       });
     },
@@ -694,26 +687,23 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { externalId } = request.body;
+      const { name } = request.body;
       // The whole verb holds the key's slot, like the file verbs: seconds of
       // executor work at worst, and the slot keeps the scanner and a
       // concurrent destroy from moving the sandbox under our feet.
-      return locks.run(externalId, async () => {
-        const existing = findByExternalId(db, externalId);
+      return locks.run(name, async () => {
+        const existing = findByName(db, name);
         if (!existing) {
           // Not a creator and not a destroyer: an unknown key is a typo,
           // not a goal state — same manners as exec.
-          throw httpError(
-            404,
-            `no sandbox for key "${externalId}" — acquire it first`,
-          );
+          throw httpError(404, `no sandbox named "${name}" — acquire it first`);
         }
         if (existing.state === 'archived' || existing.state === 'restoring') {
           // An archived sandbox has no container to swap; it already meets
           // rebuild's promise (its next wake builds from the current image).
           throw httpError(
             409,
-            `sandbox for key "${externalId}" is ${existing.state} — it has no container to rebuild`,
+            `sandbox "${name}" is ${existing.state} — it has no container to rebuild`,
           );
         }
         const row = await rebuildSandbox(db, executor, existing);
@@ -734,19 +724,19 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request, reply) => {
-      const { externalId, policy: patch } = request.body;
+      const { name, policy: patch } = request.body;
       // Unlike acquire, the merge base is the STORED policy, so validation
       // must wait for the row — it runs inside the slot, which also keeps a
       // concurrent destroy from deleting the row between check and write.
       const outcome = await locks.run<{ error: string } | { row: SandboxRow }>(
-        externalId,
+        name,
         async () => {
-          const existing = findByExternalId(db, externalId);
+          const existing = findByName(db, name);
           if (!existing) {
             // Not a creator: an unknown key is a typo, same manners as rebuild.
             throw httpError(
               404,
-              `no sandbox for key "${externalId}" — acquire it first`,
+              `no sandbox named "${name}" — acquire it first`,
             );
           }
           // Legal in every state: policy is a ledger attribute, not a container
@@ -795,13 +785,13 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
             // The goal state already holds; a no-op writes no history.
             return { row: existing };
           }
-          const row = updatePolicy(db, existing.sandboxId, merged.data);
+          const row = updatePolicy(db, existing.id, merged.data);
           const fmt = (seconds: number | null) =>
             seconds === null ? 'never' : `${seconds}s`;
           recordActivity(db, {
             kind: 'policy-changed',
-            externalId,
-            sandboxId: row.sandboxId,
+            sandboxName: name,
+            sandboxId: row.id,
             detail: changed
               .map(
                 (knob) =>
@@ -828,28 +818,25 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { externalId, metadata } = request.body;
+      const { name, metadata } = request.body;
       const serialized = serializeMetadata(metadata);
       // Inside the slot for the same reason as updatePolicy: a concurrent
       // destroy must not delete the row between check and write.
-      const row = await locks.run(externalId, async () => {
-        const existing = findByExternalId(db, externalId);
+      const row = await locks.run(name, async () => {
+        const existing = findByName(db, name);
         if (!existing) {
           // Not a creator: an unknown key is a typo, same manners as rebuild.
-          throw httpError(
-            404,
-            `no sandbox for key "${externalId}" — acquire it first`,
-          );
+          throw httpError(404, `no sandbox named "${name}" — acquire it first`);
         }
         if ((existing.metadata ?? null) === serialized) {
           // The goal state already holds; a no-op writes no history.
           return existing;
         }
-        const updated = updateMetadata(db, existing.sandboxId, serialized);
+        const updated = updateMetadata(db, existing.id, serialized);
         recordActivity(db, {
           kind: 'metadata-changed',
-          externalId,
-          sandboxId: updated.sandboxId,
+          sandboxName: name,
+          sandboxId: updated.id,
           detail:
             Object.entries(metadata)
               .map(([key, value]) => `${key}=${value}`)
@@ -870,13 +857,13 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
-      const { externalId } = request.body;
+      const { name } = request.body;
       // Same slot as acquire and the scanner: two parallel destroys of one
       // key queue up — the first destroys, the second re-checks and reports
       // the goal state honestly instead of tripping over a half-destroyed
       // sandbox.
-      return locks.run(externalId, async () => {
-        const existing = findByExternalId(db, externalId);
+      return locks.run(name, async () => {
+        const existing = findByName(db, name);
         if (!existing) {
           // Idempotent like acquire: the desired end state — no sandbox
           // under this key — already holds.
@@ -891,7 +878,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         await destroySandbox(
           db,
           executor,
-          existing.sandboxId,
+          existing.id,
           archiver?.store ?? null,
         );
         return { destroyed: true };

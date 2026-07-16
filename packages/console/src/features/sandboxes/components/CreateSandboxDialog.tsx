@@ -29,8 +29,8 @@ import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { useConfig } from '@/features/settings/hooks/useConfig';
 import { useTemplates } from '@/features/templates/hooks/useTemplates';
-import { durationHint } from '../format';
-import { useAcquireSandbox } from '../hooks/useSandboxes';
+import { durationHint, STATE_LABELS } from '../format';
+import { useAcquireSandbox, useSandboxes } from '../hooks/useSandboxes';
 
 /**
  * The console speaks the same verb as everyone else: acquire. Same key,
@@ -45,7 +45,7 @@ import { useAcquireSandbox } from '../hooks/useSandboxes';
  */
 export function CreateSandboxDialog() {
   const [open, setOpen] = useState(false);
-  const [externalId, setExternalId] = useState('');
+  const [name, setName] = useState('');
   const [template, setTemplate] = useState('');
   const [freezeAfter, setFreezeAfter] = useState('');
   const [neverStop, setNeverStop] = useState(false);
@@ -55,9 +55,12 @@ export function CreateSandboxDialog() {
   const mutation = useAcquireSandbox();
   const templates = useTemplates().data?.templates ?? [];
   const archive = useConfig().data?.archive;
+  // 名字撞车不报错而是拿回旧沙箱 — 没有 duplicate 报错来教这件事,
+  // 所以在扣扳机前一秒把真相亮出来:列表缓存本来就 2 秒一刷,免费。
+  const existing = useSandboxes().data?.sandboxes.find((s) => s.name === name);
 
   const reset = () => {
-    setExternalId('');
+    setName('');
     setTemplate('');
     setFreezeAfter('');
     setNeverStop(false);
@@ -80,13 +83,18 @@ export function CreateSandboxDialog() {
 
     mutation.mutate(
       {
-        externalId,
+        name,
         ...(template !== '' ? { template } : {}),
         ...(Object.keys(policy).length > 0 ? { policy } : {}),
       },
       {
-        onSuccess: ({ sandbox }) => {
-          toast.success(`「${sandbox.externalId}」的沙箱已就绪`);
+        onSuccess: ({ created, sandbox }) => {
+          // created 让幂等可见:拿回旧沙箱时不许谎报"已创建"。
+          toast.success(
+            created
+              ? `「${sandbox.name}」的沙箱已创建`
+              : `拿回了已有的沙箱「${sandbox.name}」`,
+          );
           setOpen(false);
           reset();
         },
@@ -114,8 +122,8 @@ export function CreateSandboxDialog() {
         <DialogHeader>
           <DialogTitle>创建沙箱</DialogTitle>
           <DialogDescription>
-            acquire 是幂等的:这个 key 已经有沙箱时,拿回的是原来那个,
-            下面的策略会被忽略。
+            acquire 是幂等的:名字已经有沙箱时,拿回的是原来那个,
+            下面的模板和策略不会应用。
           </DialogDescription>
         </DialogHeader>
         <form
@@ -126,18 +134,19 @@ export function CreateSandboxDialog() {
         >
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="create-user-key">externalId</FieldLabel>
+              <FieldLabel htmlFor="create-sandbox-name">名称</FieldLabel>
               <Input
-                id="create-user-key"
-                value={externalId}
-                onChange={(event) => setExternalId(event.target.value)}
+                id="create-sandbox-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
                 placeholder="my-agent"
                 maxLength={128}
                 className="font-mono"
               />
               <FieldDescription>
-                调用方自选的身份,acquire 对它幂等 — 同一个 key 永远回到
-                同一个沙箱。
+                {existing
+                  ? `这个名字已有沙箱(${STATE_LABELS[existing.state]})— 提交会直接拿回它,下面的模板和策略不会应用。`
+                  : '你起的唯一名字,acquire 对它幂等 — 同一个名字永远回到同一个沙箱。'}
               </FieldDescription>
             </Field>
             {templates.length > 0 && (
@@ -249,10 +258,10 @@ export function CreateSandboxDialog() {
           <DialogFooter className="mt-6">
             <Button
               type="submit"
-              disabled={externalId.length === 0 || mutation.isPending}
+              disabled={name.length === 0 || mutation.isPending}
             >
               {mutation.isPending && <Spinner />}
-              创建
+              {existing ? '拿回已有沙箱' : '创建'}
             </Button>
           </DialogFooter>
         </form>

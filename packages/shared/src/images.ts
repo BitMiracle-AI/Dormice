@@ -21,8 +21,10 @@ export type ListSandboxImagesRequest = z.infer<
 
 export const listSandboxImagesResponseSchema = z.object({
   images: z.array(
+    // Prefixed because these reference the sandbox from outside it — and a
+    // bare `name` in a row about images would read as an image name.
     z.object({
-      externalId: z.string(),
+      sandboxName: z.string(),
       sandboxId: z.string(),
       /**
        * The image the current shell was born from. Null when no shell

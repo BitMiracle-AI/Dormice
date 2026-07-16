@@ -26,9 +26,7 @@ const key = 'example-resident-agent';
 const { sandbox } = await client.acquireSandbox(key, {
   policy: { stopAfterSeconds: null },
 });
-console.log(
-  `${sandbox.sandboxId} — ${sandbox.state}, created ${sandbox.createdAt}`,
-);
+console.log(`${sandbox.id} — ${sandbox.state}, created ${sandbox.createdAt}`);
 
 // State lives on the sandbox's disk, not in this script: every visit appends
 // to the same journal.

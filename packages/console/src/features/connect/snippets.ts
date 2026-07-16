@@ -10,8 +10,8 @@ const sandbox = await Sandbox.create({
   apiKey: 'e2b_<your API token>',
   apiUrl: '${origin}/e2b/api',
   sandboxUrl: '${origin}/e2b/envd',
-  // Dormice 扩展:同一个 externalId 永远回到同一个沙箱。
-  metadata: { externalId: 'my-project' },
+  // Dormice 扩展:同一个 name 永远回到同一个沙箱。
+  metadata: { name: 'my-project' },
 });
 
 const result = await sandbox.commands.run('echo hello from dormice');`;

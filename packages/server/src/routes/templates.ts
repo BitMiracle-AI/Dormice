@@ -8,10 +8,10 @@ import {
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import type { Db } from '../db/db';
 import {
-  externalIdsUsingTemplate,
   listTemplates,
   registerTemplate,
   removeTemplate,
+  sandboxNamesUsingTemplate,
 } from '../db/templates';
 import { httpError } from '../http-error';
 
@@ -68,7 +68,7 @@ export const templateRoutes: FastifyPluginAsyncZod<
       // Refused while referenced: a sandbox row pointing at a removed
       // template would wake onto a dangling name. Named keys, so the
       // operator knows exactly what to destroy.
-      const users = externalIdsUsingTemplate(db, name);
+      const users = sandboxNamesUsingTemplate(db, name);
       if (users.length > 0) {
         throw httpError(
           409,

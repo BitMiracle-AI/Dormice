@@ -48,7 +48,7 @@ export function ActivityPage() {
         (event) =>
           (kindFilter === 'all' || event.kind === kindFilter) &&
           (search === '' ||
-            (event.externalId ?? '')
+            (event.sandboxName ?? '')
               .toLowerCase()
               .includes(search.toLowerCase())),
       ),
@@ -76,7 +76,7 @@ export function ActivityPage() {
           <InputGroupInput
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="按 externalId 搜索"
+            placeholder="按名称搜索"
           />
         </InputGroup>
         <FilterMenu
@@ -130,7 +130,7 @@ export function ActivityPage() {
             <TableRow>
               <TableHead className="w-28">时间</TableHead>
               <TableHead className="w-28">事件</TableHead>
-              <TableHead className="w-40">externalId</TableHead>
+              <TableHead className="w-40">名称</TableHead>
               <TableHead>详情</TableHead>
             </TableRow>
           </TableHeader>
@@ -156,14 +156,14 @@ export function ActivityPage() {
                   </Badge>
                 </TableCell>
                 <TableCell>
-                  {event.externalId ? (
+                  {event.sandboxName ? (
                     <Link
-                      to="/sandboxes/$externalId"
-                      params={{ externalId: event.externalId }}
+                      to="/sandboxes/$name"
+                      params={{ name: event.sandboxName }}
                       search={{ tab: 'overview' as const }}
                       className="font-mono hover:underline"
                     >
-                      {event.externalId}
+                      {event.sandboxName}
                     </Link>
                   ) : (
                     <span className="text-muted-foreground">—</span>

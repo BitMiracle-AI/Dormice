@@ -3,7 +3,7 @@ import { recordActivity } from './db/activity';
 import type { Db } from './db/db';
 import {
   deleteSandbox,
-  findBySandboxId,
+  findById,
   listSandboxes,
   overwriteState,
 } from './db/ledger';
@@ -123,8 +123,8 @@ export async function reconcile(
     row: SandboxRow,
     apply: () => void | Promise<void>,
   ) =>
-    locks.tryRun(row.externalId, async () => {
-      const fresh = findBySandboxId(db, row.sandboxId);
+    locks.tryRun(row.name, async () => {
+      const fresh = findById(db, row.id);
       if (fresh && fresh.state === row.state) {
         await apply();
       }
@@ -135,25 +135,25 @@ export async function reconcile(
   const note = (row: SandboxRow, detail: string) =>
     recordActivity(db, {
       kind: 'reconciled',
-      externalId: row.externalId,
-      sandboxId: row.sandboxId,
+      sandboxName: row.name,
+      sandboxId: row.id,
       detail,
     });
 
   for (const row of rows) {
-    const observed = containers.get(row.sandboxId);
-    containers.delete(row.sandboxId);
+    const observed = containers.get(row.id);
+    containers.delete(row.id);
     if (row.state === 'archived') {
-      owners.add(row.sandboxId);
+      owners.add(row.id);
       if (observed !== undefined) {
         await repairUnderLock(row, async () => {
-          await executor.destroy(row.sandboxId);
+          await executor.destroy(row.id);
           result.archivedSwept += 1;
           note(row, 'leftover container of an archived sandbox destroyed');
         });
-      } else if (disks.has(row.sandboxId)) {
+      } else if (disks.has(row.id)) {
         await repairUnderLock(row, async () => {
-          await executor.removeDisk(row.sandboxId);
+          await executor.removeDisk(row.id);
           result.archivedSwept += 1;
           note(row, 'leftover disk of an archived sandbox removed');
         });
@@ -161,13 +161,13 @@ export async function reconcile(
       continue;
     }
     if (row.state === 'restoring') {
-      owners.add(row.sandboxId);
-      if (archiver?.hasLiveRestore(row.sandboxId)) {
+      owners.add(row.id);
+      if (archiver?.hasLiveRestore(row.id)) {
         continue; // The task owns this row; what we observe is its mid-work.
       }
       if (observed !== undefined) {
         await repairUnderLock(row, () => {
-          overwriteState(db, row.sandboxId, LEDGER_STATE[observed]);
+          overwriteState(db, row.id, LEDGER_STATE[observed]);
           result.repairedStates += 1;
           note(
             row,
@@ -176,8 +176,8 @@ export async function reconcile(
         });
       } else {
         await repairUnderLock(row, async () => {
-          await executor.removeDisk(row.sandboxId);
-          overwriteState(db, row.sandboxId, 'archived');
+          await executor.removeDisk(row.id);
+          overwriteState(db, row.id, 'archived');
           result.repairedStates += 1;
           note(
             row,
@@ -188,10 +188,10 @@ export async function reconcile(
       continue;
     }
     if (observed !== undefined) {
-      owners.add(row.sandboxId);
+      owners.add(row.id);
       if (LEDGER_STATE[observed] !== row.state) {
         await repairUnderLock(row, () => {
-          overwriteState(db, row.sandboxId, LEDGER_STATE[observed]);
+          overwriteState(db, row.id, LEDGER_STATE[observed]);
           result.repairedStates += 1;
           note(
             row,
@@ -199,11 +199,11 @@ export async function reconcile(
           );
         });
       }
-    } else if (disks.has(row.sandboxId)) {
-      owners.add(row.sandboxId);
+    } else if (disks.has(row.id)) {
+      owners.add(row.id);
       if (row.state !== 'stopped') {
         await repairUnderLock(row, () => {
-          overwriteState(db, row.sandboxId, 'stopped');
+          overwriteState(db, row.id, 'stopped');
           result.repairedStates += 1;
           note(
             row,
@@ -213,7 +213,7 @@ export async function reconcile(
       }
     } else {
       await repairUnderLock(row, () => {
-        deleteSandbox(db, row.sandboxId);
+        deleteSandbox(db, row.id);
         result.deletedRows += 1;
         note(row, 'container and disk both gone — row deleted, key freed');
       });

@@ -217,10 +217,10 @@ function HistoryChart({
  */
 export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
   const [range, setRange] = useState<HistoryRangeKey>('1h');
-  const live = useSandboxMetrics(sandbox.externalId);
+  const live = useSandboxMetrics(sandbox.name);
   const spanMs =
     HISTORY_RANGES.find((r) => r.key === range)?.spanMs ?? 3600_000;
-  const history = useSandboxMetricsHistory(sandbox.externalId, spanMs);
+  const history = useSandboxMetricsHistory(sandbox.name, spanMs);
 
   if (live.isPending) {
     return (

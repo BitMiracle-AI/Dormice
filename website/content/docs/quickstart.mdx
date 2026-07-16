@@ -52,7 +52,7 @@ await client.writeFiles('my-agent', [
 await client.destroySandbox('my-agent'); // destroy — the only verb that loses data
 ```
 
-That's the whole loop: `acquireSandbox` is idempotent (the same key
+That's the whole loop: `acquireSandbox` is idempotent (the same name
 always returns the same sandbox, whatever state it was in), commands run
 inside the sandbox, files persist until you destroy it.
 

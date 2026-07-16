@@ -55,8 +55,8 @@ export async function sampleOnce(
       ): Promise<{ sandboxId: string; metrics: SandboxMetrics } | null> => {
         try {
           return {
-            sandboxId: row.sandboxId,
-            metrics: await executor.metrics(row.sandboxId),
+            sandboxId: row.id,
+            metrics: await executor.metrics(row.id),
           };
         } catch {
           return null;

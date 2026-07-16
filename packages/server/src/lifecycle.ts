@@ -3,7 +3,7 @@ import { recordActivity } from './db/activity';
 import type { Db } from './db/db';
 import {
   deleteSandbox,
-  findBySandboxId,
+  findById,
   setPausedByUser,
   transition,
 } from './db/ledger';
@@ -39,7 +39,7 @@ export async function freezeSandbox(
   const row = transition(db, sandboxId, 'frozen');
   recordActivity(db, {
     kind: 'frozen',
-    externalId: row.externalId,
+    sandboxName: row.name,
     sandboxId,
     detail: cause ?? 'memory squeezed into swap',
   });
@@ -56,7 +56,7 @@ export async function stopSandbox(
   const row = transition(db, sandboxId, 'stopped');
   recordActivity(db, {
     kind: 'stopped',
-    externalId: row.externalId,
+    sandboxName: row.name,
     sandboxId,
     detail: cause ?? 'container torn down, disk kept',
   });
@@ -86,7 +86,7 @@ export async function destroySandbox(
     cause: 'via destroySandbox',
   },
 ): Promise<void> {
-  const row = findBySandboxId(db, sandboxId);
+  const row = findById(db, sandboxId);
   if (row?.state === 'archived') {
     if (store === null) {
       throw new Error(
@@ -100,7 +100,7 @@ export async function destroySandbox(
     deleteSandboxMetricsSamples(db, sandboxId);
     recordActivity(db, {
       kind: activity.kind,
-      externalId: row.externalId,
+      sandboxName: row.name,
       sandboxId,
       detail: `${activity.cause}; archive object deleted`,
     });
@@ -112,7 +112,7 @@ export async function destroySandbox(
   if (row) {
     recordActivity(db, {
       kind: activity.kind,
-      externalId: row.externalId,
+      sandboxName: row.name,
       sandboxId,
       detail: activity.cause,
     });
@@ -134,18 +134,18 @@ export async function rebuildSandbox(
   executor: Executor,
   row: SandboxRow,
 ): Promise<SandboxRow> {
-  await executor.removeContainer(row.sandboxId);
+  await executor.removeContainer(row.id);
   recordActivity(db, {
     kind: 'rebuilt',
-    externalId: row.externalId,
-    sandboxId: row.sandboxId,
+    sandboxName: row.name,
+    sandboxId: row.id,
     detail:
       'shell removed, disk kept — next wake builds from the current image',
   });
   if (row.state === 'stopped') {
     return row;
   }
-  return transition(db, row.sandboxId, 'stopped');
+  return transition(db, row.id, 'stopped');
 }
 
 /** Brings a sandbox in any cold state back to active. No-op when already active. */
@@ -158,12 +158,12 @@ export async function wakeSandbox(
     case 'active':
       return row;
     case 'frozen':
-      await executor.unfreeze(row.sandboxId);
+      await executor.unfreeze(row.id);
       return awaken(db, row, 'from frozen (memory back out of swap)');
     case 'stopped':
       // If the container object was pruned away, start rebuilds the shell —
       // from the template's current image, resolved here at wake time.
-      await executor.start(row.sandboxId, {
+      await executor.start(row.id, {
         image: resolveImage(db, row.template),
       });
       return awaken(db, row, 'cold start from the surviving disk');
@@ -173,7 +173,7 @@ export async function wakeSandbox(
       // (acquire begins a restore, the E2B surface joins one); reaching
       // this arm is a caller bug worth hearing loudly.
       throw new Error(
-        `sandbox ${row.sandboxId} is ${row.state}; restore goes through the archiver — this wake is a caller bug`,
+        `sandbox ${row.id} is ${row.state}; restore goes through the archiver — this wake is a caller bug`,
       );
   }
 }
@@ -185,13 +185,13 @@ export async function wakeSandbox(
  */
 function awaken(db: Db, row: SandboxRow, how: string): SandboxRow {
   if (row.pausedByUser) {
-    setPausedByUser(db, row.sandboxId, false);
+    setPausedByUser(db, row.id, false);
   }
-  const awake = transition(db, row.sandboxId, 'active');
+  const awake = transition(db, row.id, 'active');
   recordActivity(db, {
     kind: 'woken',
-    externalId: row.externalId,
-    sandboxId: row.sandboxId,
+    sandboxName: row.name,
+    sandboxId: row.id,
     detail: how,
   });
   return { ...awake, pausedByUser: false };

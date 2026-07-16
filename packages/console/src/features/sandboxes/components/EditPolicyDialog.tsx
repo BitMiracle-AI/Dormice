@@ -63,7 +63,7 @@ export function EditPolicyDialog({ sandbox }: { sandbox: Sandbox }) {
   const submit = () => {
     mutation.mutate(
       {
-        externalId: sandbox.externalId,
+        name: sandbox.name,
         policy: {
           freezeAfterSeconds: Number(freezeAfter),
           stopAfterSeconds: neverStop ? null : Number(stopAfter),
@@ -79,7 +79,7 @@ export function EditPolicyDialog({ sandbox }: { sandbox: Sandbox }) {
       },
       {
         onSuccess: () => {
-          toast.success(`「${sandbox.externalId}」的策略已更新`);
+          toast.success(`「${sandbox.name}」的策略已更新`);
           setOpen(false);
         },
       },
@@ -110,7 +110,7 @@ export function EditPolicyDialog({ sandbox }: { sandbox: Sandbox }) {
       />
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>调整「{sandbox.externalId}」的生命周期策略</DialogTitle>
+          <DialogTitle>调整「{sandbox.name}」的生命周期策略</DialogTitle>
           <DialogDescription>
             立即生效,只改账本 — 沉睡的沙箱不会被吵醒,空闲计时也不重置
             (新阈值按已累积的空闲时间判定)。

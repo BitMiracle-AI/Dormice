@@ -34,8 +34,8 @@ export interface CreateSandboxInput {
    * Supplied by the caller, not generated here: reality moves first (the
    * container is created under this id), then the ledger records it.
    */
-  sandboxId: string;
-  externalId: string;
+  id: string;
+  name: string;
   nodeId: string;
   policy: LifecyclePolicy;
   /** Template the sandbox is created from; absent/null means the base image. */
@@ -55,12 +55,12 @@ export interface CreateSandboxInput {
   };
 }
 
-/** Inserts a new sandbox row in `active` state. Throws if the external id is taken. */
+/** Inserts a new sandbox row in `active` state. Throws if the name is taken. */
 export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
   const now = new Date().toISOString();
   const row: SandboxRow = {
-    sandboxId: input.sandboxId,
-    externalId: input.externalId,
+    id: input.id,
+    name: input.name,
     state: 'active',
     nodeId: input.nodeId,
     freezeAfterSeconds: input.policy.freezeAfterSeconds,
@@ -79,8 +79,8 @@ export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
   // The one place every creation passes through, whichever face asked.
   recordActivity(db, {
     kind: 'created',
-    externalId: row.externalId,
-    sandboxId: row.sandboxId,
+    sandboxName: row.name,
+    sandboxId: row.id,
     detail: `${input.e2b ? 'via E2B create' : 'via acquireSandbox'}${
       input.template ? `, template ${input.template}` : ''
     }`,
@@ -95,20 +95,16 @@ export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
  */
 export function touch(
   db: Db,
-  sandboxId: string,
+  id: string,
   now: string = new Date().toISOString(),
 ): SandboxRow {
   db.update(sandboxes)
     .set({ lastActiveAt: now })
-    .where(eq(sandboxes.sandboxId, sandboxId))
+    .where(eq(sandboxes.id, id))
     .run();
-  const row = db
-    .select()
-    .from(sandboxes)
-    .where(eq(sandboxes.sandboxId, sandboxId))
-    .get();
+  const row = db.select().from(sandboxes).where(eq(sandboxes.id, id)).get();
   if (!row) {
-    throw new Error(`sandbox ${sandboxId} not found`);
+    throw new Error(`sandbox ${id} not found`);
   }
   return row;
 }
@@ -140,8 +136,8 @@ export function countSandboxes(db: Db): number {
  * does not go through ALLOWED_TRANSITIONS — that table governs moves between
  * states, not the end of the record.
  */
-export function deleteSandbox(db: Db, sandboxId: string): void {
-  db.delete(sandboxes).where(eq(sandboxes.sandboxId, sandboxId)).run();
+export function deleteSandbox(db: Db, id: string): void {
+  db.delete(sandboxes).where(eq(sandboxes.id, id)).run();
 }
 
 /**
@@ -150,15 +146,8 @@ export function deleteSandbox(db: Db, sandboxId: string): void {
  * reality already did while nobody was watching. Only the reconciler calls
  * this — everything else goes through transition().
  */
-export function overwriteState(
-  db: Db,
-  sandboxId: string,
-  state: SandboxState,
-): void {
-  db.update(sandboxes)
-    .set({ state })
-    .where(eq(sandboxes.sandboxId, sandboxId))
-    .run();
+export function overwriteState(db: Db, id: string, state: SandboxState): void {
+  db.update(sandboxes).set({ state }).where(eq(sandboxes.id, id)).run();
 }
 
 /**
@@ -167,7 +156,7 @@ export function overwriteState(
  */
 export function setDeadline(
   db: Db,
-  sandboxId: string,
+  id: string,
   deadline: { deadlineAt: string; onDeadline: 'kill' | 'pause' } | null,
 ): void {
   db.update(sandboxes)
@@ -175,7 +164,7 @@ export function setDeadline(
       deadlineAt: deadline?.deadlineAt ?? null,
       onDeadline: deadline?.onDeadline ?? null,
     })
-    .where(eq(sandboxes.sandboxId, sandboxId))
+    .where(eq(sandboxes.id, id))
     .run();
 }
 
@@ -186,7 +175,7 @@ export function setDeadline(
  */
 export function updatePolicy(
   db: Db,
-  sandboxId: string,
+  id: string,
   policy: LifecyclePolicy,
 ): SandboxRow {
   db.update(sandboxes)
@@ -195,11 +184,11 @@ export function updatePolicy(
       stopAfterSeconds: policy.stopAfterSeconds,
       archiveAfterSeconds: policy.archiveAfterSeconds,
     })
-    .where(eq(sandboxes.sandboxId, sandboxId))
+    .where(eq(sandboxes.id, id))
     .run();
-  const row = findBySandboxId(db, sandboxId);
+  const row = findById(db, id);
   if (!row) {
-    throw new Error(`sandbox ${sandboxId} not found`);
+    throw new Error(`sandbox ${id} not found`);
   }
   return row;
 }
@@ -211,52 +200,31 @@ export function updatePolicy(
  */
 export function updateMetadata(
   db: Db,
-  sandboxId: string,
+  id: string,
   metadata: string | null,
 ): SandboxRow {
-  db.update(sandboxes)
-    .set({ metadata })
-    .where(eq(sandboxes.sandboxId, sandboxId))
-    .run();
-  const row = findBySandboxId(db, sandboxId);
+  db.update(sandboxes).set({ metadata }).where(eq(sandboxes.id, id)).run();
+  const row = findById(db, id);
   if (!row) {
-    throw new Error(`sandbox ${sandboxId} not found`);
+    throw new Error(`sandbox ${id} not found`);
   }
   return row;
 }
 
 /** Marks an explicit E2B pause; wakes clear it (an awake sandbox is not paused). */
-export function setPausedByUser(
-  db: Db,
-  sandboxId: string,
-  paused: boolean,
-): void {
+export function setPausedByUser(db: Db, id: string, paused: boolean): void {
   db.update(sandboxes)
     .set({ pausedByUser: paused })
-    .where(eq(sandboxes.sandboxId, sandboxId))
+    .where(eq(sandboxes.id, id))
     .run();
 }
 
-export function findByExternalId(
-  db: Db,
-  externalId: string,
-): SandboxRow | undefined {
-  return db
-    .select()
-    .from(sandboxes)
-    .where(eq(sandboxes.externalId, externalId))
-    .get();
+export function findByName(db: Db, name: string): SandboxRow | undefined {
+  return db.select().from(sandboxes).where(eq(sandboxes.name, name)).get();
 }
 
-export function findBySandboxId(
-  db: Db,
-  sandboxId: string,
-): SandboxRow | undefined {
-  return db
-    .select()
-    .from(sandboxes)
-    .where(eq(sandboxes.sandboxId, sandboxId))
-    .get();
+export function findById(db: Db, id: string): SandboxRow | undefined {
+  return db.select().from(sandboxes).where(eq(sandboxes.id, id)).get();
 }
 
 /**
@@ -266,27 +234,14 @@ export function findBySandboxId(
  * No lock needed: better-sqlite3 is synchronous and the daemon is a single
  * process, so there is no await point between the read and the write.
  */
-export function transition(
-  db: Db,
-  sandboxId: string,
-  to: SandboxState,
-): SandboxRow {
-  const row = db
-    .select()
-    .from(sandboxes)
-    .where(eq(sandboxes.sandboxId, sandboxId))
-    .get();
+export function transition(db: Db, id: string, to: SandboxState): SandboxRow {
+  const row = db.select().from(sandboxes).where(eq(sandboxes.id, id)).get();
   if (!row) {
-    throw new Error(`sandbox ${sandboxId} not found`);
+    throw new Error(`sandbox ${id} not found`);
   }
   if (!ALLOWED_TRANSITIONS[row.state].includes(to)) {
-    throw new Error(
-      `illegal transition ${row.state} -> ${to} (sandbox ${sandboxId})`,
-    );
+    throw new Error(`illegal transition ${row.state} -> ${to} (sandbox ${id})`);
   }
-  db.update(sandboxes)
-    .set({ state: to })
-    .where(eq(sandboxes.sandboxId, sandboxId))
-    .run();
+  db.update(sandboxes).set({ state: to }).where(eq(sandboxes.id, id)).run();
   return { ...row, state: to };
 }

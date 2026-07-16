@@ -30,7 +30,7 @@ describe('native API over a real daemon', () => {
     const res = await client().acquireSandbox('fresh-key');
     expect(res.status).toBe('ready');
     expect(res.sandbox.state).toBe('active');
-    expect(res.sandbox.externalId).toBe('fresh-key');
+    expect(res.sandbox.name).toBe('fresh-key');
     // The exam daemon runs with S3 configured (see setup/daemon.ts), so the
     // archive default is live: a week from stopped to archived.
     expect(res.sandbox.policy).toEqual({
@@ -43,7 +43,7 @@ describe('native API over a real daemon', () => {
   it('is idempotent: the same key always returns the same sandbox', async () => {
     const first = await client().acquireSandbox('idem-key');
     const second = await client().acquireSandbox('idem-key');
-    expect(second.sandbox.sandboxId).toBe(first.sandbox.sandboxId);
+    expect(second.sandbox.id).toBe(first.sandbox.id);
   });
 
   it('stores a policy override, including null for never-archive', async () => {
@@ -76,7 +76,7 @@ describe('native API over a real daemon', () => {
     expect(updated.sandbox.metadata).toEqual({ app: 'assistant' });
 
     const listed = await client().listSandboxes();
-    expect(listed.find((s) => s.externalId === 'meta-key')?.metadata).toEqual({
+    expect(listed.find((s) => s.name === 'meta-key')?.metadata).toEqual({
       app: 'assistant',
     });
 
@@ -118,16 +118,14 @@ describe('native API over a real daemon', () => {
       destroyed: true,
     });
     const listed = await client().listSandboxes();
-    expect(listed.some((s) => s.sandboxId === created.sandbox.sandboxId)).toBe(
-      false,
-    );
+    expect(listed.some((s) => s.id === created.sandbox.id)).toBe(false);
     expect(await client().destroySandbox('destroy-key')).toEqual({
       destroyed: false,
     });
 
     // The key is free again: the next acquire builds a brand-new sandbox.
     const again = await client().acquireSandbox('destroy-key');
-    expect(again.sandbox.sandboxId).not.toBe(created.sandbox.sandboxId);
+    expect(again.sandbox.id).not.toBe(created.sandbox.id);
   });
 
   it('rebuilds a sandbox: shell swapped, /home/user kept, same key wakes it', async () => {
@@ -137,13 +135,13 @@ describe('native API over a real daemon', () => {
     ]);
 
     const { sandbox } = await client().rebuildSandbox('rebuild-key');
-    expect(sandbox.sandboxId).toBe(created.sandbox.sandboxId);
+    expect(sandbox.id).toBe(created.sandbox.id);
     expect(sandbox.state).toBe('stopped');
 
     // The wake after a rebuild is a cold start into a fresh container; the
     // disk — and with it the file — must have survived the swap.
     const again = await client().acquireSandbox('rebuild-key');
-    expect(again.sandbox.sandboxId).toBe(created.sandbox.sandboxId);
+    expect(again.sandbox.id).toBe(created.sandbox.id);
     const read = await client().readFile('rebuild-key', 'keep.txt');
     expect(new TextDecoder().decode(read.content)).toBe('still here');
 
@@ -163,7 +161,7 @@ describe('native API over a real daemon', () => {
       stopAfterSeconds: null,
       archiveAfterSeconds: null,
     });
-    expect(sandbox.sandboxId).toBe(created.sandbox.sandboxId);
+    expect(sandbox.id).toBe(created.sandbox.id);
     expect(sandbox.policy.stopAfterSeconds).toBeNull();
     expect(sandbox.policy.archiveAfterSeconds).toBeNull();
     // Ledger-only: the sandbox itself was not woken or touched.
@@ -226,7 +224,7 @@ describe('native API over a real daemon', () => {
     ).rejects.toMatchObject({
       name: 'DormiceApiError',
       status: 404,
-      message: expect.stringMatching(/no sandbox for key/),
+      message: expect.stringMatching(/no sandbox named/),
     });
   });
 
@@ -245,7 +243,7 @@ describe('native API over a real daemon', () => {
     const result = await client().execCommand('exec-busy-key', 'sleep 3');
     expect(result.exitCode).toBe(0);
     const observed = (await client().listSandboxes()).find(
-      (s) => s.externalId === 'exec-busy-key',
+      (s) => s.name === 'exec-busy-key',
     );
     expect(observed?.state).toBe('active');
   });
@@ -262,7 +260,7 @@ describe('native API over a real daemon', () => {
     const deadline = Date.now() + 15_000;
     for (;;) {
       const cold = (await client().listSandboxes()).find(
-        (s) => s.externalId === 'exec-wake-key',
+        (s) => s.name === 'exec-wake-key',
       );
       if (cold?.state === 'frozen') break;
       if (Date.now() > deadline) {
@@ -279,7 +277,7 @@ describe('native API over a real daemon', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('woke\n');
     const observed = (await client().listSandboxes()).find(
-      (s) => s.externalId === 'exec-wake-key',
+      (s) => s.name === 'exec-wake-key',
     );
     expect(observed?.state).toBe('active');
   });
@@ -303,7 +301,7 @@ describe('native API over a real daemon', () => {
     const deadline = Date.now() + 15_000;
     for (;;) {
       const asleep = (await client().listSandboxes()).find(
-        (s) => s.externalId === 'sleeper-key',
+        (s) => s.name === 'sleeper-key',
       );
       if (asleep?.state === 'stopped') break;
       if (Date.now() > deadline) {
@@ -316,7 +314,7 @@ describe('native API over a real daemon', () => {
 
     const woken = await client().acquireSandbox('sleeper-key');
     expect(woken.status).toBe('ready');
-    expect(woken.sandbox.sandboxId).toBe(created.sandbox.sandboxId);
+    expect(woken.sandbox.id).toBe(created.sandbox.id);
     expect(woken.sandbox.state).toBe('active');
   });
 
@@ -404,7 +402,7 @@ describe('native API over a real daemon', () => {
     });
     expect(created.sandbox.template).toBe('native-tpl');
     const listed = (await client().listSandboxes()).find(
-      (s) => s.externalId === 'tpl-key',
+      (s) => s.name === 'tpl-key',
     );
     expect(listed?.template).toBe('native-tpl');
 
@@ -428,7 +426,7 @@ describe('native API over a real daemon', () => {
     // new credential is live before the old one dies.
     const keyed = client(token);
     const created = await keyed.acquireSandbox('rotation-key');
-    expect(created.sandbox.externalId).toBe('rotation-key');
+    expect(created.sandbox.name).toBe('rotation-key');
     await keyed.destroySandbox('rotation-key');
 
     const listed = await client().listApiKeys();
@@ -459,13 +457,13 @@ describe('native API over a real daemon', () => {
     });
     const mine = async () =>
       (await client().listSandboxImages()).find(
-        (e) => e.externalId === 'lineage-key',
+        (e) => e.sandboxName === 'lineage-key',
       );
 
     // Fresh: born from the template's current image, nothing to upgrade.
     expect(await mine()).toEqual({
-      externalId: 'lineage-key',
-      sandboxId: created.sandbox.sandboxId,
+      sandboxName: 'lineage-key',
+      sandboxId: created.sandbox.id,
       image,
       nextImage: image,
       upgradable: false,
@@ -541,7 +539,7 @@ describe('native API over a real daemon', () => {
     const deadline = Date.now() + 15_000;
     for (;;) {
       const cold = (await client().listSandboxes()).find(
-        (s) => s.externalId === 'files-wake-key',
+        (s) => s.name === 'files-wake-key',
       );
       if (cold?.state === 'frozen') break;
       if (Date.now() > deadline) {
@@ -555,7 +553,7 @@ describe('native API over a real daemon', () => {
     const read = await client().readFile('files-wake-key', 'keep.txt');
     expect(new TextDecoder().decode(read.content)).toBe('still here');
     const observed = (await client().listSandboxes()).find(
-      (s) => s.externalId === 'files-wake-key',
+      (s) => s.name === 'files-wake-key',
     );
     expect(observed?.state).toBe('active');
   });
@@ -612,7 +610,7 @@ describe('the observability verbs over a real daemon', () => {
     await client().acquireSandbox('obs-story-key');
     await client().destroySandbox('obs-story-key');
     const events = await client().listActivity({ limit: 500 });
-    const mine = events.filter((e) => e.externalId === 'obs-story-key');
+    const mine = events.filter((e) => e.sandboxName === 'obs-story-key');
     expect(mine.map((e) => e.kind)).toEqual(['destroyed', 'created']);
     expect(mine[1]?.detail).toContain('acquireSandbox');
   });

@@ -28,7 +28,7 @@ describe('the archive lifecycle over a real daemon', () => {
         archiveAfterSeconds: 3,
       },
     });
-    const id = first.sandbox.sandboxId;
+    const id = first.sandbox.id;
     await dormice.writeFiles('archive-key', [
       { path: 'kept.txt', content: 'survived the bucket' },
     ]);
@@ -38,7 +38,7 @@ describe('the archive lifecycle over a real daemon', () => {
     const deadline = Date.now() + 15_000;
     for (;;) {
       const sandboxes = await dormice.listSandboxes();
-      const mine = sandboxes.find((s) => s.externalId === 'archive-key');
+      const mine = sandboxes.find((s) => s.name === 'archive-key');
       if (mine?.state === 'archived') break;
       if (Date.now() > deadline) {
         throw new Error(`never archived; last observed: ${mine?.state}`);
@@ -63,7 +63,7 @@ describe('the archive lifecycle over a real daemon', () => {
       outcome = await dormice.acquireSandbox('archive-key');
     }
 
-    expect(outcome.sandbox.sandboxId).toBe(id);
+    expect(outcome.sandbox.id).toBe(id);
     expect(outcome.sandbox.state).toBe('active');
     const read = await dormice.readFile('archive-key', 'kept.txt');
     expect(Buffer.from(read.content).toString()).toBe('survived the bucket');
@@ -83,9 +83,7 @@ describe('the archive lifecycle over a real daemon', () => {
     const deadline = Date.now() + 15_000;
     for (;;) {
       const sandboxes = await dormice.listSandboxes();
-      const mine = sandboxes.find(
-        (s) => s.externalId === 'archive-destroy-key',
-      );
+      const mine = sandboxes.find((s) => s.name === 'archive-destroy-key');
       if (mine?.state === 'archived') break;
       if (Date.now() > deadline) {
         throw new Error(`never archived; last observed: ${mine?.state}`);

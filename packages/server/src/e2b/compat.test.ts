@@ -11,7 +11,7 @@ import { MemStore } from '../archive/mem-store';
 import { objectKey } from '../archive/store';
 import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
-import { findBySandboxId, setDeadline } from '../db/ledger';
+import { findById, setDeadline } from '../db/ledger';
 import { getOrCreateSigningSecret } from '../db/secrets';
 import { FAKE_BASE_IMAGE, FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
@@ -259,13 +259,13 @@ describe('E2B control plane', () => {
     expect(t.executor.stateOf(first.sandboxID)).toBe('running');
   });
 
-  it('metadata.externalId is the Dormice extension: same key, same sandbox', async () => {
+  it('metadata.name is the Dormice extension: same key, same sandbox', async () => {
     const t = testApp();
     const first = await createSandbox(t, {
-      metadata: { externalId: 'agent-7' },
+      metadata: { name: 'agent-7' },
     });
     const second = await createSandbox(t, {
-      metadata: { externalId: 'agent-7' },
+      metadata: { name: 'agent-7' },
     });
     expect(second.sandboxID).toBe(first.sandboxID);
   });
@@ -274,13 +274,13 @@ describe('E2B control plane', () => {
     const t = testApp();
     const { sandboxID } = await createSandbox(t, {
       timeout: 600,
-      metadata: { externalId: 'meta-echo', team: 'blue' },
+      metadata: { name: 'meta-echo', team: 'blue' },
     });
     const res = await control(t, 'GET', `/sandboxes/${sandboxID}`);
     expect(res.statusCode).toBe(200);
     const info = res.json();
     expect(info.state).toBe('running');
-    expect(info.metadata).toEqual({ externalId: 'meta-echo', team: 'blue' });
+    expect(info.metadata).toEqual({ name: 'meta-echo', team: 'blue' });
     const endInMs = Date.parse(info.endAt) - Date.now();
     expect(endInMs).toBeGreaterThan(590_000);
     expect(endInMs).toBeLessThan(610_000);
@@ -333,7 +333,7 @@ describe('E2B control plane', () => {
     expect(killed.statusCode).toBe(204);
     expect(t.executor.stateOf(sandboxID)).toBeUndefined();
     expect(await t.executor.listDisks()).not.toContain(sandboxID);
-    expect(findBySandboxId(t.db, sandboxID)).toBeUndefined();
+    expect(findById(t.db, sandboxID)).toBeUndefined();
 
     const again = await control(t, 'DELETE', `/sandboxes/${sandboxID}`);
     expect(again.statusCode).toBe(404);
@@ -344,7 +344,7 @@ describe('E2B control plane', () => {
   it('an expired kill-deadline is protocol-dead immediately, reaped by the scanner after', async () => {
     const t = testApp();
     const { sandboxID } = await createSandbox(t, { timeout: 300 });
-    const row = findBySandboxId(t.db, sandboxID);
+    const row = findById(t.db, sandboxID);
     expect(row?.onDeadline).toBe('kill');
     // Time-travel the deadline into the past instead of sleeping.
     setDeadline(t.db, sandboxID, {
@@ -398,7 +398,7 @@ describe('E2B control plane', () => {
 
     const info = await control(t, 'GET', `/sandboxes/${sandboxID}`);
     expect(info.json().state).toBe('running');
-    const fresh = findBySandboxId(t.db, sandboxID);
+    const fresh = findById(t.db, sandboxID);
     expect(Date.parse(fresh?.deadlineAt ?? '')).toBeGreaterThan(Date.now());
   });
 
@@ -440,7 +440,7 @@ describe('E2B control plane', () => {
     });
     expect(res.statusCode).toBe(204);
     expect(t.executor.stateOf(sandboxID)).toBe('stopped');
-    expect(findBySandboxId(t.db, sandboxID)?.state).toBe('stopped');
+    expect(findById(t.db, sandboxID)?.state).toBe('stopped');
   });
 
   it('metrics with no history takes one live reading, SDK field names', async () => {
@@ -518,7 +518,7 @@ describe('E2B control plane', () => {
     const t = testApp();
     const { sandboxID } = await createSandbox(t, { timeout: 86400 });
     // Freeze through the idle scanner, exactly like production.
-    const row = findBySandboxId(t.db, sandboxID);
+    const row = findById(t.db, sandboxID);
     const later = new Date(
       Date.now() + ((row?.freezeAfterSeconds ?? 0) + 60) * 1000,
     );
@@ -607,16 +607,16 @@ describe('E2B control plane', () => {
       method: 'POST',
       url: '/acquireSandbox',
       headers: { authorization: `Bearer ${TOKEN}` },
-      payload: { externalId: 'native-immortal' },
+      payload: { name: 'native-immortal' },
     });
-    const sandboxId = native.json().sandbox.sandboxId;
+    const sandboxId = native.json().sandbox.id;
 
     const res = await control(t, 'POST', `/sandboxes/${sandboxId}/timeout`, {
       timeout: 60,
     });
     expect(res.statusCode).toBe(204);
     // Accepted but not applied: immortality is the owner's choice.
-    expect(findBySandboxId(t.db, sandboxId)?.deadlineAt).toBeNull();
+    expect(findById(t.db, sandboxId)?.deadlineAt).toBeNull();
   });
 });
 
@@ -1248,7 +1248,7 @@ describe('E2B envd surface', () => {
 
     // The idle scanner, told it is an hour later, freezes the sandbox —
     // no heartbeat outlives its stream; only attached streams keep warmth.
-    const row = findBySandboxId(t.db, sandboxID);
+    const row = findById(t.db, sandboxID);
     const later = new Date(
       Date.now() + ((row?.freezeAfterSeconds ?? 0) + 60) * 1000,
     );
@@ -1362,7 +1362,7 @@ describe('E2B envd surface', () => {
     const pending = watchDir(t, sandboxID, { path: '/home/user' }, 600);
     setTimeout(() => {
       void (async () => {
-        const row = findBySandboxId(t.db, sandboxID);
+        const row = findById(t.db, sandboxID);
         const later = new Date(
           Date.now() + ((row?.freezeAfterSeconds ?? 0) + 60) * 1000,
         );
@@ -1684,7 +1684,7 @@ describe('signed file URLs at the daemon root', () => {
       timeout: 86400,
     });
     await putFile(t, sandboxID, 'frozen.txt', 'still here\n');
-    const row = findBySandboxId(t.db, sandboxID);
+    const row = findById(t.db, sandboxID);
     const later = new Date(
       Date.now() + ((row?.freezeAfterSeconds ?? 0) + 60) * 1000,
     );
@@ -1800,20 +1800,20 @@ describe('E2B templates', () => {
     }
   });
 
-  it('externalId reuse keeps the original template; an unknown one still 404s first', async () => {
+  it('name reuse keeps the original template; an unknown one still 404s first', async () => {
     const t = testApp();
     await registerTemplate(t, 'tpl-a', 'img-a');
     await registerTemplate(t, 'tpl-b', 'img-b');
     const first = await createSandbox(t, {
       templateID: 'tpl-a',
-      metadata: { externalId: 'alice' },
+      metadata: { name: 'alice' },
     });
 
     // Same key, different template: the stored one stays — same principle
     // as metadata and envs on the reuse path.
     const again = await control(t, 'POST', '/sandboxes', {
       templateID: 'tpl-b',
-      metadata: { externalId: 'alice' },
+      metadata: { name: 'alice' },
     });
     expect(again.statusCode).toBe(201);
     expect(again.json().sandboxID).toBe(first.sandboxID);
@@ -1822,7 +1822,7 @@ describe('E2B templates', () => {
     // Validation happens before the reuse shortcut: a typo is a typo.
     const typo = await control(t, 'POST', '/sandboxes', {
       templateID: 'ghost',
-      metadata: { externalId: 'alice' },
+      metadata: { name: 'alice' },
     });
     expect(typo.statusCode).toBe(404);
   });
@@ -1832,7 +1832,7 @@ describe('E2B templates', () => {
     await registerTemplate(t, 'py311', 'img-py');
     await createSandbox(t, {
       templateID: 'py311',
-      metadata: { externalId: 'tpl-list' },
+      metadata: { name: 'tpl-list' },
     });
     const res = await control(t, 'GET', '/v2/sandboxes');
     const items = res.json() as Array<{ templateID: string; alias?: string }>;
@@ -1880,7 +1880,7 @@ describe('E2B surface vs the archiver', () => {
     t: ReturnType<typeof archiverTestApp>,
     sandboxID: string,
   ): Promise<void> {
-    const row = findBySandboxId(t.db, sandboxID);
+    const row = findById(t.db, sandboxID);
     if (!row) throw new Error('row missing');
     const at = (s: number) => new Date(Date.parse(row.lastActiveAt) + s * 1000);
     // The scanner sweeps travel in time, but e2bView reads the ledger's
@@ -1895,7 +1895,7 @@ describe('E2B surface vs the archiver', () => {
     await scanOnce(t.db, t.executor, t.locks, at(300), t.archiver);
     await scanOnce(t.db, t.executor, t.locks, at(3 * 86400), t.archiver);
     await scanOnce(t.db, t.executor, t.locks, at(7 * 86400), t.archiver);
-    expect(findBySandboxId(t.db, sandboxID)?.state).toBe('archived');
+    expect(findById(t.db, sandboxID)?.state).toBe('archived');
     expect(t.store.has(objectKey(sandboxID))).toBe(true);
   }
 
@@ -1936,7 +1936,7 @@ describe('E2B surface vs the archiver', () => {
       path: '/home/user',
     });
     expect(stat.statusCode).toBe(502);
-    expect(findBySandboxId(t.db, sandboxID)?.state).toBe('archived');
+    expect(findById(t.db, sandboxID)?.state).toBe('archived');
     expect(t.store.has(objectKey(sandboxID))).toBe(true);
   });
 
@@ -1950,7 +1950,7 @@ describe('E2B surface vs the archiver', () => {
       url: '/acquireSandbox',
       headers: { authorization: `Bearer ${TOKEN}` },
       payload: {
-        externalId: 'native',
+        name: 'native',
         policy: {
           freezeAfterSeconds: 1,
           stopAfterSeconds: 2,
@@ -1958,33 +1958,33 @@ describe('E2B surface vs the archiver', () => {
         },
       },
     });
-    const sandboxID = acquired.json().sandbox.sandboxId as string;
-    const row = findBySandboxId(t.db, sandboxID);
+    const sandboxID = acquired.json().sandbox.id as string;
+    const row = findById(t.db, sandboxID);
     if (!row) throw new Error('row missing');
     const at = (s: number) => new Date(Date.parse(row.lastActiveAt) + s * 1000);
     await scanOnce(t.db, t.executor, t.locks, at(1), t.archiver);
     await scanOnce(t.db, t.executor, t.locks, at(2), t.archiver);
     await scanOnce(t.db, t.executor, t.locks, at(3), t.archiver);
-    expect(findBySandboxId(t.db, sandboxID)?.state).toBe('archived');
+    expect(findById(t.db, sandboxID)?.state).toBe('archived');
 
     const stat = await envdRpc(t, sandboxID, '/filesystem.Filesystem/Stat', {
       path: '/home/user',
     });
     expect(stat.statusCode).toBe(200);
     expect(t.executor.stateOf(sandboxID)).toBe('running');
-    expect(findBySandboxId(t.db, sandboxID)?.state).toBe('active');
+    expect(findById(t.db, sandboxID)?.state).toBe('active');
   });
 
-  it('create with metadata.externalId resumes its archived sandbox', async () => {
+  it('create with metadata.name resumes its archived sandbox', async () => {
     const t = archiverTestApp();
     const first = await createSandbox(t, {
       autoPause: true,
-      metadata: { externalId: 'alice' },
+      metadata: { name: 'alice' },
     });
     await walkToArchived(t, first.sandboxID);
 
     const res = await control(t, 'POST', '/sandboxes', {
-      metadata: { externalId: 'alice' },
+      metadata: { name: 'alice' },
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().sandboxID).toBe(first.sandboxID);
@@ -1999,7 +1999,7 @@ describe('E2B surface vs the archiver', () => {
     const res = await control(t, 'DELETE', `/sandboxes/${sandboxID}`);
     expect(res.statusCode).toBe(204);
     expect(t.store.has(objectKey(sandboxID))).toBe(false);
-    expect(findBySandboxId(t.db, sandboxID)).toBeUndefined();
+    expect(findById(t.db, sandboxID)).toBeUndefined();
   });
 
   it('kill mid-restore joins the task first, then deletes', async () => {
@@ -2016,10 +2016,10 @@ describe('E2B surface vs the archiver', () => {
       await gate;
       return innerGet(key, dest, onProgress);
     };
-    const row = findBySandboxId(t.db, sandboxID);
+    const row = findById(t.db, sandboxID);
     if (!row) throw new Error('row missing');
     t.archiver.beginRestore(row);
-    expect(findBySandboxId(t.db, sandboxID)?.state).toBe('restoring');
+    expect(findById(t.db, sandboxID)?.state).toBe('restoring');
 
     const del = control(t, 'DELETE', `/sandboxes/${sandboxID}`);
     // Let the DELETE reach its join, then release the download.
@@ -2028,6 +2028,6 @@ describe('E2B surface vs the archiver', () => {
     const res = await del;
     expect(res.statusCode).toBe(204);
     expect(t.store.has(objectKey(sandboxID))).toBe(false);
-    expect(findBySandboxId(t.db, sandboxID)).toBeUndefined();
+    expect(findById(t.db, sandboxID)).toBeUndefined();
   });
 });

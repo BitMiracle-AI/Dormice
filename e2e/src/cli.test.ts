@@ -39,9 +39,9 @@ describe('dor CLI against a real daemon', () => {
     const created = await sdk.acquireSandbox('cli-ls-key');
 
     const { stdout } = await cli('sandbox', 'ls');
-    expect(stdout).toMatch(/USER KEY\s{2,}STATE\s{2,}SANDBOX ID/);
+    expect(stdout).toMatch(/NAME\s{2,}STATE\s{2,}ID/);
     expect(stdout).toMatch(/cli-ls-key\s{2,}active/);
-    expect(stdout).toContain(created.sandbox.sandboxId);
+    expect(stdout).toContain(created.sandbox.id);
   });
 
   it('sandbox meta shows, replaces and clears labels through the real binary', async () => {

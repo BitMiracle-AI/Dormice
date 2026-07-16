@@ -52,15 +52,11 @@ export async function serveFileDownload(
   // vetted before anything wakes.
   const user = vetUsername(query.username);
   const row = await ctx.wakeForUse(sandboxId);
-  const stopHeartbeat = startExecHeartbeat(
-    db,
-    row.sandboxId,
-    row.freezeAfterSeconds,
-  );
+  const stopHeartbeat = startExecHeartbeat(db, row.id, row.freezeAfterSeconds);
   try {
     let entry: SandboxEntry;
     try {
-      entry = await executor.statEntry(row.sandboxId, query.path, user);
+      entry = await executor.statEntry(row.id, query.path, user);
       if (entry.type !== 'file') {
         throw new NotAFileError(`not a regular file: ${entry.path}`);
       }
@@ -81,7 +77,7 @@ export async function serveFileDownload(
       'content-length': String(entry.sizeBytes),
     });
     await executor.readFileStream(
-      row.sandboxId,
+      row.id,
       query.path,
       (chunk) => {
         if (!reply.raw.write(chunk)) {
@@ -107,7 +103,7 @@ export async function serveFileDownload(
   } finally {
     stopHeartbeat();
     try {
-      touch(db, row.sandboxId);
+      touch(db, row.id);
     } catch {
       // Released mid-transfer; the transfer's own error tells the story.
     }
@@ -124,16 +120,12 @@ export async function serveFileUpload(
   const query = request.query as { path?: string; username?: string };
   const user = vetUsername(query.username);
   const row = await ctx.wakeForUse(sandboxId);
-  const stopHeartbeat = startExecHeartbeat(
-    db,
-    row.sandboxId,
-    row.freezeAfterSeconds,
-  );
+  const stopHeartbeat = startExecHeartbeat(db, row.id, row.freezeAfterSeconds);
   try {
     const written: Array<{ name: string; type: 'file'; path: string }> = [];
     const writeOne = async (path: string, content: NodeJS.ReadableStream) => {
       try {
-        await executor.writeFileStream(row.sandboxId, path, content, user);
+        await executor.writeFileStream(row.id, path, content, user);
       } catch (error) {
         if (error instanceof NotAFileError) {
           throw new E2bError(400, 'invalid_argument', error.message);
@@ -187,7 +179,7 @@ export async function serveFileUpload(
   } finally {
     stopHeartbeat();
     try {
-      touch(db, row.sandboxId);
+      touch(db, row.id);
     } catch {
       // Released mid-upload; the upload's own result tells the story.
     }

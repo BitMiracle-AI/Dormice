@@ -1,21 +1,21 @@
 import { z } from 'zod';
 import { lifecyclePolicyOverrideSchema } from './policy';
 import {
-  externalIdSchema,
   sandboxMetadataSchema,
+  sandboxNameSchema,
   sandboxSchema,
 } from './sandbox';
 import { templateNameSchema } from './templates';
 
 /**
- * acquire(externalId) — the platform's single entry point. Idempotent:
+ * acquire(name) — the platform's single entry point. Idempotent:
  * no sandbox → create; frozen → wake; stopped → rebuild; archived → restore.
  */
 export const acquireRequestSchema = z.object({
-  externalId: externalIdSchema,
+  name: sandboxNameSchema,
   /**
    * Lifecycle override applied when this acquire creates the sandbox;
-   * omitted fields fall back to the daemon's global defaults. When the key
+   * omitted fields fall back to the daemon's global defaults. When the name
    * already has a sandbox, the stored policy stays — acquire is not an
    * update verb — but an invalid override is still answered with a 400,
    * never silently ignored.
@@ -44,14 +44,23 @@ export type AcquireRequest = z.infer<typeof acquireRequestSchema>;
  * in seconds and returns `ready`; an archived sandbox returns `restoring`
  * with progress immediately, and the caller polls acquire() until it flips
  * to `ready`.
+ *
+ * `created` makes the idempotency observable per call: names collide by
+ * converging, never by erroring, so this flag is the only way a caller
+ * learns "I got an existing sandbox back" at the moment it happens (and
+ * that the policy/template/metadata in the request were therefore ignored).
  */
 export const acquireResponseSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('ready'),
+    /** True when this acquire created the sandbox; false when the name already had one. */
+    created: z.boolean(),
     sandbox: sandboxSchema,
   }),
   z.object({
     status: z.literal('restoring'),
+    /** Always false: only an already-archived sandbox restores. */
+    created: z.boolean(),
     sandbox: sandboxSchema,
     progress: z.object({
       /** downloading — pulling the archive from S3; extracting — decompressing onto local disk. */

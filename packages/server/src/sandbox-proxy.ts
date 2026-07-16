@@ -4,7 +4,7 @@ import net from 'node:net';
 import type { Duplex } from 'node:stream';
 import type { Config } from './config';
 import type { Db } from './db/db';
-import { findBySandboxId, touch } from './db/ledger';
+import { findById, touch } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import { e2bView } from './e2b/view';
 import { startExecHeartbeat } from './exec-heartbeat';
@@ -73,7 +73,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
   const domain = config.DORMICE_SANDBOX_DOMAIN ?? '';
 
   function liveRow(sandboxId: string): SandboxRow {
-    const row = findBySandboxId(db, sandboxId);
+    const row = findById(db, sandboxId);
     if (!row || e2bView(row, new Date()) !== 'running') {
       throw new ProxyRefusal(
         !row || e2bView(row, new Date()) === 'dead'
@@ -97,12 +97,12 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
     const parsed = parseSandboxHost(req.headers.host, domain);
     if (!parsed) throw new ProxyRefusal('not sandbox traffic');
     const before = liveRow(parsed.sandboxId);
-    const row = await locks.run(before.externalId, async () => {
+    const row = await locks.run(before.name, async () => {
       const fresh = liveRow(parsed.sandboxId);
       const awake = await wakeSandbox(db, executor, fresh);
-      return touch(db, awake.sandboxId);
+      return touch(db, awake.id);
     });
-    const target = await executor.resolvePortTarget(row.sandboxId, parsed.port);
+    const target = await executor.resolvePortTarget(row.id, parsed.port);
     return { row, port: parsed.port, target };
   }
 
@@ -143,7 +143,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
         // as the connection, then the idle countdown restarts.
         const stopHeartbeat = startExecHeartbeat(
           db,
-          row.sandboxId,
+          row.id,
           row.freezeAfterSeconds,
         );
         let settled = false;
@@ -152,7 +152,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
           settled = true;
           stopHeartbeat();
           try {
-            touch(db, row.sandboxId);
+            touch(db, row.id);
           } catch {
             // Released mid-request; the connection's ending tells the story.
           }
@@ -173,10 +173,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
         });
         upstream.on('error', () => {
           settle();
-          refuse(
-            res,
-            `sandbox ${row.sandboxId} is not listening on port ${port}`,
-          );
+          refuse(res, `sandbox ${row.id} is not listening on port ${port}`);
         });
         res.on('close', () => {
           settle();
@@ -203,7 +200,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
         const { row, target } = resolved;
         const stopHeartbeat = startExecHeartbeat(
           db,
-          row.sandboxId,
+          row.id,
           row.freezeAfterSeconds,
         );
         let settled = false;
@@ -212,7 +209,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
           settled = true;
           stopHeartbeat();
           try {
-            touch(db, row.sandboxId);
+            touch(db, row.id);
           } catch {
             // Released mid-connection.
           }

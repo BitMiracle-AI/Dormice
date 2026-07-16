@@ -56,7 +56,7 @@ export function registerFilesystemRoutes(
     if (!body.path) throw connectError('invalid_argument', 'missing path');
     const user = vetUsername(usernameOf(request));
     const entry = await ctx.inSlot(sandboxIdOf(request), (row) =>
-      executor.statEntry(row.sandboxId, body.path as string, user),
+      executor.statEntry(row.id, body.path as string, user),
     );
     return { entry: entryInfoJson(entry) };
   });
@@ -70,7 +70,7 @@ export function registerFilesystemRoutes(
     }
     const user = vetUsername(usernameOf(request));
     const entries = await ctx.inSlot(sandboxIdOf(request), (row) =>
-      executor.listDir(row.sandboxId, body.path as string, depth, user),
+      executor.listDir(row.id, body.path as string, depth, user),
     );
     return { entries: entries.map(entryInfoJson) };
   });
@@ -80,11 +80,7 @@ export function registerFilesystemRoutes(
     if (!body.path) throw connectError('invalid_argument', 'missing path');
     const user = vetUsername(usernameOf(request));
     const entry = await ctx.inSlot(sandboxIdOf(request), async (row) => {
-      const created = await executor.makeDir(
-        row.sandboxId,
-        body.path as string,
-        user,
-      );
+      const created = await executor.makeDir(row.id, body.path as string, user);
       if (!created) {
         // The SDK reads already_exists as makeDir() === false.
         throw connectError(
@@ -92,7 +88,7 @@ export function registerFilesystemRoutes(
           `already exists: ${resolveSandboxPath(body.path as string)}`,
         );
       }
-      return executor.statEntry(row.sandboxId, body.path as string, user);
+      return executor.statEntry(row.id, body.path as string, user);
     });
     return { entry: entryInfoJson(entry) };
   });
@@ -105,7 +101,7 @@ export function registerFilesystemRoutes(
     const user = vetUsername(usernameOf(request));
     const entry = await ctx.inSlot(sandboxIdOf(request), (row) =>
       executor.move(
-        row.sandboxId,
+        row.id,
         body.source as string,
         body.destination as string,
         user,
@@ -119,7 +115,7 @@ export function registerFilesystemRoutes(
     if (!body.path) throw connectError('invalid_argument', 'missing path');
     const user = vetUsername(usernameOf(request));
     await ctx.inSlot(sandboxIdOf(request), (row) =>
-      executor.remove(row.sandboxId, body.path as string, user),
+      executor.remove(row.id, body.path as string, user),
     );
     return {};
   });

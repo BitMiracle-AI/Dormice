@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { externalIdSchema } from './sandbox';
+import { sandboxNameSchema } from './sandbox';
 
 /** In-container deadline applied when the caller does not set one. */
 export const DEFAULT_EXEC_TIMEOUT_SECONDS = 300;
@@ -16,13 +16,13 @@ export const MAX_EXEC_TIMEOUT_SECONDS = 86_400;
 export const EXEC_OUTPUT_LIMIT_BYTES = 1024 * 1024;
 
 /**
- * execCommand(externalId, command) — runs a shell command inside the sandbox
- * behind the key and waits for it to finish. A cold (frozen/stopped) sandbox
+ * execCommand(name, command) — runs a shell command inside the sandbox
+ * behind the name and waits for it to finish. A cold (frozen/stopped) sandbox
  * is woken first; a running command counts as activity, so the idle scanner
  * never freezes a sandbox mid-command.
  */
 export const execCommandRequestSchema = z.object({
-  externalId: externalIdSchema,
+  name: sandboxNameSchema,
   /** A shell string, executed as `bash -c <command>` inside the sandbox. */
   command: z.string().min(1),
   /**

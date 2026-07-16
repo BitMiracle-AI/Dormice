@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { externalIdSchema } from './sandbox';
+import { sandboxNameSchema } from './sandbox';
 
 /**
- * getSandboxMetrics(externalId) — one sandbox's point-in-time resource
+ * getSandboxMetrics(name) — one sandbox's point-in-time resource
  * reading: the per-sandbox sibling of getHostMetrics, and the native twin
  * of the E2B surface's metrics endpoint (same executor reading). For the
  * past instead of the present, getSandboxMetricsHistory below serves the
@@ -27,7 +27,7 @@ export const sandboxMetricsSampleSchema = z.object({
 export type SandboxMetricsSample = z.infer<typeof sandboxMetricsSampleSchema>;
 
 export const getSandboxMetricsRequestSchema = z.object({
-  externalId: externalIdSchema,
+  name: sandboxNameSchema,
 });
 
 export type GetSandboxMetricsRequest = z.infer<
@@ -58,8 +58,10 @@ export type ListSandboxMetricsRequest = z.infer<
 
 export const listSandboxMetricsResponseSchema = z.object({
   samples: z.array(
+    // References from outside the sandbox object carry the entity's name:
+    // a bare `name`/`id` here would read as the row's own identity.
     z.object({
-      externalId: z.string(),
+      sandboxName: z.string(),
       sandboxId: z.string(),
       sample: sandboxMetricsSampleSchema,
     }),
@@ -71,7 +73,7 @@ export type ListSandboxMetricsResponse = z.infer<
 >;
 
 /**
- * getSandboxMetricsHistory(externalId, start?, end?) — the sampled past of
+ * getSandboxMetricsHistory(name, start?, end?) — the sampled past of
  * one sandbox. The daemon's background sampler persists a reading per
  * measurable sandbox every DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS; this
  * verb slices that history. History exists because it is a compatibility
@@ -101,7 +103,7 @@ const isoTimestampSchema = z
   });
 
 export const getSandboxMetricsHistoryRequestSchema = z.object({
-  externalId: externalIdSchema,
+  name: sandboxNameSchema,
   /** ISO 8601; defaults to one hour before `end`. */
   start: isoTimestampSchema.optional(),
   /** ISO 8601; defaults to now. */

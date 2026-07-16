@@ -20,7 +20,7 @@ const key = 'example-lifecycle';
 // acquire() is the single entry point, idempotent on a key you choose:
 // no sandbox → create, frozen → wake, stopped → restart, archived → restore.
 const { sandbox } = await client.acquireSandbox(key);
-console.log(`acquired ${sandbox.sandboxId} (${sandbox.state})`);
+console.log(`acquired ${sandbox.id} (${sandbox.state})`);
 
 // Real code execution. `uname -r` names gVisor's userspace kernel — proof
 // the command did not run on your host.
@@ -43,9 +43,7 @@ console.log(`read back: ${new TextDecoder().decode(file.content).trimEnd()}`);
 
 // The same key always answers with the same sandbox.
 const again = await client.acquireSandbox(key);
-console.log(
-  `same sandbox on re-acquire: ${again.sandbox.sandboxId === sandbox.sandboxId}`,
-);
+console.log(`same sandbox on re-acquire: ${again.sandbox.id === sandbox.id}`);
 
 // release() destroys container and disk — the only verb that loses data.
 await client.destroySandbox(key);

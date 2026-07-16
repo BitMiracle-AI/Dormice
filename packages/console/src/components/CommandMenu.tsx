@@ -26,7 +26,7 @@ import { MOCK_PAGES_ENABLED } from '@/lib/mock';
  * hook 不能条件调用,但组件可以条件挂载。缓存和列表页共享同一个 key,
  * 打开面板时多半直接命中。
  */
-function SandboxItems({ onGo }: { onGo: (externalId: string) => void }) {
+function SandboxItems({ onGo }: { onGo: (name: string) => void }) {
   const query = useSandboxes();
   const sandboxes = query.data?.sandboxes ?? [];
   if (sandboxes.length === 0) return null;
@@ -34,12 +34,12 @@ function SandboxItems({ onGo }: { onGo: (externalId: string) => void }) {
     <CommandGroup heading="沙箱">
       {sandboxes.map((sandbox) => (
         <CommandItem
-          key={sandbox.sandboxId}
-          value={`sandbox ${sandbox.externalId}`}
-          onSelect={() => onGo(sandbox.externalId)}
+          key={sandbox.id}
+          value={`sandbox ${sandbox.name}`}
+          onSelect={() => onGo(sandbox.name)}
         >
           <HugeiconsIcon icon={PackageIcon} strokeWidth={1.8} />
-          <span className="font-mono">{sandbox.externalId}</span>
+          <span className="font-mono">{sandbox.name}</span>
           <span className="ml-auto text-xs text-muted-foreground">
             {STATE_LABELS[sandbox.state]}
           </span>
@@ -50,7 +50,7 @@ function SandboxItems({ onGo }: { onGo: (externalId: string) => void }) {
 }
 
 /**
- * ⌘K / Ctrl+K 命令面板:跳页面、按 externalId 跳沙箱。挂在 AppShell 上,
+ * ⌘K / Ctrl+K 命令面板:跳页面、按 name 跳沙箱。挂在 AppShell 上,
  * 登录后全站可用;它只做导航 — 动作(销毁/重建)留在各自页面的确认
  * 流程里,快捷键不该绕过"删了就没有了"的那道闸。
  */
@@ -73,11 +73,11 @@ export function CommandMenu() {
     setOpen(false);
     void navigate({ to });
   };
-  const goSandbox = (externalId: string) => {
+  const goSandbox = (name: string) => {
     setOpen(false);
     void navigate({
-      to: '/sandboxes/$externalId',
-      params: { externalId },
+      to: '/sandboxes/$name',
+      params: { name },
       search: { tab: 'overview' },
     });
   };

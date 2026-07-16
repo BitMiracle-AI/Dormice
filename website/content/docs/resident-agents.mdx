@@ -20,7 +20,7 @@ const res = await client.acquireSandbox(`agent-${userId}`, {
 hardware, ~1 GiB of resident memory drops to ~5 MiB — and any touch
 wakes it in about 50 ms. It never decays to a seconds-long cold start.
 
-Every later `acquireSandbox` with the same key — tomorrow, next month —
+Every later `acquireSandbox` with the same name — tomorrow, next month —
 returns the same sandbox: same files, same installed packages, same
 processes. A runnable version of this pattern lives at
 [`examples/resident-agent.mjs`](https://github.com/BitMiracle-AI/Dormice/blob/main/examples/resident-agent.mjs).

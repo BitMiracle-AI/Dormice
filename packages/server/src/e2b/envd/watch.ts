@@ -95,7 +95,7 @@ export function registerWatchRoutes(
     });
     let watcher: Awaited<ReturnType<typeof executor.watchDir>>;
     try {
-      watcher = await executor.watchDir(row.sandboxId, {
+      watcher = await executor.watchDir(row.id, {
         path: message.path,
         recursive: message.recursive === true,
         onEvent: async (event) => {
@@ -180,7 +180,7 @@ export function registerWatchRoutes(
     try {
       const watcherId = await watchers.create({
         executor,
-        sandboxId: row.sandboxId,
+        sandboxId: row.id,
         path: body.path,
         recursive: body.recursive === true,
       });
@@ -202,7 +202,7 @@ export function registerWatchRoutes(
     // No wake: this reads daemon memory. A frozen sandbox has no new events
     // to report anyway — the disk cannot change while it is frozen.
     const row = ctx.requireRunningRow(sandboxIdOf(request));
-    const events = watchers.drain(row.sandboxId, body.watcherId);
+    const events = watchers.drain(row.id, body.watcherId);
     if (events === undefined) {
       throw connectError(
         'not_found',
@@ -224,7 +224,7 @@ export function registerWatchRoutes(
     }
     // Wakes: stopping the in-container inotifywait needs the container up.
     const row = await ctx.wakeForUse(sandboxIdOf(request));
-    const removed = await watchers.remove(row.sandboxId, body.watcherId);
+    const removed = await watchers.remove(row.id, body.watcherId);
     if (!removed) {
       throw connectError(
         'not_found',

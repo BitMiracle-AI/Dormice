@@ -40,15 +40,15 @@ function formatMetadata(metadata: Record<string, string>): string {
 }
 
 const COLUMNS: { header: string; value: (s: Sandbox) => string }[] = [
-  { header: 'USER KEY', value: (s) => s.externalId },
+  { header: 'NAME', value: (s) => s.name },
   { header: 'STATE', value: (s) => s.state },
-  { header: 'SANDBOX ID', value: (s) => s.sandboxId },
+  { header: 'ID', value: (s) => s.id },
   { header: 'LAST ACTIVE', value: (s) => s.lastActiveAt },
   { header: 'METADATA', value: (s) => formatMetadata(s.metadata) },
 ];
 
 /**
- * The protocol keeps externalId opaque, so a hostile key can carry control
+ * The protocol keeps name opaque, so a hostile key can carry control
  * characters — printed raw, ESC sequences would let one sandbox's name
  * rewrite the operator's terminal. Neutralized here, at the output layer,
  * where the terminal risk lives.
@@ -101,31 +101,29 @@ export function parseLabels(args: string[]): Record<string, string> {
 }
 
 /**
- * `dor sandbox meta <externalId> [key=value ...]`: no labels = show the
+ * `dor sandbox meta <name> [key=value ...]`: no labels = show the
  * current set; labels (or --clear) = full replacement, the verb's wire
  * semantics stated plainly. A pure ledger write — nothing is woken.
  */
 export async function sandboxMeta(
   client: Dormice,
-  externalId: string,
+  name: string,
   labels: Record<string, string> | null,
 ): Promise<string> {
   if (labels === null) {
     // Read path: the native list is the one read the daemon offers.
-    const sandbox = (await client.listSandboxes()).find(
-      (s) => s.externalId === externalId,
-    );
+    const sandbox = (await client.listSandboxes()).find((s) => s.name === name);
     if (!sandbox) {
-      throw new Error(`no sandbox for key "${externalId}" — acquire it first`);
+      throw new Error(`no sandbox named "${name}" — acquire it first`);
     }
     const line = formatMetadata(sandbox.metadata);
     return line ? printable(line) : 'No metadata.';
   }
-  const { sandbox } = await client.updateMetadata(externalId, labels);
+  const { sandbox } = await client.updateMetadata(name, labels);
   const line = formatMetadata(sandbox.metadata);
   return line
-    ? `Metadata for key "${printable(externalId)}" is now ${printable(line)}.`
-    : `Cleared metadata for key "${printable(externalId)}".`;
+    ? `Metadata of "${printable(name)}" is now ${printable(line)}.`
+    : `Cleared metadata of "${printable(name)}".`;
 }
 
 export interface ExecOutput {
@@ -135,7 +133,7 @@ export interface ExecOutput {
 }
 
 /**
- * `dor sandbox exec <externalId> <command>`: run a shell command in the
+ * `dor sandbox exec <name> <command>`: run a shell command in the
  * sandbox, buffered. Three channels instead of one string: the command's
  * stdout and stderr must reach the operator's matching streams untouched
  * (this is their own command's output, like ssh — unlike the ls table,
@@ -144,11 +142,11 @@ export interface ExecOutput {
  */
 export async function sandboxExec(
   client: Dormice,
-  externalId: string,
+  name: string,
   command: string,
   timeoutSeconds?: number,
 ): Promise<ExecOutput> {
-  const result = await client.execCommand(externalId, command, {
+  const result = await client.execCommand(name, command, {
     timeoutSeconds,
   });
   let stderr = result.stderr;
@@ -158,17 +156,17 @@ export async function sandboxExec(
 }
 
 /**
- * `dor sandbox push <externalId> <localPath> [remotePath]`: one local file into
+ * `dor sandbox push <name> <localPath> [remotePath]`: one local file into
  * the sandbox. The bytes arrive here already read — main.ts owns the
  * filesystem, this function owns the API call and the message.
  */
 export async function sandboxPush(
   client: Dormice,
-  externalId: string,
+  name: string,
   content: Uint8Array,
   remotePath: string,
 ): Promise<string> {
-  const { files } = await client.writeFiles(externalId, [
+  const { files } = await client.writeFiles(name, [
     { path: remotePath, content },
   ]);
   const written = files[0]?.path ?? remotePath;
@@ -176,17 +174,17 @@ export async function sandboxPush(
 }
 
 /**
- * `dor sandbox pull <externalId> <remotePath> [localPath]`: one file out of the
+ * `dor sandbox pull <name> <remotePath> [localPath]`: one file out of the
  * sandbox. Returns the exact bytes; main.ts decides between a local file and
  * raw stdout — raw on purpose, the same rule as exec output: these are the
  * operator's own bytes, not a place to strip control characters.
  */
 export async function sandboxPull(
   client: Dormice,
-  externalId: string,
+  name: string,
   remotePath: string,
 ): Promise<ReadFileResult> {
-  return client.readFile(externalId, remotePath);
+  return client.readFile(name, remotePath);
 }
 
 /** The message printed instead of raw bytes when pull saves to a local file. */
@@ -198,33 +196,33 @@ export function pullSavedMessage(
 }
 
 /**
- * `dor sandbox rebuild <externalId>`: swap the sandbox's container, keep its
+ * `dor sandbox rebuild <name>`: swap the sandbox's container, keep its
  * disk. /home/user survives; everything else resets onto the current image
  * of the sandbox's template (or the base image) at the next use.
  */
 export async function sandboxRebuild(
   client: Dormice,
-  externalId: string,
+  name: string,
 ): Promise<string> {
-  const { sandbox } = await client.rebuildSandbox(externalId);
+  const { sandbox } = await client.rebuildSandbox(name);
   const target = sandbox.template
     ? `template "${printable(sandbox.template)}"'s current image`
     : 'the current base image';
   return (
-    `Rebuilt the sandbox for key "${printable(externalId)}" — /home/user kept, ` +
+    `Rebuilt the sandbox "${printable(name)}" — /home/user kept, ` +
     `now ${sandbox.state}; its next use starts on ${target}.`
   );
 }
 
-/** `dor sandbox destroy <externalId>`: destroy the sandbox behind a key, idempotently. */
+/** `dor sandbox destroy <name>`: destroy the sandbox behind a key, idempotently. */
 export async function sandboxDestroy(
   client: Dormice,
-  externalId: string,
+  name: string,
 ): Promise<string> {
-  const { destroyed } = await client.destroySandbox(externalId);
+  const { destroyed } = await client.destroySandbox(name);
   return destroyed
-    ? `Destroyed the sandbox for key "${printable(externalId)}".`
-    : `No sandbox for key "${printable(externalId)}" — nothing to destroy.`;
+    ? `Destroyed the sandbox "${printable(name)}".`
+    : `No sandbox named "${printable(name)}" — nothing to destroy.`;
 }
 
 /**

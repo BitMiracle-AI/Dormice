@@ -27,13 +27,13 @@ import { since } from '../format';
 
 /**
  * 「我的沙箱昨晚为什么停了」— 活动环里只属于这个沙箱的那几行。纯前端
- * 过滤:活动事件本来就带 externalId,不发明新端点;按环形表上限(1000)
+ * 过滤:活动事件本来就带 name,不发明新端点;按环形表上限(1000)
  * 拉取,把这个沙箱的事件尽量捞全,再老的已经滚出环了。
  */
-export function HistoryPanel({ externalId }: { externalId: string }) {
+export function HistoryPanel({ name }: { name: string }) {
   const { data, isPending, isError, error } = useActivity(1000);
   const events = (data?.events ?? []).filter(
-    (event) => event.externalId === externalId,
+    (event) => event.sandboxName === name,
   );
 
   if (isPending) {

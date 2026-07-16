@@ -10,11 +10,11 @@ sandboxes that are **permanent** — idle ones cool down
 (`active → frozen → stopped → archived`) instead of being destroyed, and any
 acquire brings them back. Two facts drive every workflow below:
 
-- **`acquireSandbox(externalId)` is the entire mental model.** Idempotent:
-  the same key always returns the same sandbox, whatever state it was in.
+- **`acquireSandbox(name)` is the entire mental model.** Idempotent — the name is a unique address that never errors as a duplicate:
+  the same name always returns the same sandbox, whatever state it was in.
   No sandbox → create; frozen → wake (~50 ms); stopped → start; archived →
   restore. Only `acquireSandbox` creates — other verbs answer 404 for an
-  unknown key.
+  unknown name.
 - **The disk, not the container, is the sandbox's body.** Files survive
   freezes, stops, daemon restarts, and host reboots. Only `destroySandbox`
   loses data.
@@ -70,7 +70,7 @@ sandbox.commands.run("echo hello")
 
 `Sandbox.create` makes a fresh sandbox each time (faithful E2B semantics).
 To get Dormice's idempotent acquire through the E2B surface, pass
-`metadata: { externalId: 'my-project' }` — the same key then always returns
+`metadata: { name: 'my-project' }` — the same name then always returns
 the same sandbox with its files intact. E2B `timeoutMs` deadlines are real:
 at the deadline the sandbox is killed, or parked with
 `lifecycle: { onTimeout: 'pause' }` and revived by `connect`.
@@ -107,7 +107,7 @@ The same loop in curl:
 curl -X POST http://127.0.0.1:3676/acquireSandbox \
   -H "Authorization: Bearer $DORMICE_API_TOKEN" \
   -H "content-type: application/json" \
-  -d '{"externalId": "my-agent"}'
+  -d '{"name": "my-agent"}'
 ```
 
 Verbs: `acquireSandbox` (optionally with `metadata` — string-to-string
@@ -126,7 +126,7 @@ runs an old template image), `listActivity` (recent daemon history),
 `getConfig` (effective config, secrets redacted), `getIngress` /
 `setIngress` (bind domains on the daemon's managed reverse proxy).
 `execCommand` takes
-`{ externalId, command, timeoutSeconds?, cwd?, env? }` and returns
+`{ name, command, timeoutSeconds?, cwd?, env? }` and returns
 `{ exitCode, stdout, stderr, ... }` — **a non-zero exit code is a result,
 not an HTTP error**. When a sandbox is coming back from S3, `acquireSandbox`
 returns `{ status: 'restoring', progress }` immediately; poll it until the

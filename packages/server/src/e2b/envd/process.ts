@@ -128,7 +128,7 @@ export function registerProcessRoutes(
     const { request, reply, row, write, done, detach } = args;
     const stopHeartbeat = startExecHeartbeat(
       db,
-      row.sandboxId,
+      row.id,
       row.freezeAfterSeconds,
     );
     // Keepalive events on the interval the SDK asked for — what keeps
@@ -172,7 +172,7 @@ export function registerProcessRoutes(
       try {
         // Watching the command was the activity: the idle countdown starts
         // when the stream detaches, not when it attached.
-        touch(db, row.sandboxId);
+        touch(db, row.id);
       } catch {
         // Released mid-stream; the stream's own ending tells the story.
       }
@@ -193,7 +193,7 @@ export function registerProcessRoutes(
     // Read-only: no wake — looking at the table must not thaw a sandbox.
     const row = ctx.requireRunningRow(sandboxIdOf(request));
     return {
-      processes: processes.list(row.sandboxId).map((record) => ({
+      processes: processes.list(row.id).map((record) => ({
         pid: record.pid,
         // config is echoed verbatim and always complete: the SDK
         // dereferences processes[].config.args unconditionally.
@@ -260,7 +260,7 @@ export function registerProcessRoutes(
     try {
       record = await processes.start({
         executor,
-        sandboxId: row.sandboxId,
+        sandboxId: row.id,
         options: {
           command,
           loginShell,
@@ -315,7 +315,7 @@ export function registerProcessRoutes(
     }
     const row = await ctx.wakeForStream(request, reply);
     if (!row) return;
-    const record = processes.get(row.sandboxId, pid);
+    const record = processes.get(row.id, pid);
     if (!record) {
       return streamError(reply, 'not_found', `process not found: ${pid}`);
     }
@@ -360,7 +360,7 @@ export function registerProcessRoutes(
     };
     const pid = requirePid(body);
     const row = await ctx.wakeForUse(sandboxIdOf(request));
-    const record = requireProcess(row.sandboxId, pid);
+    const record = requireProcess(row.id, pid);
     const stdinB64 = body.input?.stdin;
     const ptyB64 = body.input?.pty;
     if (typeof stdinB64 !== 'string' && typeof ptyB64 !== 'string') {
@@ -392,7 +392,7 @@ export function registerProcessRoutes(
   app.post('/process.Process/CloseStdin', async (request) => {
     const pid = requirePid(request.body);
     const row = await ctx.wakeForUse(sandboxIdOf(request));
-    const record = requireProcess(row.sandboxId, pid);
+    const record = requireProcess(row.id, pid);
     if (!record.stdin) {
       throw connectError(
         'invalid_argument',
@@ -431,7 +431,7 @@ export function registerProcessRoutes(
       );
     }
     const row = await ctx.wakeForUse(sandboxIdOf(request));
-    const record = requireProcess(row.sandboxId, pid);
+    const record = requireProcess(row.id, pid);
     try {
       await record.handle.signal(sig);
     } catch {
@@ -449,7 +449,7 @@ export function registerProcessRoutes(
     };
     const pid = requirePid(body);
     const row = await ctx.wakeForUse(sandboxIdOf(request));
-    const record = requireProcess(row.sandboxId, pid);
+    const record = requireProcess(row.id, pid);
     if (!record.pty) {
       throw connectError('invalid_argument', 'process has no PTY');
     }

@@ -34,11 +34,11 @@ export function useSandboxes() {
   });
 }
 
-export function useSandbox(externalId: string) {
+export function useSandbox(name: string) {
   const query = useSandboxes();
   return {
     ...query,
-    sandbox: query.data?.sandboxes.find((s) => s.externalId === externalId),
+    sandbox: query.data?.sandboxes.find((s) => s.name === name),
   };
 }
 
@@ -46,10 +46,10 @@ export function useSandbox(externalId: string) {
  * 单沙箱指标,5 秒一拍。观察不唤醒:停着的沙箱答 sample: null,面板
  * 据此出空态而不是把沙箱吵醒。只在指标 tab 挂载时才跑(面板卸载即停)。
  */
-export function useSandboxMetrics(externalId: string) {
+export function useSandboxMetrics(name: string) {
   return useQuery({
-    queryKey: ['sandbox-metrics', externalId],
-    queryFn: () => getSandboxMetrics(externalId),
+    queryKey: ['sandbox-metrics', name],
+    queryFn: () => getSandboxMetrics(name),
     refetchInterval: 5000,
     retry: false,
   });
@@ -61,13 +61,13 @@ export function useSandboxMetrics(externalId: string) {
  * 历史键在 sandboxId 上,换壳(rebuild)不断线。切换档位时沿用上一档
  * 的数据顶住新答案到来(keepPreviousData),图表不塌回空态。
  */
-export function useSandboxMetricsHistory(externalId: string, spanMs: number) {
+export function useSandboxMetricsHistory(name: string, spanMs: number) {
   return useQuery({
-    queryKey: ['sandbox-metrics-history', externalId, spanMs],
+    queryKey: ['sandbox-metrics-history', name, spanMs],
     queryFn: () => {
       const end = Date.now();
       return getSandboxMetricsHistory(
-        externalId,
+        name,
         new Date(end - spanMs).toISOString(),
         new Date(end).toISOString(),
       );
@@ -118,10 +118,8 @@ export function useAcquireSandbox() {
 export function useUpdatePolicy() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (args: {
-      externalId: string;
-      policy: LifecyclePolicyOverride;
-    }) => updatePolicy(args.externalId, args.policy),
+    mutationFn: (args: { name: string; policy: LifecyclePolicyOverride }) =>
+      updatePolicy(args.name, args.policy),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
   });
 }
@@ -129,7 +127,7 @@ export function useUpdatePolicy() {
 export function useRebuildSandbox() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (externalId: string) => rebuildSandbox(externalId),
+    mutationFn: (name: string) => rebuildSandbox(name),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['sandboxes'] });
       // 换壳直接改变镜像血统(可升级标记要立即消失),不等下一拍。
@@ -141,7 +139,7 @@ export function useRebuildSandbox() {
 export function useDestroySandbox() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (externalId: string) => destroySandbox(externalId),
+    mutationFn: (name: string) => destroySandbox(name),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
   });
 }

@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { findBySandboxId, touch } from '../../db/ledger';
+import { findById, touch } from '../../db/ledger';
 import type { SandboxRow } from '../../db/schema';
 import {
   DiskFullError,
@@ -152,7 +152,7 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
       }
       return;
     }
-    const row = findBySandboxId(db, sandboxId);
+    const row = findById(db, sandboxId);
     if (row && (row.state === 'archived' || row.state === 'restoring')) {
       throw new E2bError(
         502,
@@ -169,7 +169,7 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
    * sandbox feels like.
    */
   function requireRunningRow(sandboxId: string): SandboxRow {
-    const row = findBySandboxId(db, sandboxId);
+    const row = findById(db, sandboxId);
     if (!row) {
       throw new E2bError(502, 'unavailable', 'sandbox not found');
     }
@@ -194,10 +194,10 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
     // will be refused anyway would waste a whole restore.
     const before = requireRunningRow(sandboxId);
     await joinRestore(sandboxId);
-    return locks.run(before.externalId, async () => {
+    return locks.run(before.name, async () => {
       const fresh = requireRunningRow(sandboxId);
       const awake = await wakeSandbox(db, executor, fresh);
-      return touch(db, awake.sandboxId);
+      return touch(db, awake.id);
     });
   }
 
@@ -207,10 +207,10 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
   ): Promise<T> {
     const before = requireRunningRow(sandboxId);
     await joinRestore(sandboxId);
-    return locks.run(before.externalId, async () => {
+    return locks.run(before.name, async () => {
       const fresh = requireRunningRow(sandboxId);
       const awake = await wakeSandbox(db, executor, fresh);
-      const row = touch(db, awake.sandboxId);
+      const row = touch(db, awake.id);
       try {
         return await work(row);
       } catch (error) {

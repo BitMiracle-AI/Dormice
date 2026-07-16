@@ -199,7 +199,7 @@ function RemoveTemplateDialog({
         toast.success(
           removed ? `已删除「${name}」` : `「${name}」本来就不存在`,
         ),
-      // 还有沙箱引用时 daemon 回 409 并点名 externalId — 原文转达。
+      // 还有沙箱引用时 daemon 回 409 并点名 name — 原文转达。
       onError: (error) => toast.error(error.message),
     });
 

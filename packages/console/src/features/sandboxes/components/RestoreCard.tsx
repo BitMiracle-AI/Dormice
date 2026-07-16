@@ -21,14 +21,14 @@ export function RestoreCard({ sandbox }: { sandbox: Sandbox }) {
   const restoring = sandbox.state === 'restoring';
 
   const progressQuery = useQuery({
-    queryKey: ['restore-progress', sandbox.externalId],
-    queryFn: () => acquireSandbox({ externalId: sandbox.externalId }),
+    queryKey: ['restore-progress', sandbox.name],
+    queryFn: () => acquireSandbox({ name: sandbox.name }),
     enabled: restoring,
     refetchInterval: 1500,
     retry: false,
   });
   const begin = useMutation({
-    mutationFn: () => acquireSandbox({ externalId: sandbox.externalId }),
+    mutationFn: () => acquireSandbox({ name: sandbox.name }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
     onError: (error) => toast.error(`恢复没能开始:${error.message}`),
   });

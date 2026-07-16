@@ -149,17 +149,19 @@ export class Dormice {
   }
 
   /**
-   * acquire(externalId): the platform's single entry point, idempotent — the
-   * same key always comes back to the same sandbox, whatever state it was
-   * in. A `restoring` status means the sandbox is being pulled back from
+   * acquire(name): the platform's single entry point, idempotent — the
+   * same name always comes back to the same sandbox, whatever state it was
+   * in (names converge, they never error as duplicates); the response's
+   * `created` flag says whether this call minted the sandbox or found it.
+   * A `restoring` status means the sandbox is being pulled back from
    * the archive; poll until it flips to `ready`.
    */
   async acquireSandbox(
-    externalId: string,
+    name: string,
     options?: AcquireSandboxOptions,
   ): Promise<AcquireResponse> {
     const data = await this.rpc('acquireSandbox', {
-      externalId,
+      name,
       policy: options?.policy,
       template: options?.template,
       metadata: options?.metadata,
@@ -193,10 +195,8 @@ export class Dormice {
    * and with no running container (stopped, archived, restoring) the
    * sample is null. For the past, see getSandboxMetricsHistory.
    */
-  async getSandboxMetrics(
-    externalId: string,
-  ): Promise<SandboxMetricsSample | null> {
-    const data = await this.rpc('getSandboxMetrics', { externalId });
+  async getSandboxMetrics(name: string): Promise<SandboxMetricsSample | null> {
+    const data = await this.rpc('getSandboxMetrics', { name });
     return getSandboxMetricsResponseSchema.parse(data).sample;
   }
 
@@ -209,11 +209,11 @@ export class Dormice {
    * for shows the gap.
    */
   async getSandboxMetricsHistory(
-    externalId: string,
+    name: string,
     options?: { start?: string; end?: string },
   ): Promise<GetSandboxMetricsHistoryResponse> {
     const data = await this.rpc('getSandboxMetricsHistory', {
-      externalId,
+      name,
       start: options?.start,
       end: options?.end,
     });
@@ -360,8 +360,8 @@ export class Dormice {
    * or exec wakes it, paying one cold start. Unknown key: 404 — rebuild is
    * not a creator.
    */
-  async rebuildSandbox(externalId: string): Promise<RebuildSandboxResponse> {
-    const data = await this.rpc('rebuildSandbox', { externalId });
+  async rebuildSandbox(name: string): Promise<RebuildSandboxResponse> {
+    const data = await this.rpc('rebuildSandbox', { name });
     return rebuildSandboxResponseSchema.parse(data);
   }
 
@@ -374,10 +374,10 @@ export class Dormice {
    * the idle clock is not refreshed. Unknown key: 404 — not a creator.
    */
   async updatePolicy(
-    externalId: string,
+    name: string,
     policy: LifecyclePolicyOverride,
   ): Promise<UpdatePolicyResponse> {
-    const data = await this.rpc('updatePolicy', { externalId, policy });
+    const data = await this.rpc('updatePolicy', { name, policy });
     return updatePolicyResponseSchema.parse(data);
   }
 
@@ -387,20 +387,20 @@ export class Dormice {
    * idle clock is not refreshed. Unknown key: 404 — not a creator.
    */
   async updateMetadata(
-    externalId: string,
+    name: string,
     metadata: SandboxMetadata,
   ): Promise<UpdateMetadataResponse> {
-    const data = await this.rpc('updateMetadata', { externalId, metadata });
+    const data = await this.rpc('updateMetadata', { name, metadata });
     return updateMetadataResponseSchema.parse(data);
   }
 
   /**
-   * Destroys the sandbox behind an external id — container and disk are gone
+   * Destroys the sandbox behind a name — container and disk are gone
    * for good. Idempotent like acquire: a key that has no sandbox is not an
    * error, the response just says `destroyed: false`.
    */
-  async destroySandbox(externalId: string): Promise<DestroySandboxResponse> {
-    const data = await this.rpc('destroySandbox', { externalId });
+  async destroySandbox(name: string): Promise<DestroySandboxResponse> {
+    const data = await this.rpc('destroySandbox', { name });
     return destroySandboxResponseSchema.parse(data);
   }
 
@@ -462,14 +462,14 @@ export class Dormice {
   }
 
   /**
-   * Runs a shell command inside the sandbox behind an external id and returns
+   * Runs a shell command inside the sandbox behind a name and returns
    * the buffered result: honest exit code (a nonzero exit is a result, not
    * an error), stdout/stderr capped at 1 MiB per stream. Wakes a cold
    * sandbox first, and counts as activity for the whole run — the idle
    * scanner never freezes a sandbox mid-command.
    */
   async execCommand(
-    externalId: string,
+    name: string,
     command: string,
     options?: ExecCommandOptions,
   ): Promise<ExecCommandResponse> {
@@ -481,7 +481,7 @@ export class Dormice {
     const data = await this.rpc(
       'execCommand',
       {
-        externalId,
+        name,
         command,
         timeoutSeconds,
         cwd: options?.cwd,
@@ -494,17 +494,17 @@ export class Dormice {
   }
 
   /**
-   * Writes a batch of files into the sandbox behind an external id, waking a
+   * Writes a batch of files into the sandbox behind a name, waking a
    * cold sandbox first. Parents are created, existing files overwritten.
    * Per-file cap is 16 MiB — content travels as base64 inside JSON; a big
    * batch on a slow link may need a larger client `timeoutMs`.
    */
   async writeFiles(
-    externalId: string,
+    name: string,
     files: FileToWrite[],
   ): Promise<WriteFilesResponse> {
     const data = await this.rpc('writeFiles', {
-      externalId,
+      name,
       files: files.map((file) => ({
         path: file.path,
         contentBase64: Buffer.from(
@@ -522,12 +522,12 @@ export class Dormice {
    * same rules (parents created, existing file overwritten, 16 MiB cap).
    */
   async writeFile(
-    externalId: string,
+    name: string,
     path: string,
     content: string | Uint8Array,
   ): Promise<WriteFileResponse> {
     const data = await this.rpc('writeFile', {
-      externalId,
+      name,
       path,
       contentBase64: Buffer.from(
         typeof content === 'string'
@@ -542,8 +542,8 @@ export class Dormice {
    * Reads one file's bytes out of the sandbox. A file over the 16 MiB cap
    * is refused by the daemon (413), never truncated.
    */
-  async readFile(externalId: string, path: string): Promise<ReadFileResult> {
-    const data = await this.rpc('readFile', { externalId, path });
+  async readFile(name: string, path: string): Promise<ReadFileResult> {
+    const data = await this.rpc('readFile', { name, path });
     const parsed = readFileResponseSchema.parse(data);
     return {
       path: parsed.path,
@@ -557,11 +557,8 @@ export class Dormice {
    * file by file. Files come back in request order; the batch total is
    * capped at 48 MiB by the daemon (413).
    */
-  async readFiles(
-    externalId: string,
-    paths: string[],
-  ): Promise<ReadFileResult[]> {
-    const data = await this.rpc('readFiles', { externalId, paths });
+  async readFiles(name: string, paths: string[]): Promise<ReadFileResult[]> {
+    const data = await this.rpc('readFiles', { name, paths });
     return readFilesResponseSchema.parse(data).files.map((file) => ({
       path: file.path,
       content: new Uint8Array(Buffer.from(file.contentBase64, 'base64')),

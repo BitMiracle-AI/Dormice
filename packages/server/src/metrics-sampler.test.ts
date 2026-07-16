@@ -48,15 +48,15 @@ function harness() {
 
 type App = ReturnType<typeof harness>['app'];
 
-async function acquire(app: App, externalId: string) {
+async function acquire(app: App, name: string) {
   const res = await app.inject({
     method: 'POST',
     url: '/acquireSandbox',
     headers: authed,
-    payload: { externalId },
+    payload: { name },
   });
   expect(res.statusCode).toBe(200);
-  return res.json().sandbox as { sandboxId: string };
+  return res.json().sandbox as { id: string };
 }
 
 function sampleRows(db: ReturnType<typeof harness>['db']) {
@@ -72,10 +72,10 @@ describe('sampleOnce', () => {
     const { app, db, executor } = harness();
     await acquire(app, 'hot');
     const napping = await acquire(app, 'napping');
-    await freezeSandbox(db, executor, napping.sandboxId);
+    await freezeSandbox(db, executor, napping.id);
     const cold = await acquire(app, 'cold');
-    await freezeSandbox(db, executor, cold.sandboxId);
-    await stopSandbox(db, executor, cold.sandboxId);
+    await freezeSandbox(db, executor, cold.id);
+    await stopSandbox(db, executor, cold.id);
 
     const now = new Date('2026-07-15T10:00:00.000Z');
     const result = await sampleOnce(db, executor, now, { retentionHours: 168 });
@@ -101,9 +101,7 @@ describe('sampleOnce', () => {
       expect(row.memTotalBytes).toBeGreaterThan(0);
     }
     // Observation is not activity: the frozen sandbox is still frozen.
-    expect((await executor.listContainers()).get(napping.sandboxId)).toBe(
-      'paused',
-    );
+    expect((await executor.listContainers()).get(napping.id)).toBe('paused');
   });
 
   it('skips a vanished container without failing the tick', async () => {
@@ -112,8 +110,8 @@ describe('sampleOnce', () => {
     const doomed = await acquire(app, 'doomed');
     // The container dies physically, past the ledger (gVisor OOM does this
     // for real) — the row still says active, the reading throws.
-    await executor.freeze(doomed.sandboxId);
-    await executor.stop(doomed.sandboxId);
+    await executor.freeze(doomed.id);
+    await executor.stop(doomed.id);
 
     const now = new Date('2026-07-15T10:00:00.000Z');
     const result = await sampleOnce(db, executor, now, { retentionHours: 168 });
@@ -165,13 +163,13 @@ describe('sampleOnce', () => {
       method: 'POST',
       url: '/destroySandbox',
       headers: authed,
-      payload: { externalId: 'victim' },
+      payload: { name: 'victim' },
     });
     expect(res.statusCode).toBe(200);
 
     const remaining = sampleRows(db);
     expect(remaining).toHaveLength(1);
-    expect(remaining[0]?.sandboxId).not.toBe(victim.sandboxId);
+    expect(remaining[0]?.sandboxId).not.toBe(victim.id);
     // Fleet snapshots belong to no sandbox: untouched.
     expect(fleetRows(db)).toHaveLength(1);
   });

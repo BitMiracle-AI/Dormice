@@ -5,8 +5,8 @@ import { z } from 'zod';
 import {
   countSandboxes,
   createSandbox,
-  findByExternalId,
-  findBySandboxId,
+  findById,
+  findByName,
   listSandboxes,
   setDeadline,
   setPausedByUser,
@@ -41,11 +41,11 @@ import { e2bView } from './view';
  * The E2B control plane: what the official SDK calls api.e2b.app for.
  * Mounted under /e2b/api; the SDK reaches it through its `apiUrl` option.
  * Faithful by default — timeouts kill, kill destroys; Dormice's immortality
- * is opt-in via metadata.externalId (idempotent create) or autoPause.
+ * is opt-in via metadata.name (idempotent create) or autoPause.
  */
 
-/** The Dormice extension key: metadata.externalId makes create idempotent. */
-const EXTERNAL_ID_PATTERN = /^[a-zA-Z0-9._-]{1,64}$/;
+/** The Dormice extension key: metadata.name makes create idempotent. */
+const SANDBOX_NAME_PATTERN = /^[a-zA-Z0-9._-]{1,64}$/;
 
 /** Seconds; E2B's default sandbox TTL. */
 const DEFAULT_TIMEOUT_SECONDS = 300;
@@ -117,15 +117,15 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     if (!archiver) {
       throw apiError(
         502,
-        `sandbox "${row.sandboxId}" is archived but the daemon has no S3 configured (DORMICE_S3_*)`,
+        `sandbox "${row.id}" is archived but the daemon has no S3 configured (DORMICE_S3_*)`,
       );
     }
     try {
-      await archiver.restoreJoin(row.sandboxId);
+      await archiver.restoreJoin(row.id);
     } catch (error) {
       throw apiError(
         502,
-        `restoring sandbox "${row.sandboxId}" failed: ${error instanceof Error ? error.message : String(error)} — retry`,
+        `restoring sandbox "${row.id}" failed: ${error instanceof Error ? error.message : String(error)} — retry`,
       );
     }
   }
@@ -181,7 +181,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   /** What create and connect answer with. */
   function sessionView(row: SandboxRow) {
     return {
-      sandboxID: row.sandboxId,
+      sandboxID: row.id,
       // The node identity. The JS SDK never reads this field, but the
       // Python SDK's generated models hard-require it on every sandbox
       // response — its absence is a KeyError before user code runs
@@ -189,7 +189,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       clientID: row.nodeId,
       ...templateFields(row),
       envdVersion: ENVD_VERSION,
-      envdAccessToken: mintEnvdToken(envdSigningSecret, row.sandboxId),
+      envdAccessToken: mintEnvdToken(envdSigningSecret, row.id),
       ...domainField,
     };
   }
@@ -197,7 +197,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   /** What getInfo and list answer with. */
   function infoView(row: SandboxRow, state: 'running' | 'paused') {
     return {
-      sandboxID: row.sandboxId,
+      sandboxID: row.id,
       // Required by the Python SDK's models, like clientID above.
       clientID: row.nodeId,
       ...templateFields(row),
@@ -227,7 +227,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     row: SandboxRow;
     state: 'running' | 'paused';
   } {
-    const row = findBySandboxId(db, sandboxId);
+    const row = findById(db, sandboxId);
     if (!row) throw notFound(sandboxId);
     const state = e2bView(row, new Date());
     if (state === 'dead') throw notFound(sandboxId);
@@ -245,7 +245,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     const candidate = Date.now() + timeoutSeconds * 1000;
     const current = row.deadlineAt ? Date.parse(row.deadlineAt) : 0;
     if (candidate > current) {
-      setDeadline(db, row.sandboxId, {
+      setDeadline(db, row.id, {
         deadlineAt: new Date(candidate).toISOString(),
         onDeadline: row.onDeadline,
       });
@@ -258,22 +258,22 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     async (request, reply) => {
       const body = request.body;
       const timeoutSeconds = body.timeout ?? DEFAULT_TIMEOUT_SECONDS;
-      const requestedKey = body.metadata?.externalId;
+      const requestedKey = body.metadata?.name;
       if (
         requestedKey !== undefined &&
-        !EXTERNAL_ID_PATTERN.test(requestedKey)
+        !SANDBOX_NAME_PATTERN.test(requestedKey)
       ) {
         throw apiError(
           400,
-          `invalid metadata.externalId "${requestedKey}": expected 1-64 chars of [a-zA-Z0-9._-]`,
+          `invalid metadata.name "${requestedKey}": expected 1-64 chars of [a-zA-Z0-9._-]`,
         );
       }
-      const externalId = requestedKey ?? `e2b-${randomUUID()}`;
+      const name = requestedKey ?? `e2b-${randomUUID()}`;
 
-      // The externalId reuse path may find an archived sandbox; the join
+      // The name-reuse path may find an archived sandbox; the join
       // brings it back before the slot work below wakes it as usual.
       if (requestedKey !== undefined) {
-        await joinRestore(findByExternalId(db, requestedKey));
+        await joinRestore(findByName(db, requestedKey));
       }
 
       // templateID resolution: a registered name wins; 'base', the base
@@ -293,8 +293,8 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         }
       }
 
-      const row = await locks.run(externalId, async () => {
-        const existing = findByExternalId(db, externalId);
+      const row = await locks.run(name, async () => {
+        const existing = findByName(db, name);
         if (existing && e2bView(existing, new Date()) !== 'dead') {
           // The Dormice extension: same key, same sandbox — an acquire in
           // E2B clothes. Stored metadata/envs stay (same principle as the
@@ -302,7 +302,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           // deadline is extended like a connect.
           const awake = await wakeSandbox(db, executor, existing);
           extendDeadline(awake, timeoutSeconds);
-          return touch(db, awake.sandboxId);
+          return touch(db, awake.id);
         }
         if (existing) {
           // Protocol-dead but not yet reaped: E2B semantics say it is gone,
@@ -310,7 +310,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           await destroySandbox(
             db,
             executor,
-            existing.sandboxId,
+            existing.id,
             archiver?.store ?? null,
             {
               kind: 'destroyed',
@@ -325,13 +325,13 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
             `sandbox limit reached (DORMICE_MAX_SANDBOXES=${config.DORMICE_MAX_SANDBOXES}) — destroy a sandbox or raise the limit`,
           );
         }
-        const sandboxId = randomUUID();
-        await executor.create(sandboxId, {
+        const id = randomUUID();
+        await executor.create(id, {
           image: resolveImage(db, template),
         });
         return createSandbox(db, {
-          sandboxId,
-          externalId,
+          id,
+          name,
           nodeId: config.DORMICE_NODE_ID,
           policy: resolvePolicy(undefined, archiveDefaultSeconds),
           template,
@@ -367,14 +367,14 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       // then finds it active and the wake below is a no-op. Blocking is the
       // faithful behavior: E2B's connect returns a live sandbox, period.
       await joinRestore(before.row);
-      const row = await locks.run(before.row.externalId, async () => {
-        const fresh = findBySandboxId(db, id);
+      const row = await locks.run(before.row.name, async () => {
+        const fresh = findById(db, id);
         if (!fresh || e2bView(fresh, new Date()) === 'dead') {
           throw notFound(id);
         }
         const awake = await wakeSandbox(db, executor, fresh);
         extendDeadline(awake, request.body.timeout ?? DEFAULT_TIMEOUT_SECONDS);
-        return touch(db, awake.sandboxId);
+        return touch(db, awake.id);
       });
       // 200 = it was already running, 201 = this connect resumed it.
       return reply
@@ -444,7 +444,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         3600_000,
         now,
       );
-      const rows = querySandboxSamples(db, row.sandboxId, startIso, endIso);
+      const rows = querySandboxSamples(db, row.id, startIso, endIso);
       const bucketSeconds = resolveBucketSeconds(rows.length, startMs, endMs);
       const sliced =
         bucketSeconds === null
@@ -474,7 +474,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       const windowIncludesNow =
         now.getTime() >= startMs && now.getTime() <= endMs;
       if (!measurable || !windowIncludesNow) return [];
-      const m = await executor.metrics(row.sandboxId);
+      const m = await executor.metrics(row.id);
       return [
         {
           timestamp: now.toISOString(),
@@ -494,7 +494,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   app.delete('/sandboxes/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
     // kill = destroy, for real: container, disk and row gone. Persistence
-    // on the E2B surface is "don't kill" (autoPause / externalId), never a
+    // on the E2B surface is "don't kill" (autoPause / metadata.name), never a
     // kill that secretly keeps data.
     const { row } = findLive(id);
     if (row.state === 'restoring') {
@@ -504,16 +504,13 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       // whose destroy below deletes the S3 object.
       await archiver?.restoreJoin(id).catch(() => {});
     }
-    await locks.run(row.externalId, async () => {
-      const fresh = findBySandboxId(db, id);
+    await locks.run(row.name, async () => {
+      const fresh = findById(db, id);
       if (!fresh) throw notFound(id);
-      await destroySandbox(
-        db,
-        executor,
-        fresh.sandboxId,
-        archiver?.store ?? null,
-        { kind: 'destroyed', cause: 'via E2B kill' },
-      );
+      await destroySandbox(db, executor, fresh.id, archiver?.store ?? null, {
+        kind: 'destroyed',
+        cause: 'via E2B kill',
+      });
     });
     return reply.code(204).send();
   });
@@ -527,7 +524,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       // setTimeout overwrites in both directions, measured from now — but
       // only for E2B-created sandboxes; native ones stay immortal.
       if (row.onDeadline !== null) {
-        setDeadline(db, row.sandboxId, {
+        setDeadline(db, row.id, {
           deadlineAt: new Date(
             Date.now() + request.body.timeout * 1000,
           ).toISOString(),
@@ -548,15 +545,15 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         // The SDK reads a 409 as "already paused" and answers false.
         throw apiError(409, 'sandbox is already paused');
       }
-      await locks.run(before.row.externalId, async () => {
-        const fresh = findBySandboxId(db, id);
+      await locks.run(before.row.name, async () => {
+        const fresh = findById(db, id);
         if (!fresh) throw notFound(id);
         let current = fresh;
         if (current.state === 'active') {
           current = await freezeSandbox(
             db,
             executor,
-            current.sandboxId,
+            current.id,
             'paused via E2B',
           );
         }
@@ -566,11 +563,11 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           await stopSandbox(
             db,
             executor,
-            current.sandboxId,
+            current.id,
             'paused via E2B (memory discarded)',
           );
         }
-        setPausedByUser(db, fresh.sandboxId, true);
+        setPausedByUser(db, fresh.id, true);
       });
       return reply.code(204).send();
     },

@@ -36,7 +36,7 @@ import { useEnvdAuth, useKillProcess, useProcesses } from '../hooks/useEnvd';
 export function ProcessesPanel({ sandbox }: { sandbox: Sandbox }) {
   // 只有物理容器在(active/frozen)才有进程表;停机沙箱只剩磁盘。
   const hasContainer = sandbox.state === 'active' || sandbox.state === 'frozen';
-  const auth = useEnvdAuth(sandbox.sandboxId);
+  const auth = useEnvdAuth(sandbox.id);
   const processes = useProcesses(auth.data, hasContainer);
   const kill = useKillProcess(auth.data);
 

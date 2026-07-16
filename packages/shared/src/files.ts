@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { externalIdSchema } from './sandbox';
+import { sandboxNameSchema } from './sandbox';
 
 /**
  * Per-file size cap, write and read alike. Content crosses the wire as
@@ -75,14 +75,14 @@ const fileContentSchema = z
   });
 
 /**
- * writeFiles(externalId, files) — writes every file in the batch into the
- * sandbox behind the key, waking it first if it is cold. Parent directories
+ * writeFiles(name, files) — writes every file in the batch into the
+ * sandbox behind the name, waking it first if it is cold. Parent directories
  * are created as needed; an existing file is overwritten. Writes happen in
  * array order and fail fast: on error the earlier files are already written
  * — the batch is a round-trip saver, not a transaction.
  */
 export const writeFilesRequestSchema = z.object({
-  externalId: externalIdSchema,
+  name: sandboxNameSchema,
   files: z
     .array(
       z.object({
@@ -104,13 +104,13 @@ export const writeFilesResponseSchema = z.object({
 export type WriteFilesResponse = z.infer<typeof writeFilesResponseSchema>;
 
 /**
- * writeFile(externalId, path, content) — the single-file form of writeFiles:
+ * writeFile(name, path, content) — the single-file form of writeFiles:
  * same rules (parents created, existing file overwritten, same size cap),
  * one file, no array to wrap and unwrap. Kept as its own verb so the wire,
  * the SDK and the docs stay one name per intent.
  */
 export const writeFileRequestSchema = z.object({
-  externalId: externalIdSchema,
+  name: sandboxNameSchema,
   path: sandboxPathSchema,
   /** The file's bytes, base64. Text is just UTF-8 bytes — the SDK encodes strings transparently. */
   contentBase64: fileContentSchema,
@@ -126,14 +126,14 @@ export const writeFileResponseSchema = z.object({
 export type WriteFileResponse = z.infer<typeof writeFileResponseSchema>;
 
 /**
- * readFile(externalId, path) — returns one file's bytes. A file over the size
+ * readFile(name, path) — returns one file's bytes. A file over the size
  * limit is refused outright (413 naming the actual size), never truncated:
  * unlike exec output, where a capped log still informs, a truncated file is
  * simply a corrupt file — an honest error beats delivering damaged goods.
  * Missing file: 404. Directory or other non-regular file: 400.
  */
 export const readFileRequestSchema = z.object({
-  externalId: externalIdSchema,
+  name: sandboxNameSchema,
   path: sandboxPathSchema,
 });
 
@@ -148,7 +148,7 @@ export const readFileResponseSchema = z.object({
 export type ReadFileResponse = z.infer<typeof readFileResponseSchema>;
 
 /**
- * readFiles(externalId, paths) — the batch form of readFile, all or nothing:
+ * readFiles(name, paths) — the batch form of readFile, all or nothing:
  * one missing path fails the whole call (404 naming it), same for a
  * non-regular file (400) or a per-file size overrun (413). A partial result
  * is not offered on purpose — a batch read that silently drops a file is a
@@ -157,7 +157,7 @@ export type ReadFileResponse = z.infer<typeof readFileResponseSchema>;
  * by READ_FILES_TOTAL_LIMIT_BYTES (413 when the haul exceeds it).
  */
 export const readFilesRequestSchema = z.object({
-  externalId: externalIdSchema,
+  name: sandboxNameSchema,
   paths: z.array(sandboxPathSchema).min(1),
 });
 
