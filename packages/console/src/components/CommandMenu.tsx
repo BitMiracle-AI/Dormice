@@ -6,8 +6,7 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
-import { NAV_GROUPS } from '@/components/AppSidebar';
-import { Button } from '@/components/ui/button';
+import { menuButtonClass, NAV_GROUPS } from '@/components/nav';
 import {
   CommandDialog,
   CommandEmpty,
@@ -17,6 +16,7 @@ import {
   CommandList,
 } from '@/components/ui/command';
 import { Kbd } from '@/components/ui/kbd';
+import { SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar';
 import { STATE_LABELS } from '@/features/sandboxes/format';
 import { useSandboxes } from '@/features/sandboxes/hooks/useSandboxes';
 import { MOCK_PAGES_ENABLED } from '@/lib/mock';
@@ -50,7 +50,8 @@ function SandboxItems({ onGo }: { onGo: (name: string) => void }) {
 }
 
 /**
- * ⌘K / Ctrl+K 命令面板:跳页面、按 name 跳沙箱。挂在 AppShell 上,
+ * ⌘K / Ctrl+K 命令面板:跳页面、按 name 跳沙箱。入口是侧栏顶部的
+ * 菜单项(顶栏 2026-07-16 删除:面包屑与页面自带页头是第二份真相),
  * 登录后全站可用;它只做导航 — 动作(销毁/重建)留在各自页面的确认
  * 流程里,快捷键不该绕过"删了就没有了"的那道闸。
  */
@@ -84,16 +85,16 @@ export function CommandMenu() {
 
   return (
     <>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="ml-auto text-muted-foreground"
-        onClick={() => setOpen(true)}
-      >
-        <HugeiconsIcon icon={Search01Icon} className="size-4" />
-        搜索
-        <Kbd>⌘K</Kbd>
-      </Button>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          className={menuButtonClass}
+          onClick={() => setOpen(true)}
+        >
+          <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
+          <span>搜索</span>
+          <Kbd className="ml-auto">⌘K</Kbd>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
       <CommandDialog
         open={open}
         onOpenChange={setOpen}
