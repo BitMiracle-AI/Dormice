@@ -61,7 +61,7 @@ const LEDGER_STATE: Record<ContainerState, SandboxState> = {
  *                                survivable instead of silent data loss.
  * - container and disk gone   -> the sandbox truly is gone (an interrupted
  *                                destroy, a wiped data dir): the row is
- *                                deleted and the external id is free again
+ *                                deleted and the name is free again
  * - container without a row   -> destroyed; without a row it has no user
  *                                key, so nothing could ever reach it
  * - disk owned by nothing     -> removed; leaked disks silently eat the host

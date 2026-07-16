@@ -89,7 +89,7 @@ describe('startup reconcile', () => {
 
     const result = await reconcile(db, executor, locks);
     // Not a death: the sandbox is recorded as stopped, its row keeps the
-    // external id, and the next acquire rebuilds the container from the disk.
+    // name, and the next acquire rebuilds the container from the disk.
     expect(result).toEqual({ ...NONE, repairedStates: 1 });
     expect(findByName(db, 'alice')?.state).toBe('stopped');
     expect(await executor.listDisks()).toContain(row.id);
@@ -111,7 +111,7 @@ describe('startup reconcile', () => {
   it('destroys a container no row points at', async () => {
     const { db, executor, locks } = setup();
     // Crash between executor.create() and createSandbox(): a container was
-    // born but never entered the ledger, so no external id can ever reach it.
+    // born but never entered the ledger, so no name can ever reach it.
     await executor.create('orphan');
 
     const result = await reconcile(db, executor, locks);

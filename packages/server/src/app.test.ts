@@ -107,14 +107,18 @@ describe('POST /acquireSandbox', () => {
     expect(executor.stateOf(body.sandbox.id)).toBe('running');
   });
 
-  it('is idempotent: same external id returns the same sandbox', async () => {
+  it('is idempotent: the same name returns the same sandbox', async () => {
     const { app } = testApp();
     const first = (await acquire(app, { name: 'alice' })).json();
     const second = (await acquire(app, { name: 'alice' })).json();
     expect(second.sandbox.id).toBe(first.sandbox.id);
+    // `created` is how a caller sees which of the two happened — the flag
+    // must not lie in either direction.
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
   });
 
-  it('gives different external ids different sandboxes', async () => {
+  it('gives different names different sandboxes', async () => {
     const { app } = testApp();
     const alice = (await acquire(app, { name: 'alice' })).json();
     const bob = (await acquire(app, { name: 'bob' })).json();
@@ -307,6 +311,8 @@ describe('acquire wakes cold sandboxes', () => {
     const woken = (await acquire(app, { name: 'alice' })).json();
     expect(woken.sandbox.id).toBe(id);
     expect(woken.sandbox.state).toBe('active');
+    // A wake is not a creation, however cold the start.
+    expect(woken.created).toBe(false);
     expect(executor.stateOf(id)).toBe('running');
   });
 
@@ -431,6 +437,8 @@ describe('acquire after reality moved behind the ledger', () => {
     const again = (await acquire(app, { name: 'alice' })).json();
     expect(again.status).toBe('ready');
     expect(again.sandbox.id).not.toBe(created.sandbox.id);
+    // The old incarnation's row is gone, so this acquire genuinely creates.
+    expect(again.created).toBe(true);
     // This time the sandbox is real.
     expect(executor.stateOf(again.sandbox.id)).toBe('running');
   });
@@ -439,8 +447,8 @@ describe('acquire after reality moved behind the ledger', () => {
     // A stopped sandbox is an exited container plus a disk, and a routine
     // `docker container prune` eats the container object. The disk — the
     // sandbox's actual data — survives, so the sandbox must survive too:
-    // same key, same sandboxId, rebuilt from the disk. Never a silent
-    // fresh empty box.
+    // same name, same id, rebuilt from the disk. Never a silent fresh
+    // empty box.
     const { app, db, executor, locks } = testApp();
     const created = (
       await acquire(app, {
@@ -459,6 +467,9 @@ describe('acquire after reality moved behind the ledger', () => {
     const again = (await acquire(app, { name: 'alice' })).json();
     expect(again.sandbox.id).toBe(id);
     expect(again.sandbox.state).toBe('active');
+    // The survival must not be misreported as a creation — a caller who
+    // trusts `created` would wrongly assume an empty /home/user.
+    expect(again.created).toBe(false);
     expect(executor.stateOf(id)).toBe('running');
   });
 });
@@ -1149,6 +1160,9 @@ describe('the archiver through the app', () => {
     const deadline = Date.now() + 5_000;
     while (true) {
       const body = (await acquire(app, { name })).json();
+      // Only an already-archived sandbox restores, and the ready it lands
+      // on is a wake — no arm of this poll loop may ever claim `created`.
+      expect(body.created).toBe(false);
       if (body.status === 'ready') return body;
       expect(body.status).toBe('restoring');
       expect(body.progress.phase).toMatch(/downloading|extracting/);

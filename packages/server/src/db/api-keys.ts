@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { and, desc, eq, isNull, lt, or } from 'drizzle-orm';
+import { and, desc, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { recordActivity } from './activity';
 import type { Db } from './db';
 import { type ApiKeyRow, apiKeys } from './schema';
@@ -60,9 +60,19 @@ export function findActiveApiKeyByName(
     .get();
 }
 
-/** Every key ever minted, revoked ones included — the rotation history. */
+/**
+ * Every key ever minted, revoked ones included — the rotation history.
+ * createdAt has millisecond granularity, so two keys minted back-to-back
+ * can tie; rowid breaks the tie by insertion order, and it is trustworthy
+ * here because api_keys rows are never deleted (revoke is soft), so rowids
+ * are never reused.
+ */
 export function listApiKeys(db: Db): ApiKeyRow[] {
-  return db.select().from(apiKeys).orderBy(desc(apiKeys.createdAt)).all();
+  return db
+    .select()
+    .from(apiKeys)
+    .orderBy(desc(apiKeys.createdAt), desc(sql`rowid`))
+    .all();
 }
 
 /**

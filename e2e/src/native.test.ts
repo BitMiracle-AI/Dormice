@@ -1,7 +1,7 @@
 import { DEFAULT_LIFECYCLE_POLICY, Dormice } from '@dormice/sdk';
 import { describe, expect, inject, it } from 'vitest';
 
-// One daemon serves the whole run, so every test uses its own external id to
+// One daemon serves the whole run, so every test uses its own sandbox name to
 // stay independent of the others.
 function client(token = inject('dormiceToken')) {
   return new Dormice({ endpoint: inject('dormiceEndpoint'), token });

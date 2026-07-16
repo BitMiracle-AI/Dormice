@@ -4,7 +4,7 @@ export const SKIPPED: unique symbol = Symbol('skipped');
 /**
  * The single serialization point for everything that operates on one
  * sandbox: acquire, destroy, the idle scanner's cooling moves and the
- * reconciler's repairs all take the sandbox's external-id slot before they
+ * reconciler's repairs all take the sandbox's name slot before they
  * check-then-act. Each of those verbs has seconds of executor work between
  * its check and its act (create builds a disk, freeze can hold 45s in
  * memory.reclaim), and interleaving in that gap produced real corruption:

@@ -23,7 +23,7 @@ function create(db: Db, name = 'user-1') {
 }
 
 describe('ledger', () => {
-  it('creates a sandbox in active state and finds it by external id', () => {
+  it('creates a sandbox in active state and finds it by name', () => {
     const db = testDb();
     const created = create(db);
     expect(created.state).toBe('active');
@@ -31,7 +31,7 @@ describe('ledger', () => {
     expect(findByName(db, 'someone-else')).toBeUndefined();
   });
 
-  it('enforces one sandbox per external id at the database level', () => {
+  it('enforces one sandbox per name at the database level', () => {
     const db = testDb();
     create(db);
     expect(() => create(db)).toThrow(/UNIQUE/);
