@@ -6,7 +6,7 @@ import {
   scrypt,
   timingSafeEqual,
 } from 'node:crypto';
-import type { onRequestAsyncHookHandler } from 'fastify';
+import type { FastifyRequest, onRequestAsyncHookHandler } from 'fastify';
 
 // Hand-rolled instead of util.promisify: promisify picks the overload
 // without the options argument, and the cost parameters live there.
@@ -134,9 +134,32 @@ export function verifySession(
 }
 
 /**
+ * The console-session leg shared verbatim by both auth hooks: cookie
+ * present, an account exists (secret non-null), the CSRF header rode along
+ * (see CONSOLE_HEADER), and the HMAC verifies. The session secret is
+ * fetched per request, not captured at startup: setup can replace the
+ * account (and its secret) while the daemon runs, and the arbiter must
+ * judge against the current one. Null means no account exists yet — no
+ * cookie can be valid.
+ */
+function sessionCookieValid(
+  request: FastifyRequest,
+  getSessionSecret: () => string | null,
+): boolean {
+  const cookie = request.cookies?.[SESSION_COOKIE];
+  const secret = getSessionSecret();
+  return Boolean(
+    cookie &&
+      secret !== null &&
+      request.headers[CONSOLE_HEADER] !== undefined &&
+      verifySession(secret, cookie),
+  );
+}
+
+/**
  * The single arbiter of who may call the API (/healthz stays open —
  * liveness probes have no secrets). Two credentials open the same door:
- * a Bearer credential (SDK, CLI, curl — the env token or any active API
+ * a Bearer credential (SDK, CLI, curl — the env token or any live API
  * key, adjudicated by verifyCredential) and the web console's session
  * cookie (which additionally requires the console header, see above). A
  * second route surface with its own auth would be a second truth.
@@ -146,11 +169,6 @@ export function verifySession(
  * closure, one truth, two dialects. The 'Bearer ' prefix is public
  * framing, not a secret, so stripping it needs no constant time; the
  * secret comparisons live inside verifyCredential.
- *
- * The session secret is fetched per request, not captured at startup: setup
- * can replace the account (and its secret) while the daemon runs, and the
- * arbiter must judge against the current one. Null means no account exists
- * yet — no cookie can be valid.
  */
 export function requireApiAuth(
   verifyCredential: (bareToken: string) => boolean,
@@ -162,14 +180,49 @@ export function requireApiAuth(
     if (bare !== null && verifyCredential(bare)) {
       return;
     }
-    const cookie = request.cookies?.[SESSION_COOKIE];
-    const secret = getSessionSecret();
-    if (
-      cookie &&
-      secret !== null &&
-      request.headers[CONSOLE_HEADER] !== undefined &&
-      verifySession(secret, cookie)
-    ) {
+    if (sessionCookieValid(request, getSessionSecret)) {
+      return;
+    }
+    await reply.code(401).send({ message: 'missing or invalid API token' });
+  };
+}
+
+/**
+ * The admin gate for the apiKey management verbs: only the env token
+ * (Bearer) or a console session may pass. A key that is otherwise valid
+ * gets an honest 403 instead of a silent 401 — key-manages-key would let
+ * one leaked credential mint itself an unrevoked successor and revoke
+ * every legitimate peer, so the refusal names the rule. The console-setup
+ * door (routes/console.ts) rests on the same doctrine: a machine
+ * credential must not escalate into managing credentials.
+ *
+ * Leg order matters twice. The isLiveApiKey lookup runs only after both
+ * accepting legs failed, so a console session with a stray key header
+ * still passes, and the ledger is consulted only for requests already
+ * being refused. And isLiveApiKey must be a pure read that never stamps
+ * lastUsedAt — the request is being refused, not honored. A disabled or
+ * expired key is no longer a valid credential and falls through to the
+ * same 401 as garbage: a 403 for it would leak that the row exists.
+ */
+export function requireAdminAuth(
+  isEnvToken: (bareToken: string) => boolean,
+  isLiveApiKey: (bareToken: string) => boolean,
+  getSessionSecret: () => string | null,
+): onRequestAsyncHookHandler {
+  return async (request, reply) => {
+    const header = request.headers.authorization;
+    const bare = header?.startsWith('Bearer ') ? header.slice(7) : null;
+    if (bare !== null && isEnvToken(bare)) {
+      return;
+    }
+    if (sessionCookieValid(request, getSessionSecret)) {
+      return;
+    }
+    if (bare !== null && isLiveApiKey(bare)) {
+      await reply.code(403).send({
+        message:
+          'API keys cannot manage API keys — use DORMICE_API_TOKEN or the console',
+      });
       return;
     }
     await reply.code(401).send({ message: 'missing or invalid API token' });

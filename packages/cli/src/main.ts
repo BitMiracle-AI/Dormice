@@ -8,6 +8,8 @@ import path from 'node:path';
 import { Command } from 'commander';
 import {
   apikeyCreate,
+  apikeyDisable,
+  apikeyEnable,
   apikeyLs,
   apikeyRevoke,
   clientFromEnv,
@@ -208,8 +210,14 @@ apikey
   .command('create')
   .description('Mint an API key; the token is printed once and never again')
   .argument('<name>', 'a human handle for the key, e.g. ci or laptop')
-  .action(async (name: string) => {
-    console.log(await apikeyCreate(clientFromEnv(process.env), name));
+  .option(
+    '--expires <date>',
+    'expiry date (YYYY-MM-DD, works through that day); omit for never',
+  )
+  .action(async (name: string, options: { expires?: string }) => {
+    console.log(
+      await apikeyCreate(clientFromEnv(process.env), name, options.expires),
+    );
   });
 
 apikey
@@ -217,6 +225,22 @@ apikey
   .description('List every API key ever minted, revoked ones included')
   .action(async () => {
     console.log(await apikeyLs(clientFromEnv(process.env)));
+  });
+
+apikey
+  .command('disable')
+  .description('Park an API key reversibly — it stops working until re-enabled')
+  .argument('<name>', 'name of the key to disable')
+  .action(async (name: string) => {
+    console.log(await apikeyDisable(clientFromEnv(process.env), name));
+  });
+
+apikey
+  .command('enable')
+  .description('Resume a parked API key')
+  .argument('<name>', 'name of the key to enable')
+  .action(async (name: string) => {
+    console.log(await apikeyEnable(clientFromEnv(process.env), name));
   });
 
 apikey

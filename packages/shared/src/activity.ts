@@ -33,6 +33,12 @@ export const ACTIVITY_KINDS = [
   'ingress-updated',
   /** An operator minted an API key (createApiKey). The token itself is never logged. */
   'apikey-created',
+  /** updateApiKey changed a key's name or expiry; the detail names what moved. */
+  'apikey-updated',
+  /** An operator parked an API key (updateApiKey disabled) — reversible, unlike revoke. */
+  'apikey-disabled',
+  /** An operator resumed a parked API key — the credential opens doors again. */
+  'apikey-enabled',
   /** An operator revoked an API key (revokeApiKey) — the credential died here. */
   'apikey-revoked',
   /**

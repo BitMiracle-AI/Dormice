@@ -1,5 +1,6 @@
 import {
   type ApiKey,
+  apiKeyStatus,
   Dormice,
   type ReadFileResult,
   type Sandbox,
@@ -270,17 +271,74 @@ export async function templateRm(
 }
 
 /**
- * `dor apikey create <name>`: mint an API key. The token line is the one
- * and only time the key material exists outside the daemon's hash — the
- * warning is part of the output, not decoration.
+ * The CLI speaks names; the wire speaks ids (names are renameable, so the
+ * id is the stable address). One resolver, used by every verb that edits a
+ * key. "Not revoked" is the filter, deliberately wider than "live":
+ * disabled and expired keys still hold their name, and the operator must
+ * be able to enable or revoke them by it.
+ */
+async function resolveApiKeyId(
+  client: Dormice,
+  name: string,
+): Promise<string | null> {
+  const keys = await client.listApiKeys();
+  return keys.find((k) => k.name === name && k.revokedAt === null)?.id ?? null;
+}
+
+/**
+ * Strictly YYYY-MM-DD, expiring at the END of that local day — "expires
+ * 2026-08-01" naturally reads as "works through August 1st", and the
+ * console's date picker uses the same semantics.
+ */
+function parseExpiresDate(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
+    throw new Error(
+      `--expires must be a date like 2026-12-31 (got "${printable(value)}")`,
+    );
+  }
+  const [, year, month, day] = match;
+  const endOfDay = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    23,
+    59,
+    59,
+    999,
+  );
+  // The Date constructor rolls impossible dates over (Feb 31 -> Mar 3)
+  // instead of failing; a round-trip check keeps the refusal honest.
+  if (
+    endOfDay.getFullYear() !== Number(year) ||
+    endOfDay.getMonth() !== Number(month) - 1 ||
+    endOfDay.getDate() !== Number(day)
+  ) {
+    throw new Error(`--expires: "${printable(value)}" is not a real date`);
+  }
+  return endOfDay.toISOString();
+}
+
+/**
+ * `dor apikey create <name> [--expires YYYY-MM-DD]`: mint an API key. The
+ * token line is the one and only time the key material exists outside the
+ * daemon's hash — the warning is part of the output, not decoration.
  */
 export async function apikeyCreate(
   client: Dormice,
   name: string,
+  expires?: string,
 ): Promise<string> {
-  const { apiKey, token } = await client.createApiKey(name);
+  const expiresAt =
+    expires === undefined ? undefined : parseExpiresDate(expires);
+  const { apiKey, token } = await client.createApiKey(
+    name,
+    expiresAt ? { expiresAt } : undefined,
+  );
   return (
-    `Created API key "${printable(apiKey.name)}" (prefix ${apiKey.prefix}).\n` +
+    `Created API key "${printable(apiKey.name)}" (prefix ${apiKey.prefix}` +
+    (apiKey.expiresAt ? `, expires ${apiKey.expiresAt}` : '') +
+    ').\n' +
     `${token}\n` +
     'Store it now — it will never be shown again.'
   );
@@ -292,12 +350,14 @@ export async function apikeyLs(client: Dormice): Promise<string> {
   if (keys.length === 0) {
     return 'No API keys.';
   }
+  const now = Date.now();
   const columns: { header: string; value: (k: ApiKey) => string }[] = [
     { header: 'NAME', value: (k) => k.name },
     { header: 'PREFIX', value: (k) => k.prefix },
     { header: 'CREATED', value: (k) => k.createdAt },
     { header: 'LAST USED', value: (k) => k.lastUsedAt ?? 'never' },
-    { header: 'STATUS', value: (k) => (k.revokedAt ? 'revoked' : 'active') },
+    { header: 'EXPIRES', value: (k) => k.expiresAt ?? 'never' },
+    { header: 'STATUS', value: (k) => apiKeyStatus(k, now) },
   ];
   return renderTable(
     columns.map((column) => column.header),
@@ -306,16 +366,46 @@ export async function apikeyLs(client: Dormice): Promise<string> {
 }
 
 /**
- * `dor apikey revoke <name>`: kill the active key under a name. The false
- * branch is said out loud — a silent miss here would leave a leaked key
- * alive behind a typo.
+ * `dor apikey revoke <name>`: kill the non-revoked key under a name. The
+ * false branch is said out loud — a silent miss here would leave a leaked
+ * key alive behind a typo.
  */
 export async function apikeyRevoke(
   client: Dormice,
   name: string,
 ): Promise<string> {
-  const { revoked } = await client.revokeApiKey(name);
+  const id = await resolveApiKeyId(client, name);
+  const revoked = id === null ? false : (await client.revokeApiKey(id)).revoked;
   return revoked
     ? `Revoked API key "${printable(name)}" — it stops working immediately.`
     : `No active API key named "${printable(name)}" — nothing to revoke.`;
+}
+
+/**
+ * `dor apikey disable <name>`: park a key reversibly — it stops working on
+ * the next request but keeps its name and history, unlike revoke.
+ */
+export async function apikeyDisable(
+  client: Dormice,
+  name: string,
+): Promise<string> {
+  const id = await resolveApiKeyId(client, name);
+  if (id === null) {
+    throw new Error(`no API key named "${printable(name)}"`);
+  }
+  await client.updateApiKey(id, { disabled: true });
+  return `Disabled API key "${printable(name)}" — it stops working until re-enabled.`;
+}
+
+/** `dor apikey enable <name>`: resume a parked key. */
+export async function apikeyEnable(
+  client: Dormice,
+  name: string,
+): Promise<string> {
+  const id = await resolveApiKeyId(client, name);
+  if (id === null) {
+    throw new Error(`no API key named "${printable(name)}"`);
+  }
+  await client.updateApiKey(id, { disabled: false });
+  return `Enabled API key "${printable(name)}".`;
 }

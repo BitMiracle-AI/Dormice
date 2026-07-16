@@ -78,6 +78,11 @@ export function since(iso: string): string {
   return formatDuration((Date.now() - Date.parse(iso)) / 1000);
 }
 
+/** 距离某时刻还有多久:"6天3小时"(调用方自己加"后");已过去则为"0秒"。 */
+export function until(iso: string): string {
+  return formatDuration((Date.parse(iso) - Date.now()) / 1000);
+}
+
 /**
  * 沙箱的下一步降温:与 daemon 扫描器同一套语义 — 空闲时长从
  * lastActiveAt 起算,按当前状态取对应旋钮,一次只降一档。旋钮为 null

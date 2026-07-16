@@ -247,6 +247,18 @@ export const apiKeys = sqliteTable(
     createdAt: text('created_at').notNull(),
     /** Null = never used. Written with 60s granularity, not per request. */
     lastUsedAt: text('last_used_at'),
+    /**
+     * Null = never expires. Always written through normalizeIso (exact
+     * toISOString shape) so the liveness filter's string comparison against
+     * "now" is chronologically sound — wire input has variable precision.
+     */
+    expiresAt: text('expires_at'),
+    /**
+     * Null = enabled. The reversible half of revocation: set/cleared by
+     * updateApiKey, and the name stays held while disabled — only revoke
+     * frees a name.
+     */
+    disabledAt: text('disabled_at'),
     /** Null = active. Set once by revokeApiKey; never cleared. */
     revokedAt: text('revoked_at'),
   },

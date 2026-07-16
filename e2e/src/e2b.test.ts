@@ -80,7 +80,7 @@ describe('official e2b SDK against the daemon', () => {
       endpoint: inject('dormiceEndpoint'),
       token: inject('dormiceToken'),
     });
-    const { token } = await dormice.createApiKey('e2b-face');
+    const { apiKey, token } = await dormice.createApiKey('e2b-face');
     try {
       const sbx = await Sandbox.create({
         ...connection(),
@@ -93,7 +93,7 @@ describe('official e2b SDK against the daemon', () => {
         await sbx.kill();
       }
     } finally {
-      await dormice.revokeApiKey('e2b-face');
+      await dormice.revokeApiKey(apiKey.id);
     }
     // Revoked: the same key is refused at the control-plane door.
     await expect(

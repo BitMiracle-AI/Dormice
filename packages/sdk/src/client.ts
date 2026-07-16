@@ -52,8 +52,10 @@ import {
   type SetIngressResponse,
   setIngressResponseSchema,
   type Template,
+  type UpdateApiKeyResponse,
   type UpdateMetadataResponse,
   type UpdatePolicyResponse,
+  updateApiKeyResponseSchema,
   updateMetadataResponseSchema,
   updatePolicyResponseSchema,
   type WriteFileResponse,
@@ -438,10 +440,23 @@ export class Dormice {
    * be revoked without touching the server. The returned `token` (64 hex
    * chars) is shown here EXACTLY ONCE: the daemon stores only its hash, so
    * no later call can retrieve it. Refused with a 409 while an active key
-   * already answers to this name.
+   * already answers to this name. Optional `expiresAt` (ISO) mints a TTL
+   * key; omitted means never expires.
+   *
+   * The apiKey management verbs are admin-only: this client must be
+   * authenticated with DORMICE_API_TOKEN itself — a ledger key gets an
+   * honest 403 (keys cannot manage keys).
    */
-  async createApiKey(name: string): Promise<CreateApiKeyResponse> {
-    const data = await this.rpc('createApiKey', { name });
+  async createApiKey(
+    name: string,
+    options?: { expiresAt?: string },
+  ): Promise<CreateApiKeyResponse> {
+    const data = await this.rpc('createApiKey', {
+      name,
+      ...(options?.expiresAt !== undefined
+        ? { expiresAt: options.expiresAt }
+        : {}),
+    });
     return createApiKeyResponseSchema.parse(data);
   }
 
@@ -452,12 +467,28 @@ export class Dormice {
   }
 
   /**
-   * Revokes the active key under a name — the credential stops working on
-   * the very next request; the row stays listed as rotation history.
-   * Idempotent: an unknown or already-revoked name answers `revoked: false`.
+   * Edits a live key in place, addressed by id (names are renameable — the
+   * id is the stable handle). An absent field is untouched; `expiresAt:
+   * null` clears to never-expires; `disabled` parks or resumes the key
+   * reversibly (unlike revoke). 404 on an unknown id, 409 on a revoked row
+   * or a name collision with a live key.
    */
-  async revokeApiKey(name: string): Promise<RevokeApiKeyResponse> {
-    const data = await this.rpc('revokeApiKey', { name });
+  async updateApiKey(
+    id: string,
+    patch: { name?: string; expiresAt?: string | null; disabled?: boolean },
+  ): Promise<UpdateApiKeyResponse> {
+    const data = await this.rpc('updateApiKey', { id, ...patch });
+    return updateApiKeyResponseSchema.parse(data);
+  }
+
+  /**
+   * Revokes the key with this id — the credential stops working on the
+   * very next request; the row stays listed as rotation history and the
+   * name is freed. Idempotent: an unknown or already-revoked id answers
+   * `revoked: false`.
+   */
+  async revokeApiKey(id: string): Promise<RevokeApiKeyResponse> {
+    const data = await this.rpc('revokeApiKey', { id });
     return revokeApiKeyResponseSchema.parse(data);
   }
 

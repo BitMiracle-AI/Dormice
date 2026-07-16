@@ -29,7 +29,9 @@ or a reverse-proxy domain (then use `https://their-domain`). Auth is one
 API token (created by the installer, hex): ask the user for the endpoint
 and token, conventionally held in `DORMICE_ENDPOINT` / `DORMICE_API_TOKEN`.
 API keys minted in the console (or with `dor apikey create <name>`) work
-everywhere the token does — same variables, revocable per client.
+everywhere the token does — same variables, revocable per client — except
+the apiKey management verbs themselves, which require the env token
+(keys cannot manage keys).
 
 ## Pick an entry path
 
@@ -118,8 +120,10 @@ an existing sandbox's lifecycle policy in place — no wake, no destroy),
 `execCommand`, `writeFiles` / `writeFile`, `readFile` / `readFiles`,
 `rebuildSandbox` (fresh container, `/home/user` kept), `destroySandbox`,
 `registerTemplate` / `listTemplates` / `removeTemplate`,
-`createApiKey` / `listApiKeys` / `revokeApiKey` (revocable peers of the
-API token; the create response shows the key once, never again),
+`createApiKey` / `listApiKeys` / `updateApiKey` / `revokeApiKey`
+(revocable peers of the API token with optional expiry and a reversible
+disable switch; the create response shows the key once, never again;
+these four verbs accept only the env token),
 `getHostMetrics`, `getSandboxMetrics` / `listSandboxMetrics` (live
 resource samples; never wake anything), `listSandboxImages` (who still
 runs an old template image), `listActivity` (recent daemon history),

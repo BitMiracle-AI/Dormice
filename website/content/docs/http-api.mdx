@@ -46,9 +46,10 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | `POST /registerTemplate` | upsert name → image | 400 `'base'` is reserved |
 | `POST /listTemplates` | every registered template | — |
 | `POST /removeTemplate` | unregister; idempotent | 409 while sandboxes still use it (names them) |
-| `POST /createApiKey` | mint an [API key](#api-keys); the token appears in this response once, never again | 409 while an active key already has this name |
+| `POST /createApiKey` | mint an [API key](#api-keys), optionally with an `expiresAt`; the token appears in this response once, never again | 409 while a non-revoked key already has this name |
 | `POST /listApiKeys` | every key ever minted, revoked ones included, newest first — no secrets | — |
-| `POST /revokeApiKey` | soft-revoke the active key under a name; idempotent (`revoked: false` when none was) | — |
+| `POST /updateApiKey` | edit a key by `id`: rename, change/clear `expiresAt`, park/resume via `disabled` — absent fields untouched | 404 unknown id; 409 revoked row or name collision |
+| `POST /revokeApiKey` | soft-revoke a key by `id`; idempotent (`revoked: false` when none was) | — |
 | `POST /getHostMetrics` | host snapshot; never wakes anything | — |
 | `POST /getSandboxMetrics` | one sandbox's live CPU/memory/disk sample; `sample` is `null` when nothing is running | 404 unknown name |
 | `POST /listSandboxMetrics` | every measurable sandbox's sample in one answer | — |
@@ -106,20 +107,34 @@ signal that the policy/template/metadata in the request were ignored.
 `DORMICE_API_TOKEN` works forever, but rotating it means editing
 `/etc/dormice/env` and restarting the daemon. API keys are its
 full-power, revocable peers: mint one per client with
-`POST /createApiKey {"name": "ci"}`, hand out the returned 64-hex
-`token`, and when a key leaks, `POST /revokeApiKey {"name": "ci"}` kills
-exactly that credential on its next request — no config edit, no
-restart, no other client disturbed.
+`POST /createApiKey {"name": "ci"}` (optionally with
+`"expiresAt": "<ISO>"` for a TTL key), hand out the returned 64-hex
+`token`, and when a key leaks, revoke it — the credential dies on its
+next request, no config edit, no restart, no other client disturbed.
 
 The token appears in the create response **once**. The daemon stores
 only its hash, so nothing can ever show it again — copy it then. Keys
 open every door the env token does, the
 [E2B surface](/docs/e2b-sdks) included (`e2b_<key>` works as an E2B API
-key); the one exception is console account setup/reset, which accepts
-only the env token — a leaked machine credential must not be able to
-take over the human account. Each key row carries `lastUsedAt` (written
-with 60-second granularity), and revoked rows stay in `listApiKeys` as
-your rotation history.
+key), with exactly two exceptions:
+
+- **Console account setup/reset** accepts only the env token — a leaked
+  machine credential must not be able to take over the human account.
+- **The four apiKey verbs themselves** (`createApiKey`, `listApiKeys`,
+  `updateApiKey`, `revokeApiKey`) accept only the env token or a console
+  session. A key that could manage keys is a self-replication ladder —
+  one leaked credential minting itself an unrevoked successor — so a
+  valid key gets an honest 403 on these routes.
+
+Each key has two handles: `name`, the human label (renameable through
+`updateApiKey`), and `id`, the stable address `updateApiKey` and
+`revokeApiKey` take. Three ways a key stops working, with different
+semantics: **disabling** (`updateApiKey {"disabled": true}`) is a
+reversible hold; **expiry** (`expiresAt`, extendable or clearable with
+`"expiresAt": null`) happens on its own; **revoking** is final, keeps
+the row as rotation history, and is the only one that frees the name
+for reuse. Each key row carries `lastUsedAt` (written with 60-second
+granularity), and revoked rows stay in `listApiKeys` forever.
 
 ## Commands and files on the wire
 

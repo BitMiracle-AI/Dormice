@@ -22,6 +22,9 @@ export const ACTIVITY_KIND_LABELS: Record<ActivityKind, string> = {
   'daemon-started': 'daemon 启动',
   'ingress-updated': '域名配置',
   'apikey-created': '密钥创建',
+  'apikey-updated': '密钥调整',
+  'apikey-disabled': '密钥停用',
+  'apikey-enabled': '密钥启用',
   'apikey-revoked': '密钥吊销',
   'upgrade-started': '发起升级',
 };
@@ -59,6 +62,12 @@ export const ACTIVITY_KIND_STYLES: Record<ActivityKind, string> = {
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
   'apikey-created':
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
+  'apikey-updated':
+    'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
+  'apikey-disabled':
+    'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400',
+  'apikey-enabled':
+    'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
   'apikey-revoked':
     'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400',
   'upgrade-started':
