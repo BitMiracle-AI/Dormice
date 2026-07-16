@@ -19,9 +19,9 @@ import {
  */
 export const sandboxes = sqliteTable('sandboxes', {
   /** UUID, never an autoincrement — ids must stay unique across machines. */
-  sandboxId: text('sandbox_id').primaryKey(),
-  /** The key acquire() is idempotent on: one sandbox per external id. */
-  externalId: text('external_id').notNull().unique(),
+  id: text('id').primaryKey(),
+  /** The caller-chosen name acquire() is idempotent on: one sandbox per name. */
+  name: text('name').notNull().unique(),
   state: text('state', { enum: SANDBOX_STATES }).notNull(),
   nodeId: text('node_id').notNull(),
   freezeAfterSeconds: integer('freeze_after_seconds').notNull(),
@@ -96,7 +96,7 @@ export const activity = sqliteTable('activity', {
   at: text('at').notNull(),
   kind: text('kind', { enum: ACTIVITY_KINDS }).notNull(),
   /** Null for events with no owning sandbox (orphan sweeps, daemon start). */
-  externalId: text('external_id'),
+  sandboxName: text('sandbox_name'),
   sandboxId: text('sandbox_id'),
   detail: text('detail').notNull(),
 });
@@ -116,10 +116,11 @@ export type ActivityRow = typeof activity.$inferSelect;
  * (DORMICE_METRICS_RETENTION_HOURS vs a fixed 30 days) and deletion path
  * (destroy cascades here, never there).
  *
- * Keyed by sandboxId, not externalId: rebuild replaces the shell but keeps
- * the sandboxId, so history stays continuous across rebuilds; destroy
- * deletes by the same key. No autoincrement id — rows have no "Nth entry"
- * meaning (unlike the activity ring, where id IS the ring position).
+ * Keyed by the sandbox's platform id, not its name: rebuild replaces the
+ * shell but keeps the id, so history stays continuous across rebuilds;
+ * destroy deletes by the same key. No autoincrement id of its own — rows
+ * have no "Nth entry" meaning (unlike the activity ring, where id IS the
+ * ring position).
  */
 export const sandboxMetricsSamples = sqliteTable(
   'sandbox_metrics_samples',

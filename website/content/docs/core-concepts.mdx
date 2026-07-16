@@ -58,6 +58,19 @@ or lost to a crash, and the sandbox's files survive every time. Only
 `destroySandbox` deletes the disk. [Sandbox
 persistence](/docs/persistence) is the full story.
 
+Every sandbox carries two identifiers, and they answer two different
+questions. The **name** is yours — a user id, a session id, a CI job
+name — and it is how every API call addresses the sandbox. Names are
+unique, but not the way most systems are: `acquireSandbox(name)` never
+rejects a duplicate — the same name always comes back to the same
+sandbox, waking or restoring it as needed (like `docker --name`, or a
+Kubernetes resource name). Destroy a sandbox and acquire its name again,
+and a brand-new sandbox answers under the old address; the response's
+`created` flag tells you which happened. The **id** is the platform's —
+a UUID minted at creation that identifies *this incarnation*: rebuilding
+keeps it, destroy-and-recreate mints a new one. You never pass `id` to
+an API call; it only appears in responses.
+
 ## The daemon
 
 A daemon is a program that runs in the background forever rather than

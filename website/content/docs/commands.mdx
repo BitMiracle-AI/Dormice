@@ -23,7 +23,7 @@ result.stdoutTruncated; // false — see "Output limits" below
 
 **A non-zero exit code is a result, not an error.** `execCommand`
 resolves with `exitCode: 1` — it does not throw. Errors are reserved for
-the protocol failing: 404 when no sandbox exists behind the key (one is
+the protocol failing: 404 when no sandbox exists behind the name (one is
 never silently created), 409 while a sandbox is mid-restore.
 
 ## Run a command from the CLI

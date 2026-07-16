@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import {
-  externalIdSchema,
   sandboxMetadataSchema,
+  sandboxNameSchema,
   sandboxSchema,
 } from './sandbox';
 
 /**
- * updateMetadata(externalId, metadata) — the update verb acquire deliberately
+ * updateMetadata(name, metadata) — the update verb acquire deliberately
  * is not. Without it, a sandbox could only ever be labeled at birth: the
  * fleet you already run would be un-groupable forever.
  *
@@ -19,7 +19,7 @@ import {
  * and the idle clock is NOT refreshed — relabeling is not sandbox activity.
  */
 export const updateMetadataRequestSchema = z.object({
-  externalId: externalIdSchema,
+  name: sandboxNameSchema,
   metadata: sandboxMetadataSchema,
 });
 

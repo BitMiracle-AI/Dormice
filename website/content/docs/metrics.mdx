@@ -46,7 +46,7 @@ a dashboard over N sandboxes costs one call, not N:
 
 ```ts
 const samples = await client.listSandboxMetrics();
-// [{ externalId, sandboxId, sample }, …]
+// [{ sandboxName, sandboxId, sample }, …]
 ```
 
 Only sandboxes with a running or frozen container appear; colder

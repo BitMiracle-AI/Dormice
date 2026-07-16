@@ -123,8 +123,8 @@ export const getHostMetrics = () => rpc<HostMetricsResponse>('/getHostMetrics');
 
 // One sandbox's point-in-time reading. Same principle: a frozen sandbox is
 // measured as it sleeps, a stopped one answers sample: null — never woken.
-export const getSandboxMetrics = (externalId: string) =>
-  rpc<GetSandboxMetricsResponse>('/getSandboxMetrics', { externalId });
+export const getSandboxMetrics = (name: string) =>
+  rpc<GetSandboxMetricsResponse>('/getSandboxMetrics', { name });
 
 // Every measurable sandbox in one answer — the list view's food. Presence
 // means measured: colder states are simply absent.
@@ -135,12 +135,12 @@ export const listSandboxMetrics = () =>
 // daemon buckets the answer (per-field maxima — spikes survive); a window
 // the daemon was down for shows the gap, never an interpolation.
 export const getSandboxMetricsHistory = (
-  externalId: string,
+  name: string,
   start: string,
   end: string,
 ) =>
   rpc<GetSandboxMetricsHistoryResponse>('/getSandboxMetricsHistory', {
-    externalId,
+    name,
     start,
     end,
   });
@@ -223,20 +223,18 @@ export const removeTemplate = (name: string) =>
 export const acquireSandbox = (request: AcquireRequest) =>
   rpc<AcquireResponse>('/acquireSandbox', request);
 
-export const destroySandbox = (externalId: string) =>
-  rpc<{ destroyed: boolean }>('/destroySandbox', { externalId });
+export const destroySandbox = (name: string) =>
+  rpc<{ destroyed: boolean }>('/destroySandbox', { name });
 
 // Swap the container, keep /home/user: the next use starts on the daemon's
 // current base image.
-export const rebuildSandbox = (externalId: string) =>
-  rpc<{ sandbox: Sandbox }>('/rebuildSandbox', { externalId });
+export const rebuildSandbox = (name: string) =>
+  rpc<{ sandbox: Sandbox }>('/rebuildSandbox', { name });
 
 // Patch the stored lifecycle policy in place — the update verb acquire is
 // not. Ledger-only: nothing wakes, the idle clock keeps running.
-export const updatePolicy = (
-  externalId: string,
-  policy: LifecyclePolicyOverride,
-) => rpc<{ sandbox: Sandbox }>('/updatePolicy', { externalId, policy });
+export const updatePolicy = (name: string, policy: LifecyclePolicyOverride) =>
+  rpc<{ sandbox: Sandbox }>('/updatePolicy', { name, policy });
 
 // The terminal's key: trades the session cookie for one sandbox's envd
 // access token, so the browser can speak to the envd surface directly.

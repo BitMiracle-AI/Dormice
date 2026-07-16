@@ -52,8 +52,12 @@ export const activityEventSchema = z.object({
   /** ISO 8601 UTC. */
   at: z.string(),
   kind: activityKindSchema,
-  /** Null for events with no owning sandbox (orphan sweeps, daemon start). */
-  externalId: z.string().nullable(),
+  /**
+   * Null for events with no owning sandbox (orphan sweeps, daemon start).
+   * Prefixed because they reference another entity: a bare `name` here
+   * would read as the event's own name (`id` above already is its own).
+   */
+  sandboxName: z.string().nullable(),
   sandboxId: z.string().nullable(),
   /** One short line of context: which actor, which threshold, what was repaired. */
   detail: z.string(),

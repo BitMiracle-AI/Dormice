@@ -21,12 +21,12 @@ import { useDestroySandbox } from '../hooks/useSandboxes';
  * so the dialog must live outside it — a trigger inside would vanish).
  */
 export function DestroySandboxDialog({
-  externalId,
+  name,
   open,
   onOpenChange,
   onDestroyed,
 }: {
-  externalId: string;
+  name: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDestroyed?: () => void;
@@ -34,11 +34,9 @@ export function DestroySandboxDialog({
   const mutation = useDestroySandbox();
 
   const destroy = () =>
-    mutation.mutate(externalId, {
+    mutation.mutate(name, {
       onSuccess: ({ destroyed }) => {
-        toast.success(
-          destroyed ? `已销毁 ${externalId}` : `${externalId} 本来就不存在`,
-        );
+        toast.success(destroyed ? `已销毁 ${name}` : `${name} 本来就不存在`);
         onDestroyed?.();
       },
       onError: (error) => toast.error(error.message),
@@ -48,9 +46,9 @@ export function DestroySandboxDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>销毁「{externalId}」?</AlertDialogTitle>
+          <AlertDialogTitle>销毁「{name}」?</AlertDialogTitle>
           <AlertDialogDescription>
-            沙箱连同磁盘一起销毁,不可恢复。key 依然有效 — 下次 acquire
+            沙箱连同磁盘一起销毁,不可恢复。名字依然可用 — 下次同名 acquire
             会得到一个全新的空白沙箱。
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -66,10 +64,10 @@ export function DestroySandboxDialog({
 }
 
 export function DestroySandboxButton({
-  externalId,
+  name,
   onDestroyed,
 }: {
-  externalId: string;
+  name: string;
   onDestroyed?: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -80,7 +78,7 @@ export function DestroySandboxButton({
         销毁
       </Button>
       <DestroySandboxDialog
-        externalId={externalId}
+        name={name}
         open={open}
         onOpenChange={setOpen}
         onDestroyed={onDestroyed}

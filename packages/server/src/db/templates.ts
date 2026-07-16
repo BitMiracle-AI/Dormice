@@ -54,16 +54,16 @@ export function removeTemplate(db: Db, name: string): boolean {
 }
 
 /**
- * External ids of sandboxes still created from this template — removal is
+ * Names of sandboxes still created from this template — removal is
  * refused while this is non-empty, so wakes never resolve a dangling name.
  */
-export function externalIdsUsingTemplate(db: Db, name: string): string[] {
+export function sandboxNamesUsingTemplate(db: Db, name: string): string[] {
   return db
-    .select({ externalId: sandboxes.externalId })
+    .select({ name: sandboxes.name })
     .from(sandboxes)
     .where(eq(sandboxes.template, name))
     .all()
-    .map((row) => row.externalId);
+    .map((row) => row.name);
 }
 
 /**

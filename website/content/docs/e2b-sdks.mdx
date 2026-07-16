@@ -61,14 +61,14 @@ construction, so the Python SDK's validation never bites.
 
 ## Reuse the same sandbox across creates
 
-A Dormice extension: pass `metadata: { externalId: '...' }` and
-`Sandbox.create` behaves like the native `acquireSandbox` — the same key
+A Dormice extension: pass `metadata: { name: '...' }` and
+`Sandbox.create` behaves like the native `acquireSandbox` — the same name
 always returns the same sandbox instead of a new one, whatever state it
 was in, files intact:
 
 ```ts
 const sbx = await Sandbox.create({
-  metadata: { externalId: 'my-project' },
+  metadata: { name: 'my-project' },
   // ...the two URLs and apiKey as above
 });
 ```

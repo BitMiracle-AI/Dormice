@@ -4,8 +4,8 @@ import { e2bView } from './view';
 
 function row(overrides: Partial<SandboxRow>): SandboxRow {
   return {
-    sandboxId: 'sbx-1',
-    externalId: 'alice',
+    id: 'sbx-1',
+    name: 'alice',
     state: 'active',
     nodeId: 'node-test',
     freezeAfterSeconds: 60,

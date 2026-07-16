@@ -2,12 +2,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { recordActivity } from '../db/activity';
 import type { Db } from '../db/db';
-import {
-  findBySandboxId,
-  setPausedByUser,
-  touch,
-  transition,
-} from '../db/ledger';
+import { findById, setPausedByUser, touch, transition } from '../db/ledger';
 import type { SandboxRow } from '../db/schema';
 import { resolveImage } from '../db/templates';
 import type { Executor } from '../executor/executor';
@@ -97,27 +92,27 @@ export class Archiver {
   async archive(row: SandboxRow): Promise<void> {
     if (row.state !== 'stopped') {
       throw new Error(
-        `sandbox ${row.sandboxId} is ${row.state}, expected stopped — only a stopped sandbox can archive`,
+        `sandbox ${row.id} is ${row.state}, expected stopped — only a stopped sandbox can archive`,
       );
     }
     const startedAt = Date.now();
-    const tmp = path.join(this.tmpDir, `${row.sandboxId}.archive.tar.zst`);
+    const tmp = path.join(this.tmpDir, `${row.id}.archive.tar.zst`);
     try {
-      await this.executor.exportDisk(row.sandboxId, tmp);
-      await this.store.put(objectKey(row.sandboxId), tmp);
-      transition(this.db, row.sandboxId, 'archived');
-      await this.executor.destroy(row.sandboxId);
+      await this.executor.exportDisk(row.id, tmp);
+      await this.store.put(objectKey(row.id), tmp);
+      transition(this.db, row.id, 'archived');
+      await this.executor.destroy(row.id);
     } finally {
       await rm(tmp, { force: true });
     }
     const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
     recordActivity(this.db, {
       kind: 'archived',
-      externalId: row.externalId,
-      sandboxId: row.sandboxId,
+      sandboxName: row.name,
+      sandboxId: row.id,
       detail: `disk shipped to S3 in ${seconds}s; local copy freed`,
     });
-    this.log(`archived ${row.sandboxId} in ${seconds}s`);
+    this.log(`archived ${row.id} in ${seconds}s`);
   }
 
   /**
@@ -126,34 +121,30 @@ export class Archiver {
    * the key slot. Calling again while a restore runs joins the same task.
    */
   beginRestore(row: SandboxRow): { progress: RestoreProgress } {
-    const existing = this.restores.get(row.sandboxId);
+    const existing = this.restores.get(row.id);
     if (existing) return existing;
     if (row.state !== 'archived') {
       throw new Error(
-        `sandbox ${row.sandboxId} is ${row.state}, expected archived — beginRestore is the move on archived rows`,
+        `sandbox ${row.id} is ${row.state}, expected archived — beginRestore is the move on archived rows`,
       );
     }
-    transition(this.db, row.sandboxId, 'restoring');
+    transition(this.db, row.id, 'restoring');
     recordActivity(this.db, {
       kind: 'restore-started',
-      externalId: row.externalId,
-      sandboxId: row.sandboxId,
+      sandboxName: row.name,
+      sandboxId: row.id,
       detail: 'restore from S3 began',
     });
     const progress: RestoreProgress = { phase: 'downloading', percent: 0 };
-    const done = this.runRestore(
-      row.sandboxId,
-      row.externalId,
-      progress,
-    ).finally(() => {
-      this.restores.delete(row.sandboxId);
+    const done = this.runRestore(row.id, row.name, progress).finally(() => {
+      this.restores.delete(row.id);
     });
     // Native acquire never awaits this — a failure with no joiner must not
     // crash the daemon as an unhandled rejection. Joiners still observe the
     // rejection through the same promise.
     done.catch(() => {});
     const entry: RestoreEntry = { progress, done };
-    this.restores.set(row.sandboxId, entry);
+    this.restores.set(row.id, entry);
     return entry;
   }
 
@@ -176,12 +167,12 @@ export class Archiver {
    * own finish needs the slot.
    */
   async restoreJoin(sandboxId: string): Promise<void> {
-    const row = findBySandboxId(this.db, sandboxId);
+    const row = findById(this.db, sandboxId);
     if (!row || (row.state !== 'archived' && row.state !== 'restoring')) {
       return;
     }
-    const entry = await this.locks.run(row.externalId, async () => {
-      const fresh = findBySandboxId(this.db, sandboxId);
+    const entry = await this.locks.run(row.name, async () => {
+      const fresh = findById(this.db, sandboxId);
       if (fresh?.state === 'archived') {
         return this.beginRestore(fresh) as RestoreEntry;
       }
@@ -204,7 +195,7 @@ export class Archiver {
    */
   private async runRestore(
     sandboxId: string,
-    externalId: string,
+    name: string,
     progress: RestoreProgress,
   ): Promise<void> {
     const tmp = path.join(this.tmpDir, `${sandboxId}.restore.tar.zst`);
@@ -217,8 +208,8 @@ export class Archiver {
       await this.executor.importDisk(sandboxId, tmp, (fraction) => {
         progress.percent = clampPercent(fraction);
       });
-      await this.locks.run(externalId, async () => {
-        const fresh = findBySandboxId(this.db, sandboxId);
+      await this.locks.run(name, async () => {
+        const fresh = findById(this.db, sandboxId);
         if (fresh?.state !== 'restoring') {
           // Nothing legal moves a restoring row but this task; hearing
           // otherwise is a bug report. The disk just built is task-owned.
@@ -240,7 +231,7 @@ export class Archiver {
         touch(this.db, sandboxId);
         recordActivity(this.db, {
           kind: 'restored',
-          externalId,
+          sandboxName: name,
           sandboxId,
           detail: 'disk back from S3, sandbox active; archive object deleted',
         });
@@ -255,13 +246,13 @@ export class Archiver {
         `restore of ${sandboxId} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
       await this.executor.removeDisk(sandboxId).catch(() => {});
-      await this.locks.run(externalId, async () => {
-        const fresh = findBySandboxId(this.db, sandboxId);
+      await this.locks.run(name, async () => {
+        const fresh = findById(this.db, sandboxId);
         if (fresh?.state === 'restoring') {
           transition(this.db, sandboxId, 'archived');
           recordActivity(this.db, {
             kind: 'restore-failed',
-            externalId,
+            sandboxName: name,
             sandboxId,
             detail: `back to archived, S3 object intact — ${
               err instanceof Error ? err.message : String(err)

@@ -58,7 +58,7 @@ sandbox
   .description(
     'Run a shell command inside the sandbox behind a key (wakes it first)',
   )
-  .argument('<externalId>', 'the external id whose sandbox runs the command')
+  .argument('<name>', 'the sandbox name to run the command in')
   .argument(
     '<command>',
     'shell command, quoted as one argument (runs as bash -c)',
@@ -68,110 +68,102 @@ sandbox
     'kill the command after this many seconds',
     (value: string) => Number(value),
   )
-  .action(
-    async (externalId: string, command: string, opts: { timeout?: number }) => {
-      const result = await sandboxExec(
-        clientFromEnv(process.env),
-        externalId,
-        command,
-        opts.timeout,
-      );
-      process.stdout.write(result.stdout);
-      process.stderr.write(result.stderr);
-      process.exitCode = result.exitCode;
-    },
-  );
+  .action(async (name: string, command: string, opts: { timeout?: number }) => {
+    const result = await sandboxExec(
+      clientFromEnv(process.env),
+      name,
+      command,
+      opts.timeout,
+    );
+    process.stdout.write(result.stdout);
+    process.stderr.write(result.stderr);
+    process.exitCode = result.exitCode;
+  });
 
 sandbox
   .command('push')
   .description(
     'Copy a local file into the sandbox behind a key (wakes it first)',
   )
-  .argument('<externalId>', 'the external id whose sandbox receives the file')
+  .argument('<name>', 'the sandbox name to push the file into')
   .argument('<localPath>', 'local file to send')
   .argument(
     '[remotePath]',
     'destination inside the sandbox; relative paths land under /home/user (default: the local file name)',
   )
-  .action(
-    async (externalId: string, localPath: string, remotePath?: string) => {
-      const content = await readFile(localPath);
-      console.log(
-        await sandboxPush(
-          clientFromEnv(process.env),
-          externalId,
-          content,
-          remotePath ?? path.basename(localPath),
-        ),
-      );
-    },
-  );
+  .action(async (name: string, localPath: string, remotePath?: string) => {
+    const content = await readFile(localPath);
+    console.log(
+      await sandboxPush(
+        clientFromEnv(process.env),
+        name,
+        content,
+        remotePath ?? path.basename(localPath),
+      ),
+    );
+  });
 
 sandbox
   .command('pull')
   .description('Copy a file out of the sandbox behind a key (wakes it first)')
-  .argument('<externalId>', 'the external id whose sandbox holds the file')
+  .argument('<name>', 'the sandbox name to pull the file from')
   .argument('<remotePath>', 'file inside the sandbox; relative to /home/user')
   .argument('[localPath]', 'where to save it; omitted = raw bytes to stdout')
-  .action(
-    async (externalId: string, remotePath: string, localPath?: string) => {
-      const result = await sandboxPull(
-        clientFromEnv(process.env),
-        externalId,
-        remotePath,
-      );
-      if (localPath === undefined) {
-        // Raw on purpose, like exec output: the operator's own file's bytes.
-        process.stdout.write(result.content);
-        return;
-      }
-      await writeFile(localPath, result.content);
-      console.log(pullSavedMessage(result, localPath));
-    },
-  );
+  .action(async (name: string, remotePath: string, localPath?: string) => {
+    const result = await sandboxPull(
+      clientFromEnv(process.env),
+      name,
+      remotePath,
+    );
+    if (localPath === undefined) {
+      // Raw on purpose, like exec output: the operator's own file's bytes.
+      process.stdout.write(result.content);
+      return;
+    }
+    await writeFile(localPath, result.content);
+    console.log(pullSavedMessage(result, localPath));
+  });
 
 sandbox
   .command('meta')
   .description(
     'Show or replace the labels on the sandbox behind a key (replacement is total; a pure ledger write, nothing is woken)',
   )
-  .argument('<externalId>', 'the external id whose sandbox to label')
+  .argument('<name>', 'the sandbox name to label')
   .argument(
     '[labels...]',
     'key=value pairs forming the NEW complete label set; omitted = show the current one',
   )
   .option('--clear', 'remove every label')
-  .action(
-    async (externalId: string, labels: string[], opts: { clear?: boolean }) => {
-      if (opts.clear && labels.length > 0) {
-        throw new Error('--clear and key=value labels are mutually exclusive');
-      }
-      console.log(
-        await sandboxMeta(
-          clientFromEnv(process.env),
-          externalId,
-          opts.clear ? {} : labels.length > 0 ? parseLabels(labels) : null,
-        ),
-      );
-    },
-  );
+  .action(async (name: string, labels: string[], opts: { clear?: boolean }) => {
+    if (opts.clear && labels.length > 0) {
+      throw new Error('--clear and key=value labels are mutually exclusive');
+    }
+    console.log(
+      await sandboxMeta(
+        clientFromEnv(process.env),
+        name,
+        opts.clear ? {} : labels.length > 0 ? parseLabels(labels) : null,
+      ),
+    );
+  });
 
 sandbox
   .command('rebuild')
   .description(
     "Swap the container, keep /home/user — next use starts on the template's current image (or the base image)",
   )
-  .argument('<externalId>', 'the external id whose sandbox to rebuild')
-  .action(async (externalId: string) => {
-    console.log(await sandboxRebuild(clientFromEnv(process.env), externalId));
+  .argument('<name>', 'the sandbox name to rebuild')
+  .action(async (name: string) => {
+    console.log(await sandboxRebuild(clientFromEnv(process.env), name));
   });
 
 sandbox
   .command('destroy')
-  .description('Destroy the sandbox behind an external id (idempotent)')
-  .argument('<externalId>', 'the external id whose sandbox to destroy')
-  .action(async (externalId: string) => {
-    console.log(await sandboxDestroy(clientFromEnv(process.env), externalId));
+  .description('Destroy the sandbox behind a name (idempotent)')
+  .argument('<name>', 'the sandbox name to destroy')
+  .action(async (name: string) => {
+    console.log(await sandboxDestroy(clientFromEnv(process.env), name));
   });
 
 const template = program

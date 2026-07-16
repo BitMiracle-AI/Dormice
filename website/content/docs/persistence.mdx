@@ -32,7 +32,7 @@ gVisor host:
 - **Out-of-memory** — a sandbox that hits its memory cap
   (`DORMICE_SANDBOX_MEMORY_GB`, default 2 GB) is killed with exit
   code 137, the Linux convention for "forcibly killed", and recorded as
-  stopped. The same key acquires it right back, files intact.
+  stopped. The same name acquires it right back, files intact.
 - **Archive → restore** — the disk round-trips through S3 and comes
   back byte-for-byte.
 

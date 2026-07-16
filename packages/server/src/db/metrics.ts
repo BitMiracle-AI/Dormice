@@ -70,11 +70,11 @@ export function insertMetricsTick(db: Db, input: MetricsTickInput): void {
     if (input.samples.length > 0) {
       const liveIds = new Set(
         tx
-          .select({ sandboxId: sandboxes.sandboxId })
+          .select({ sandboxId: sandboxes.id })
           .from(sandboxes)
           .where(
             inArray(
-              sandboxes.sandboxId,
+              sandboxes.id,
               input.samples.map((s) => s.sandboxId),
             ),
           )

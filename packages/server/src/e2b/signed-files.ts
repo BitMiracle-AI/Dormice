@@ -116,11 +116,11 @@ export const signedFileRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
 
   app.get('/files', async (request, reply) => {
     const row = authenticate(request, 'read');
-    return serveFileDownload(ctx, row.sandboxId, request, reply);
+    return serveFileDownload(ctx, row.id, request, reply);
   });
 
   app.post('/files', { bodyLimit: UNLIMITED_BODY_BYTES }, (request, reply) => {
     const row = authenticate(request, 'write');
-    return serveFileUpload(ctx, row.sandboxId, request, reply);
+    return serveFileUpload(ctx, row.id, request, reply);
   });
 };

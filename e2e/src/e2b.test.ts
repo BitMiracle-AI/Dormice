@@ -561,15 +561,15 @@ describe('official e2b SDK against the daemon', () => {
       endpoint: inject('dormiceEndpoint'),
       token: inject('dormiceToken'),
     });
-    const externalId = `watch-freeze-${Date.now()}`;
+    const name = `watch-freeze-${Date.now()}`;
     // Native acquire sets the second-scale policy; the e2b face then joins
-    // the same sandbox through the externalId extension.
-    await dormice.acquireSandbox(externalId, {
+    // the same sandbox through the metadata.name extension.
+    await dormice.acquireSandbox(name, {
       policy: { freezeAfterSeconds: 1, stopAfterSeconds: null },
     });
     const sbx = await Sandbox.create({
       ...connection(),
-      metadata: { externalId },
+      metadata: { name },
     });
     try {
       const events: Array<{ name: string; type: string }> = [];
@@ -583,7 +583,7 @@ describe('official e2b SDK against the daemon', () => {
       // The real wall-clock scanner freezes the sandbox under the open watch.
       const frozen = async () => {
         const sandboxes = await dormice.listSandboxes();
-        return sandboxes.find((s) => s.externalId === externalId)?.state;
+        return sandboxes.find((s) => s.name === name)?.state;
       };
       const deadline = Date.now() + 15_000;
       while ((await frozen()) !== 'frozen') {
@@ -599,7 +599,7 @@ describe('official e2b SDK against the daemon', () => {
       );
       await handle.stop();
     } finally {
-      await dormice.destroySandbox(externalId);
+      await dormice.destroySandbox(name);
     }
   });
 
@@ -673,16 +673,16 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
-  it('the Dormice extension: metadata.externalId makes create idempotent, data persists', async () => {
+  it('the Dormice extension: metadata.name makes create idempotent, data persists', async () => {
     const first = await Sandbox.create({
       ...connection(),
-      metadata: { externalId: 'e2e-agent-key' },
+      metadata: { name: 'e2e-agent-key' },
     });
     try {
       await first.files.write('persistent.txt', 'same sandbox every time');
       const second = await Sandbox.create({
         ...connection(),
-        metadata: { externalId: 'e2e-agent-key' },
+        metadata: { name: 'e2e-agent-key' },
       });
       expect(second.sandboxId).toBe(first.sandboxId);
       expect(await second.files.read('persistent.txt')).toBe(

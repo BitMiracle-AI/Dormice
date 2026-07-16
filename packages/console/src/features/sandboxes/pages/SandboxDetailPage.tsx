@@ -56,21 +56,21 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
  * SDK 同一条 wire。tab 记在 URL 里,刷新与分享都停在原面板。
  */
 export function SandboxDetailPage() {
-  const { externalId } = useParams({ from: '/_app/sandboxes/$externalId' });
-  const { tab } = useSearch({ from: '/_app/sandboxes/$externalId' });
-  const navigate = useNavigate({ from: '/sandboxes/$externalId' });
-  const { sandbox, isSuccess } = useSandbox(externalId);
+  const { name } = useParams({ from: '/_app/sandboxes/$name' });
+  const { tab } = useSearch({ from: '/_app/sandboxes/$name' });
+  const navigate = useNavigate({ from: '/sandboxes/$name' });
+  const { sandbox, isSuccess } = useSandbox(name);
   // 镜像血统与列表页同一份 5 秒缓存;拿不到就不显示,不挡页面。
   const images = useSandboxImages();
-  const lineage = images.data?.images.find((e) => e.externalId === externalId);
+  const lineage = images.data?.images.find((e) => e.sandboxName === name);
 
   if (!sandbox) {
     return isSuccess ? (
       <Empty className="border border-dashed">
         <EmptyHeader>
-          <EmptyTitle>没有叫「{externalId}」的沙箱</EmptyTitle>
+          <EmptyTitle>没有叫「{name}」的沙箱</EmptyTitle>
           <EmptyDescription>
-            可能已被销毁 — 这个 key 依然有效,下次 acquire 会得到一个
+            可能已被销毁 — 这个名字依然可用,下次同名 acquire 会得到一个
             全新的沙箱。
           </EmptyDescription>
         </EmptyHeader>
@@ -92,17 +92,15 @@ export function SandboxDetailPage() {
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <h1 className="font-mono text-2xl font-semibold">
-            {sandbox.externalId}
-          </h1>
+          <h1 className="font-mono text-2xl font-semibold">{sandbox.name}</h1>
           <SandboxStateBadge state={sandbox.state} />
           <LifecycleCountdown sandbox={sandbox} />
         </div>
         <div className="flex items-center gap-2">
           <EditPolicyDialog sandbox={sandbox} />
-          <RebuildSandboxButton externalId={sandbox.externalId} />
+          <RebuildSandboxButton name={sandbox.name} />
           <DestroySandboxButton
-            externalId={sandbox.externalId}
+            name={sandbox.name}
             onDestroyed={() => navigate({ to: '/sandboxes' })}
           />
         </div>
@@ -134,7 +132,7 @@ export function SandboxDetailPage() {
           <Card>
             <CardContent>
               <dl>
-                <Row label="沙箱 ID">{sandbox.sandboxId}</Row>
+                <Row label="沙箱 ID">{sandbox.id}</Row>
                 <Row label="模板">
                   <span className="inline-flex items-center gap-1.5">
                     {sandbox.template ?? '基础镜像'}
@@ -192,7 +190,7 @@ export function SandboxDetailPage() {
         </TabsContent>
 
         <TabsContent value="terminal">
-          <SandboxTerminalCard sandboxId={sandbox.sandboxId} />
+          <SandboxTerminalCard sandboxId={sandbox.id} />
         </TabsContent>
 
         <TabsContent value="files">
@@ -208,7 +206,7 @@ export function SandboxDetailPage() {
         </TabsContent>
 
         <TabsContent value="history">
-          <HistoryPanel externalId={sandbox.externalId} />
+          <HistoryPanel name={sandbox.name} />
         </TabsContent>
       </Tabs>
     </>

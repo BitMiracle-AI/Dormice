@@ -109,11 +109,11 @@ describe('sandbox commands over real HTTP', () => {
     const output = await sandboxLs(client);
     const lines = output.split('\n');
     expect(lines[0]).toMatch(
-      /^USER KEY\s{2,}STATE\s{2,}SANDBOX ID\s{2,}LAST ACTIVE\s{2,}METADATA$/,
+      /^NAME\s{2,}STATE\s{2,}ID\s{2,}LAST ACTIVE\s{2,}METADATA$/,
     );
     expect(output).toMatch(/alice\s{2,}active/);
     expect(output).toMatch(/bob\s{2,}active/);
-    expect(output).toContain(alice.sandbox.sandboxId);
+    expect(output).toContain(alice.sandbox.id);
     expect(output).toContain('app=demo');
   });
 
@@ -125,10 +125,10 @@ describe('sandbox commands over real HTTP', () => {
       'app=demo,env=prod',
     );
     expect(await sandboxMeta(client, 'labeled', { app: 'ci' })).toBe(
-      'Metadata for key "labeled" is now app=ci.',
+      'Metadata of "labeled" is now app=ci.',
     );
     expect(await sandboxMeta(client, 'labeled', {})).toBe(
-      'Cleared metadata for key "labeled".',
+      'Cleared metadata of "labeled".',
     );
     expect(await sandboxMeta(client, 'labeled', null)).toBe('No metadata.');
     await expect(sandboxMeta(client, 'nobody', null)).rejects.toThrow(
@@ -137,8 +137,8 @@ describe('sandbox commands over real HTTP', () => {
     await client.destroySandbox('labeled');
   });
 
-  it('neutralizes control characters a hostile external id smuggles in', async () => {
-    // The protocol keeps externalId opaque, so an ESC sequence is a legal key;
+  it('neutralizes control characters a hostile name smuggles in', async () => {
+    // The protocol keeps name opaque, so an ESC sequence is a legal key;
     // printed raw it would rewrite the operator's terminal.
     await client.acquireSandbox('evil\u001b[31mkey');
     const output = await sandboxLs(client);
@@ -189,7 +189,7 @@ describe('sandbox commands over real HTTP', () => {
   it('rebuild reports the swap and surfaces the 404 for an unknown key', async () => {
     await client.acquireSandbox('rebuilder');
     expect(await sandboxRebuild(client, 'rebuilder')).toBe(
-      'Rebuilt the sandbox for key "rebuilder" — /home/user kept, now stopped; ' +
+      'Rebuilt the sandbox "rebuilder" — /home/user kept, now stopped; ' +
         'its next use starts on the current base image.',
     );
     await expect(sandboxRebuild(client, 'nobody')).rejects.toThrow(
@@ -201,10 +201,10 @@ describe('sandbox commands over real HTTP', () => {
   it('destroy reports both outcomes of the idempotent destroy', async () => {
     await client.acquireSandbox('carol');
     expect(await sandboxDestroy(client, 'carol')).toBe(
-      'Destroyed the sandbox for key "carol".',
+      'Destroyed the sandbox "carol".',
     );
     expect(await sandboxDestroy(client, 'carol')).toBe(
-      'No sandbox for key "carol" — nothing to destroy.',
+      'No sandbox named "carol" — nothing to destroy.',
     );
   });
 });

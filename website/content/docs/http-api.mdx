@@ -11,7 +11,7 @@ method name, so there is nothing the SDK can do that curl cannot:
 curl -X POST http://127.0.0.1:3676/acquireSandbox \
   -H "Authorization: Bearer $DORMICE_API_TOKEN" \
   -H "content-type: application/json" \
-  -d '{"externalId": "my-agent"}'
+  -d '{"name": "my-agent"}'
 ```
 
 Two rules cover the whole surface:
@@ -32,16 +32,16 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 
 | Route | Does | Errors worth knowing |
 | --- | --- | --- |
-| `POST /acquireSandbox` | create, wake, or restore — idempotent per key | 400 invalid policy/unknown template, 429 at the sandbox limit |
-| `POST /updatePolicy` | patch an existing sandbox's [lifecycle policy](/docs/lifecycle#change-the-policy-later) in place; never wakes, never resets the idle clock | 404 unknown key, 400 invalid merged policy |
-| `POST /updateMetadata` | replace an existing sandbox's label set wholesale (`{}` clears); never wakes, never resets the idle clock | 404 unknown key |
+| `POST /acquireSandbox` | create, wake, or restore — idempotent per name | 400 invalid policy/unknown template, 429 at the sandbox limit |
+| `POST /updatePolicy` | patch an existing sandbox's [lifecycle policy](/docs/lifecycle#change-the-policy-later) in place; never wakes, never resets the idle clock | 404 unknown name, 400 invalid merged policy |
+| `POST /updateMetadata` | replace an existing sandbox's label set wholesale (`{}` clears); never wakes, never resets the idle clock | 404 unknown name |
 | `POST /listSandboxes` | every sandbox and its state; never wakes anything | — |
-| `POST /execCommand` | run a command, buffered | 404 unknown key, 409 archived/restoring |
+| `POST /execCommand` | run a command, buffered | 404 unknown name, 409 archived/restoring |
 | `POST /writeFiles` | batch write, base64 in JSON | 404/409 as above; body over 48 MiB refused |
 | `POST /writeFile` | write one file — the single form of `writeFiles` | same as `writeFiles` |
 | `POST /readFile` | read one file, base64 out | 404 no such file, 400 not a file, 413 over 16 MiB (names the real size) |
 | `POST /readFiles` | batch read, all or nothing, request order | first bad path fails the whole batch; 413 over 48 MiB total |
-| `POST /rebuildSandbox` | swap container, keep `/home/user` | 404 unknown key, 409 archived/restoring |
+| `POST /rebuildSandbox` | swap container, keep `/home/user` | 404 unknown name, 409 archived/restoring |
 | `POST /destroySandbox` | destroy; idempotent | 409 mid-restore — retry when it finishes |
 | `POST /registerTemplate` | upsert name → image | 400 `'base'` is reserved |
 | `POST /listTemplates` | every registered template | — |
@@ -50,7 +50,7 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | `POST /listApiKeys` | every key ever minted, revoked ones included, newest first — no secrets | — |
 | `POST /revokeApiKey` | soft-revoke the active key under a name; idempotent (`revoked: false` when none was) | — |
 | `POST /getHostMetrics` | host snapshot; never wakes anything | — |
-| `POST /getSandboxMetrics` | one sandbox's live CPU/memory/disk sample; `sample` is `null` when nothing is running | 404 unknown key |
+| `POST /getSandboxMetrics` | one sandbox's live CPU/memory/disk sample; `sample` is `null` when nothing is running | 404 unknown name |
 | `POST /listSandboxMetrics` | every measurable sandbox's sample in one answer | — |
 | `POST /listSandboxImages` | each sandbox's born image vs its template's current one | — |
 | `POST /listActivity` | the daemon's recent history, newest first — a bounded ring, not an audit log | — |
@@ -59,8 +59,8 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | `POST /setIngress` | rewrite the managed proxy config to exactly this domain list (empty list unbinds all) | 400 when the daemon manages no proxy |
 
 **Only `acquireSandbox` creates.** The use verbs (`execCommand`, files,
-`rebuildSandbox`) answer 404 for an unknown key rather than creating a
-sandbox as a side effect — an unknown key is more likely a typo than an
+`rebuildSandbox`) answer 404 for an unknown name rather than creating a
+sandbox as a side effect — an unknown name is more likely a typo than an
 intent.
 
 ## The sandbox object
@@ -69,7 +69,7 @@ Everything that returns a sandbox returns this shape:
 
 ```json
 {
-  "sandboxId": "8b1e…-uuid", "externalId": "my-agent",
+  "id": "8b1e…-uuid", "name": "my-agent",
   "state": "active", "nodeId": "…", "endpoint": "http://127.0.0.1:3676",
   "policy": { "freezeAfterSeconds": 600, "stopAfterSeconds": 259200, "archiveAfterSeconds": null },
   "template": null, "metadata": { "app": "crawler", "env": "prod" },
@@ -77,8 +77,12 @@ Everything that returns a sandbox returns this shape:
 }
 ```
 
+`name` is yours and `id` is the platform's — [two identities with two
+jobs](/docs/core-concepts#sandboxes). Every verb addresses sandboxes by
+`name`; `id` only ever appears in responses.
+
 `metadata` is your own string-to-string labels — pass it to
-`acquireSandbox` at creation (`{"externalId": "…", "metadata": {"app": "crawler"}}`),
+`acquireSandbox` at creation (`{"name": "…", "metadata": {"app": "crawler"}}`),
 relabel later with `updateMetadata`, group and filter on it in the
 console or your own `listSandboxes` loop. The daemon never interprets
 it; a sandbox without labels reads `{}`, never `null`. Like `policy`
@@ -88,11 +92,14 @@ which is what `updateMetadata` is for.
 
 `state` is one of `active | frozen | stopped | archived | restoring`
 (the [lifecycle states](/docs/lifecycle)). `acquireSandbox` wraps it in
-a union: `{ "status": "ready", "sandbox": … }`, or — when the sandbox is
-coming back from S3 —
-`{ "status": "restoring", "sandbox": …, "progress": { "phase": "downloading" | "extracting", "percent": … } }`;
+a union: `{ "status": "ready", "created": true | false, "sandbox": … }`,
+or — when the sandbox is coming back from S3 —
+`{ "status": "restoring", "created": false, "sandbox": …, "progress": { "phase": "downloading" | "extracting", "percent": … } }`;
 poll acquire until it flips to `ready` (see
-[Archiving](/docs/archiving)).
+[Archiving](/docs/archiving)). `created` is how a caller sees which side
+of the idempotency it landed on: names converge on the existing sandbox
+instead of erroring as duplicates, so `created: false` is the only
+signal that the policy/template/metadata in the request were ignored.
 
 ## API keys
 
@@ -116,15 +123,15 @@ your rotation history.
 
 ## Commands and files on the wire
 
-`execCommand` takes `{ externalId, command, timeoutSeconds?, cwd?, env? }`
+`execCommand` takes `{ name, command, timeoutSeconds?, cwd?, env? }`
 and returns
 `{ exitCode, stdout, stderr, stdoutTruncated, stderrTruncated }` — a
 non-zero exit code is a result, not an HTTP error
 ([details](/docs/commands)).
 
 File content crosses the wire as base64 inside JSON: `writeFiles` takes
-`{ externalId, files: [{ path, contentBase64 }] }`; `readFile` takes
-`{ externalId, path }` and returns `{ path, contentBase64 }` with the
+`{ name, files: [{ path, contentBase64 }] }`; `readFile` takes
+`{ name, path }` and returns `{ path, contentBase64 }` with the
 path resolved absolute. Each has a twin for the other arity: `writeFile`
 writes one file without the array, `readFiles` reads a batch all or
 nothing. Limits and error semantics: [Moving files](/docs/files).

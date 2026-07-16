@@ -13,7 +13,8 @@ export const ACTIVITY_KEEP = 1000;
 
 export interface ActivityInput {
   kind: ActivityKind;
-  externalId?: string | null;
+  /** The owning sandbox's name/id — prefixed: they reference another entity. */
+  sandboxName?: string | null;
   sandboxId?: string | null;
   detail: string;
 }
@@ -30,7 +31,7 @@ export function recordActivity(db: Db, input: ActivityInput): void {
     .values({
       at: new Date().toISOString(),
       kind: input.kind,
-      externalId: input.externalId ?? null,
+      sandboxName: input.sandboxName ?? null,
       sandboxId: input.sandboxId ?? null,
       detail: input.detail,
     })

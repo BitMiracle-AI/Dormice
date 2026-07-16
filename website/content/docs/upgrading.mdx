@@ -57,7 +57,7 @@ whoever is using the sandbox and should happen on your schedule:
 docker build -t dormice-base:NEW -f images/Dockerfile images/
 # point DORMICE_BASE_IMAGE at the new tag in /etc/dormice/env, then:
 systemctl restart dormice
-dor sandbox rebuild <externalId>   # per sandbox, when it suits you
+dor sandbox rebuild <name>   # per sandbox, when it suits you
 ```
 
 [Rebuild](/docs/persistence#rebuild-a-sandbox) swaps the container and

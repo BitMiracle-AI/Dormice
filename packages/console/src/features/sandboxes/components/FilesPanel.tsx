@@ -104,7 +104,7 @@ function sortEntries(entries: EnvdEntry[]): EnvdEntry[] {
 export function FilesPanel({ sandbox }: { sandbox: Sandbox }) {
   const [unlocked, setUnlocked] = useState(sandbox.state === 'active');
   const [path, setPath] = useState(HOME);
-  const auth = useEnvdAuth(sandbox.sandboxId);
+  const auth = useEnvdAuth(sandbox.id);
   const directory = useDirectory(auth.data, path, unlocked);
   // 沙箱里(agent、终端)动了文件,这张表 2 秒内自己跟上 — 不用手点刷新。
   useDirectoryWatch(auth.data, path, {

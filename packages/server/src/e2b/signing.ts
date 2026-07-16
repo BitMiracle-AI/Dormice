@@ -62,7 +62,7 @@ export function findRowBySignature(
   for (const row of listSandboxes(db)) {
     if (e2bView(row, now) === 'dead') continue;
     const expected = fileSignature(
-      mintEnvdToken(signingSecret, row.sandboxId),
+      mintEnvdToken(signingSecret, row.id),
       material,
     );
     if (timingSafeEqual(sha256(expected), sha256(presented))) return row;

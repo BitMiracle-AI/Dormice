@@ -41,7 +41,7 @@ try {
   console.log('killed');
 }
 
-// Dormice extension worth knowing: Sandbox.create({ metadata: { externalId } })
+// Dormice extension worth knowing: Sandbox.create({ metadata: { name } })
 // makes create idempotent — the same key returns the same sandbox instead of
 // a new one, which is how an E2B application picks up permanent sandboxes
 // without leaving the e2b package.

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { type Db, migrateDb, openDb } from '../db/db';
-import { createSandbox, findByExternalId, transition } from '../db/ledger';
+import { createSandbox, findByName, transition } from '../db/ledger';
 import type { SandboxRow } from '../db/schema';
 import { FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
@@ -31,23 +31,23 @@ function setup() {
 async function seedStopped(
   db: Db,
   executor: FakeExecutor,
-  externalId: string,
+  name: string,
 ): Promise<SandboxRow> {
-  const sandboxId = randomUUID();
-  await executor.create(sandboxId);
-  await executor.writeFiles(sandboxId, [
-    { path: 'kept.txt', content: Buffer.from(`data of ${externalId}`) },
+  const id = randomUUID();
+  await executor.create(id);
+  await executor.writeFiles(id, [
+    { path: 'kept.txt', content: Buffer.from(`data of ${name}`) },
   ]);
   createSandbox(db, {
-    sandboxId,
-    externalId,
+    id,
+    name,
     nodeId: 'node-test',
     policy: DEFAULT_LIFECYCLE_POLICY,
   });
-  await executor.freeze(sandboxId);
-  await executor.stop(sandboxId);
-  transition(db, sandboxId, 'frozen');
-  return transition(db, sandboxId, 'stopped');
+  await executor.freeze(id);
+  await executor.stop(id);
+  transition(db, id, 'frozen');
+  return transition(db, id, 'stopped');
 }
 
 describe('Archiver.archive', () => {
@@ -57,11 +57,11 @@ describe('Archiver.archive', () => {
 
     await archiver.archive(row);
 
-    expect(store.has(objectKey(row.sandboxId))).toBe(true);
-    expect(findByExternalId(db, 'alice')?.state).toBe('archived');
+    expect(store.has(objectKey(row.id))).toBe(true);
+    expect(findByName(db, 'alice')?.state).toBe('archived');
     // "Local copy freed" includes the shell: destroy, not just the disk.
-    expect(executor.stateOf(row.sandboxId)).toBeUndefined();
-    expect(await executor.listDisks()).not.toContain(row.sandboxId);
+    expect(executor.stateOf(row.id)).toBeUndefined();
+    expect(await executor.listDisks()).not.toContain(row.id);
     expect(readdirSync(tmpDir)).toEqual([]);
   });
 
@@ -76,13 +76,13 @@ describe('Archiver.archive', () => {
     const events: string[] = [];
     const watchingStore = new (class extends MemStore {
       override async put(key: string, filePath: string): Promise<void> {
-        events.push(`put while ${findByExternalId(db, 'alice')?.state}`);
+        events.push(`put while ${findByName(db, 'alice')?.state}`);
         await super.put(key, filePath);
       }
     })();
     const watchingExecutor = new (class extends FakeExecutor {
       override async destroy(sandboxId: string): Promise<void> {
-        events.push(`destroy while ${findByExternalId(db, 'alice')?.state}`);
+        events.push(`destroy while ${findByName(db, 'alice')?.state}`);
         await super.destroy(sandboxId);
       }
     })();
@@ -119,23 +119,23 @@ describe('Archiver.archive', () => {
     await expect(archiver.archive(row)).rejects.toThrow('the bucket said no');
     // The invariant as behavior: disk still present <=> upload unconfirmed,
     // so the row stays stopped and the next sweep retries the whole thing.
-    expect(findByExternalId(db, 'alice')?.state).toBe('stopped');
-    expect(await executor.listDisks()).toContain(row.sandboxId);
+    expect(findByName(db, 'alice')?.state).toBe('stopped');
+    expect(await executor.listDisks()).toContain(row.id);
     expect(readdirSync(tmpDir)).toEqual([]);
   });
 
   it('refuses a row that is not stopped', async () => {
     const { db, executor, archiver } = setup();
-    const sandboxId = randomUUID();
-    await executor.create(sandboxId);
+    const id = randomUUID();
+    await executor.create(id);
     const row = createSandbox(db, {
-      sandboxId,
-      externalId: 'alice',
+      id,
+      name: 'alice',
       nodeId: 'node-test',
       policy: DEFAULT_LIFECYCLE_POLICY,
     });
     await expect(archiver.archive(row)).rejects.toThrow(
-      `sandbox ${sandboxId} is active, expected stopped`,
+      `sandbox ${id} is active, expected stopped`,
     );
   });
 });
@@ -145,7 +145,7 @@ describe('Archiver.beginRestore', () => {
     const { db, executor, store, tmpDir, archiver } = setup();
     const row = await seedStopped(db, executor, 'alice');
     await archiver.archive(row);
-    const archived = findByExternalId(db, 'alice');
+    const archived = findByName(db, 'alice');
     if (!archived) throw new Error('row vanished');
 
     let entry: ReturnType<Archiver['beginRestore']> | undefined;
@@ -153,21 +153,21 @@ describe('Archiver.beginRestore', () => {
       entry = archiver.beginRestore(archived);
     });
     // Non-blocking: the row is restoring the moment beginRestore returns.
-    expect(findByExternalId(db, 'alice')?.state).toBe('restoring');
-    expect(archiver.hasLiveRestore(row.sandboxId)).toBe(true);
+    expect(findByName(db, 'alice')?.state).toBe('restoring');
+    expect(archiver.hasLiveRestore(row.id)).toBe(true);
     expect(entry?.progress.phase).toBe('downloading');
 
-    await archiver.restoreJoin(row.sandboxId);
+    await archiver.restoreJoin(row.id);
 
-    expect(findByExternalId(db, 'alice')?.state).toBe('active');
-    expect(executor.stateOf(row.sandboxId)).toBe('running');
-    expect(
-      (await executor.readFile(row.sandboxId, 'kept.txt')).toString(),
-    ).toBe('data of alice');
-    expect(archiver.hasLiveRestore(row.sandboxId)).toBe(false);
+    expect(findByName(db, 'alice')?.state).toBe('active');
+    expect(executor.stateOf(row.id)).toBe('running');
+    expect((await executor.readFile(row.id, 'kept.txt')).toString()).toBe(
+      'data of alice',
+    );
+    expect(archiver.hasLiveRestore(row.id)).toBe(false);
     // The object goes with the restore: from here "an object exists" means
     // "the row is archived" — release never chases stale copies.
-    expect(store.has(objectKey(row.sandboxId))).toBe(false);
+    expect(store.has(objectKey(row.id))).toBe(false);
     expect(readdirSync(tmpDir)).toEqual([]);
   });
 
@@ -175,20 +175,20 @@ describe('Archiver.beginRestore', () => {
     const { db, executor, store, tmpDir, archiver } = setup();
     const row = await seedStopped(db, executor, 'alice');
     await archiver.archive(row);
-    await store.delete(objectKey(row.sandboxId));
-    const archived = findByExternalId(db, 'alice');
+    await store.delete(objectKey(row.id));
+    const archived = findByName(db, 'alice');
     if (!archived) throw new Error('row vanished');
 
     archiver.beginRestore(archived);
-    await expect(archiver.restoreJoin(row.sandboxId)).rejects.toThrow(
-      `archive object ${objectKey(row.sandboxId)} is not in bucket`,
+    await expect(archiver.restoreJoin(row.id)).rejects.toThrow(
+      `archive object ${objectKey(row.id)} is not in bucket`,
     );
 
     // The S3 object is the only copy; with it gone the honest state is
     // archived-and-failing, retried on every acquire, loudly.
-    expect(findByExternalId(db, 'alice')?.state).toBe('archived');
-    expect(await executor.listDisks()).not.toContain(row.sandboxId);
-    expect(archiver.hasLiveRestore(row.sandboxId)).toBe(false);
+    expect(findByName(db, 'alice')?.state).toBe('archived');
+    expect(await executor.listDisks()).not.toContain(row.id);
+    expect(archiver.hasLiveRestore(row.id)).toBe(false);
     expect(readdirSync(tmpDir)).toEqual([]);
   });
 
@@ -196,32 +196,30 @@ describe('Archiver.beginRestore', () => {
     const { db, executor, archiver } = setup();
     const row = await seedStopped(db, executor, 'alice');
     await archiver.archive(row);
-    const archived = findByExternalId(db, 'alice');
+    const archived = findByName(db, 'alice');
     if (!archived) throw new Error('row vanished');
 
     const first = archiver.beginRestore(archived);
-    const again = archiver.beginRestore(
-      findByExternalId(db, 'alice') as SandboxRow,
-    );
+    const again = archiver.beginRestore(findByName(db, 'alice') as SandboxRow);
     expect(again).toBe(first);
-    await archiver.restoreJoin(row.sandboxId);
-    expect(findByExternalId(db, 'alice')?.state).toBe('active');
+    await archiver.restoreJoin(row.id);
+    expect(findByName(db, 'alice')?.state).toBe('active');
   });
 });
 
 describe('Archiver.restoreJoin', () => {
   it('is a no-op for a sandbox that is not archived', async () => {
     const { db, executor, archiver } = setup();
-    const sandboxId = randomUUID();
-    await executor.create(sandboxId);
+    const id = randomUUID();
+    await executor.create(id);
     createSandbox(db, {
-      sandboxId,
-      externalId: 'alice',
+      id,
+      name: 'alice',
       nodeId: 'node-test',
       policy: DEFAULT_LIFECYCLE_POLICY,
     });
-    await archiver.restoreJoin(sandboxId);
-    expect(findByExternalId(db, 'alice')?.state).toBe('active');
+    await archiver.restoreJoin(id);
+    expect(findByName(db, 'alice')?.state).toBe('active');
   });
 
   it('starts the restore itself when the row is archived', async () => {
@@ -229,9 +227,9 @@ describe('Archiver.restoreJoin', () => {
     const row = await seedStopped(db, executor, 'alice');
     await archiver.archive(row);
 
-    await archiver.restoreJoin(row.sandboxId);
+    await archiver.restoreJoin(row.id);
 
-    expect(findByExternalId(db, 'alice')?.state).toBe('active');
-    expect(executor.stateOf(row.sandboxId)).toBe('running');
+    expect(findByName(db, 'alice')?.state).toBe('active');
+    expect(executor.stateOf(row.id)).toBe('running');
   });
 });

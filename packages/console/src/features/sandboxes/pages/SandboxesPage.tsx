@@ -78,8 +78,8 @@ const STATE_FILTERS: Array<SandboxState> = [
   'restoring',
 ];
 
-/** 可排序的列:字符串比较对 externalId 和 ISO 时间戳同样成立。 */
-type SortKey = 'externalId' | 'lastActiveAt' | 'createdAt';
+/** 可排序的列:字符串比较对 name 和 ISO 时间戳同样成立。 */
+type SortKey = 'name' | 'lastActiveAt' | 'createdAt';
 type Sort = { key: SortKey; dir: 1 | -1 };
 
 /** 一个沙箱的标签摊平成 "key=value" 串 — 筛选项与展示共用同一拼法。 */
@@ -182,7 +182,7 @@ function SortableHead({
  * 安静的 ghost 图标,不是一排常驻按钮。销毁的确认弹窗挂在菜单外 —
  * 菜单关闭即卸载,弹窗放里面会跟着消失。
  */
-function SandboxRowMenu({ externalId }: { externalId: string }) {
+function SandboxRowMenu({ name }: { name: string }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   return (
@@ -193,7 +193,7 @@ function SandboxRowMenu({ externalId }: { externalId: string }) {
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label={`${externalId} 的操作`}
+              aria-label={`${name} 的操作`}
             >
               <HugeiconsIcon icon={MoreVerticalIcon} />
             </Button>
@@ -202,12 +202,12 @@ function SandboxRowMenu({ externalId }: { externalId: string }) {
         <DropdownMenuContent align="end">
           <DropdownMenuItem
             onClick={async () => {
-              await navigator.clipboard.writeText(externalId);
-              toast.success('externalId 已复制');
+              await navigator.clipboard.writeText(name);
+              toast.success('名称已复制');
             }}
           >
             <HugeiconsIcon icon={Copy01Icon} />
-            复制 externalId
+            复制名称
           </DropdownMenuItem>
           <DropdownMenuItem
             variant="destructive"
@@ -219,7 +219,7 @@ function SandboxRowMenu({ externalId }: { externalId: string }) {
         </DropdownMenuContent>
       </DropdownMenu>
       <DestroySandboxDialog
-        externalId={externalId}
+        name={name}
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
       />
@@ -232,10 +232,10 @@ function SandboxRowMenu({ externalId }: { externalId: string }) {
  * 裁决的,并发只是把失败搅在一起),结束后一次性汇报成败。
  */
 function BulkDestroyButton({
-  externalIds,
+  names,
   onDone,
 }: {
-  externalIds: string[];
+  names: string[];
   onDone: () => void;
 }) {
   const [pending, setPending] = useState(false);
@@ -243,17 +243,17 @@ function BulkDestroyButton({
   const destroyAll = async () => {
     setPending(true);
     const failures: string[] = [];
-    for (const externalId of externalIds) {
+    for (const name of names) {
       try {
-        await destroySandbox(externalId);
+        await destroySandbox(name);
       } catch {
-        failures.push(externalId);
+        failures.push(name);
       }
     }
     setPending(false);
     void queryClient.invalidateQueries({ queryKey: ['sandboxes'] });
     if (failures.length === 0) {
-      toast.success(`已销毁 ${externalIds.length} 个沙箱`);
+      toast.success(`已销毁 ${names.length} 个沙箱`);
     } else {
       toast.error(`${failures.length} 个销毁失败:${failures.join('、')}`);
     }
@@ -266,15 +266,15 @@ function BulkDestroyButton({
         render={
           <Button variant="destructive" size="sm" disabled={pending}>
             {pending && <Spinner />}
-            销毁选中({externalIds.length})
+            销毁选中({names.length})
           </Button>
         }
       />
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>销毁 {externalIds.length} 个沙箱?</AlertDialogTitle>
+          <AlertDialogTitle>销毁 {names.length} 个沙箱?</AlertDialogTitle>
           <AlertDialogDescription>
-            沙箱连同磁盘一起销毁,不可恢复。key 依然有效 — 下次 acquire
+            沙箱连同磁盘一起销毁,不可恢复。名字依然可用 — 下次用同名 acquire
             会得到一个全新的空白沙箱。
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -296,13 +296,15 @@ export function SandboxesPage() {
   const fleet = useFleetMetrics();
   const metricsOf = useMemo(
     () =>
-      new Map((fleet.data?.samples ?? []).map((s) => [s.externalId, s.sample])),
+      new Map(
+        (fleet.data?.samples ?? []).map((s) => [s.sandboxName, s.sample]),
+      ),
     [fleet.data],
   );
   // 镜像血统批量拉,同一口径:拉不到就不出标记,不挡列表。
   const images = useSandboxImages();
   const lineageOf = useMemo(
-    () => new Map((images.data?.images ?? []).map((e) => [e.externalId, e])),
+    () => new Map((images.data?.images ?? []).map((e) => [e.sandboxName, e])),
     [images.data],
   );
   const [search, setSearch] = useState('');
@@ -332,7 +334,7 @@ export function SandboxesPage() {
         (metadataFilter === '' ||
           labelPairs(sandbox).includes(metadataFilter)) &&
         (search === '' ||
-          sandbox.externalId.toLowerCase().includes(search.toLowerCase())),
+          sandbox.name.toLowerCase().includes(search.toLowerCase())),
     );
     if (!sort) return matched;
     return [...matched].sort(
@@ -341,22 +343,20 @@ export function SandboxesPage() {
   }, [sandboxes, stateFilter, metadataFilter, search, sort]);
 
   // 选中集随现实收敛:被别处销毁的沙箱不该留在选中里撑数字。
-  const selectedVisible = filtered.filter((s) => selected.has(s.externalId));
+  const selectedVisible = filtered.filter((s) => selected.has(s.name));
   const allVisibleSelected =
     filtered.length > 0 && selectedVisible.length === filtered.length;
 
   const toggleAll = () => {
     setSelected(
-      allVisibleSelected
-        ? new Set()
-        : new Set(filtered.map((s) => s.externalId)),
+      allVisibleSelected ? new Set() : new Set(filtered.map((s) => s.name)),
     );
   };
-  const toggleOne = (externalId: string) => {
+  const toggleOne = (name: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(externalId)) next.delete(externalId);
-      else next.add(externalId);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
       return next;
     });
   };
@@ -384,7 +384,7 @@ export function SandboxesPage() {
           <InputGroupInput
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="按 externalId 搜索"
+            placeholder="按 name 搜索"
           />
         </InputGroup>
         <FilterMenu
@@ -412,7 +412,7 @@ export function SandboxesPage() {
         {selectedVisible.length > 0 && (
           <div className="ml-auto">
             <BulkDestroyButton
-              externalIds={selectedVisible.map((s) => s.externalId)}
+              names={selectedVisible.map((s) => s.name)}
               onDone={() => setSelected(new Set())}
             />
           </div>
@@ -462,8 +462,8 @@ export function SandboxesPage() {
               </TableHead>
               <TableHead>
                 <SortableHead
-                  label="externalId"
-                  sortKey="externalId"
+                  label="名称"
+                  sortKey="name"
                   sort={sort}
                   onSort={toggleSort}
                 />
@@ -498,26 +498,24 @@ export function SandboxesPage() {
           <TableBody>
             {filtered.map((sandbox: Sandbox) => (
               <TableRow
-                key={sandbox.sandboxId}
-                data-state={
-                  selected.has(sandbox.externalId) ? 'selected' : undefined
-                }
+                key={sandbox.id}
+                data-state={selected.has(sandbox.name) ? 'selected' : undefined}
               >
                 <TableCell>
                   <Checkbox
-                    aria-label={`选中 ${sandbox.externalId}`}
-                    checked={selected.has(sandbox.externalId)}
-                    onCheckedChange={() => toggleOne(sandbox.externalId)}
+                    aria-label={`选中 ${sandbox.name}`}
+                    checked={selected.has(sandbox.name)}
+                    onCheckedChange={() => toggleOne(sandbox.name)}
                   />
                 </TableCell>
                 <TableCell>
                   <Link
-                    to="/sandboxes/$externalId"
-                    params={{ externalId: sandbox.externalId }}
+                    to="/sandboxes/$name"
+                    params={{ name: sandbox.name }}
                     search={{ tab: 'overview' }}
                     className="font-mono font-medium hover:underline"
                   >
-                    {sandbox.externalId}
+                    {sandbox.name}
                   </Link>
                 </TableCell>
                 <TableCell>
@@ -526,16 +524,14 @@ export function SandboxesPage() {
                 <TableCell className="text-muted-foreground">
                   <span className="inline-flex items-center gap-1.5">
                     {sandbox.template ?? '基础镜像'}
-                    <UpgradableBadge
-                      lineage={lineageOf.get(sandbox.externalId)}
-                    />
+                    <UpgradableBadge lineage={lineageOf.get(sandbox.name)} />
                   </span>
                 </TableCell>
                 <TableCell>
                   <MetadataChips sandbox={sandbox} />
                 </TableCell>
                 {(() => {
-                  const m = metricsOf.get(sandbox.externalId);
+                  const m = metricsOf.get(sandbox.name);
                   if (!m) {
                     return (
                       <>
@@ -581,7 +577,7 @@ export function SandboxesPage() {
                   {since(sandbox.createdAt)}
                 </TableCell>
                 <TableCell className="text-right">
-                  <SandboxRowMenu externalId={sandbox.externalId} />
+                  <SandboxRowMenu name={sandbox.name} />
                 </TableCell>
               </TableRow>
             ))}

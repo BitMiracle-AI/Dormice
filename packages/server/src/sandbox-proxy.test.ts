@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
-import { findBySandboxId } from './db/ledger';
+import { findById } from './db/ledger';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
 import { parseSandboxHost } from './sandbox-proxy';
@@ -141,7 +141,7 @@ describe('sandbox port proxy', () => {
     const sandboxId = await createSandbox(t.port);
     // Freeze the real way — the idle scanner, told it is later — so the
     // ledger and reality move together, exactly the state traffic finds.
-    const row = findBySandboxId(t.db, sandboxId);
+    const row = findById(t.db, sandboxId);
     const later = new Date(
       Date.now() + ((row?.freezeAfterSeconds ?? 0) + 60) * 1000,
     );

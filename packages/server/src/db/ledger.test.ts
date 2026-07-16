@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { type Db, migrateDb, openDb } from './db';
-import { createSandbox, findByExternalId, touch, transition } from './ledger';
+import { createSandbox, findByName, touch, transition } from './ledger';
 
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 
@@ -13,10 +13,10 @@ function testDb(): Db {
   return db;
 }
 
-function create(db: Db, externalId = 'user-1') {
+function create(db: Db, name = 'user-1') {
   return createSandbox(db, {
-    sandboxId: randomUUID(),
-    externalId,
+    id: randomUUID(),
+    name,
     nodeId: 'node-1',
     policy: DEFAULT_LIFECYCLE_POLICY,
   });
@@ -27,8 +27,8 @@ describe('ledger', () => {
     const db = testDb();
     const created = create(db);
     expect(created.state).toBe('active');
-    expect(findByExternalId(db, 'user-1')).toEqual(created);
-    expect(findByExternalId(db, 'someone-else')).toBeUndefined();
+    expect(findByName(db, 'user-1')).toEqual(created);
+    expect(findByName(db, 'someone-else')).toBeUndefined();
   });
 
   it('enforces one sandbox per external id at the database level', () => {
@@ -39,7 +39,7 @@ describe('ledger', () => {
 
   it('walks the full lifecycle: active -> frozen -> stopped -> archived -> restoring -> active', () => {
     const db = testDb();
-    const { sandboxId } = create(db);
+    const { id: sandboxId } = create(db);
     for (const to of [
       'frozen',
       'stopped',
@@ -49,19 +49,19 @@ describe('ledger', () => {
     ] as const) {
       expect(transition(db, sandboxId, to).state).toBe(to);
     }
-    expect(findByExternalId(db, 'user-1')?.state).toBe('active');
+    expect(findByName(db, 'user-1')?.state).toBe('active');
   });
 
   it('wakes a frozen sandbox straight back to active', () => {
     const db = testDb();
-    const { sandboxId } = create(db);
+    const { id: sandboxId } = create(db);
     transition(db, sandboxId, 'frozen');
     expect(transition(db, sandboxId, 'active').state).toBe('active');
   });
 
   it('rejects skipping rungs on the way down, except rebuild', () => {
     const db = testDb();
-    const { sandboxId } = create(db);
+    const { id: sandboxId } = create(db);
     expect(() => transition(db, sandboxId, 'archived')).toThrow(
       /illegal transition/,
     );
@@ -72,7 +72,7 @@ describe('ledger', () => {
 
   it('rejects waking an archived sandbox without going through restoring', () => {
     const db = testDb();
-    const { sandboxId } = create(db);
+    const { id: sandboxId } = create(db);
     transition(db, sandboxId, 'frozen');
     transition(db, sandboxId, 'stopped');
     transition(db, sandboxId, 'archived');
@@ -88,7 +88,7 @@ describe('ledger', () => {
 
   it('touch refreshes the idle clock to the injected instant', () => {
     const db = testDb();
-    const { sandboxId, lastActiveAt } = create(db);
+    const { id: sandboxId, lastActiveAt } = create(db);
     const future = new Date(Date.parse(lastActiveAt) + 60_000).toISOString();
     expect(touch(db, sandboxId, future).lastActiveAt).toBe(future);
   });

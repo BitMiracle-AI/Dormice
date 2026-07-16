@@ -1,6 +1,6 @@
 import type { Archiver } from './archive/archiver';
 import type { Db } from './db/db';
-import { findBySandboxId, listSandboxes } from './db/ledger';
+import { findById, listSandboxes } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
@@ -128,8 +128,8 @@ export async function scanOnce(
       continue;
     }
     try {
-      await locks.tryRun(row.externalId, async () => {
-        const fresh = findBySandboxId(db, row.sandboxId);
+      await locks.tryRun(row.name, async () => {
+        const fresh = findById(db, row.id);
         if (!fresh) {
           return; // Released since the sweep's snapshot.
         }
@@ -140,7 +140,7 @@ export async function scanOnce(
           await destroySandbox(
             db,
             executor,
-            fresh.sandboxId,
+            fresh.id,
             archiver?.store ?? null,
             { kind: 'expired-killed', cause: 'E2B deadline (kill) reached' },
           );
@@ -151,7 +151,7 @@ export async function scanOnce(
           await freezeSandbox(
             db,
             executor,
-            fresh.sandboxId,
+            fresh.id,
             'E2B deadline reached (pause)',
           );
           result.frozen += 1;
@@ -162,7 +162,7 @@ export async function scanOnce(
           await freezeSandbox(
             db,
             executor,
-            fresh.sandboxId,
+            fresh.id,
             `idle ${fresh.freezeAfterSeconds}s reached — memory squeezed into swap (scanner)`,
           );
           result.frozen += 1;
@@ -170,7 +170,7 @@ export async function scanOnce(
           await stopSandbox(
             db,
             executor,
-            fresh.sandboxId,
+            fresh.id,
             `idle ${fresh.stopAfterSeconds}s reached — container torn down, disk kept (scanner)`,
           );
           result.stopped += 1;
@@ -178,7 +178,7 @@ export async function scanOnce(
       });
     } catch (error) {
       result.failures.push({
-        sandboxId: row.sandboxId,
+        sandboxId: row.id,
         message: error instanceof Error ? error.message : String(error),
       });
     }
@@ -187,8 +187,8 @@ export async function scanOnce(
   if (archiver === undefined) return result;
   for (const row of archiveDue) {
     try {
-      await locks.tryRun(row.externalId, async () => {
-        const fresh = findBySandboxId(db, row.sandboxId);
+      await locks.tryRun(row.name, async () => {
+        const fresh = findById(db, row.id);
         // Re-verified in the slot: phase one may have killed it by
         // deadline, an acquire may have woken it, a destroy removed it —
         // the snapshot's opinion is void either way.
@@ -204,7 +204,7 @@ export async function scanOnce(
       });
     } catch (error) {
       result.failures.push({
-        sandboxId: row.sandboxId,
+        sandboxId: row.id,
         message: error instanceof Error ? error.message : String(error),
       });
     }

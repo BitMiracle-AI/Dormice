@@ -73,7 +73,7 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
   it('is idempotent: the same key returns the same sandbox', async () => {
     const first = await client.acquireSandbox('alice');
     const second = await client.acquireSandbox('alice');
-    expect(second.sandbox.sandboxId).toBe(first.sandbox.sandboxId);
+    expect(second.sandbox.id).toBe(first.sandbox.id);
   });
 
   it('passes a policy override through', async () => {
@@ -154,19 +154,19 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
         DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds * 1000,
     );
     await scanOnce(db, executor, locks, frozenAt);
-    expect(executor.stateOf(created.sandbox.sandboxId)).toBe('paused');
+    expect(executor.stateOf(created.sandbox.id)).toBe('paused');
 
     const woken = await client.acquireSandbox('dave');
     expect(woken.status).toBe('ready');
-    expect(woken.sandbox.sandboxId).toBe(created.sandbox.sandboxId);
+    expect(woken.sandbox.id).toBe(created.sandbox.id);
     expect(woken.sandbox.state).toBe('active');
-    expect(executor.stateOf(created.sandbox.sandboxId)).toBe('running');
+    expect(executor.stateOf(created.sandbox.id)).toBe('running');
   });
 
   it('lists sandboxes with their lifecycle states', async () => {
     await client.acquireSandbox('erin');
     const sandboxes = await client.listSandboxes();
-    const erin = sandboxes.find((s) => s.externalId === 'erin');
+    const erin = sandboxes.find((s) => s.name === 'erin');
     expect(erin?.state).toBe('active');
   });
 
@@ -216,7 +216,7 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
             authorization: `Bearer ${TOKEN}`,
             'content-type': 'application/json',
           },
-          body: JSON.stringify({ externalId: 'henry', command: 'sleep 1' }),
+          body: JSON.stringify({ name: 'henry', command: 'sleep 1' }),
         }),
       ).rejects.toThrow(/fetch failed/);
       // The SDK carries its own dispatcher, so the same call sails through.
@@ -232,7 +232,7 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
       {
         name: 'DormiceApiError',
         status: 404,
-        message: expect.stringMatching(/no sandbox for key/),
+        message: expect.stringMatching(/no sandbox named/),
       },
     );
   });
@@ -273,16 +273,16 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
 
   it('rebuilds a sandbox: same id, state stopped, data intact after re-acquire', async () => {
     const created = await client.acquireSandbox('grace');
-    const id = created.sandbox.sandboxId;
+    const id = created.sandbox.id;
     await client.writeFiles('grace', [{ path: 'keep.txt', content: 'body' }]);
 
     const { sandbox } = await client.rebuildSandbox('grace');
-    expect(sandbox.sandboxId).toBe(id);
+    expect(sandbox.id).toBe(id);
     expect(sandbox.state).toBe('stopped');
     expect(executor.stateOf(id)).toBeUndefined();
 
     const again = await client.acquireSandbox('grace');
-    expect(again.sandbox.sandboxId).toBe(id);
+    expect(again.sandbox.id).toBe(id);
     const read = await client.readFile('grace', 'keep.txt');
     expect(new TextDecoder().decode(read.content)).toBe('body');
 
@@ -297,7 +297,7 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
     const { sandbox } = await client.updatePolicy('policy-key', {
       stopAfterSeconds: null,
     });
-    expect(sandbox.sandboxId).toBe(created.sandbox.sandboxId);
+    expect(sandbox.id).toBe(created.sandbox.id);
     expect(sandbox.policy).toEqual({
       ...DEFAULT_LIFECYCLE_POLICY,
       stopAfterSeconds: null,
@@ -315,11 +315,11 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
   it('releases a sandbox and reports idempotently', async () => {
     const created = await client.acquireSandbox('frank');
     expect(await client.destroySandbox('frank')).toEqual({ destroyed: true });
-    expect(executor.stateOf(created.sandbox.sandboxId)).toBeUndefined();
+    expect(executor.stateOf(created.sandbox.id)).toBeUndefined();
     expect(await client.destroySandbox('frank')).toEqual({ destroyed: false });
 
     const again = await client.acquireSandbox('frank');
-    expect(again.sandbox.sandboxId).not.toBe(created.sandbox.sandboxId);
+    expect(again.sandbox.id).not.toBe(created.sandbox.id);
   });
 });
 
@@ -334,7 +334,7 @@ describe('templates over real HTTP', () => {
       template: 'tpl-sdk',
     });
     expect(res.sandbox.template).toBe('tpl-sdk');
-    expect(await executor.imageOf(res.sandbox.sandboxId)).toBe('img-sdk');
+    expect(await executor.imageOf(res.sandbox.id)).toBe('img-sdk');
 
     // In use: removal is refused, naming the key that holds it.
     await expect(client.removeTemplate('tpl-sdk')).rejects.toMatchObject({
@@ -422,8 +422,8 @@ describe('the observability verbs over real HTTP', () => {
     await client.acquireSandbox('fleet-a');
     await client.acquireSandbox('fleet-b');
     const samples = await client.listSandboxMetrics();
-    const mine = samples.filter((s) => s.externalId.startsWith('fleet-'));
-    expect(mine.map((s) => s.externalId).sort()).toEqual([
+    const mine = samples.filter((s) => s.sandboxName.startsWith('fleet-'));
+    expect(mine.map((s) => s.sandboxName).sort()).toEqual([
       'fleet-a',
       'fleet-b',
     ]);
@@ -434,14 +434,14 @@ describe('the observability verbs over real HTTP', () => {
     await client.destroySandbox('fleet-b');
     // Released means gone from the measurable set, not null-stuffed.
     const after = await client.listSandboxMetrics();
-    expect(after.filter((s) => s.externalId.startsWith('fleet-'))).toEqual([]);
+    expect(after.filter((s) => s.sandboxName.startsWith('fleet-'))).toEqual([]);
   });
 
   it('listActivity tells the story just written, newest first', async () => {
     await client.acquireSandbox('story-sdk');
     await client.destroySandbox('story-sdk');
     const log = await client.listActivity({ limit: 10 });
-    const mine = log.filter((e) => e.externalId === 'story-sdk');
+    const mine = log.filter((e) => e.sandboxName === 'story-sdk');
     expect(mine.map((e) => e.kind)).toEqual(['destroyed', 'created']);
   });
 });

@@ -1,6 +1,6 @@
 import multipart from '@fastify/multipart';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
-import { findBySandboxId } from '../../db/ledger';
+import { findById } from '../../db/ledger';
 import type { E2bDeps } from '../deps';
 import { E2bError, verifyEnvdToken } from '../protocol';
 import { e2bView } from '../view';
@@ -94,7 +94,7 @@ export const e2bEnvdRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     // running, the exact signal isRunning() keys on.
     const header = request.headers['e2b-sandbox-id'];
     const id = Array.isArray(header) ? header[0] : header;
-    const row = id ? findBySandboxId(db, id) : undefined;
+    const row = id ? findById(db, id) : undefined;
     if (!row || e2bView(row, new Date()) !== 'running') {
       return reply
         .code(502)

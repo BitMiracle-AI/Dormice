@@ -30,24 +30,24 @@ terminal.)
 ## dor sandbox exec
 
 ```sh
-dor sandbox exec <externalId> '<command>' [-t <seconds>]
+dor sandbox exec <name> '<command>' [-t <seconds>]
 ```
 
-Runs a shell command in the sandbox behind the key, waking it first. The
+Runs a shell command in the named sandbox, waking it first. The
 command is one quoted argument, executed as `bash -c`. Its stdout and
 stderr pass through to yours, and **its exit code becomes `dor`'s exit
 code** — so `dor sandbox exec` in a script behaves like the command
 itself.
 
 `-t, --timeout <seconds>` kills the command after that long
-([enforced inside the container](/docs/commands)). An unknown key is a
+([enforced inside the container](/docs/commands)). An unknown name is a
 404, never a sandbox created by accident.
 
 ## dor sandbox push / pull
 
 ```sh
-dor sandbox push <externalId> <localPath> [remotePath]
-dor sandbox pull <externalId> <remotePath> [localPath]
+dor sandbox push <name> <localPath> [remotePath]
+dor sandbox pull <name> <remotePath> [localPath]
 ```
 
 One file in, one file out. Relative remote paths land under
@@ -58,7 +58,7 @@ wherever. Both obey the [16 MiB single-file limit](/docs/files).
 ## dor sandbox rebuild
 
 ```sh
-dor sandbox rebuild <externalId>
+dor sandbox rebuild <name>
 ```
 
 Swaps the container and keeps `/home/user` — the sandbox's next use
@@ -69,11 +69,11 @@ Details: [Rebuild a sandbox](/docs/persistence#rebuild-a-sandbox).
 ## dor sandbox destroy
 
 ```sh
-dor sandbox destroy <externalId>
+dor sandbox destroy <name>
 ```
 
 Destroys the sandbox — container, disk, and (if archived) the S3
-object. The only command that loses data. Idempotent: destroying a key
+object. The only command that loses data. Idempotent: destroying a name
 that has no sandbox reports so and exits 0.
 
 ## dor template

@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { lifecyclePolicyOverrideSchema } from './policy';
-import { externalIdSchema, sandboxSchema } from './sandbox';
+import { sandboxNameSchema, sandboxSchema } from './sandbox';
 
 /**
- * updatePolicy(externalId, policy) — the update verb acquire deliberately is not.
+ * updatePolicy(name, policy) — the update verb acquire deliberately is not.
  * Without it, changing a live sandbox's lifecycle (say, promoting it to a
  * never-stop resident agent) would require destroy + re-acquire, and destroy
  * removes the disk — the one thing this platform promises to keep.
@@ -18,7 +18,7 @@ import { externalIdSchema, sandboxSchema } from './sandbox';
  * thresholds apply to the idle time already accumulated.
  */
 export const updatePolicyRequestSchema = z.object({
-  externalId: externalIdSchema,
+  name: sandboxNameSchema,
   policy: lifecyclePolicyOverrideSchema,
 });
 
