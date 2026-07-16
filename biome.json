@@ -5,6 +5,7 @@
       "**",
       "!packages/*/drizzle",
       "!packages/console/src/components/ui",
+      "!packages/console/src/components/Grainient.tsx",
       "!packages/console/src/hooks/use-mobile.ts",
       "!packages/console/src/lib/utils.ts",
       "!packages/console/src/shadcn.css",
