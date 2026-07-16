@@ -41,9 +41,9 @@ async function rpc(path, body = {}) {
   return res.json();
 }
 
-const write = (externalId, files) =>
+const write = (name, files) =>
   rpc('/writeFiles', {
-    externalId,
+    name,
     files: files.map(([path, text]) => ({
       path,
       contentBase64: Buffer.from(text, 'utf8').toString('base64'),
@@ -66,55 +66,55 @@ for (const [name, image] of templates) {
 // stopAfterSeconds: null 是常驻 agent 档,永远停在 frozen。
 const sandboxes = [
   {
-    externalId: 'demo-agent',
+    name: 'demo-agent',
     policy: { freezeAfterSeconds: 300, stopAfterSeconds: null },
     template: 'claude-code',
     metadata: { app: 'assistant', env: 'prod' },
   },
   {
-    externalId: 'web-scraper',
+    name: 'web-scraper',
     policy: { freezeAfterSeconds: 5 },
     template: 'python-ml',
     metadata: { app: 'crawler', env: 'prod' },
   },
   {
-    externalId: 'build-runner',
+    name: 'build-runner',
     policy: { freezeAfterSeconds: 3, stopAfterSeconds: 8 },
     metadata: { app: 'ci' },
   },
   {
-    externalId: 'docs-writer',
+    name: 'docs-writer',
     policy: { freezeAfterSeconds: 5 },
     template: 'node-agent',
     metadata: { app: 'assistant', env: 'staging' },
   },
   {
-    externalId: 'email-triage',
+    name: 'email-triage',
     policy: { freezeAfterSeconds: 600, stopAfterSeconds: null },
     metadata: { app: 'assistant', env: 'prod' },
   },
   {
-    externalId: 'ci-check',
+    name: 'ci-check',
     policy: { freezeAfterSeconds: 4, stopAfterSeconds: 10 },
     metadata: { app: 'ci' },
   },
   {
-    externalId: 'data-pipeline',
+    name: 'data-pipeline',
     policy: { freezeAfterSeconds: 900 },
     template: 'python-ml',
     metadata: { app: 'crawler', env: 'staging' },
   },
   // 刻意不带标签:列表的标签列该有留白的样子,筛选也筛得掉它。
-  { externalId: 'scratch' },
+  { name: 'scratch' },
 ];
-for (const { externalId, policy, template, metadata } of sandboxes) {
+for (const { name, policy, template, metadata } of sandboxes) {
   await rpc('/acquireSandbox', {
-    externalId,
+    name,
     ...(policy ? { policy } : {}),
     ...(template ? { template } : {}),
     ...(metadata ? { metadata } : {}),
   });
-  console.log(`沙箱  ${externalId}`);
+  console.log(`沙箱  ${name}`);
 }
 
 // ---- 文件(给文件浏览器一些可看的内容)---------------------------------

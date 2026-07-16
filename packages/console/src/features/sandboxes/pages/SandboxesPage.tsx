@@ -14,6 +14,7 @@ import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { DataTable } from '@/components/DataTable';
 import { FilterMenu } from '@/components/FilterMenu';
+import { paginate, TablePager } from '@/components/TablePager';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   AlertDialog,
@@ -78,8 +79,10 @@ const STATE_FILTERS: Array<SandboxState> = [
   'restoring',
 ];
 
+const PAGE_SIZE = 50;
+
 /** 可排序的列:字符串比较对 name 和 ISO 时间戳同样成立。 */
-type SortKey = 'name' | 'lastActiveAt' | 'createdAt';
+type SortKey = 'name' | 'lastActiveAt';
 type Sort = { key: SortKey; dir: 1 | -1 };
 
 /** 一个沙箱的标签摊平成 "key=value" 串 — 筛选项与展示共用同一拼法。 */
@@ -94,15 +97,18 @@ function MetadataChips({ sandbox }: { sandbox: Sandbox }) {
   const pairs = labelPairs(sandbox);
   if (pairs.length === 0) return null;
   return (
-    <span className="inline-flex max-w-[16rem] flex-wrap gap-1">
+    // 上限收着点:列要在 max-w-6xl 里一屏放下,肥列多一寸,「操作」列
+    // 就被挤出视野一寸(2026-07-16 实测过溢出)。truncate 放内层 span:
+    // Badge 是 flex 容器,直接截自己会从两侧裁字、省略号不出现。
+    <span className="inline-flex max-w-[13rem] flex-wrap gap-1">
       {pairs.map((pair) => (
         <Badge
           key={pair}
           variant="outline"
-          className="max-w-[10rem] truncate font-mono text-xs font-normal text-muted-foreground"
+          className="max-w-[6.5rem] font-mono text-xs font-normal text-muted-foreground"
           title={pair}
         >
-          {pair}
+          <span className="truncate">{pair}</span>
         </Badge>
       ))}
     </span>
@@ -314,6 +320,9 @@ export function SandboxesPage() {
   const [metadataFilter, setMetadataFilter] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<Sort | null>(null);
+  // 分页是纯前端的(列表整份在手里);筛选变化回第一页,排序不回 —
+  // 排序改的是全序不是集合。
+  const [page, setPage] = useState(1);
 
   const metadataOptions = useMemo(() => {
     const pairs = new Set(sandboxes.flatMap(labelPairs));
@@ -342,6 +351,8 @@ export function SandboxesPage() {
     );
   }, [sandboxes, stateFilter, metadataFilter, search, sort]);
 
+  const { rows, safePage, pageCount } = paginate(filtered, page, PAGE_SIZE);
+
   // 选中集随现实收敛:被别处销毁的沙箱不该留在选中里撑数字。
   const selectedVisible = filtered.filter((s) => selected.has(s.name));
   const allVisibleSelected =
@@ -362,18 +373,15 @@ export function SandboxesPage() {
   };
 
   return (
-    <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">沙箱</h1>
-          <p className="text-sm text-muted-foreground">
-            账本里的全部沙箱,每 2 秒刷新 — 看着不会吵醒任何一个。
-          </p>
-        </div>
+    // openasi 列表页版式(2026-07-16 用户拍板):限宽居中、页头一行、
+    // 表格吃掉剩余高度框内滚、分页条钉底。h-full 接住外壳锁定的视口高。
+    <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-5 p-4 md:p-6">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3">
+        <h1 className="text-xl font-medium">沙箱</h1>
         <CreateSandboxDialog />
-      </div>
+      </header>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
         <InputGroup className="w-64">
           <InputGroupAddon>
             <HugeiconsIcon
@@ -383,7 +391,10 @@ export function SandboxesPage() {
           </InputGroupAddon>
           <InputGroupInput
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setPage(1);
+            }}
             placeholder="按 name 搜索"
           />
         </InputGroup>
@@ -394,16 +405,20 @@ export function SandboxesPage() {
             value: state,
             label: STATE_LABELS[state],
           }))}
-          onChange={(value) =>
-            setStateFilter(value === '' ? 'all' : (value as SandboxState))
-          }
+          onChange={(value) => {
+            setStateFilter(value === '' ? 'all' : (value as SandboxState));
+            setPage(1);
+          }}
         />
         {metadataOptions.length > 0 && (
           <FilterMenu
             label="标签"
             value={metadataFilter}
             options={metadataOptions}
-            onChange={setMetadataFilter}
+            onChange={(value) => {
+              setMetadataFilter(value);
+              setPage(1);
+            }}
           />
         )}
         <span className="text-sm text-muted-foreground">
@@ -426,7 +441,7 @@ export function SandboxesPage() {
       )}
 
       {query.isSuccess && sandboxes.length === 0 && (
-        <Empty className="border border-dashed">
+        <Empty className="flex-1 border border-dashed">
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <HugeiconsIcon icon={PackageIcon} />
@@ -440,7 +455,7 @@ export function SandboxesPage() {
       )}
 
       {query.isSuccess && sandboxes.length > 0 && filtered.length === 0 && (
-        <Empty className="border border-dashed">
+        <Empty className="flex-1 border border-dashed">
           <EmptyHeader>
             <EmptyTitle>没有匹配的沙箱</EmptyTitle>
             <EmptyDescription>换个关键词或状态试试。</EmptyDescription>
@@ -449,8 +464,8 @@ export function SandboxesPage() {
       )}
 
       {filtered.length > 0 && (
-        // 限高让长列表在框内滚,表头吸顶 — 列名滚不丢。
-        <DataTable containerClassName="max-h-[70vh]">
+        // fill:表格占满剩余高度框内滚,表头吸顶 — 列名滚不丢。
+        <DataTable fill>
           <TableHeader>
             <TableRow>
               <TableHead className="w-0">
@@ -483,20 +498,13 @@ export function SandboxesPage() {
                   onSort={toggleSort}
                 />
               </TableHead>
-              <TableHead>生命周期策略</TableHead>
-              <TableHead>
-                <SortableHead
-                  label="存活"
-                  sortKey="createdAt"
-                  sort={sort}
-                  onSort={toggleSort}
-                />
-              </TableHead>
+              {/* 短表头:6 个字的表头会把列最小宽钉死,行内容才是主角。 */}
+              <TableHead title="生命周期策略">策略</TableHead>
               <TableHead className="text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.map((sandbox: Sandbox) => (
+            {rows.map((sandbox: Sandbox) => (
               <TableRow
                 key={sandbox.id}
                 data-state={selected.has(sandbox.name) ? 'selected' : undefined}
@@ -567,14 +575,19 @@ export function SandboxesPage() {
                 >
                   {since(sandbox.lastActiveAt)}
                 </TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  {policyLine(sandbox.policy)}
-                </TableCell>
-                <TableCell
-                  className="tabular-nums text-muted-foreground"
-                  title={`创建于:${new Date(sandbox.createdAt).toLocaleString()}`}
-                >
-                  {since(sandbox.createdAt)}
+                {/* 限宽 + 放开 nowrap(vendored TableCell 默认不换行)让长
+                    策略折行,且只在「·」分隔处断 — CJK 默认哪里都能断,
+                    会把「停止」劈成两半。「存活」列刻意不设(2026-07-16
+                    版式取舍):创建时长与空闲高度重复,详情页有它的家。 */}
+                <TableCell className="max-w-[10rem] whitespace-normal text-xs text-muted-foreground">
+                  {policyLine(sandbox.policy)
+                    .split(' · ')
+                    .map((segment, index) => (
+                      <span key={segment}>
+                        {index > 0 && ' · '}
+                        <span className="whitespace-nowrap">{segment}</span>
+                      </span>
+                    ))}
                 </TableCell>
                 <TableCell className="text-right">
                   <SandboxRowMenu name={sandbox.name} />
@@ -584,6 +597,15 @@ export function SandboxesPage() {
           </TableBody>
         </DataTable>
       )}
-    </>
+
+      {filtered.length > 0 && (
+        <TablePager
+          page={safePage}
+          pageCount={pageCount}
+          total={filtered.length}
+          onPageChange={setPage}
+        />
+      )}
+    </div>
   );
 }

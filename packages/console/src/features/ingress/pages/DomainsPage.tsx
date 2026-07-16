@@ -247,19 +247,14 @@ export function DomainsPage() {
   };
 
   return (
-    // 内容是竖排的域名条目与指引,同设置页限宽居中。
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">域名</h1>
-          <p className="text-sm text-muted-foreground">
-            给控制台(和 API)绑定域名,可以绑多个;HTTPS 证书自动申请与续期。
-          </p>
-        </div>
+    // 内容是竖排的域名条目与指引 — 不是表格页,限宽 4xl 读起来舒服。
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 p-4 md:p-6">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-xl font-medium">域名</h1>
         {data?.managed && statuses.length > 0 && (
           <BindDomainDialog bound={bound} publicIp={publicIp} />
         )}
-      </div>
+      </header>
 
       {isPending ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">

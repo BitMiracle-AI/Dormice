@@ -5,6 +5,7 @@ import { Link } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { DataTable } from '@/components/DataTable';
 import { FilterMenu } from '@/components/FilterMenu';
+import { paginate, TablePager } from '@/components/TablePager';
 import { Badge } from '@/components/ui/badge';
 import {
   Empty,
@@ -30,6 +31,8 @@ import { cn } from '@/lib/utils';
 import { useActivity } from '../hooks/useActivity';
 import { ACTIVITY_KIND_LABELS, ACTIVITY_KIND_STYLES } from '../kinds';
 
+const PAGE_SIZE = 50;
+
 /**
  * 「我不在的时候发生了什么」:daemon 每一次生命周期动作(创建、降温、
  * 唤醒、销毁)和对账修复的有界环形记录 — 事件写在动作发生处,这里只读。
@@ -40,6 +43,7 @@ export function ActivityPage() {
   const { data, isPending, isError, error } = useActivity();
   const [search, setSearch] = useState('');
   const [kindFilter, setKindFilter] = useState<'all' | ActivityKind>('all');
+  const [page, setPage] = useState(1);
 
   const events = data?.events ?? [];
   const filtered = useMemo(
@@ -54,18 +58,17 @@ export function ActivityPage() {
       ),
     [events, kindFilter, search],
   );
+  const { rows, safePage, pageCount } = paginate(filtered, page, PAGE_SIZE);
 
   return (
-    <>
-      <div>
-        <h1 className="text-2xl font-semibold">活动</h1>
-        <p className="text-sm text-muted-foreground">
-          账本的历史:谁被创建、冻结、停止、销毁,对账修了什么。保留最近 1000
-          条,更老的自然滚出。
-        </p>
-      </div>
+    // openasi 列表页版式(2026-07-16 用户拍板):限宽居中、表格吃掉剩余
+    // 高度框内滚、分页条钉底。
+    <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-5 p-4 md:p-6">
+      <header className="shrink-0">
+        <h1 className="text-xl font-medium">活动</h1>
+      </header>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
         <InputGroup className="w-64">
           <InputGroupAddon>
             <HugeiconsIcon
@@ -75,7 +78,10 @@ export function ActivityPage() {
           </InputGroupAddon>
           <InputGroupInput
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setPage(1);
+            }}
             placeholder="按名称搜索"
           />
         </InputGroup>
@@ -87,9 +93,10 @@ export function ActivityPage() {
               [ActivityKind, string]
             >
           ).map(([kind, label]) => ({ value: kind, label }))}
-          onChange={(value) =>
-            setKindFilter(value === '' ? 'all' : (value as ActivityKind))
-          }
+          onChange={(value) => {
+            setKindFilter(value === '' ? 'all' : (value as ActivityKind));
+            setPage(1);
+          }}
         />
         <span className="text-sm text-muted-foreground">
           {filtered.length} / {events.length} 条
@@ -101,14 +108,14 @@ export function ActivityPage() {
           <Spinner /> 读取活动
         </div>
       ) : isError ? (
-        <Empty className="border border-dashed">
+        <Empty className="flex-1 border border-dashed">
           <EmptyHeader>
             <EmptyTitle>读取失败</EmptyTitle>
             <EmptyDescription>{error.message}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : events.length === 0 ? (
-        <Empty className="border border-dashed">
+        <Empty className="flex-1 border border-dashed">
           <EmptyHeader>
             <EmptyTitle>还没有活动</EmptyTitle>
             <EmptyDescription>
@@ -117,15 +124,15 @@ export function ActivityPage() {
           </EmptyHeader>
         </Empty>
       ) : filtered.length === 0 ? (
-        <Empty className="border border-dashed">
+        <Empty className="flex-1 border border-dashed">
           <EmptyHeader>
             <EmptyTitle>没有匹配的事件</EmptyTitle>
             <EmptyDescription>换个关键词或事件类型试试。</EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : (
-        // 环形记录上限 1000 条,是全站最长的表 — 限高框内滚,表头吸顶。
-        <DataTable containerClassName="max-h-[70vh]">
+        // 环形记录上限 1000 条,是全站最长的表 — fill 框内滚,表头吸顶。
+        <DataTable fill>
           <TableHeader>
             <TableRow>
               <TableHead className="w-28">时间</TableHead>
@@ -135,7 +142,7 @@ export function ActivityPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.map((event) => (
+            {rows.map((event) => (
               <TableRow key={event.id}>
                 <TableCell
                   className="tabular-nums text-muted-foreground"
@@ -177,6 +184,15 @@ export function ActivityPage() {
           </TableBody>
         </DataTable>
       )}
-    </>
+
+      {!isPending && !isError && filtered.length > 0 && (
+        <TablePager
+          page={safePage}
+          pageCount={pageCount}
+          total={filtered.length}
+          onPageChange={setPage}
+        />
+      )}
+    </div>
   );
 }

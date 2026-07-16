@@ -1,5 +1,5 @@
 import { Outlet, useRouterState } from '@tanstack/react-router';
-import { Fragment } from 'react';
+import { type CSSProperties, Fragment } from 'react';
 import { AppSidebar } from '@/components/AppSidebar';
 import { CommandMenu } from '@/components/CommandMenu';
 import {
@@ -21,9 +21,11 @@ const SEGMENT_LABELS: Record<string, string> = {
   sandboxes: '沙箱',
   templates: '模板',
   activity: '活动',
+  'api-keys': 'API 密钥',
   domains: '域名',
   doctor: '体检',
   settings: '设置',
+  version: '版本',
   connect: '连接',
 };
 
@@ -46,9 +48,15 @@ export function AppShell() {
   const crumbs = crumbsOf(pathname);
 
   return (
-    <SidebarProvider>
+    // 外壳锁定视口高度,滚动只发生在内容区(openasi 版式,2026-07-16):
+    // 表格页因此能"表格占满剩余高度框内滚、分页钉底"。侧栏 15rem
+    // (openasi 同宽;vendored sidebar.tsx 不动,用 CSS 变量覆写)。
+    <SidebarProvider
+      className="h-svh overflow-hidden"
+      style={{ '--sidebar-width': '15rem' } as CSSProperties}
+    >
       <AppSidebar />
-      <SidebarInset>
+      <SidebarInset className="min-h-0 overflow-hidden">
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger className="-ml-1" />
           {/* 组件自带 data-vertical:self-stretch,限高后会钉在顶栏上沿 — 压回居中。 */}
@@ -79,7 +87,8 @@ export function AppShell() {
           </Breadcrumb>
           <CommandMenu />
         </header>
-        <div className="flex flex-1 flex-col gap-4 p-4 md:p-6">
+        {/* 页面自带容器(max-w/padding/gap 按页型),这里只给滚动口。 */}
+        <div className="min-h-0 flex-1 overflow-y-auto">
           <Outlet />
         </div>
       </SidebarInset>

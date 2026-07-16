@@ -1,5 +1,7 @@
 import type { ConfigEntry } from '@dormice/shared';
+import { useState } from 'react';
 import { DataTable } from '@/components/DataTable';
+import { paginate, TablePager } from '@/components/TablePager';
 import { Badge } from '@/components/ui/badge';
 import {
   Empty,
@@ -16,7 +18,6 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatDuration } from '@/features/sandboxes/format';
-import { VersionCard } from '../components/VersionCard';
 import { useConfig } from '../hooks/useConfig';
 
 /**
@@ -68,6 +69,8 @@ function ValueCell({ entry }: { entry: ConfigEntry }) {
   return <>{entry.value}</>;
 }
 
+const PAGE_SIZE = 50;
+
 /**
  * daemon 生效配置的只读观察窗:回答"这台 daemon 开了哪些旋钮"。刻意
  * 只读 — 配置的真身在 /etc/dormice/env,改完重启 daemon 生效;网页里
@@ -75,31 +78,38 @@ function ValueCell({ entry }: { entry: ConfigEntry }) {
  */
 export function SettingsPage() {
   const { data, isPending, isError, error } = useConfig();
+  const [page, setPage] = useState(1);
 
   if (isPending) {
     return (
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+      <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground md:p-6">
         <Spinner /> 读取生效配置
       </div>
     );
   }
   if (isError) {
     return (
-      <Empty className="border border-dashed">
-        <EmptyHeader>
-          <EmptyTitle>读取失败</EmptyTitle>
-          <EmptyDescription>{error.message}</EmptyDescription>
-        </EmptyHeader>
-      </Empty>
+      <div className="mx-auto flex h-full w-full max-w-6xl flex-col p-4 md:p-6">
+        <Empty className="flex-1 border border-dashed">
+          <EmptyHeader>
+            <EmptyTitle>读取失败</EmptyTitle>
+            <EmptyDescription>{error.message}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      </div>
     );
   }
 
+  const { rows, safePage, pageCount } = paginate(data.entries, page, PAGE_SIZE);
+
   return (
-    // 四列窄表,铺满宽屏一行字拉太长 — 限宽居中,读起来是一页文档。
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
-      <div>
-        <h1 className="text-2xl font-semibold">设置</h1>
-        <p className="text-sm text-muted-foreground">
+    // openasi 列表页版式(2026-07-16 用户拍板);版本卡已拆去独立的
+    // /version 页 — 设置是设置,版本是版本。
+    <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-5 p-4 md:p-6">
+      <header className="shrink-0">
+        <h1 className="text-xl font-medium">设置</h1>
+        {/* 这行不是装饰:配置的真身与改法只在这里说 — 页面本体是只读的。 */}
+        <p className="mt-1 text-sm text-muted-foreground">
           daemon 的生效配置,只读。改配置在主机的{' '}
           <code className="font-mono">/etc/dormice/env</code>,改完{' '}
           <code className="font-mono">systemctl restart dormice</code>。归档:
@@ -108,11 +118,9 @@ export function SettingsPage() {
             : '未启用 — 配齐 DORMICE_S3_* 四件套后可用'}
           。
         </p>
-      </div>
+      </header>
 
-      <VersionCard />
-
-      <DataTable>
+      <DataTable fill>
         <TableHeader>
           <TableRow>
             <TableHead>旋钮</TableHead>
@@ -122,7 +130,7 @@ export function SettingsPage() {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {data.entries.map((entry) => (
+          {rows.map((entry) => (
             <TableRow key={entry.key}>
               <TableCell className="font-mono text-xs font-medium">
                 {entry.key}
@@ -144,6 +152,13 @@ export function SettingsPage() {
           ))}
         </TableBody>
       </DataTable>
+
+      <TablePager
+        page={safePage}
+        pageCount={pageCount}
+        total={data.entries.length}
+        onPageChange={setPage}
+      />
     </div>
   );
 }

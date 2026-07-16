@@ -66,7 +66,7 @@ export function SandboxDetailPage() {
 
   if (!sandbox) {
     return isSuccess ? (
-      <Empty className="border border-dashed">
+      <Empty className="m-4 border border-dashed md:m-6">
         <EmptyHeader>
           <EmptyTitle>没有叫「{name}」的沙箱</EmptyTitle>
           <EmptyDescription>
@@ -89,10 +89,11 @@ export function SandboxDetailPage() {
   }
 
   return (
-    <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    // 工作区页:与列表页同宽限 6xl,页头随 openasi 版式(text-xl medium)。
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 md:p-6">
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <h1 className="font-mono text-2xl font-semibold">{sandbox.name}</h1>
+          <h1 className="font-mono text-xl font-medium">{sandbox.name}</h1>
           <SandboxStateBadge state={sandbox.state} />
           <LifecycleCountdown sandbox={sandbox} />
         </div>
@@ -104,7 +105,7 @@ export function SandboxDetailPage() {
             onDestroyed={() => navigate({ to: '/sandboxes' })}
           />
         </div>
-      </div>
+      </header>
 
       {(sandbox.state === 'archived' || sandbox.state === 'restoring') && (
         <RestoreCard sandbox={sandbox} />
@@ -209,6 +210,6 @@ export function SandboxDetailPage() {
           <HistoryPanel name={sandbox.name} />
         </TabsContent>
       </Tabs>
-    </>
+    </div>
   );
 }
