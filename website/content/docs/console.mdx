@@ -83,13 +83,21 @@ with the daemon's own message naming the sandboxes.
 ## API keys
 
 Mint revocable credentials without leaving the browser
-([what they are](/docs/http-api#api-keys)). The create dialog shows the
-key **exactly once** — the daemon stores only a hash — with a copy
-button and no second chance. The table keeps every key ever minted,
-revoked ones included, as your rotation history: name, prefix, creation
-time, last use, status. Revoking takes effect on the key's next request.
-`DORMICE_API_TOKEN` itself never appears here — it is the bootstrap
-credential, and retiring it means editing `/etc/dormice/env`.
+([what they are](/docs/http-api#api-keys)). The create dialog takes a
+name and an optional expiry date, then shows the key **exactly once** —
+the daemon stores only a hash — with a copy button, a "copy connection
+config" button (endpoint + credential, ready for CI secrets), and no
+second chance. The table keeps every key ever minted, revoked ones
+included, as your rotation history: name, masked prefix, creation time,
+last use, expiry, an enable/disable switch (the reversible half of
+revoking), and status. Rows can be edited in place (rename, change or
+clear the expiry), selected in bulk for revocation, and revoking takes
+effect on the key's next request. `DORMICE_API_TOKEN` itself appears as
+a pinned, read-only "default" row so all credentials are visible in one
+table — but it lives in the server's environment, so retiring it means
+editing `/etc/dormice/env`, and it (or a console session) is also the
+only credential the key-management actions themselves accept: keys
+cannot manage keys.
 
 ## Activity, domains, and settings
 

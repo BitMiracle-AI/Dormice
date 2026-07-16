@@ -93,18 +93,25 @@ removes the image itself.
 ## dor apikey
 
 ```sh
-dor apikey create <name>   # prints the key once — store it immediately
-dor apikey ls
-dor apikey revoke <name>
+dor apikey create <name>                      # prints the key once — store it immediately
+dor apikey create <name> --expires 2026-12-31 # a TTL key, valid through that day
+dor apikey ls                                 # incl. EXPIRES and STATUS columns
+dor apikey disable <name>                     # reversible hold
+dor apikey enable <name>
+dor apikey revoke <name>                      # final; frees the name
 ```
 
 API keys are revocable peers of `DORMICE_API_TOKEN` — same power, but
 killable without touching the server ([details](/docs/http-api#api-keys)).
 `create` prints the 64-hex token exactly once; the daemon keeps only its
 hash. The minted key goes wherever the token goes, including this CLI's
-own `DORMICE_API_TOKEN` variable. `revoke` takes effect on the key's
-next request; revoking a name that has no active key says so honestly —
-check the spelling before assuming the leak is plugged.
+own `DORMICE_API_TOKEN` variable — with one exception: the `apikey`
+commands themselves require the env token (keys cannot manage keys; a
+key gets the daemon's honest 403). `disable` is the reversible half of
+`revoke`: the key stops working until re-enabled but keeps its name and
+history. `revoke` takes effect on the key's next request; revoking a
+name that has no active key says so honestly — check the spelling before
+assuming the leak is plugged.
 
 ## dor doctor
 

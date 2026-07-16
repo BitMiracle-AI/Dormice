@@ -167,6 +167,29 @@ describe('dor CLI against a real daemon', () => {
     expect(listed.stdout).toMatch(/NAME\s{2,}PREFIX\s{2,}CREATED/);
     expect(listed.stdout).toMatch(/cli-key\s{2,}[0-9a-f]{8}.*active/);
 
+    // Disable parks the credential (next request dies), enable revives it.
+    const disabled = await cli('apikey', 'disable', 'cli-key');
+    expect(disabled.stdout).toContain('Disabled API key "cli-key"');
+    await expect(
+      run('node', [CLI, 'sandbox', 'ls'], {
+        env: {
+          ...process.env,
+          DORMICE_ENDPOINT: inject('dormiceEndpoint'),
+          DORMICE_API_TOKEN: token,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+    const enabled = await cli('apikey', 'enable', 'cli-key');
+    expect(enabled.stdout).toContain('Enabled API key "cli-key"');
+    const revived = await run('node', [CLI, 'sandbox', 'ls'], {
+      env: {
+        ...process.env,
+        DORMICE_ENDPOINT: inject('dormiceEndpoint'),
+        DORMICE_API_TOKEN: token,
+      },
+    });
+    expect(revived.stdout).toBeDefined();
+
     const revoked = await cli('apikey', 'revoke', 'cli-key');
     expect(revoked.stdout).toContain('Revoked API key "cli-key"');
     await expect(

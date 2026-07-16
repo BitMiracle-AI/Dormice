@@ -417,7 +417,7 @@ describe('native API over a real daemon', () => {
     });
   });
 
-  it('API keys: the rolling-rotation story — mint, work, revoke, the env token survives', async () => {
+  it('API keys: the rolling-rotation story — mint, work, park, revoke, the env token survives', async () => {
     const { apiKey, token } = await client().createApiKey('rotation');
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     expect(apiKey.prefix).toBe(token.slice(0, 8));
@@ -433,14 +433,31 @@ describe('native API over a real daemon', () => {
     const mine = listed.find((k) => k.name === 'rotation');
     expect(mine?.lastUsedAt).not.toBeNull();
 
-    expect(await client().revokeApiKey('rotation')).toEqual({ revoked: true });
+    // Key-manages-key is refused with the honest 403 — a leaked key must
+    // not be able to mint itself an unrevoked successor.
+    await expect(keyed.listApiKeys()).rejects.toMatchObject({
+      name: 'DormiceApiError',
+      status: 403,
+      message: expect.stringMatching(/cannot manage API keys/),
+    });
+    await expect(keyed.createApiKey('backdoor')).rejects.toMatchObject({
+      status: 403,
+    });
+
+    // Disable is the reversible hold: 401 while parked, alive again after.
+    await client().updateApiKey(apiKey.id, { disabled: true });
+    await expect(keyed.listSandboxes()).rejects.toMatchObject({ status: 401 });
+    await client().updateApiKey(apiKey.id, { disabled: false });
+    expect(await keyed.listSandboxes()).toBeDefined();
+
+    expect(await client().revokeApiKey(apiKey.id)).toEqual({ revoked: true });
     await expect(keyed.listSandboxes()).rejects.toMatchObject({
       name: 'DormiceApiError',
       status: 401,
     });
     // The env token is the bootstrap credential: revocation never touches it.
     expect(await client().listSandboxes()).toBeDefined();
-    expect(await client().revokeApiKey('rotation')).toEqual({
+    expect(await client().revokeApiKey(apiKey.id)).toEqual({
       revoked: false,
     });
   });

@@ -10,10 +10,10 @@ import {
 import { type Logger, pino } from 'pino';
 import { z } from 'zod';
 import type { Archiver } from './archive/archiver';
-import { requireApiAuth, tokensEqual } from './auth';
+import { requireAdminAuth, requireApiAuth, tokensEqual } from './auth';
 import { type Config, type ConfigSources, configSources } from './config';
 import { getConsoleAccount } from './db/account';
-import { verifyApiKeyToken } from './db/api-keys';
+import { isLiveApiKey, verifyApiKeyToken } from './db/api-keys';
 import type { Db } from './db/db';
 import { getOrCreateSigningSecret } from './db/secrets';
 import { registerE2bCompat } from './e2b';
@@ -205,6 +205,16 @@ export function buildApp({
     () => getConsoleAccount(db)?.sessionSecret ?? null,
   );
 
+  // The apiKey verbs are admin-only: a credential must not be able to
+  // manage the credential ledger it lives in (key-manages-key is a
+  // self-replication ladder for a leaked key). Env token or console
+  // session only; a live ledger key gets an honest 403, not a silent 401.
+  const adminAuth = requireAdminAuth(
+    (bare) => tokensEqual(bare, config.DORMICE_API_TOKEN),
+    (bare) => isLiveApiKey(db, bare),
+    () => getConsoleAccount(db)?.sessionSecret ?? null,
+  );
+
   // The envd/signed-URL derivation base. Captured once — unlike the session
   // secret there is no verb that rotates it (see db/secrets.ts) — and NOT
   // the API token: the two credentials must rotate independently.
@@ -221,7 +231,6 @@ export function buildApp({
       archiveDefaultSeconds,
     });
     await api.register(templateRoutes, { db });
-    await api.register(apiKeyRoutes, { db });
     await api.register(hostRoutes, { config, db, executor });
     await api.register(activityRoutes, { db });
     await api.register(ingressRoutes, { db, ingress });
@@ -231,6 +240,14 @@ export function buildApp({
       archiveDefaultSeconds,
     });
     await api.register(upgradeRoutes, { updater, db });
+  });
+
+  // The apiKey management verbs sit behind the stricter admin gate — their
+  // own scope, because a Fastify hook guards a whole scope and these four
+  // verbs are the only ones with a different answer to "who may call".
+  app.register(async (admin) => {
+    admin.addHook('onRequest', adminAuth);
+    await admin.register(apiKeyRoutes, { db });
   });
 
   // The web console: account + session endpoints (open — setup and login

@@ -57,7 +57,9 @@ wire.
 
 [API keys](/docs/http-api#api-keys) minted through the daemon work here
 too — `e2b_<key>` anywhere the token goes, and they are pure hex by
-construction, so the Python SDK's validation never bites.
+construction, so the Python SDK's validation never bites. A disabled,
+expired or revoked key is rejected on this surface the same instant it
+is on the native one — one credential truth, two dialects.
 
 ## Reuse the same sandbox across creates
 

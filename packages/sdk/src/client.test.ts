@@ -373,22 +373,62 @@ describe('API keys over real HTTP', () => {
     const mine = listed.find((k) => k.name === 'sdk-rotation');
     expect(mine?.lastUsedAt).not.toBeNull();
 
-    expect(await client.revokeApiKey('sdk-rotation')).toEqual({
+    expect(await client.revokeApiKey(apiKey.id)).toEqual({
       revoked: true,
     });
     await expect(keyed.listSandboxes()).rejects.toMatchObject({ status: 401 });
-    expect(await client.revokeApiKey('sdk-rotation')).toEqual({
+    expect(await client.revokeApiKey(apiKey.id)).toEqual({
       revoked: false,
     });
   });
 
   it("surfaces the server's 409 for a duplicate active name", async () => {
-    await client.createApiKey('sdk-dup');
+    const { apiKey } = await client.createApiKey('sdk-dup');
     await expect(client.createApiKey('sdk-dup')).rejects.toMatchObject({
       status: 409,
       message: expect.stringMatching(/sdk-dup/),
     });
-    await client.revokeApiKey('sdk-dup');
+    await client.revokeApiKey(apiKey.id);
+  });
+
+  it('updateApiKey renames, parks and expires a key in place', async () => {
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    const { apiKey, token } = await client.createApiKey('sdk-edit', {
+      expiresAt: future,
+    });
+    expect(apiKey.expiresAt).toBe(future);
+
+    const keyed = new Dormice({ endpoint, token });
+    await keyed.listSandboxes();
+
+    // Park it: the credential dies on the next request, reversibly.
+    const parked = await client.updateApiKey(apiKey.id, { disabled: true });
+    expect(parked.apiKey.disabledAt).not.toBeNull();
+    await expect(keyed.listSandboxes()).rejects.toMatchObject({ status: 401 });
+
+    const resumed = await client.updateApiKey(apiKey.id, {
+      disabled: false,
+      name: 'sdk-edit-2',
+      expiresAt: null,
+    });
+    expect(resumed.apiKey).toMatchObject({
+      name: 'sdk-edit-2',
+      disabledAt: null,
+      expiresAt: null,
+    });
+    await keyed.listSandboxes();
+
+    await client.revokeApiKey(apiKey.id);
+  });
+
+  it('a ledger key gets the honest 403 on the management verbs', async () => {
+    const { apiKey, token } = await client.createApiKey('sdk-not-admin');
+    const keyed = new Dormice({ endpoint, token });
+    await expect(keyed.listApiKeys()).rejects.toMatchObject({
+      status: 403,
+      message: expect.stringMatching(/cannot manage API keys/),
+    });
+    await client.revokeApiKey(apiKey.id);
   });
 });
 

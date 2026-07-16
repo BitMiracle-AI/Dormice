@@ -11,6 +11,8 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   apikeyCreate,
+  apikeyDisable,
+  apikeyEnable,
   apikeyLs,
   apikeyRevoke,
   clientFromEnv,
@@ -37,6 +39,7 @@ const MIGRATIONS = fileURLToPath(
 
 let app: ReturnType<typeof buildApp>;
 let client: Dormice;
+let endpoint: string;
 
 beforeAll(async () => {
   const db = openDb(':memory:');
@@ -62,10 +65,8 @@ beforeAll(async () => {
   if (typeof address !== 'object' || address === null) {
     throw new Error('expected a TCP address');
   }
-  client = new Dormice({
-    endpoint: `http://127.0.0.1:${address.port}`,
-    token: TOKEN,
-  });
+  endpoint = `http://127.0.0.1:${address.port}`;
+  client = new Dormice({ endpoint, token: TOKEN });
 });
 
 afterAll(async () => {
@@ -235,9 +236,9 @@ describe('apikey commands over real HTTP', () => {
 
     const output = await apikeyLs(client);
     expect(output.split('\n')[0]).toMatch(
-      /^NAME\s{2,}PREFIX\s{2,}CREATED\s{2,}LAST USED\s{2,}STATUS$/,
+      /^NAME\s{2,}PREFIX\s{2,}CREATED\s{2,}LAST USED\s{2,}EXPIRES\s{2,}STATUS$/,
     );
-    expect(output).toMatch(/ci\s{2,}[0-9a-f]{8}.*never\s{2,}active/);
+    expect(output).toMatch(/ci\s{2,}[0-9a-f]{8}.*never\s{2,}never\s{2,}active/);
 
     expect(await apikeyRevoke(client, 'ci')).toBe(
       'Revoked API key "ci" — it stops working immediately.',
@@ -246,6 +247,54 @@ describe('apikey commands over real HTTP', () => {
       'No active API key named "ci" — nothing to revoke.',
     );
     expect(await apikeyLs(client)).toMatch(/ci\s{2,}.*revoked/);
+  });
+
+  it('disable parks a key by name; enable resumes it; a disabled key still revokes by name', async () => {
+    await apikeyCreate(client, 'park-me');
+
+    expect(await apikeyDisable(client, 'park-me')).toBe(
+      'Disabled API key "park-me" — it stops working until re-enabled.',
+    );
+    expect(await apikeyLs(client)).toMatch(/park-me\s{2,}.*disabled/);
+
+    expect(await apikeyEnable(client, 'park-me')).toBe(
+      'Enabled API key "park-me".',
+    );
+    expect(await apikeyLs(client)).toMatch(/park-me\s{2,}.*active/);
+
+    // Disabled keys keep their name — revoke must still reach them by it.
+    await apikeyDisable(client, 'park-me');
+    expect(await apikeyRevoke(client, 'park-me')).toBe(
+      'Revoked API key "park-me" — it stops working immediately.',
+    );
+    await expect(apikeyDisable(client, 'park-me')).rejects.toThrow(
+      /no API key named "park-me"/,
+    );
+  });
+
+  it('--expires mints a TTL key through end-of-day and refuses garbage dates', async () => {
+    const created = await apikeyCreate(client, 'ttl', '2030-06-15');
+    expect(created.split('\n')[0]).toMatch(
+      /^Created API key "ttl" \(prefix [0-9a-f]{8}, expires 2030-06-1[56]T.*\)\.$/,
+    );
+    expect(await apikeyLs(client)).toMatch(/ttl\s{2,}.*active/);
+
+    await expect(apikeyCreate(client, 'bad', 'next tuesday')).rejects.toThrow(
+      /--expires must be a date like 2026-12-31/,
+    );
+    await expect(apikeyCreate(client, 'bad', '2030-02-31')).rejects.toThrow(
+      /--expires/,
+    );
+  });
+
+  it("a minted key is refused on the management verbs with the server's honest 403", async () => {
+    const created = await apikeyCreate(client, 'not-admin');
+    const token = created.split('\n')[1] ?? '';
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    const keyed = new Dormice({ endpoint, token });
+    await expect(apikeyLs(keyed)).rejects.toThrow(
+      /cannot manage API keys — use DORMICE_API_TOKEN or the console/,
+    );
   });
 });
 

@@ -202,13 +202,25 @@ export const listApiKeys = () => rpc<{ apiKeys: ApiKey[] }>('/listApiKeys');
 
 // The response's `token` is the key material's ONE appearance — the daemon
 // stores only its hash. Show it, offer copy, never ask for it back.
-export const createApiKey = (name: string) =>
-  rpc<CreateApiKeyResponse>('/createApiKey', { name });
+// expiresAt omitted = never expires.
+export const createApiKey = (name: string, expiresAt?: string) =>
+  rpc<CreateApiKeyResponse>('/createApiKey', {
+    name,
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
+  });
+
+// Patch semantics: an absent field is untouched, expiresAt null clears to
+// never, disabled parks/resumes reversibly. Addressed by id — names are
+// renameable, the id is the stable handle.
+export const updateApiKey = (
+  id: string,
+  patch: { name?: string; expiresAt?: string | null; disabled?: boolean },
+) => rpc<{ apiKey: ApiKey }>('/updateApiKey', { id, ...patch });
 
 // Soft revoke: the row stays listed as rotation history; the credential
-// stops working on its next request. False = no active key had that name.
-export const revokeApiKey = (name: string) =>
-  rpc<{ revoked: boolean }>('/revokeApiKey', { name });
+// stops working on its next request. False = no non-revoked key had that id.
+export const revokeApiKey = (id: string) =>
+  rpc<{ revoked: boolean }>('/revokeApiKey', { id });
 
 // An upsert: re-registering a name points it at a new image — that IS the
 // template upgrade front door (then rebuild the sandboxes that should move).

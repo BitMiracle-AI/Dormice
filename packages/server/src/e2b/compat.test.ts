@@ -220,7 +220,7 @@ describe('E2B control plane', () => {
       headers: { authorization: `Bearer ${TOKEN}` },
       payload: { name: 'e2b-client' },
     });
-    const { token } = minted.json();
+    const { token, apiKey } = minted.json();
 
     const prefixed = await t.app.inject({
       method: 'POST',
@@ -234,7 +234,7 @@ describe('E2B control plane', () => {
       method: 'POST',
       url: '/revokeApiKey',
       headers: { authorization: `Bearer ${TOKEN}` },
-      payload: { name: 'e2b-client' },
+      payload: { id: apiKey.id },
     });
     const revoked = await t.app.inject({
       method: 'POST',
@@ -244,6 +244,51 @@ describe('E2B control plane', () => {
     });
     expect(revoked.statusCode).toBe(401);
     expect(revoked.json()).toEqual({ code: 401, message: 'invalid API key' });
+  });
+
+  it('disabled and expired ledger keys are rejected on the X-API-KEY face too', async () => {
+    const t = testApp();
+    const native = { authorization: `Bearer ${TOKEN}` };
+    const useE2b = (token: string) =>
+      t.app.inject({
+        method: 'POST',
+        url: '/e2b/api/sandboxes',
+        headers: { 'x-api-key': `e2b_${token}` },
+        payload: {},
+      });
+
+    const parked = (
+      await t.app.inject({
+        method: 'POST',
+        url: '/createApiKey',
+        headers: native,
+        payload: { name: 'parked' },
+      })
+    ).json();
+    await t.app.inject({
+      method: 'POST',
+      url: '/updateApiKey',
+      headers: native,
+      payload: { id: parked.apiKey.id, disabled: true },
+    });
+    const disabled = await useE2b(parked.token);
+    expect(disabled.statusCode).toBe(401);
+    expect(disabled.json()).toEqual({ code: 401, message: 'invalid API key' });
+
+    const stale = (
+      await t.app.inject({
+        method: 'POST',
+        url: '/createApiKey',
+        headers: native,
+        payload: {
+          name: 'stale',
+          expiresAt: new Date(Date.now() - 1000).toISOString(),
+        },
+      })
+    ).json();
+    const expired = await useE2b(stale.token);
+    expect(expired.statusCode).toBe(401);
+    expect(expired.json()).toEqual({ code: 401, message: 'invalid API key' });
   });
 
   it('creates a fresh sandbox per call — E2B semantics, no key given', async () => {
