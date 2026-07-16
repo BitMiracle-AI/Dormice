@@ -1,12 +1,8 @@
-import {
-  ArrowRight01Icon,
-  PackageIcon,
-  Search01Icon,
-} from '@hugeicons/core-free-icons';
+import { ArrowRight01Icon, PackageIcon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
-import { menuButtonClass, NAV_GROUPS } from '@/components/nav';
+import { NAV_GROUPS } from '@/components/nav';
 import {
   CommandDialog,
   CommandEmpty,
@@ -15,8 +11,6 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
-import { Kbd } from '@/components/ui/kbd';
-import { SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar';
 import { STATE_LABELS } from '@/features/sandboxes/format';
 import { useSandboxes } from '@/features/sandboxes/hooks/useSandboxes';
 import { MOCK_PAGES_ENABLED } from '@/lib/mock';
@@ -50,10 +44,10 @@ function SandboxItems({ onGo }: { onGo: (name: string) => void }) {
 }
 
 /**
- * ⌘K / Ctrl+K 命令面板:跳页面、按 name 跳沙箱。入口是侧栏顶部的
- * 菜单项(顶栏 2026-07-16 删除:面包屑与页面自带页头是第二份真相),
- * 登录后全站可用;它只做导航 — 动作(销毁/重建)留在各自页面的确认
- * 流程里,快捷键不该绕过"删了就没有了"的那道闸。
+ * ⌘K / Ctrl+K 命令面板:跳页面、按 name 跳沙箱。纯键盘入口(2026-07-16
+ * 用户拍板去掉侧栏搜索按钮,快捷键是唯一门),组件不渲染可见节点、只挂
+ * 快捷键和弹窗,登录后全站可用;它只做导航 — 动作(销毁/重建)留在各自
+ * 页面的确认流程里,快捷键不该绕过"删了就没有了"的那道闸。
  */
 export function CommandMenu() {
   const [open, setOpen] = useState(false);
@@ -84,47 +78,35 @@ export function CommandMenu() {
   };
 
   return (
-    <>
-      <SidebarMenuItem>
-        <SidebarMenuButton
-          className={menuButtonClass}
-          onClick={() => setOpen(true)}
-        >
-          <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
-          <span>搜索</span>
-          <Kbd className="ml-auto">⌘K</Kbd>
-        </SidebarMenuButton>
-      </SidebarMenuItem>
-      <CommandDialog
-        open={open}
-        onOpenChange={setOpen}
-        title="命令面板"
-        description="跳转到页面或沙箱"
-      >
-        <CommandInput placeholder="搜页面、沙箱" />
-        <CommandList>
-          <CommandEmpty>没有匹配的结果。</CommandEmpty>
-          <CommandGroup heading="页面">
-            {NAV_GROUPS.flatMap((group) => group.items)
-              .filter((item) => !item.mock || MOCK_PAGES_ENABLED)
-              .map((item) => (
-                <CommandItem
-                  key={item.to}
-                  value={`page ${item.label}`}
-                  onSelect={() => goPage(item.to)}
-                >
-                  <HugeiconsIcon icon={item.icon} strokeWidth={1.8} />
-                  {item.label}
-                  <HugeiconsIcon
-                    icon={ArrowRight01Icon}
-                    className="ml-auto size-3.5 text-muted-foreground"
-                  />
-                </CommandItem>
-              ))}
-          </CommandGroup>
-          {open && <SandboxItems onGo={goSandbox} />}
-        </CommandList>
-      </CommandDialog>
-    </>
+    <CommandDialog
+      open={open}
+      onOpenChange={setOpen}
+      title="命令面板"
+      description="跳转到页面或沙箱"
+    >
+      <CommandInput placeholder="搜页面、沙箱" />
+      <CommandList>
+        <CommandEmpty>没有匹配的结果。</CommandEmpty>
+        <CommandGroup heading="页面">
+          {NAV_GROUPS.flatMap((group) => group.items)
+            .filter((item) => !item.mock || MOCK_PAGES_ENABLED)
+            .map((item) => (
+              <CommandItem
+                key={item.to}
+                value={`page ${item.label}`}
+                onSelect={() => goPage(item.to)}
+              >
+                <HugeiconsIcon icon={item.icon} strokeWidth={1.8} />
+                {item.label}
+                <HugeiconsIcon
+                  icon={ArrowRight01Icon}
+                  className="ml-auto size-3.5 text-muted-foreground"
+                />
+              </CommandItem>
+            ))}
+        </CommandGroup>
+        {open && <SandboxItems onGo={goSandbox} />}
+      </CommandList>
+    </CommandDialog>
   );
 }

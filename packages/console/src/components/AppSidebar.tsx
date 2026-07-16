@@ -1,15 +1,24 @@
 import {
+  ArrowUpRight01Icon,
   Book02Icon,
   GithubIcon,
   Logout01Icon,
-  Moon02Icon,
-  Sun02Icon,
 } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Link, useRouterState } from '@tanstack/react-router';
-import { useTheme } from 'next-themes';
+import { useState } from 'react';
 import { CommandMenu } from '@/components/CommandMenu';
 import { menuButtonClass, NAV_GROUPS } from '@/components/nav';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import {
   Sidebar,
   SidebarContent,
@@ -44,9 +53,9 @@ export function AppSidebar() {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
-  const { resolvedTheme, setTheme } = useTheme();
   // 只读缓存:设置页查过且有新版本才亮,角标自己绝不发请求。
   const upgradable = useCachedUpgradable();
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
 
   return (
     <Sidebar variant="inset" className="px-1">
@@ -60,10 +69,8 @@ export function AppSidebar() {
             Dormice
           </span>
         </Link>
-        {/* ⌘K 搜索入口:顶栏删掉后(2026-07-16)它是全站搜索唯一的可见入口。 */}
-        <SidebarMenu>
-          <CommandMenu />
-        </SidebarMenu>
+        {/* ⌘K 命令面板:纯键盘入口,组件只挂快捷键和弹窗,不渲染可见节点。 */}
+        <CommandMenu />
       </SidebarHeader>
 
       <SidebarContent>
@@ -121,6 +128,12 @@ export function AppSidebar() {
             >
               <HugeiconsIcon icon={GithubIcon} strokeWidth={2} />
               <span>GitHub</span>
+              {/* 右上角箭头 = 外链,新标签页打开的视觉承诺。 */}
+              <HugeiconsIcon
+                icon={ArrowUpRight01Icon}
+                strokeWidth={2}
+                className="ml-auto size-3.5 text-muted-foreground"
+              />
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
@@ -136,30 +149,40 @@ export function AppSidebar() {
             >
               <HugeiconsIcon icon={Book02Icon} strokeWidth={2} />
               <span>文档</span>
+              <HugeiconsIcon
+                icon={ArrowUpRight01Icon}
+                strokeWidth={2}
+                className="ml-auto size-3.5 text-muted-foreground"
+              />
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
               className={menuButtonClass}
-              onClick={() =>
-                setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')
-              }
+              onClick={() => setLogoutConfirmOpen(true)}
             >
-              <HugeiconsIcon
-                icon={resolvedTheme === 'dark' ? Sun02Icon : Moon02Icon}
-                strokeWidth={2}
-              />
-              <span>{resolvedTheme === 'dark' ? '浅色模式' : '深色模式'}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton className={menuButtonClass} onClick={signOut}>
               <HugeiconsIcon icon={Logout01Icon} strokeWidth={2} />
               <span>退出登录</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+
+      {/* 退出确认:不是不可逆操作,但会话没了要重输密码,值得拦一下手滑。 */}
+      <AlertDialog open={logoutConfirmOpen} onOpenChange={setLogoutConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>退出登录?</AlertDialogTitle>
+            <AlertDialogDescription>
+              退出后需要重新输入密码才能进入控制台。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>再待会儿</AlertDialogCancel>
+            <AlertDialogAction onClick={signOut}>退出</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Sidebar>
   );
 }
