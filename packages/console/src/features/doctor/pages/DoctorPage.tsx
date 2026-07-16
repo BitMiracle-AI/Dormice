@@ -85,17 +85,11 @@ export function DoctorPage() {
   );
 
   return (
-    <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold">
-            体检 <SampleDataBadge />
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            与 <code className="font-mono">dor doctor</code> 同一套只读检查:
-            这台机器能不能跑 daemon。只查不修,修是 install.sh 的活。
-          </p>
-        </div>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 md:p-6">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="flex items-center gap-2 text-xl font-medium">
+          体检 <SampleDataBadge />
+        </h1>
         <Tooltip>
           <TooltipTrigger
             render={
@@ -108,7 +102,7 @@ export function DoctorPage() {
           />
           <TooltipContent>接入 runDoctor 端点后可用</TooltipContent>
         </Tooltip>
-      </div>
+      </header>
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <Badge
@@ -176,6 +170,6 @@ export function DoctorPage() {
           </ul>
         </CardContent>
       </Card>
-    </>
+    </div>
   );
 }

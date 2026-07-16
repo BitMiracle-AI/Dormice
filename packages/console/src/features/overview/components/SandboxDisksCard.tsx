@@ -30,9 +30,11 @@ export function SandboxDisksCard() {
   return (
     <StatCard
       label="沙箱磁盘"
+      // 稀疏镜像只为真实内容付费:大数字是实占,hint 是许诺 — 差值即超卖。
+      // 四列布局下 footer 左栏只有 8 个汉字宽,文案按这个上限写。
       value={formatBytes(sandboxDisks.actualBytes)}
-      hint={`${sandboxDisks.count} 块盘共许诺 ${formatBytes(sandboxDisks.nominalBytes)}`}
-      sub={`实占 ${usedPct}% — 稀疏镜像只为真实内容付费`}
+      hint={`共许诺 ${formatBytes(sandboxDisks.nominalBytes)}`}
+      sub={`${sandboxDisks.count} 块盘 · 实占 ${usedPct}%`}
       corner={
         <div className="w-20 shrink-0 pb-1.5 @[250px]/card:w-24">
           <Meter pct={usedPct} />

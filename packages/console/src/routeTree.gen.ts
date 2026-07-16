@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppVersionRouteImport } from './routes/_app/version'
 import { Route as AppTemplatesRouteImport } from './routes/_app/templates'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppDomainsRouteImport } from './routes/_app/domains'
@@ -34,6 +35,11 @@ const AppRoute = AppRouteImport.update({
 const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppVersionRoute = AppVersionRouteImport.update({
+  id: '/version',
+  path: '/version',
   getParentRoute: () => AppRoute,
 } as any)
 const AppTemplatesRoute = AppTemplatesRouteImport.update({
@@ -92,6 +98,7 @@ export interface FileRoutesByFullPath {
   '/domains': typeof AppDomainsRoute
   '/settings': typeof AppSettingsRoute
   '/templates': typeof AppTemplatesRoute
+  '/version': typeof AppVersionRoute
   '/sandboxes/$name': typeof AppSandboxesNameRoute
   '/sandboxes/': typeof AppSandboxesIndexRoute
 }
@@ -104,6 +111,7 @@ export interface FileRoutesByTo {
   '/domains': typeof AppDomainsRoute
   '/settings': typeof AppSettingsRoute
   '/templates': typeof AppTemplatesRoute
+  '/version': typeof AppVersionRoute
   '/': typeof AppIndexRoute
   '/sandboxes/$name': typeof AppSandboxesNameRoute
   '/sandboxes': typeof AppSandboxesIndexRoute
@@ -119,6 +127,7 @@ export interface FileRoutesById {
   '/_app/domains': typeof AppDomainsRoute
   '/_app/settings': typeof AppSettingsRoute
   '/_app/templates': typeof AppTemplatesRoute
+  '/_app/version': typeof AppVersionRoute
   '/_app/': typeof AppIndexRoute
   '/_app/sandboxes/$name': typeof AppSandboxesNameRoute
   '/_app/sandboxes/': typeof AppSandboxesIndexRoute
@@ -135,6 +144,7 @@ export interface FileRouteTypes {
     | '/domains'
     | '/settings'
     | '/templates'
+    | '/version'
     | '/sandboxes/$name'
     | '/sandboxes/'
   fileRoutesByTo: FileRoutesByTo
@@ -147,6 +157,7 @@ export interface FileRouteTypes {
     | '/domains'
     | '/settings'
     | '/templates'
+    | '/version'
     | '/'
     | '/sandboxes/$name'
     | '/sandboxes'
@@ -161,6 +172,7 @@ export interface FileRouteTypes {
     | '/_app/domains'
     | '/_app/settings'
     | '/_app/templates'
+    | '/_app/version'
     | '/_app/'
     | '/_app/sandboxes/$name'
     | '/_app/sandboxes/'
@@ -192,6 +204,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/version': {
+      id: '/_app/version'
+      path: '/version'
+      fullPath: '/version'
+      preLoaderRoute: typeof AppVersionRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/templates': {
@@ -268,6 +287,7 @@ interface AppRouteChildren {
   AppDomainsRoute: typeof AppDomainsRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppTemplatesRoute: typeof AppTemplatesRoute
+  AppVersionRoute: typeof AppVersionRoute
   AppIndexRoute: typeof AppIndexRoute
   AppSandboxesNameRoute: typeof AppSandboxesNameRoute
   AppSandboxesIndexRoute: typeof AppSandboxesIndexRoute
@@ -281,6 +301,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppDomainsRoute: AppDomainsRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppTemplatesRoute: AppTemplatesRoute,
+  AppVersionRoute: AppVersionRoute,
   AppIndexRoute: AppIndexRoute,
   AppSandboxesNameRoute: AppSandboxesNameRoute,
   AppSandboxesIndexRoute: AppSandboxesIndexRoute,

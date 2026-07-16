@@ -39,11 +39,17 @@ export function RangeSwitcher({
           if (typeof next === 'string') onChange(next as TimelineRangeKey);
         }}
         variant="outline"
-        size="sm"
-        className="hidden sm:flex"
+        spacing={0}
+        // openasi 同款分段控件(2026-07-16):无缝拼接、加宽点按面,
+        // 切档不闪过渡动画。
+        className="hidden *:data-[slot=toggle-group-item]:px-3.5 sm:flex"
       >
         {TIMELINE_RANGES.map((r) => (
-          <ToggleGroupItem key={r.key} value={r.key}>
+          <ToggleGroupItem
+            key={r.key}
+            value={r.key}
+            className="transition-none"
+          >
             {r.label}
           </ToggleGroupItem>
         ))}

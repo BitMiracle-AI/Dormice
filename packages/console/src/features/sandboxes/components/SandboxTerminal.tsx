@@ -80,7 +80,8 @@ function LiveTerminal({ sandboxId }: { sandboxId: string }) {
     <div className="flex flex-col gap-2">
       <div
         ref={containerRef}
-        className="h-80 w-full overflow-hidden rounded-md bg-black p-2"
+        // select-text:全局 select-none 下终端输出必须仍可选中复制。
+        className="h-80 w-full select-text overflow-hidden rounded-md bg-black p-2"
       />
       {closedReason && (
         <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm text-muted-foreground">

@@ -1,6 +1,9 @@
 import {
   Activity01Icon,
+  Book02Icon,
   DashboardSquare01Icon,
+  GitCommitIcon,
+  GithubIcon,
   Globe02Icon,
   Key01Icon,
   Layers01Icon,
@@ -60,6 +63,7 @@ export const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
       { to: '/domains', label: '域名', icon: Globe02Icon },
       { to: '/doctor', label: '体检', icon: StethoscopeIcon, mock: true },
       { to: '/settings', label: '设置', icon: Settings01Icon },
+      { to: '/version', label: '版本', icon: GitCommitIcon },
     ],
   },
   {
@@ -129,7 +133,7 @@ export function AppSidebar() {
                         <span>{item.label}</span>
                       </SidebarMenuButton>
                       {item.mock && <SidebarMenuBadge>预览</SidebarMenuBadge>}
-                      {item.to === '/settings' && upgradable && (
+                      {item.to === '/version' && upgradable && (
                         <SidebarMenuBadge>
                           <span
                             className="size-2 rounded-full bg-amber-500"
@@ -148,6 +152,37 @@ export function AppSidebar() {
 
       <SidebarFooter>
         <SidebarMenu>
+          {/* 项目主页与文档站(2026-07-16 用户拍板):真外链,新标签页打开。 */}
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              className={menuButtonClass}
+              render={
+                <a
+                  href="https://github.com/BitMiracle-AI/Dormice"
+                  target="_blank"
+                  rel="noreferrer"
+                />
+              }
+            >
+              <HugeiconsIcon icon={GithubIcon} strokeWidth={2} />
+              <span>GitHub</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              className={menuButtonClass}
+              render={
+                <a
+                  href="https://dormice.dev"
+                  target="_blank"
+                  rel="noreferrer"
+                />
+              }
+            >
+              <HugeiconsIcon icon={Book02Icon} strokeWidth={2} />
+              <span>文档</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
               className={menuButtonClass}

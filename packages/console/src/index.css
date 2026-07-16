@@ -10,7 +10,19 @@
 @layer base {
   body {
     /* macOS 浏览器默认亚像素渲染把字形描粗,medium/semibold 都显臃肿;
-       灰度平滑(antialiased)才是 Inter 设计稿上的粗细。 */
-    @apply antialiased;
+       灰度平滑(antialiased)才是 Inter 设计稿上的粗细。
+       select-none:全站默认禁选(2026-07-16 用户拍板,对齐 openasi 的
+       桌面应用感);生来要被复制的表面在下面整类放开。 */
+    @apply antialiased select-none;
+  }
+
+  /* 代码与输入区是"读了就要拿走"的内容,禁选对它们是残疾不是质感。 */
+  code,
+  pre,
+  kbd,
+  samp,
+  input,
+  textarea {
+    @apply select-text;
   }
 }

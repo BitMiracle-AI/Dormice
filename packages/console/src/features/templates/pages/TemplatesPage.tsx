@@ -11,6 +11,7 @@ import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { DataTable } from '@/components/DataTable';
+import { paginate, TablePager } from '@/components/TablePager';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   AlertDialog,
@@ -273,6 +274,8 @@ function TemplateRowMenu({ template }: { template: Template }) {
   );
 }
 
+const PAGE_SIZE = 50;
+
 /**
  * 模板注册表:名字 → 镜像的账本行。宿主机的 Docker daemon 就是镜像库,
  * 这一页管的只是指向;引用数从 2 秒轮询的沙箱列表现算,不发明新端点。
@@ -281,21 +284,18 @@ export function TemplatesPage() {
   const templates = useTemplates();
   const sandboxes = useSandboxes().data?.sandboxes ?? [];
   const list = templates.data?.templates ?? [];
+  const [page, setPage] = useState(1);
+  const { rows, safePage, pageCount } = paginate(list, page, PAGE_SIZE);
 
   const referenceCount = (name: string) =>
     sandboxes.filter((sandbox) => sandbox.template === name).length;
 
   return (
-    // 六列窄表,同设置页限宽居中 — 宽屏上不摊大饼。
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">模板</h1>
-          <p className="text-sm text-muted-foreground">
-            模板 = 命名的 Docker 镜像。名字即 E2B 的 templateID,重新注册
-            即升级。
-          </p>
-        </div>
+    // openasi 列表页版式(2026-07-16 用户拍板):限宽居中、表格吃掉剩余
+    // 高度框内滚、分页条钉底。
+    <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-5 p-4 md:p-6">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3">
+        <h1 className="text-xl font-medium">模板</h1>
         <RegisterTemplateDialog
           trigger={
             <Button size="sm">
@@ -304,7 +304,7 @@ export function TemplatesPage() {
             </Button>
           }
         />
-      </div>
+      </header>
 
       {templates.isError && (
         <Alert variant="destructive">
@@ -313,7 +313,7 @@ export function TemplatesPage() {
       )}
 
       {templates.isSuccess && list.length === 0 && (
-        <Empty className="border border-dashed">
+        <Empty className="flex-1 border border-dashed">
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <HugeiconsIcon icon={Layers01Icon} />
@@ -328,7 +328,7 @@ export function TemplatesPage() {
       )}
 
       {list.length > 0 && (
-        <DataTable>
+        <DataTable fill>
           <TableHeader>
             <TableRow>
               <TableHead>名字</TableHead>
@@ -340,7 +340,7 @@ export function TemplatesPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {list.map((template) => {
+            {rows.map((template) => {
               const references = referenceCount(template.name);
               return (
                 <TableRow key={template.name}>
@@ -383,6 +383,15 @@ export function TemplatesPage() {
             })}
           </TableBody>
         </DataTable>
+      )}
+
+      {list.length > 0 && (
+        <TablePager
+          page={safePage}
+          pageCount={pageCount}
+          total={list.length}
+          onPageChange={setPage}
+        />
       )}
     </div>
   );
