@@ -1,23 +1,15 @@
 import {
-  Activity01Icon,
   Book02Icon,
-  DashboardSquare01Icon,
-  GitCommitIcon,
   GithubIcon,
-  Globe02Icon,
-  Key01Icon,
-  Layers01Icon,
   Logout01Icon,
   Moon02Icon,
-  PackageIcon,
-  PlugSocketIcon,
-  Settings01Icon,
-  StethoscopeIcon,
   Sun02Icon,
 } from '@hugeicons/core-free-icons';
-import { HugeiconsIcon, type HugeiconsProps } from '@hugeicons/react';
+import { HugeiconsIcon } from '@hugeicons/react';
 import { Link, useRouterState } from '@tanstack/react-router';
 import { useTheme } from 'next-themes';
+import { CommandMenu } from '@/components/CommandMenu';
+import { menuButtonClass, NAV_GROUPS } from '@/components/nav';
 import {
   Sidebar,
   SidebarContent,
@@ -36,53 +28,12 @@ import { logout } from '@/lib/api';
 import { MOCK_PAGES_ENABLED } from '@/lib/mock';
 import { clearSessionMarker } from '@/lib/session';
 
-interface NavItem {
-  to: string;
-  label: string;
-  icon: NonNullable<HugeiconsProps['icon']>;
-  /** 服务端还没有的页面:dev 里带"预览"角标,生产构建整个隐藏。 */
-  mock?: boolean;
-}
-
-// 平台 = 管的对象(沙箱/模板),运维 = 管这台机器;连接页是给要接 SDK 的人。
-// 导出给命令面板(⌘K)复用 — 页面清单只有这一份,两处永远一致。
-export const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
-  {
-    label: '平台',
-    items: [
-      { to: '/', label: '仪表盘', icon: DashboardSquare01Icon },
-      { to: '/sandboxes', label: '沙箱', icon: PackageIcon },
-      { to: '/templates', label: '模板', icon: Layers01Icon },
-    ],
-  },
-  {
-    label: '运维',
-    items: [
-      { to: '/activity', label: '活动', icon: Activity01Icon },
-      { to: '/api-keys', label: 'API 密钥', icon: Key01Icon },
-      { to: '/domains', label: '域名', icon: Globe02Icon },
-      { to: '/doctor', label: '体检', icon: StethoscopeIcon, mock: true },
-      { to: '/settings', label: '设置', icon: Settings01Icon },
-      { to: '/version', label: '版本', icon: GitCommitIcon },
-    ],
-  },
-  {
-    label: '接入',
-    items: [{ to: '/connect', label: '连接', icon: PlugSocketIcon }],
-  },
-];
-
 async function signOut() {
   // 尽力而为:cookie 可能已经死了,无所谓 — 清掉标记回登录页才是正事。
   await logout().catch(() => undefined);
   clearSessionMarker();
   window.location.href = '/console/login';
 }
-
-// 侧栏按钮统一药丸形 + medium 字重(风格参考 openasi 侧栏,2026-07-12)。
-// cursor-default 抹平 Link(手型)与 button(箭头)的光标分裂 — 侧栏是
-// 应用 chrome,不是网页链接。
-const menuButtonClass = 'rounded-full font-medium cursor-default';
 
 function isActivePath(pathname: string, to: string): boolean {
   if (to === '/') return pathname === '/';
@@ -109,6 +60,10 @@ export function AppSidebar() {
             Dormice
           </span>
         </Link>
+        {/* ⌘K 搜索入口:顶栏删掉后(2026-07-16)它是全站搜索唯一的可见入口。 */}
+        <SidebarMenu>
+          <CommandMenu />
+        </SidebarMenu>
       </SidebarHeader>
 
       <SidebarContent>
