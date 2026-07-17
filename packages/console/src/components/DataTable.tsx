@@ -4,11 +4,13 @@ import { Table } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 
 // 表格皮的唯一定义(参考 openasi 表格,2026-07-15 用户拍板):
-// - 表头 h-12、单元格 px-4 py-2.5,首末列 24px 边距 — 内容离卡面圆角有喘息
+// - 行定高 h-13,表头表行同高(2026-07-18 拍板)— 行高不随内容深浅
+//   跳动;表格里 height 是下限,超高内容仍会诚实撑开而不是被裁
+// - 单元格 px-4 py-2.5,首末列 24px 边距 — 内容离卡面圆角有喘息
 // - 吸顶表头 bg-card 与卡面同色,滚动不穿帮;短表贴不到顶,无害
 // - 行动画一律关闭:2 秒轮询重渲下 transition-colors 会微闪
 const TABLE_CHROME =
-  '[&_tr]:transition-none [&_th]:h-12 [&_th]:px-4 [&_td]:px-4 [&_td]:py-2.5 [&_th:first-child]:pl-6 [&_td:first-child]:pl-6 [&_th:last-child]:pr-6 [&_td:last-child]:pr-6 [&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10 [&_thead]:bg-card';
+  '[&_tr]:transition-none [&_tr]:h-13 [&_th]:px-4 [&_td]:px-4 [&_td]:py-2.5 [&_th:first-child]:pl-6 [&_td:first-child]:pl-6 [&_th:last-child]:pr-6 [&_td:last-child]:pr-6 [&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10 [&_thead]:bg-card';
 
 /**
  * 数据表外壳:卡面(bg-card + 大圆角 + ring)包一层滚动容器,再套统一

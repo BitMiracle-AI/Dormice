@@ -7,6 +7,7 @@ import {
 import { HugeiconsIcon, type HugeiconsProps } from '@hugeicons/react';
 import { useState } from 'react';
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
+import { Meter } from '@/components/Meter';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent } from '@/components/ui/card';
 import {
@@ -25,30 +26,11 @@ import { Spinner } from '@/components/ui/spinner';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { withGapBreaks } from '@/lib/chart-gaps';
 import { formatBytes, pctOf } from '@/lib/format';
-import { cn } from '@/lib/utils';
 import { since } from '../format';
 import {
   useSandboxMetrics,
   useSandboxMetricsHistory,
 } from '../hooks/useSandboxes';
-
-function Meter({ pct }: { pct: number }) {
-  const clamped = Math.min(100, Math.max(0, pct));
-  const [fill, track] =
-    clamped >= 90
-      ? ['bg-red-500', 'bg-red-500/15']
-      : clamped >= 75
-        ? ['bg-amber-500', 'bg-amber-500/15']
-        : ['bg-primary', 'bg-primary/10'];
-  return (
-    <div className={cn('h-1.5 w-full overflow-hidden rounded-full', track)}>
-      <div
-        className={cn('h-full rounded-full', fill)}
-        style={{ width: `${clamped}%` }}
-      />
-    </div>
-  );
-}
 
 function MetricCard({
   icon,
