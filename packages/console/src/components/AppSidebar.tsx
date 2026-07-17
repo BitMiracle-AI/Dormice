@@ -53,7 +53,7 @@ export function AppSidebar() {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
-  // 只读缓存:设置页查过且有新版本才亮,角标自己绝不发请求。
+  // 只读缓存:开台检查或版本页查过且有新版本才亮,角标自己绝不发请求。
   const upgradable = useCachedUpgradable();
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
 

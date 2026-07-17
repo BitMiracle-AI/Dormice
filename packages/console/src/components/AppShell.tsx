@@ -2,11 +2,14 @@ import { Outlet } from '@tanstack/react-router';
 import type { CSSProperties } from 'react';
 import { AppSidebar } from '@/components/AppSidebar';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
+import { UpgradeNotice } from '@/features/settings/components/UpgradeNotice';
 
 /**
  * 登录后的应用外壳:侧边栏 + 页面内容。顶栏 2026-07-16 用户拍板删除:
  * 面包屑只是页面自带页头的第二份真相,⌘K 命令面板成为纯键盘入口
  * (CommandMenu),侧栏开关保留键盘位(⌘B,vendored sidebar 自带)。
+ * UpgradeNotice 也挂在这里:开台(登录后)查一次版本,可升级即弹提醒
+ * — 外壳是"人到场"的单一挂点,检查纪律见 useUpgrade.ts。
  */
 export function AppShell() {
   return (
@@ -24,6 +27,7 @@ export function AppShell() {
           <Outlet />
         </div>
       </SidebarInset>
+      <UpgradeNotice />
     </SidebarProvider>
   );
 }
