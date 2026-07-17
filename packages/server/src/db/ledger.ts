@@ -53,6 +53,11 @@ export interface CreateSandboxInput {
     deadlineAt: string;
     onDeadline: 'kill' | 'pause';
   };
+  /**
+   * Who asked (request.actor) — every creation is request-caused, so both
+   * faces pass this; absent only in tests that fabricate rows directly.
+   */
+  actor?: string | null;
 }
 
 /** Inserts a new sandbox row in `active` state. Throws if the name is taken. */
@@ -81,6 +86,7 @@ export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
     kind: 'created',
     sandboxName: row.name,
     sandboxId: row.id,
+    actor: input.actor,
     detail: `${input.e2b ? 'via E2B create' : 'via acquireSandbox'}${
       input.template ? `, template ${input.template}` : ''
     }`,

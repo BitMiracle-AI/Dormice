@@ -105,8 +105,11 @@ Three more pages round out the operator view:
 
 - **Activity** — the daemon's recent history (who was created, frozen,
   destroyed, what the reconciler repaired, which API key was minted or
-  revoked), filterable by event kind and sandbox key. A bounded window,
-  not an audit log.
+  revoked), each event attributed to the credential that asked — an API
+  key by name, the env token, a console session, or "system" for the
+  daemon's own moves. Filterable by event kind, actor, and sandbox
+  name: filtering by a key is how you read a leaked key's blast radius
+  before revoking it. A bounded window, not an audit log.
 - **Domains** — bind domains to the daemon's front door (the managed
   reverse proxy), with a copyable DNS record guide and a live per-domain
   probe that shows DNS and certificate progress until each one turns

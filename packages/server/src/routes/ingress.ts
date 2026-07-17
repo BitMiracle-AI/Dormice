@@ -74,6 +74,7 @@ export const ingressRoutes: FastifyPluginAsyncZod<
       ];
       recordActivity(db, {
         kind: 'ingress-updated',
+        actor: request.actor,
         detail: `${changes.join(', ') || 'domains unchanged'} — now serving ${
           domains.length ? domains.join(', ') : 'plain-HTTP IP access only'
         }`,

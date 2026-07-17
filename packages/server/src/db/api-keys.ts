@@ -42,7 +42,8 @@ function normalizeIso(value: string): string {
 export function createApiKey(
   db: Db,
   name: string,
-  expiresAt?: string,
+  expiresAt: string | undefined,
+  actor: string | null,
 ): { row: ApiKeyRow; token: string } {
   const token = randomBytes(32).toString('hex');
   const row: ApiKeyRow = {
@@ -59,6 +60,9 @@ export function createApiKey(
   db.insert(apiKeys).values(row).run();
   recordActivity(db, {
     kind: 'apikey-created',
+    // The admin gate means this actor can only be env-token or console —
+    // a key can never appear as the minter of another key.
+    actor,
     detail:
       `API key "${name}" (prefix ${row.prefix}) minted` +
       (row.expiresAt ? `, expires ${row.expiresAt}` : ''),
@@ -101,7 +105,11 @@ export function listApiKeys(db: Db): ApiKeyRow[] {
  * or is already revoked — the desired end state was already true. The row
  * survives as history; the name is immediately free for a new key.
  */
-export function revokeApiKey(db: Db, id: string): boolean {
+export function revokeApiKey(
+  db: Db,
+  id: string,
+  actor: string | null,
+): boolean {
   const row = findApiKeyById(db, id);
   if (!row || row.revokedAt !== null) {
     return false;
@@ -112,6 +120,7 @@ export function revokeApiKey(db: Db, id: string): boolean {
     .run();
   recordActivity(db, {
     kind: 'apikey-revoked',
+    actor,
     detail: `API key "${row.name}" revoked`,
   });
   return true;
@@ -131,6 +140,7 @@ export function updateApiKey(
   db: Db,
   row: ApiKeyRow,
   patch: { name?: string; expiresAt?: string | null; disabled?: boolean },
+  actor: string | null,
 ): ApiKeyRow {
   const changes: Partial<ApiKeyRow> = {};
   const facts: {
@@ -176,7 +186,7 @@ export function updateApiKey(
   }
   db.update(apiKeys).set(changes).where(eq(apiKeys.id, row.id)).run();
   for (const fact of facts) {
-    recordActivity(db, fact);
+    recordActivity(db, { ...fact, actor });
   }
   return { ...row, ...changes };
 }
@@ -222,15 +232,17 @@ export function isLiveApiKey(db: Db, bareToken: string): boolean {
  * sha256(key), which preimage resistance makes worthless to an attacker
  * (the argument GitHub token storage rests on).
  *
- * A hit also stamps lastUsedAt — only a hit: verification is the one moment
- * a credential was actually honored. Throttled to LAST_USED_GRANULARITY_MS
- * so a polling client does not write the ledger per request. ISO strings
- * compare lexicographically as timestamps, so the cutoff is a plain string <.
+ * A hit answers the key's id (attribution's raw material — the auth hook
+ * dresses it as an actor and rides it on the request) and stamps lastUsedAt
+ * — only a hit: verification is the one moment a credential was actually
+ * honored. Throttled to LAST_USED_GRANULARITY_MS so a polling client does
+ * not write the ledger per request. ISO strings compare lexicographically
+ * as timestamps, so the cutoff is a plain string <.
  */
-export function verifyApiKeyToken(db: Db, bareToken: string): boolean {
+export function verifyApiKeyToken(db: Db, bareToken: string): string | null {
   const row = findLiveApiKeyByHash(db, hashApiKeyToken(bareToken));
   if (!row) {
-    return false;
+    return null;
   }
   const now = Date.now();
   const cutoff = new Date(now - LAST_USED_GRANULARITY_MS).toISOString();
@@ -243,5 +255,5 @@ export function verifyApiKeyToken(db: Db, bareToken: string): boolean {
       ),
     )
     .run();
-  return true;
+  return row.id;
 }

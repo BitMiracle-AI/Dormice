@@ -47,11 +47,12 @@ export const upgradeRoutes: FastifyPluginAsyncZod<
         response: { 200: applyUpgradeResponseSchema },
       },
     },
-    async () => {
+    async (request) => {
       await updater.apply();
       const current = updater.current;
       recordActivity(db, {
         kind: 'upgrade-started',
+        actor: request.actor,
         detail: `one-click upgrade launched${current ? ` from ${current.commit}` : ''} (systemd unit dormice-upgrade)`,
       });
       return { started: true as const };

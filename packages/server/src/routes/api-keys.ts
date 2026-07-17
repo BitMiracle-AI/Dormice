@@ -45,7 +45,7 @@ function view(row: ApiKeyRow): ApiKey {
  * requireAdminAuth (env token or console session; a live key gets an
  * honest 403), because a credential must not manage the credential ledger
  * it lives in. Verification itself lives in db/api-keys.ts and is
- * consulted by buildApp's verifyCredential closure, not here.
+ * consulted by buildApp's identifyCredential closure, not here.
  */
 export const apiKeyRoutes: FastifyPluginAsyncZod<ApiKeyRoutesOptions> = async (
   app,
@@ -71,7 +71,7 @@ export const apiKeyRoutes: FastifyPluginAsyncZod<ApiKeyRoutesOptions> = async (
           `an active API key named '${name}' already exists — revoke it first or pick another name`,
         );
       }
-      const { row, token } = createApiKey(db, name, expiresAt);
+      const { row, token } = createApiKey(db, name, expiresAt, request.actor);
       return { apiKey: view(row), token };
     },
   );
@@ -119,7 +119,7 @@ export const apiKeyRoutes: FastifyPluginAsyncZod<ApiKeyRoutesOptions> = async (
           );
         }
       }
-      return { apiKey: view(updateApiKey(db, row, patch)) };
+      return { apiKey: view(updateApiKey(db, row, patch, request.actor)) };
     },
   );
 
@@ -131,6 +131,8 @@ export const apiKeyRoutes: FastifyPluginAsyncZod<ApiKeyRoutesOptions> = async (
         response: { 200: revokeApiKeyResponseSchema },
       },
     },
-    async (request) => ({ revoked: revokeApiKey(db, request.body.id) }),
+    async (request) => ({
+      revoked: revokeApiKey(db, request.body.id, request.actor),
+    }),
   );
 };

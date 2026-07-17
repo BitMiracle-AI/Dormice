@@ -54,7 +54,7 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | `POST /getSandboxMetrics` | one sandbox's live CPU/memory/disk sample; `sample` is `null` when nothing is running | 404 unknown name |
 | `POST /listSandboxMetrics` | every measurable sandbox's sample in one answer | — |
 | `POST /listSandboxImages` | each sandbox's born image vs its template's current one | — |
-| `POST /listActivity` | the daemon's recent history, newest first — a bounded ring, not an audit log | — |
+| `POST /listActivity` | the daemon's recent history with per-event [attribution](#who-did-what), newest first — a bounded ring, not an audit log | — |
 | `POST /getConfig` | effective configuration, read-only; secrets reported present-or-absent, value never sent | — |
 | `POST /getIngress` | domains bound on the daemon's managed reverse proxy, with live DNS and certificate probes | — |
 | `POST /setIngress` | rewrite the managed proxy config to exactly this domain list (empty list unbinds all) | 400 when the daemon manages no proxy |
@@ -135,6 +135,22 @@ reversible hold; **expiry** (`expiresAt`, extendable or clearable with
 the row as rotation history, and is the only one that frees the name
 for reuse. Each key row carries `lastUsedAt` (written with 60-second
 granularity), and revoked rows stay in `listApiKeys` forever.
+
+## Who did what
+
+Every `listActivity` event carries an `actor`: `"env-token"` (the
+bootstrap credential), `"console"` (a console session), `"apikey:<id>"`
+(that key — by `id`, since names are renameable; resolve it through
+`listApiKeys`, where the row lives forever), or `null` when no
+credential asked — the idle scanner freezing, the reconciler repairing,
+the archiver archiving.
+
+This is what turns key hygiene into incident response: suspect a leak,
+disable the key to stop the bleeding, filter the activity ring by that
+key to see what it created and destroyed, then revoke and rotate. The
+ring attributes lifecycle verbs only — commands and file traffic never
+enter it (they would flush its 1000 entries in minutes), so "which key
+ran what" needs a real audit system, which this deliberately is not.
 
 ## Commands and files on the wire
 

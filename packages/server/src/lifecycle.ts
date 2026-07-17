@@ -27,13 +27,16 @@ import type { Executor } from './executor/executor';
  * The lifecycle verbs also feed the activity ring here, after the ledger
  * write — history is recorded where reality and ledger already move
  * together, so no caller can forget it. `cause` is the caller's one line of
- * context ("who did this and why"); the default names the bare move.
+ * context ("why"); `actor` is who asked (request.actor's vocabulary) — the
+ * daemon's own callers (scanner, reconciler) pass neither, and the honest
+ * defaults name the bare move and no credential.
  */
 export async function freezeSandbox(
   db: Db,
   executor: Executor,
   sandboxId: string,
   cause?: string,
+  actor?: string | null,
 ): Promise<SandboxRow> {
   await executor.freeze(sandboxId);
   const row = transition(db, sandboxId, 'frozen');
@@ -41,6 +44,7 @@ export async function freezeSandbox(
     kind: 'frozen',
     sandboxName: row.name,
     sandboxId,
+    actor,
     detail: cause ?? 'memory squeezed into swap',
   });
   return row;
@@ -51,6 +55,7 @@ export async function stopSandbox(
   executor: Executor,
   sandboxId: string,
   cause?: string,
+  actor?: string | null,
 ): Promise<SandboxRow> {
   await executor.stop(sandboxId);
   const row = transition(db, sandboxId, 'stopped');
@@ -58,6 +63,7 @@ export async function stopSandbox(
     kind: 'stopped',
     sandboxName: row.name,
     sandboxId,
+    actor,
     detail: cause ?? 'container torn down, disk kept',
   });
   return row;
@@ -81,7 +87,11 @@ export async function destroySandbox(
   executor: Executor,
   sandboxId: string,
   store: ArchiveStore | null,
-  activity: { kind: 'destroyed' | 'expired-killed'; cause: string } = {
+  activity: {
+    kind: 'destroyed' | 'expired-killed';
+    cause: string;
+    actor?: string | null;
+  } = {
     kind: 'destroyed',
     cause: 'via destroySandbox',
   },
@@ -102,6 +112,7 @@ export async function destroySandbox(
       kind: activity.kind,
       sandboxName: row.name,
       sandboxId,
+      actor: activity.actor,
       detail: `${activity.cause}; archive object deleted`,
     });
     return;
@@ -114,6 +125,7 @@ export async function destroySandbox(
       kind: activity.kind,
       sandboxName: row.name,
       sandboxId,
+      actor: activity.actor,
       detail: activity.cause,
     });
   }
@@ -133,12 +145,14 @@ export async function rebuildSandbox(
   db: Db,
   executor: Executor,
   row: SandboxRow,
+  actor?: string | null,
 ): Promise<SandboxRow> {
   await executor.removeContainer(row.id);
   recordActivity(db, {
     kind: 'rebuilt',
     sandboxName: row.name,
     sandboxId: row.id,
+    actor,
     detail:
       'shell removed, disk kept — next wake builds from the current image',
   });
@@ -153,20 +167,21 @@ export async function wakeSandbox(
   db: Db,
   executor: Executor,
   row: SandboxRow,
+  actor?: string | null,
 ): Promise<SandboxRow> {
   switch (row.state) {
     case 'active':
       return row;
     case 'frozen':
       await executor.unfreeze(row.id);
-      return awaken(db, row, 'from frozen (memory back out of swap)');
+      return awaken(db, row, 'from frozen (memory back out of swap)', actor);
     case 'stopped':
       // If the container object was pruned away, start rebuilds the shell —
       // from the template's current image, resolved here at wake time.
       await executor.start(row.id, {
         image: resolveImage(db, row.template),
       });
-      return awaken(db, row, 'cold start from the surviving disk');
+      return awaken(db, row, 'cold start from the surviving disk', actor);
     case 'archived':
     case 'restoring':
       // Every legitimate path branches to the archiver before landing here
@@ -183,7 +198,12 @@ export async function wakeSandbox(
  * so any explicit E2B pause mark is cleared along with the transition —
  * ledger honesty, not an E2B-surface concern leaking in.
  */
-function awaken(db: Db, row: SandboxRow, how: string): SandboxRow {
+function awaken(
+  db: Db,
+  row: SandboxRow,
+  how: string,
+  actor?: string | null,
+): SandboxRow {
   if (row.pausedByUser) {
     setPausedByUser(db, row.id, false);
   }
@@ -192,6 +212,7 @@ function awaken(db: Db, row: SandboxRow, how: string): SandboxRow {
     kind: 'woken',
     sandboxName: row.name,
     sandboxId: row.id,
+    actor,
     detail: how,
   });
   return { ...awake, pausedByUser: false };

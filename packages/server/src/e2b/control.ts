@@ -32,8 +32,8 @@ import {
   apiError,
   E2bError,
   ENVD_VERSION,
+  identifyApiKey,
   mintEnvdToken,
-  verifyApiKey,
 } from './protocol';
 import { e2bView } from './view';
 
@@ -100,7 +100,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     archiver,
     archiveDefaultSeconds,
     envdSigningSecret,
-    verifyCredential,
+    identifyCredential,
   },
 ) => {
   /**
@@ -132,9 +132,12 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   app.addHook('onRequest', async (request, reply) => {
     const presented = request.headers['x-api-key'];
     const key = Array.isArray(presented) ? presented[0] : presented;
-    if (!verifyApiKey(verifyCredential, key)) {
+    const actor = identifyApiKey(identifyCredential, key);
+    if (actor === null) {
       await reply.code(401).send({ code: 401, message: 'invalid API key' });
+      return;
     }
+    request.actor = actor;
   });
 
   // The E2B error dialect: every non-2xx body is { code, message } — the
@@ -300,7 +303,12 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           // E2B clothes. Stored metadata/envs stay (same principle as the
           // native policy's "override applies at creation only"); the
           // deadline is extended like a connect.
-          const awake = await wakeSandbox(db, executor, existing);
+          const awake = await wakeSandbox(
+            db,
+            executor,
+            existing,
+            request.actor,
+          );
           extendDeadline(awake, timeoutSeconds);
           return touch(db, awake.id);
         }
@@ -315,6 +323,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
             {
               kind: 'destroyed',
               cause: 'protocol-dead row reaped by E2B create',
+              actor: request.actor,
             },
           );
         }
@@ -335,6 +344,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           nodeId: config.DORMICE_NODE_ID,
           policy: resolvePolicy(undefined, archiveDefaultSeconds),
           template,
+          actor: request.actor,
           metadata:
             body.metadata && Object.keys(body.metadata).length > 0
               ? JSON.stringify(body.metadata)
@@ -372,7 +382,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         if (!fresh || e2bView(fresh, new Date()) === 'dead') {
           throw notFound(id);
         }
-        const awake = await wakeSandbox(db, executor, fresh);
+        const awake = await wakeSandbox(db, executor, fresh, request.actor);
         extendDeadline(awake, request.body.timeout ?? DEFAULT_TIMEOUT_SECONDS);
         return touch(db, awake.id);
       });
@@ -510,6 +520,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       await destroySandbox(db, executor, fresh.id, archiver?.store ?? null, {
         kind: 'destroyed',
         cause: 'via E2B kill',
+        actor: request.actor,
       });
     });
     return reply.code(204).send();
@@ -555,6 +566,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
             executor,
             current.id,
             'paused via E2B',
+            request.actor,
           );
         }
         // keepMemory:false maps to stopped: filesystem only, cold boot on
@@ -565,6 +577,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
             executor,
             current.id,
             'paused via E2B (memory discarded)',
+            request.actor,
           );
         }
         setPausedByUser(db, fresh.id, true);

@@ -16,6 +16,13 @@ export interface ActivityInput {
   /** The owning sandbox's name/id — prefixed: they reference another entity. */
   sandboxName?: string | null;
   sandboxId?: string | null;
+  /**
+   * Which credential asked (shared/activity.ts vocabulary), threaded from
+   * request.actor by the route that took the request. Absent = null = the
+   * daemon's own doing — the honest default for the scanner, reconciler
+   * and archiver, which pass nothing.
+   */
+  actor?: string | null;
   detail: string;
 }
 
@@ -33,6 +40,7 @@ export function recordActivity(db: Db, input: ActivityInput): void {
       kind: input.kind,
       sandboxName: input.sandboxName ?? null,
       sandboxId: input.sandboxId ?? null,
+      actor: input.actor ?? null,
       detail: input.detail,
     })
     .run();
