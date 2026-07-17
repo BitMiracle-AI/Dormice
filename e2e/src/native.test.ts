@@ -433,6 +433,20 @@ describe('native API over a real daemon', () => {
     const mine = listed.find((k) => k.name === 'rotation');
     expect(mine?.lastUsedAt).not.toBeNull();
 
+    // Attribution answers the blast-radius question: the key's work carries
+    // its id, and the mint (done above on the env token) says who minted.
+    const story = await client().listActivity({ limit: 500 });
+    const keyWork = story.filter((e) => e.sandboxName === 'rotation-key');
+    expect(keyWork.map((e) => e.actor)).toEqual([
+      `apikey:${apiKey.id}`,
+      `apikey:${apiKey.id}`,
+    ]);
+    expect(
+      story.find(
+        (e) => e.kind === 'apikey-created' && e.detail.includes('"rotation"'),
+      )?.actor,
+    ).toBe('env-token');
+
     // Key-manages-key is refused with the honest 403 — a leaked key must
     // not be able to mint itself an unrevoked successor.
     await expect(keyed.listApiKeys()).rejects.toMatchObject({
@@ -630,6 +644,8 @@ describe('the observability verbs over a real daemon', () => {
     const mine = events.filter((e) => e.sandboxName === 'obs-story-key');
     expect(mine.map((e) => e.kind)).toEqual(['destroyed', 'created']);
     expect(mine[1]?.detail).toContain('acquireSandbox');
+    // Attribution: this suite runs on the env token, and the events say so.
+    expect(mine.map((e) => e.actor)).toEqual(['env-token', 'env-token']);
   });
 
   it('getSandboxMetricsHistory fills up as the sampler ticks, and 404s after destroy', async () => {

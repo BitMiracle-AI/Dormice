@@ -1869,3 +1869,93 @@ describe('API keys', () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+describe('activity attribution', () => {
+  /**
+   * The newest event of this kind (listActivity is newest-first),
+   * optionally narrowed to one sandbox. Actor strings are asserted as
+   * literals on purpose: they are wire vocabulary, and a drifted constant
+   * must fail here, not ride through.
+   */
+  const eventOf = async (
+    app: ReturnType<typeof testApp>['app'],
+    kind: string,
+    sandboxName?: string,
+  ) => {
+    const events = (await rpc(app, '/listActivity')).json().events as Array<{
+      kind: string;
+      sandboxName: string | null;
+      actor: string | null;
+    }>;
+    return events.find(
+      (e) =>
+        e.kind === kind &&
+        (sandboxName === undefined || e.sandboxName === sandboxName),
+    );
+  };
+
+  it('lifecycle verbs name their credential: env token and API key are distinct actors', async () => {
+    const { app } = testApp();
+    const minted = (await rpc(app, '/createApiKey', { name: 'agent' })).json();
+    const asKey = { authorization: `Bearer ${minted.token}` };
+
+    await acquire(app, { name: 'mine' });
+    await acquire(app, { name: 'theirs' }, asKey);
+    expect((await eventOf(app, 'created', 'mine'))?.actor).toBe('env-token');
+    expect((await eventOf(app, 'created', 'theirs'))?.actor).toBe(
+      `apikey:${minted.apiKey.id}`,
+    );
+
+    // The blast-radius question a leak raises: which key destroyed this?
+    await app.inject({
+      method: 'POST',
+      url: '/destroySandbox',
+      headers: asKey,
+      payload: { name: 'mine' },
+    });
+    expect((await eventOf(app, 'destroyed', 'mine'))?.actor).toBe(
+      `apikey:${minted.apiKey.id}`,
+    );
+  });
+
+  it('daemon moves stay null; the wake that follows names its caller', async () => {
+    const { app, db, executor, locks } = testApp();
+    const created = (await acquire(app, { name: 'alice' })).json();
+
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(
+        created.sandbox.lastActiveAt,
+        DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+      ),
+    );
+    // The idle scanner froze it: no credential asked, so no actor.
+    expect((await eventOf(app, 'frozen', 'alice'))?.actor).toBeNull();
+
+    await acquire(app, { name: 'alice' });
+    expect((await eventOf(app, 'woken', 'alice'))?.actor).toBe('env-token');
+  });
+
+  it('apikey management events name the administrator: env token or console, never a key', async () => {
+    const { app } = testApp();
+    await rpc(app, '/createApiKey', { name: 'by-env' });
+    expect((await eventOf(app, 'apikey-created'))?.actor).toBe('env-token');
+
+    const setup = await app.inject({
+      method: 'POST',
+      url: '/console/auth/setup',
+      payload: { token: TOKEN, username: 'operator', password: 'horse pass' },
+    });
+    const cookie = setup.cookies.find((c) => c.name === SESSION_COOKIE);
+    await app.inject({
+      method: 'POST',
+      url: '/createApiKey',
+      headers: { [CONSOLE_HEADER]: '1' },
+      cookies: { [SESSION_COOKIE]: (cookie as { value: string }).value },
+      payload: { name: 'by-console' },
+    });
+    expect((await eventOf(app, 'apikey-created'))?.actor).toBe('console');
+  });
+});

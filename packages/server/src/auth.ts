@@ -6,7 +6,22 @@ import {
   scrypt,
   timingSafeEqual,
 } from 'node:crypto';
+import { CONSOLE_ACTOR, ENV_TOKEN_ACTOR } from '@dormice/shared';
 import type { FastifyRequest, onRequestAsyncHookHandler } from 'fastify';
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /**
+     * Attribution: who this request is, in the shared actor vocabulary
+     * ('env-token' | 'console' | 'apikey:<id>'). Set by whichever auth hook
+     * admitted the request — authentication is the one moment identity is
+     * adjudicated, so it is captured there and threaded into recordActivity,
+     * never re-derived. Null only on unauthenticated surfaces (/healthz,
+     * console setup/login), which record no activity.
+     */
+    actor: string | null;
+  }
+}
 
 // Hand-rolled instead of util.promisify: promisify picks the overload
 // without the options argument, and the cost parameters live there.
@@ -160,27 +175,35 @@ function sessionCookieValid(
  * The single arbiter of who may call the API (/healthz stays open —
  * liveness probes have no secrets). Two credentials open the same door:
  * a Bearer credential (SDK, CLI, curl — the env token or any live API
- * key, adjudicated by verifyCredential) and the web console's session
+ * key, adjudicated by identifyCredential) and the web console's session
  * cookie (which additionally requires the console header, see above). A
  * second route surface with its own auth would be a second truth.
  *
- * verifyCredential judges bare tokens, so both faces (this Bearer header
- * and the E2B X-API-KEY hook) feed it the same canonical form — one
- * closure, one truth, two dialects. The 'Bearer ' prefix is public
+ * identifyCredential judges bare tokens and answers who they are (the
+ * shared actor vocabulary; null = not a credential), so both faces (this
+ * Bearer header and the E2B X-API-KEY hook) feed it the same canonical
+ * form — one closure, one truth, two dialects. Admission and attribution
+ * are the same adjudication: the actor rides the request from here into
+ * every recordActivity the handler reaches. The 'Bearer ' prefix is public
  * framing, not a secret, so stripping it needs no constant time; the
- * secret comparisons live inside verifyCredential.
+ * secret comparisons live inside identifyCredential.
  */
 export function requireApiAuth(
-  verifyCredential: (bareToken: string) => boolean,
+  identifyCredential: (bareToken: string) => string | null,
   getSessionSecret: () => string | null,
 ): onRequestAsyncHookHandler {
   return async (request, reply) => {
     const header = request.headers.authorization;
     const bare = header?.startsWith('Bearer ') ? header.slice(7) : null;
-    if (bare !== null && verifyCredential(bare)) {
-      return;
+    if (bare !== null) {
+      const actor = identifyCredential(bare);
+      if (actor !== null) {
+        request.actor = actor;
+        return;
+      }
     }
     if (sessionCookieValid(request, getSessionSecret)) {
+      request.actor = CONSOLE_ACTOR;
       return;
     }
     await reply.code(401).send({ message: 'missing or invalid API token' });
@@ -213,9 +236,11 @@ export function requireAdminAuth(
     const header = request.headers.authorization;
     const bare = header?.startsWith('Bearer ') ? header.slice(7) : null;
     if (bare !== null && isEnvToken(bare)) {
+      request.actor = ENV_TOKEN_ACTOR;
       return;
     }
     if (sessionCookieValid(request, getSessionSecret)) {
+      request.actor = CONSOLE_ACTOR;
       return;
     }
     if (bare !== null && isLiveApiKey(bare)) {

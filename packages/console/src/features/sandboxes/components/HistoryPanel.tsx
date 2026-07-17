@@ -17,21 +17,25 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { actorLabel } from '@/features/activity/actors';
 import { useActivity } from '@/features/activity/hooks/useActivity';
 import {
   ACTIVITY_KIND_LABELS,
   ACTIVITY_KIND_STYLES,
 } from '@/features/activity/kinds';
+import { useApiKeys } from '@/features/api-keys/hooks/useApiKeys';
 import { cn } from '@/lib/utils';
 import { since } from '../format';
 
 /**
  * 「我的沙箱昨晚为什么停了」— 活动环里只属于这个沙箱的那几行。纯前端
  * 过滤:活动事件本来就带 name,不发明新端点;按环形表上限(1000)
- * 拉取,把这个沙箱的事件尽量捞全,再老的已经滚出环了。
+ * 拉取,把这个沙箱的事件尽量捞全,再老的已经滚出环了。操作者列在这里
+ * 尤其要紧:同一个沙箱被谁唤醒、被谁销毁,就是这一列的答案。
  */
 export function HistoryPanel({ name }: { name: string }) {
   const { data, isPending, isError, error } = useActivity(1000);
+  const apiKeys = useApiKeys().data?.apiKeys;
   const events = (data?.events ?? []).filter(
     (event) => event.sandboxName === name,
   );
@@ -76,6 +80,7 @@ export function HistoryPanel({ name }: { name: string }) {
           <TableRow>
             <TableHead className="w-28">时间</TableHead>
             <TableHead className="w-28">事件</TableHead>
+            <TableHead className="w-32">操作者</TableHead>
             <TableHead>详情</TableHead>
           </TableRow>
         </TableHeader>
@@ -98,6 +103,11 @@ export function HistoryPanel({ name }: { name: string }) {
                 >
                   {ACTIVITY_KIND_LABELS[event.kind]}
                 </Badge>
+              </TableCell>
+              <TableCell
+                className={cn(event.actor === null && 'text-muted-foreground')}
+              >
+                {actorLabel(event.actor, apiKeys)}
               </TableCell>
               <TableCell className="text-muted-foreground">
                 {event.detail}

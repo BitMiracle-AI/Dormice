@@ -291,6 +291,40 @@ describe('E2B control plane', () => {
     expect(expired.json()).toEqual({ code: 401, message: 'invalid API key' });
   });
 
+  it('E2B-created sandboxes attribute to the key that asked', async () => {
+    const t = testApp();
+    const minted = (
+      await t.app.inject({
+        method: 'POST',
+        url: '/createApiKey',
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { name: 'e2b-agent' },
+      })
+    ).json();
+
+    const created = await t.app.inject({
+      method: 'POST',
+      url: '/e2b/api/sandboxes',
+      headers: { 'x-api-key': `e2b_${minted.token}` },
+      payload: {},
+    });
+    expect(created.statusCode).toBe(201);
+
+    // Both faces feed the same identity closure, so the created event names
+    // the key — the same attribution the native Bearer face gets.
+    const events = (
+      await t.app.inject({
+        method: 'POST',
+        url: '/listActivity',
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      })
+    ).json().events as Array<{ kind: string; actor: string | null }>;
+    expect(events.find((e) => e.kind === 'created')?.actor).toBe(
+      `apikey:${minted.apiKey.id}`,
+    );
+  });
+
   it('creates a fresh sandbox per call — E2B semantics, no key given', async () => {
     const t = testApp();
     const first = await createSandbox(t);

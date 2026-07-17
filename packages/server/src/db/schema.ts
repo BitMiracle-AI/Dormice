@@ -98,6 +98,13 @@ export const activity = sqliteTable('activity', {
   /** Null for events with no owning sandbox (orphan sweeps, daemon start). */
   sandboxName: text('sandbox_name'),
   sandboxId: text('sandbox_id'),
+  /**
+   * Which credential asked — the closed vocabulary in shared/activity.ts
+   * ('env-token' | 'console' | 'apikey:<id>'). Null = no credential did:
+   * the daemon's own actors, plus rows from before attribution existed
+   * (the ring prunes those away within days).
+   */
+  actor: text('actor'),
   detail: text('detail').notNull(),
 });
 

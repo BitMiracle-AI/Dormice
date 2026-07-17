@@ -26,23 +26,35 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { useApiKeys } from '@/features/api-keys/hooks/useApiKeys';
 import { since } from '@/features/sandboxes/format';
 import { cn } from '@/lib/utils';
+import { actorLabel } from '../actors';
 import { useActivity } from '../hooks/useActivity';
 import { ACTIVITY_KIND_LABELS, ACTIVITY_KIND_STYLES } from '../kinds';
 
 const PAGE_SIZE = 50;
 
 /**
+ * 筛选器里 actor=null(系统)的哨兵值。词表是封闭的('env-token' /
+ * 'console' / 'apikey:<id>'),裸串 'system' 永不与真实 actor 相撞。
+ */
+const SYSTEM_ACTOR_FILTER = 'system';
+
+/**
  * 「我不在的时候发生了什么」:daemon 每一次生命周期动作(创建、降温、
  * 唤醒、销毁)和对账修复的有界环形记录 — 事件写在动作发生处,这里只读。
  * 筛选是纯前端的:环一共就 1000 条,全在手里,没必要为过滤发明服务端
- * 参数。
+ * 参数。操作者列回答事故响应的第一问(「这把 key 干了什么」):按 kind
+ * 之外再按 actor 筛,就是那把 key 的爆炸半径。
  */
 export function ActivityPage() {
   const { data, isPending, isError, error } = useActivity();
+  // 只为把 apikey:<id> 翻译回名字;密钥页共用一份缓存。
+  const apiKeys = useApiKeys().data?.apiKeys;
   const [search, setSearch] = useState('');
   const [kindFilter, setKindFilter] = useState<'all' | ActivityKind>('all');
+  const [actorFilter, setActorFilter] = useState('');
   const [page, setPage] = useState(1);
 
   const events = data?.events ?? [];
@@ -51,13 +63,25 @@ export function ActivityPage() {
       events.filter(
         (event) =>
           (kindFilter === 'all' || event.kind === kindFilter) &&
+          (actorFilter === '' ||
+            (actorFilter === SYSTEM_ACTOR_FILTER
+              ? event.actor === null
+              : event.actor === actorFilter)) &&
           (search === '' ||
             (event.sandboxName ?? '')
               .toLowerCase()
               .includes(search.toLowerCase())),
       ),
-    [events, kindFilter, search],
+    [events, kindFilter, actorFilter, search],
   );
+  // 选项来自数据里实际出现过的操作者 — 不虚构没干过活的候选。
+  const actorOptions = useMemo(() => {
+    const seen = new Set(events.map((event) => event.actor));
+    return [...seen].map((actor) => ({
+      value: actor ?? SYSTEM_ACTOR_FILTER,
+      label: actorLabel(actor, apiKeys),
+    }));
+  }, [events, apiKeys]);
   const { rows, safePage, pageCount } = paginate(filtered, page, PAGE_SIZE);
 
   return (
@@ -95,6 +119,15 @@ export function ActivityPage() {
           ).map(([kind, label]) => ({ value: kind, label }))}
           onChange={(value) => {
             setKindFilter(value === '' ? 'all' : (value as ActivityKind));
+            setPage(1);
+          }}
+        />
+        <FilterMenu
+          label="操作者"
+          value={actorFilter}
+          options={actorOptions}
+          onChange={(value) => {
+            setActorFilter(value);
             setPage(1);
           }}
         />
@@ -138,6 +171,7 @@ export function ActivityPage() {
               <TableHead className="w-28">时间</TableHead>
               <TableHead className="w-28">事件</TableHead>
               <TableHead className="w-40">名称</TableHead>
+              <TableHead className="w-32">操作者</TableHead>
               <TableHead>详情</TableHead>
             </TableRow>
           </TableHeader>
@@ -175,6 +209,13 @@ export function ActivityPage() {
                   ) : (
                     <span className="text-muted-foreground">—</span>
                   )}
+                </TableCell>
+                <TableCell
+                  className={cn(
+                    event.actor === null && 'text-muted-foreground',
+                  )}
+                >
+                  {actorLabel(event.actor, apiKeys)}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {event.detail}
