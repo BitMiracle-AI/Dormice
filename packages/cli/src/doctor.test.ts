@@ -30,6 +30,17 @@ const DF_ROOMY =
   'Filesystem 1024-blocks Used Available Capacity Mounted on\n' +
   '/dev/vda3 200000000 50000000 150000000 25% /';
 
+// systemd-sysctl --cat-config output shape: a `# /path` line opens each
+// file, then that file's lines follow. Application order = boot order.
+const CAT_CONFIG_GOOD = [
+  '# /usr/lib/sysctl.d/50-default.conf',
+  'kernel.sysrq = 0x01b6',
+  '# /etc/sysctl.d/99-dormice.conf',
+  '# Managed by Dormice install.sh — rewritten on every run.',
+  'vm.swappiness=100',
+  'net.ipv4.ip_forward=1',
+].join('\n');
+
 /**
  * A whole healthy host, faked. Tests override single facts to break one
  * check at a time — the doctor equivalent of the contract suite's "one
@@ -50,6 +61,7 @@ function fakeHost(
     '/etc/docker/daemon.json': GOOD_DAEMON_JSON,
     '/proc/meminfo': 'MemTotal: 30000000 kB\nSwapTotal: 16777212 kB',
     '/proc/sys/vm/swappiness': '100\n',
+    '/proc/sys/net/ipv4/ip_forward': '1\n',
     '/etc/iptables/rules.v4': IPTABLES_GOOD,
     '/etc/caddy/Caddyfile':
       '# Managed by Dormice — setIngress rewrites this file.\n\n:80 {\n\treverse_proxy 127.0.0.1:3676\n}\n',
@@ -61,6 +73,8 @@ function fakeHost(
       '{"runc":{"path":"runc"},"runsc":{"path":"/usr/local/bin/runsc"}}',
     ),
     'iptables -S DOCKER-USER': ok(IPTABLES_GOOD),
+    'systemctl is-enabled dormice-metadata-firewall': ok('enabled\n'),
+    '/usr/lib/systemd/systemd-sysctl --cat-config': ok(CAT_CONFIG_GOOD),
     [`docker image inspect ${IMAGE}`]: ok('[{}]'),
     'df -Pk /var/lib/dormice': ok(DF_ROOMY),
     [`docker run --rm --runtime=runsc ${IMAGE} uname -r`]:
@@ -232,14 +246,89 @@ describe('metadata firewall', () => {
 
   it('rules present but not persisted is a warning, not a failure', async () => {
     const { results, failed } = await runDoctor(
-      fakeHost({ files: { '/etc/iptables/rules.v4': undefined } }),
+      fakeHost({
+        files: { '/etc/iptables/rules.v4': undefined },
+        commands: {
+          'systemctl is-enabled dormice-metadata-firewall': boom('disabled'),
+        },
+      }),
     );
     expect(results['metadata-persisted']).toMatchObject({
       status: 'warn',
-      fix: expect.stringContaining('iptables-persistent'),
+      fix: expect.stringContaining('install.sh'),
     });
     // Warnings alone never flip the exit code.
     expect(failed).toBe(false);
+  });
+
+  it('a pre-unit install persisted via iptables-persistent still passes', async () => {
+    const { results } = await runDoctor(
+      fakeHost({
+        commands: {
+          'systemctl is-enabled dormice-metadata-firewall': boom(
+            'Failed to get unit file state',
+          ),
+        },
+      }),
+    );
+    expect(results['metadata-persisted']).toMatchObject({
+      status: 'pass',
+      detail: expect.stringContaining('rules.v4'),
+    });
+  });
+});
+
+describe('sandbox networking (net.ipv4.ip_forward)', () => {
+  it('an effective 0 is a hard failure — sandboxes are cut right now', async () => {
+    const { results, failed } = await runDoctor(
+      fakeHost({ files: { '/proc/sys/net/ipv4/ip_forward': '0\n' } }),
+    );
+    expect(failed).toBe(true);
+    expect(results['ip-forward']).toMatchObject({
+      status: 'fail',
+      detail: expect.stringContaining('every sandbox is cut'),
+    });
+  });
+
+  it('effective 1 with a boot config saying 0 warns and names the file', async () => {
+    // The real incident: /etc/sysctl.conf shipped ip_forward=0, applied via
+    // Debian's 99-sysctl.conf symlink — which sorts after 99-dormice.conf.
+    const { results, failed } = await runDoctor(
+      fakeHost({
+        commands: {
+          '/usr/lib/systemd/systemd-sysctl --cat-config': ok(
+            [
+              '# /etc/sysctl.d/99-dormice.conf',
+              'vm.swappiness=100',
+              'net.ipv4.ip_forward=1',
+              '# /etc/sysctl.d/99-sysctl.conf',
+              'net.ipv4.ip_forward = 0',
+            ].join('\n'),
+          ),
+        },
+      }),
+    );
+    expect(failed).toBe(false);
+    expect(results['ip-forward']).toMatchObject({
+      status: 'warn',
+      detail: expect.stringContaining('99-sysctl.conf'),
+    });
+  });
+
+  it('effective 1 with no boot config at all passes — dockerd re-enables it', async () => {
+    const { results } = await runDoctor(
+      fakeHost({
+        commands: {
+          '/usr/lib/systemd/systemd-sysctl --cat-config': ok(
+            '# /usr/lib/sysctl.d/50-default.conf\nkernel.sysrq = 0x01b6\n',
+          ),
+        },
+      }),
+    );
+    expect(results['ip-forward']).toMatchObject({
+      status: 'pass',
+      detail: expect.stringContaining('dockerd re-enables'),
+    });
   });
 });
 

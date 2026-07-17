@@ -88,6 +88,12 @@ export const SAMPLE_DOCTOR: DoctorReport = {
         '直读 /proc/sys/vm/swappiness 的生效值 — gVisor 的共享内存低于 100 挤不出去',
     },
     {
+      id: 'ip-forward',
+      title: 'net.ipv4.ip_forward = 1',
+      status: 'pass',
+      detail: '生效值 1,且 /etc/sysctl.d/99-dormice.conf 在启动序中胜出',
+    },
+    {
       id: 'metadata-firewall',
       title: '云元数据防火墙',
       status: 'pass',
@@ -97,7 +103,7 @@ export const SAMPLE_DOCTOR: DoctorReport = {
       id: 'metadata-persisted',
       title: '防火墙规则已持久化',
       status: 'pass',
-      detail: '/etc/iptables/rules.v4 在,重启不丢',
+      detail: 'dormice-metadata-firewall.service 开机在 docker 之后补规则',
     },
     {
       id: 'api-token',
