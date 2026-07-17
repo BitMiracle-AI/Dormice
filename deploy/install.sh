@@ -35,7 +35,11 @@ NODE_SHA256=55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742
 # gVisor is pinned to the release proven on real hardware, with checksums of
 # the binaries themselves — the .sha512 files published next to the binaries
 # only guard transit, not a poisoned origin.
+# The git release tag is release-YYYYMMDD.N, but the storage bucket keys the
+# binaries by date alone (…/releases/release/YYYYMMDD/x86_64) — GVISOR_DATE is
+# that path component; keep it in sync with GVISOR_RELEASE.
 GVISOR_RELEASE=release-20260622.0
+GVISOR_DATE=20260622
 RUNSC_SHA512=6df95d09363dbd9ee5d5c889c1549b457e1783b039ff60a8f9f16f8c94c774a2ca2eef5b1c370e36b863f6b0407b53ba3c69051c6ef051253843dabf89a6de4e
 SHIM_SHA512=87c63197836574b7a2c057d2c0647d2badb679187f0b9175ecf78ac52207cdaa3f101629d3e5d165c95930ca35fe81bc26bb90fcf08e09b99c2ee047b6235ce2
 
@@ -172,6 +176,14 @@ else
   done
   note "installed $(node --version) to /opt, linked into /usr/local/bin"
 fi
+# The systemd unit execs /usr/local/bin/node unconditionally, but a host whose
+# own Node satisfied the version check keeps it elsewhere (e.g. /usr/bin/node)
+# — link whatever node passed the check so the unit can always start.
+if [ ! -x /usr/local/bin/node ]; then
+  node_path=$(command -v node)
+  ln -sf "$node_path" /usr/local/bin/node
+  note "linked $node_path -> /usr/local/bin/node (the path dormice.service execs)"
+fi
 
 # ---- Docker ----------------------------------------------------------------
 log 'Docker'
@@ -228,7 +240,7 @@ if docker info --format '{{json .Runtimes}}' | grep -q '"runsc"'; then
   note "[skip] runsc is a registered Docker runtime ($(runsc --version | head -1))"
 else
   if [ ! -x /usr/local/bin/runsc ]; then
-    gvisor_url="https://storage.googleapis.com/gvisor/releases/release/$GVISOR_RELEASE/x86_64"
+    gvisor_url="https://storage.googleapis.com/gvisor/releases/release/$GVISOR_DATE/x86_64"
     for bin in runsc containerd-shim-runsc-v1; do
       curl -fsSL -o "/tmp/$bin" "$gvisor_url/$bin" || die "cannot download $bin from $gvisor_url —
     if this host cannot reach storage.googleapis.com, download runsc and
@@ -341,7 +353,16 @@ status_write running
 log 'build'
 pnpm_version=$(node -p "require('$INSTALL_DIR/package.json').packageManager.split('@')[1]")
 if ! command -v pnpm >/dev/null || [ "$(pnpm --version)" != "$pnpm_version" ]; then
-  if [ "$MIRROR" = cn ]; then
+  pnpm_path=$(command -v pnpm || true)
+  if [ -n "$pnpm_path" ] && readlink -f "$pnpm_path" 2>/dev/null | grep -q corepack; then
+    # The host's pnpm is a corepack shim (Node >= 16.9 ships corepack, and
+    # `corepack enable` shims pnpm next to node). npm install -g refuses to
+    # overwrite a binary it does not own and dies with EEXIST — so pin the
+    # version through corepack, the shim's actual owner, instead.
+    [ "$MIRROR" = cn ] && export COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+    corepack prepare "pnpm@$pnpm_version" --activate
+    note "pinned pnpm@$pnpm_version via corepack (the host's pnpm is a corepack shim)"
+  elif [ "$MIRROR" = cn ]; then
     npm install -g "pnpm@$pnpm_version" --registry=https://registry.npmmirror.com >/dev/null
   else
     npm install -g "pnpm@$pnpm_version" >/dev/null
