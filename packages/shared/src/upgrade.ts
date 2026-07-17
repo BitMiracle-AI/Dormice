@@ -14,8 +14,9 @@ import { z } from 'zod';
  * The check reaches the network, so failures are data, not surprises:
  * `check` is null and `checkError` says why (the getIngress probe
  * precedent — the observation succeeded, the probe inside it did not).
- * Nothing checks in the background; this verb runs when asked, with a
- * short-lived server-side cache to keep a busy console polite.
+ * Nothing checks on a timer; this verb runs when a human arrives — the
+ * console asks once per open, the version page and its button ask again
+ * — with a short-lived server-side cache to keep a busy console polite.
  */
 export const checkUpgradeRequestSchema = z.object({
   /** Bypass the server-side cache — the "check now" button. */

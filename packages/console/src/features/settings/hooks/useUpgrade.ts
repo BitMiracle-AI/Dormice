@@ -2,9 +2,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { checkUpgrade, getUpgradeStatus } from '@/lib/api';
 
 /**
- * 版本检查只在打开设置页与点按钮时发生 — 刻意不做后台轮询(检查会打
- * 远端仓库,后台跑等于 phone home);daemon 侧另有一小时缓存,反复进
- * 页面不重复走网络。检查失败是数据(checkError)不是异常,卡片如实显示。
+ * 版本检查只在"人到场"时发生 — 开台一次(AppShell 挂 UpgradeNotice,
+ * 2026-07-18 起)、打开版本页、点按钮;刻意不做定时轮询(检查会打远端
+ * 仓库,无人时后台跑才是 phone home,管理员主动打开控制台不算);
+ * daemon 侧另有一小时缓存,反复进页面不重复走网络。检查失败是数据
+ * (checkError)不是异常,卡片如实显示。
  */
 export function useCheckUpgrade() {
   return useQuery({
@@ -43,8 +45,10 @@ export function useUpgradeStatus() {
 }
 
 /**
- * 侧栏角标的只读缓存视图:绝不自己发请求(检查只在设置页与按钮发生,
- * 角标不该成为第二个 phone-home 入口),设置页查过且可升级才亮。
+ * 侧栏角标的只读缓存视图:绝不自己发请求(开台与版本页已是仅有的
+ * 检查入口,角标不该成为第三个),查过且可升级才亮。开台检查落进
+ * 同一份缓存,所以角标从登录起就能亮;忽略提醒弹窗不熄灭它 —
+ * 被动信号不打扰人,也不撒谎。
  */
 export function useCachedUpgradable(): boolean {
   const { data } = useQuery({
