@@ -60,13 +60,23 @@ know why; the Linux terms in it are covered in
   kind of memory gVisor holds sandboxes in; measured at the default 60:
   0 bytes reclaimed. This is the check that reads the live value.
 
-## Network containment
+## Network
 
+- **net.ipv4.ip_forward = 1** — off, bridge networking is dead and
+  every sandbox is cut from the network right now. This is the one
+  check where the live value can lie: dockerd re-enables forwarding at
+  every daemon start, masking a boot config that says 0 until the next
+  sysctl config replay switches it back off — so it also reads the
+  boot config, in systemd-sysctl's own application order, and *warns*
+  naming the file that would turn it off.
 - **cloud metadata firewall** — `DROP` rules in the `DOCKER-USER` chain
   for `169.254.0.0/16` and `100.100.100.200`; without them a sandbox
   can steal cloud credentials from the metadata service.
 - **firewall rules persisted** — *warn*: rules living only in memory
-  silently vanish on reboot.
+  silently vanish on reboot. Persistence is the
+  `dormice-metadata-firewall` systemd unit the installer writes; a
+  host persisted by an older install via `iptables-persistent` still
+  passes.
 
 ## Configuration
 

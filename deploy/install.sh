@@ -276,20 +276,50 @@ else
   note "created a ${SWAP_GB} GiB /swapfile, persisted in /etc/fstab"
 fi
 
-# ---- vm.swappiness = 100 ----------------------------------------------------
-# gVisor holds sandbox memory as shared memory, which the kernel refuses to
-# swap below swappiness 100 (measured at 60: 0 bytes reclaimed). The file is
-# named to sort after cloud-vendor sysctl.d files that ship swappiness=0.
-log 'vm.swappiness = 100'
-if [ "$(cat /proc/sys/vm/swappiness)" = 100 ]; then
-  note '[skip] effective value is already 100'
+# ---- kernel parameters (sysctl) ----------------------------------------------
+# vm.swappiness=100: gVisor holds sandbox memory as shared memory, which the
+# kernel refuses to swap below swappiness 100 (measured at 60: 0 bytes
+# reclaimed). net.ipv4.ip_forward=1: bridge networking dies without it, and
+# although dockerd flips it on at every daemon start, a boot config that says
+# 0 comes back at the next config replay and silently cuts every sandbox's
+# network. The file is named to sort after cloud-vendor sysctl.d files that
+# ship swappiness=0. Applied scoped — `sysctl --system` here would replay
+# every operator setting mid-install (an ip_forward=0 in /etc/sysctl.conf did
+# exactly that and killed the base-image build two steps later). Boot-order
+# effectiveness is verified against systemd-sysctl's own application order:
+# the winning value of each key must be the one we need. The value, not the
+# file — a host may legitimately set ip_forward=1 in its own later-sorting
+# config (the test host does), and that is agreement, not a conflict.
+log 'kernel parameters (vm.swappiness = 100, net.ipv4.ip_forward = 1)'
+SYSCTL_FILE=/etc/sysctl.d/99-dormice.conf
+sysctl_wanted='# Managed by Dormice install.sh — rewritten on every run.
+vm.swappiness=100
+net.ipv4.ip_forward=1'
+if [ "$(cat "$SYSCTL_FILE" 2>/dev/null)" = "$sysctl_wanted" ]; then
+  note "[skip] $SYSCTL_FILE is in place"
 else
-  echo 'vm.swappiness=100' >/etc/sysctl.d/99-dormice.conf
-  sysctl --system >/dev/null
-  [ "$(cat /proc/sys/vm/swappiness)" = 100 ] \
-    || die 'wrote /etc/sysctl.d/99-dormice.conf but the effective value still is not 100 — something later in sysctl order overrides it'
-  note 'set via /etc/sysctl.d/99-dormice.conf (survives reboot)'
+  printf '%s\n' "$sysctl_wanted" >"$SYSCTL_FILE"
+  note "wrote $SYSCTL_FILE (survives reboot)"
 fi
+sysctl -p "$SYSCTL_FILE" >/dev/null
+systemd_sysctl=/usr/lib/systemd/systemd-sysctl
+[ -x "$systemd_sysctl" ] || systemd_sysctl=/lib/systemd/systemd-sysctl
+[ -x "$systemd_sysctl" ] \
+  || die 'cannot find systemd-sysctl to verify the sysctl boot order — non-systemd hosts are not supported'
+for kv in vm.swappiness=100 net.ipv4.ip_forward=1; do
+  key=${kv%%=*} want=${kv#*=}
+  winner=$("$systemd_sysctl" --cat-config | awk -v key="$key" '
+    /^# \//       { file = $2; next }
+    /^[ \t]*[#;]/ { next }
+    {
+      eq = index($0, "="); if (eq == 0) next
+      k = substr($0, 1, eq - 1); gsub(/[ \t]/, "", k); sub(/^-/, "", k); gsub("/", ".", k)
+      if (k == key) { v = substr($0, eq + 1); gsub(/[ \t]/, "", v); print file " " v }
+    }' | tail -n 1)
+  [ "${winner#* }" = "$want" ] \
+    || die "$key must be $want at boot, but the sysctl boot order ends with ${winner% *} setting it to ${winner#* } — change or remove that line, then re-run"
+done
+note 'verified: the sysctl boot order ends with our values for both keys'
 
 # ---- cloud metadata firewall -------------------------------------------------
 # Sandboxes run untrusted code; on a cloud host with an attached role, one
@@ -306,16 +336,45 @@ for target in 169.254.0.0/16 100.100.100.200; do
   fi
 done
 if [ -n "$added" ]; then note "added DROP rules:$added"; else note '[skip] both DROP rules present'; fi
-if ! grep -qs 100.100.100.200 /etc/iptables/rules.v4; then
-  # Preseeded so apt never prompts; the explicit save below is what persists.
-  echo 'iptables-persistent iptables-persistent/autosave_v4 boolean true' | debconf-set-selections
-  echo 'iptables-persistent iptables-persistent/autosave_v6 boolean true' | debconf-set-selections
-  command -v netfilter-persistent >/dev/null || { apt-get update -q; apt-get install -qy iptables-persistent; }
-  netfilter-persistent save >/dev/null 2>&1
-  note 'persisted to /etc/iptables/rules.v4 (survives reboot)'
+# Persistence is our own oneshot unit that re-adds the rules after docker
+# creates the DOCKER-USER chain at boot (docker never flushes that chain
+# afterwards). Deliberately NOT iptables-persistent: installing it makes apt
+# remove ufw (the packages conflict) — silently discarding an operator's
+# firewall — and `netfilter-persistent save` snapshots the whole ruleset,
+# operator rules and Docker's ephemeral NAT entries included, when exactly
+# two rules are ours to persist. Hosts persisted the old way keep their
+# /etc/iptables/rules.v4 untouched; the -C checks make duplicates impossible.
+FIREWALL_UNIT=/etc/systemd/system/dormice-metadata-firewall.service
+firewall_unit=$(cat <<'EOF'
+# Written by Dormice install.sh — rewritten on every run. Sandboxes run
+# untrusted code; these rules keep them away from the cloud metadata service.
+[Unit]
+Description=Dormice: block cloud metadata endpoints from containers
+After=docker.service
+Requires=docker.service
+Before=dormice.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'iptables -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP'
+ExecStart=/bin/sh -c 'iptables -C DOCKER-USER -d 100.100.100.200 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 100.100.100.200 -j DROP'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+)
+if [ "$(cat "$FIREWALL_UNIT" 2>/dev/null)" = "$firewall_unit" ]; then
+  note '[skip] persistence unit is in place'
 else
-  note '[skip] rules already persisted'
+  printf '%s\n' "$firewall_unit" >"$FIREWALL_UNIT"
+  systemctl daemon-reload
+  note "wrote $FIREWALL_UNIT (re-adds the rules after docker starts — survives reboot)"
 fi
+systemctl enable dormice-metadata-firewall >/dev/null 2>&1
+# Started now, not only at boot: a unit that has never run is an unproven
+# promise, and the start is a no-op when the rules are already in.
+systemctl restart dormice-metadata-firewall
 
 # ---- Dormice code -----------------------------------------------------------
 # Defined before the pull so the rollback in on_exit can always call it.

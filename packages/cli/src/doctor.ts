@@ -112,6 +112,34 @@ const DAEMON_JSON = '/etc/docker/daemon.json';
 const RULES_V4 = '/etc/iptables/rules.v4';
 const METADATA_IP = '100.100.100.200';
 const METADATA_RANGE = '169.254.0.0/16';
+const SYSCTL_FILE = '/etc/sysctl.d/99-dormice.conf';
+// Not on PATH; /lib is merged into /usr/lib on every supported target.
+const SYSTEMD_SYSCTL = '/usr/lib/systemd/systemd-sysctl';
+
+/**
+ * The file whose value for `key` wins at boot, parsed from
+ * `systemd-sysctl --cat-config` — the authoritative application order,
+ * with `# /path` lines marking each file. Last setter wins.
+ */
+function sysctlBootWinner(
+  catConfig: string,
+  key: string,
+): { file: string; value: string } | undefined {
+  let file = 'unknown';
+  let winner: { file: string; value: string } | undefined;
+  for (const line of catConfig.split('\n')) {
+    if (line.startsWith('# /')) {
+      file = line.slice(2).trim();
+      continue;
+    }
+    if (/^\s*[#;]/.test(line)) continue;
+    const eq = line.indexOf('=');
+    if (eq < 0) continue;
+    const k = line.slice(0, eq).trim().replace(/^-/, '').replaceAll('/', '.');
+    if (k === key) winner = { file, value: line.slice(eq + 1).trim() };
+  }
+  return winner;
+}
 
 async function daemonJson(
   ctx: DoctorContext,
@@ -289,8 +317,48 @@ const CHECKS: DoctorCheck[] = [
         ? pass('100 (effective value)')
         : fail(
             `effective value is ${value} — below 100 the kernel refuses to swap gVisor's shmem-held sandbox memory (measured at 60: 0 bytes reclaimed)`,
-            "echo 'vm.swappiness=100' > /etc/sysctl.d/99-dormice.conf && sysctl --system",
+            `re-run install.sh — it persists 100 in ${SYSCTL_FILE}, applies it scoped, and verifies nothing later in the sysctl boot order overrides it`,
           );
+    },
+  },
+  {
+    id: 'ip-forward',
+    title: 'net.ipv4.ip_forward = 1',
+    needs: ['os-linux'],
+    run: async (ctx) => {
+      const raw = await ctx.readTextFile('/proc/sys/net/ipv4/ip_forward');
+      const value = raw?.trim();
+      if (value === undefined)
+        return fail('cannot read /proc/sys/net/ipv4/ip_forward');
+      if (value !== '1') {
+        return fail(
+          `effective value is ${value} — bridge networking is off, every sandbox is cut from the network right now`,
+          `re-run install.sh — it persists 1 in ${SYSCTL_FILE}, applies it, and verifies the sysctl boot order`,
+        );
+      }
+      // 1 now proves little: dockerd flips it on at every daemon start. The
+      // hazard is a boot config that says 0 — the next config replay (some
+      // other installer's `sysctl --system`) re-applies it and cuts sandbox
+      // networking until dockerd restarts. Unlike swappiness, whose drift
+      // surfaces in the effective value after a reboot, this one can stay
+      // masked forever — so this check alone also reads the boot config, in
+      // systemd-sysctl's own application order.
+      const res = await ctx.run(SYSTEMD_SYSCTL, ['--cat-config']);
+      if (!res.ok) {
+        return pass('1 (effective value; boot config unreadable here)');
+      }
+      const winner = sysctlBootWinner(res.stdout, 'net.ipv4.ip_forward');
+      if (winner !== undefined && winner.value !== '1') {
+        return warn(
+          `1 now, but ${winner.file} sets ${winner.value} at boot — the next sysctl config replay cuts every sandbox's networking`,
+          `drop net.ipv4.ip_forward from ${winner.file}, or re-run install.sh and let it verify the boot order`,
+        );
+      }
+      return pass(
+        winner === undefined
+          ? '1 (effective value; no boot config sets it — dockerd re-enables it at every start)'
+          : `1 (effective value, persisted by ${winner.file})`,
+      );
     },
   },
   {
@@ -325,13 +393,25 @@ const CHECKS: DoctorCheck[] = [
     title: 'firewall rules persisted',
     needs: ['metadata-firewall'],
     run: async (ctx) => {
+      const unit = await ctx.run('systemctl', [
+        'is-enabled',
+        'dormice-metadata-firewall',
+      ]);
+      if (unit.ok) {
+        return pass(
+          'dormice-metadata-firewall.service re-adds the rules after docker starts',
+        );
+      }
+      // Pre-unit installs persisted via iptables-persistent — still real
+      // persistence, not drift to repair.
       const rules = await ctx.readTextFile(RULES_V4);
-      return rules?.includes(METADATA_IP) && rules.includes('169.254')
-        ? pass(`both rules in ${RULES_V4}`)
-        : warn(
-            'the DROP rules live only in memory — a reboot silently drops them',
-            'apt-get install -y iptables-persistent && netfilter-persistent save',
-          );
+      if (rules?.includes(METADATA_IP) && rules.includes('169.254')) {
+        return pass(`both rules in ${RULES_V4} (iptables-persistent)`);
+      }
+      return warn(
+        'the DROP rules live only in memory — a reboot silently drops them',
+        're-run install.sh (it writes the dormice-metadata-firewall systemd unit)',
+      );
     },
   },
   {
