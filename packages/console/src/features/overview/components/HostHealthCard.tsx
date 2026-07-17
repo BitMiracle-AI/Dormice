@@ -6,6 +6,7 @@ import {
 } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon, type HugeiconsProps } from '@hugeicons/react';
 import type { ReactNode } from 'react';
+import { Meter } from '@/components/Meter';
 import {
   Card,
   CardContent,
@@ -17,7 +18,6 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { formatBytes, pctOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useHostMetrics } from '../hooks/useHostMetrics';
-import { Meter } from './Meter';
 
 function HostRow({
   icon,

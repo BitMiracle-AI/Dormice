@@ -14,6 +14,7 @@ import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { DataTable } from '@/components/DataTable';
 import { FilterMenu } from '@/components/FilterMenu';
+import { Meter } from '@/components/Meter';
 import { paginate, TablePager } from '@/components/TablePager';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
@@ -27,7 +28,6 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -64,7 +64,7 @@ import { CreateSandboxDialog } from '../components/CreateSandboxDialog';
 import { DestroySandboxDialog } from '../components/DestroySandboxButton';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { UpgradableBadge } from '../components/UpgradableBadge';
-import { policyLine, STATE_LABELS, since } from '../format';
+import { STATE_LABELS, since } from '../format';
 import {
   useFleetMetrics,
   useSandboxes,
@@ -82,42 +82,35 @@ const STATE_FILTERS: Array<SandboxState> = [
 const PAGE_SIZE = 50;
 
 /** 可排序的列:字符串比较对 name 和 ISO 时间戳同样成立。 */
-type SortKey = 'name' | 'lastActiveAt';
+type SortKey = 'name' | 'createdAt' | 'lastActiveAt';
 type Sort = { key: SortKey; dir: 1 | -1 };
 
-/** 一个沙箱的标签摊平成 "key=value" 串 — 筛选项与展示共用同一拼法。 */
+/**
+ * 一个沙箱的标签摊平成 "key=value" 串,供筛选。标签列刻意不设
+ * (2026-07-17 用户拍板):标签的用途是分组筛选,不是逐行阅读 —
+ * chips 会 flex-wrap 撑高行,单个沙箱的标签去详情页看。
+ */
 function labelPairs(sandbox: Sandbox): string[] {
   return Object.entries(sandbox.metadata).map(
     ([key, value]) => `${key}=${value}`,
   );
 }
 
-/** 标签列的一格:小 chips,长值截断、全文挂 hover;没标签就空着不占眼睛。 */
-function MetadataChips({ sandbox }: { sandbox: Sandbox }) {
-  const pairs = labelPairs(sandbox);
-  if (pairs.length === 0) return null;
-  return (
-    // 上限收着点:列要在 max-w-6xl 里一屏放下,肥列多一寸,「操作」列
-    // 就被挤出视野一寸(2026-07-16 实测过溢出)。truncate 放内层 span:
-    // Badge 是 flex 容器,直接截自己会从两侧裁字、省略号不出现。
-    <span className="inline-flex max-w-[13rem] flex-wrap gap-1">
-      {pairs.map((pair) => (
-        <Badge
-          key={pair}
-          variant="outline"
-          className="max-w-[6.5rem] font-mono text-xs font-normal text-muted-foreground"
-          title={pair}
-        >
-          <span className="truncate">{pair}</span>
-        </Badge>
-      ))}
-    </span>
-  );
+/**
+ * 上限一侧的字节数:去掉小数尾零 — 上限几乎都是整数,「4.00 GiB」
+ * 的尾零是噪音;用量一侧保留 formatBytes 原样,精度在那儿是信息。
+ */
+function formatCap(bytes: number): string {
+  return formatBytes(bytes)
+    .replace(/(\.\d*?)0+(?= )/, '$1')
+    .replace(/\.(?= )/, '');
 }
 
 /**
- * 资源列的一格:数值紧凑,细节挂 hover;占比过线换警示色,和指标 tab
- * 的 Meter 同一套阈值。value 为 null = 这行没被测到(没有容器可测)。
+ * 资源列的一格:写成「用量 / 上限」— 不带分母的数字没有信息量,
+ * 1.2 GiB 对 2 GiB 的沙箱是快满,对 8 GiB 的是很空。占比过线换警示色,
+ * 和指标 tab 的 Meter 同一套阈值。value 为 null = 这行没被测到
+ * (没有容器可测)。
  */
 function UsageCell({
   value,
@@ -146,6 +139,11 @@ function UsageCell({
       title={title}
     >
       {value}
+      {/* 迷你条:数字给精度,条给一眼的量感。宽度钉死不随列宽漂 —
+          三列的条一样长,长短才可比。 */}
+      <div className="mt-1 ml-auto w-16">
+        <Meter pct={pct} />
+      </div>
     </TableCell>
   );
 }
@@ -485,12 +483,22 @@ export function SandboxesPage() {
               </TableHead>
               <TableHead>状态</TableHead>
               <TableHead>模板</TableHead>
-              <TableHead>标签</TableHead>
               <TableHead className="text-right">CPU</TableHead>
               <TableHead className="text-right">内存</TableHead>
               <TableHead className="text-right">磁盘</TableHead>
               <TableHead>
-                {/* 升序 = 最久没动的排最前:回收磁盘时先看这里。 */}
+                <SortableHead
+                  label="创建"
+                  sortKey="createdAt"
+                  sort={sort}
+                  onSort={toggleSort}
+                />
+              </TableHead>
+              <TableHead>
+                {/* 升序 = 最久没动的排最前:回收磁盘时先看这里 — 生命
+                    周期策略从最后活动起算,这列才是"谁快被降温"的信号。
+                    「策略」列刻意不设(2026-07-17 版式取舍):低频配置、
+                    还是唯一会折行撑高行的列,归详情页。全表单行,不横滚。 */}
                 <SortableHead
                   label="空闲"
                   sortKey="lastActiveAt"
@@ -498,8 +506,6 @@ export function SandboxesPage() {
                   onSort={toggleSort}
                 />
               </TableHead>
-              {/* 短表头:6 个字的表头会把列最小宽钉死,行内容才是主角。 */}
-              <TableHead title="生命周期策略">策略</TableHead>
               <TableHead className="text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
@@ -531,12 +537,20 @@ export function SandboxesPage() {
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   <span className="inline-flex items-center gap-1.5">
-                    {sandbox.template ?? '基础镜像'}
+                    {/* 链接指向模板列表页(没有逐模板详情页);基础镜像
+                        不是模板,没有可去处,保持纯文本。 */}
+                    {sandbox.template ? (
+                      <Link
+                        to="/templates"
+                        className="hover:text-foreground hover:underline"
+                      >
+                        {sandbox.template}
+                      </Link>
+                    ) : (
+                      '基础镜像'
+                    )}
                     <UpgradableBadge lineage={lineageOf.get(sandbox.name)} />
                   </span>
-                </TableCell>
-                <TableCell>
-                  <MetadataChips sandbox={sandbox} />
                 </TableCell>
                 {(() => {
                   const m = metricsOf.get(sandbox.name);
@@ -552,42 +566,35 @@ export function SandboxesPage() {
                   return (
                     <>
                       <UsageCell
-                        value={`${Math.round(m.cpuUsedPct)}%`}
+                        value={`${Math.round(m.cpuUsedPct)}% / ${m.cpuCount} 核`}
                         pct={m.cpuUsedPct / m.cpuCount}
-                        title={`${m.cpuCount} 核 · 百分比按单核计`}
+                        title="百分比按单核计,多核可超 100%"
                       />
                       <UsageCell
-                        value={formatBytes(m.memUsedBytes)}
+                        value={`${formatBytes(m.memUsedBytes)} / ${formatCap(m.memTotalBytes)}`}
                         pct={pctOf(m.memUsedBytes, m.memTotalBytes)}
-                        title={`共 ${formatBytes(m.memTotalBytes)}`}
                       />
                       <UsageCell
-                        value={formatBytes(m.diskUsedBytes)}
+                        value={`${formatBytes(m.diskUsedBytes)} / ${formatCap(m.diskTotalBytes)}`}
                         pct={pctOf(m.diskUsedBytes, m.diskTotalBytes)}
-                        title={`名义 ${formatBytes(m.diskTotalBytes)}`}
+                        title="上限是名义配额:稀疏镜像,未写入不占宿主盘"
                       />
                     </>
                   );
                 })()}
+                {/* 带「前」:光秃的时长会被读成存活状态;空闲列不带 —
+                    表头已说明它是一段仍在计数的时长。 */}
+                <TableCell
+                  className="tabular-nums text-muted-foreground"
+                  title={`创建于:${new Date(sandbox.createdAt).toLocaleString()}`}
+                >
+                  {since(sandbox.createdAt)}前
+                </TableCell>
                 <TableCell
                   className="tabular-nums text-muted-foreground"
                   title={`最近活动:${new Date(sandbox.lastActiveAt).toLocaleString()}`}
                 >
                   {since(sandbox.lastActiveAt)}
-                </TableCell>
-                {/* 限宽 + 放开 nowrap(vendored TableCell 默认不换行)让长
-                    策略折行,且只在「·」分隔处断 — CJK 默认哪里都能断,
-                    会把「停止」劈成两半。「存活」列刻意不设(2026-07-16
-                    版式取舍):创建时长与空闲高度重复,详情页有它的家。 */}
-                <TableCell className="max-w-[10rem] whitespace-normal text-xs text-muted-foreground">
-                  {policyLine(sandbox.policy)
-                    .split(' · ')
-                    .map((segment, index) => (
-                      <span key={segment}>
-                        {index > 0 && ' · '}
-                        <span className="whitespace-nowrap">{segment}</span>
-                      </span>
-                    ))}
                 </TableCell>
                 <TableCell className="text-right">
                   <SandboxRowMenu name={sandbox.name} />

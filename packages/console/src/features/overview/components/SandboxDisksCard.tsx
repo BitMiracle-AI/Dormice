@@ -1,7 +1,7 @@
+import { Meter } from '@/components/Meter';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { formatBytes, pctOf } from '@/lib/format';
 import { useHostMetrics } from '../hooks/useHostMetrics';
-import { Meter } from './Meter';
 import { StatCard, StatCardSkeleton } from './StatCard';
 
 /**

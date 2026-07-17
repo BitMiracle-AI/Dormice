@@ -1,3 +1,4 @@
+import { Meter } from '@/components/Meter';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { pctOf } from '@/lib/format';
 import { fullClock } from '../format';
@@ -7,7 +8,6 @@ import {
   useFleetTimeline,
 } from '../hooks/useFleetTimeline';
 import { useHostMetrics } from '../hooks/useHostMetrics';
-import { Meter } from './Meter';
 import { SandboxDisksCard } from './SandboxDisksCard';
 import { Sparkline } from './Sparkline';
 import { StatCard, StatCardSkeleton } from './StatCard';
