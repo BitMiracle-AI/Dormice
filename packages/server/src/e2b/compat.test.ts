@@ -783,6 +783,10 @@ describe('E2B envd surface', () => {
     });
     expect(down.statusCode).toBe(200);
     expect(down.headers['content-length']).toBe(String(content.length));
+    expect(down.headers['content-type']).toBe('text/plain; charset=utf-8');
+    expect(down.headers['content-disposition']).toBe(
+      "inline; filename*=utf-8''up.txt",
+    );
     expect(down.body).toBe(content);
 
     const missing = await t.app.inject({
@@ -1634,6 +1638,39 @@ describe('signed file URLs at the daemon root', () => {
     const fromB = await download(b.envdAccessToken, exp);
     expect(fromB.statusCode).toBe(200);
     expect(fromB.body).toBe('contents of B\n');
+  });
+
+  it('downloads name the true MIME and filename — the extension lives in the query, so headers are all a preflight can read', async () => {
+    // Microsoft's Office online viewer rejects a signed docx URL served as
+    // bare octet-stream (measured 2026-07-18); real envd's typed
+    // content-type + disposition filename are what let it through.
+    const t = testApp();
+    const { sandboxID, envdAccessToken } = await createSandbox(t);
+    await putFile(t, sandboxID, '文档 report.docx', 'not really a docx');
+    await putFile(t, sandboxID, 'blob.weird', 'bytes');
+
+    const fetchSigned = (path: string) => {
+      const sig = sdkSignature({ path, operation: 'read', envdAccessToken });
+      return t.app.inject({
+        method: 'GET',
+        url: `/files?path=${encodeURIComponent(path)}&signature=${encodeURIComponent(sig)}`,
+      });
+    };
+
+    const docx = await fetchSigned('文档 report.docx');
+    expect(docx.statusCode).toBe(200);
+    expect(docx.headers['content-type']).toBe(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    // RFC 5987: non-ASCII percent-encoded, the space included.
+    expect(docx.headers['content-disposition']).toBe(
+      "inline; filename*=utf-8''%E6%96%87%E6%A1%A3%20report.docx",
+    );
+    expect(docx.headers['last-modified']).toMatch(/GMT$/);
+
+    const weird = await fetchSigned('blob.weird');
+    expect(weird.statusCode).toBe(200);
+    expect(weird.headers['content-type']).toBe('application/octet-stream');
   });
 
   it('signed uploads: multipart carries the path in the filename, octet-stream in the query', async () => {
