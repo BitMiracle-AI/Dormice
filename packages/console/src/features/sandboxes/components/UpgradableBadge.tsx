@@ -14,7 +14,7 @@ export function UpgradableBadge({ lineage }: { lineage?: ImageLineage }) {
   return (
     <Badge
       variant="outline"
-      className="border-amber-500/40 bg-amber-500/10 font-medium text-amber-600 dark:text-amber-400"
+      className="border-transparent bg-amber-500/10 font-medium text-amber-600 dark:text-amber-400"
       title={`运行 ${lineage.image},模板当前 ${lineage.nextImage} — Rebuild 换新`}
     >
       可升级

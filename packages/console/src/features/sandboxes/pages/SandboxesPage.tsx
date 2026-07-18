@@ -4,7 +4,7 @@ import {
   ArrowUp01Icon,
   Copy01Icon,
   Delete02Icon,
-  MoreVerticalIcon,
+  MoreHorizontalIcon,
   PackageIcon,
   Search01Icon,
 } from '@hugeicons/core-free-icons';
@@ -64,7 +64,7 @@ import { CreateSandboxDialog } from '../components/CreateSandboxDialog';
 import { DestroySandboxDialog } from '../components/DestroySandboxButton';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { UpgradableBadge } from '../components/UpgradableBadge';
-import { STATE_LABELS, since } from '../format';
+import { ago, STATE_LABELS } from '../format';
 import {
   useFleetMetrics,
   useSandboxes,
@@ -107,29 +107,34 @@ function formatCap(bytes: number): string {
 }
 
 /**
- * 资源列的一格:写成「用量 / 上限」— 不带分母的数字没有信息量,
- * 1.2 GiB 对 2 GiB 的沙箱是快满,对 8 GiB 的是很空。占比过线换警示色,
- * 和指标 tab 的 Meter 同一套阈值。value 为 null = 这行没被测到
- * (没有容器可测)。
+ * 资源列的一格:Meter 条是主角,「用量 / 上限」整行 text-xs 当精度注脚
+ * (2026-07-18 用户拍板,主次对调) — 扫表时读的是条的长短与颜色,数字
+ * 是停下来核对时才看的。数字列因此瘦身,省下的宽度归名称列。占比过线
+ * 数字换警示色,和 Meter 同一套阈值同一套色。value 为 null = 这行没被
+ * 测到(没有容器可测)。
  */
 function UsageCell({
   value,
+  cap,
   pct,
   title,
 }: {
   value: string | null;
+  cap?: string;
   pct: number;
   title?: string;
 }) {
   if (value === null) {
     return (
-      <TableCell className="text-right text-muted-foreground">—</TableCell>
+      <TableCell className="text-right text-xs text-muted-foreground">
+        —
+      </TableCell>
     );
   }
   return (
     <TableCell
       className={cn(
-        'text-right tabular-nums',
+        'text-right text-xs tabular-nums',
         pct >= 90
           ? 'text-red-600 dark:text-red-400'
           : pct >= 75
@@ -139,9 +144,9 @@ function UsageCell({
       title={title}
     >
       {value}
-      {/* 迷你条:数字给精度,条给一眼的量感。宽度钉死不随列宽漂 —
-          三列的条一样长,长短才可比。 */}
-      <div className="mt-1 ml-auto w-16">
+      {cap && <> / {cap}</>}
+      {/* 条的宽度钉死不随列宽漂 — 三列的条一样长,长短才可比。 */}
+      <div className="mt-1 ml-auto w-24">
         <Meter pct={pct} />
       </div>
     </TableCell>
@@ -194,30 +199,28 @@ function SandboxRowMenu({ name }: { name: string }) {
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`${name} 的操作`}
-            >
-              <HugeiconsIcon icon={MoreVerticalIcon} />
+            <Button variant="ghost" size="icon" aria-label={`${name} 的操作`}>
+              <HugeiconsIcon icon={MoreHorizontalIcon} className="size-5" />
             </Button>
           }
         />
         <DropdownMenuContent align="end">
           <DropdownMenuItem
+            className="font-medium"
             onClick={async () => {
               await navigator.clipboard.writeText(name);
               toast.success('名称已复制');
             }}
           >
-            <HugeiconsIcon icon={Copy01Icon} />
+            <HugeiconsIcon icon={Copy01Icon} strokeWidth={2} />
             复制名称
           </DropdownMenuItem>
           <DropdownMenuItem
             variant="destructive"
+            className="font-medium"
             onClick={() => setConfirmOpen(true)}
           >
-            <HugeiconsIcon icon={Delete02Icon} />
+            <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
             销毁
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -463,10 +466,15 @@ export function SandboxesPage() {
 
       {filtered.length > 0 && (
         // fill:表格占满剩余高度框内滚,表头吸顶 — 列名滚不丢。
-        <DataTable fill>
+        // table-fixed 是「全表不横滚」的物理保证:列宽由表头一次定死,
+        // 超长的名称/模板在自己列里省略号收场(全文在 title),而不是把
+        // 整张表撑出横向滚动条。定宽列按内容给宽(数字列的下限是 Meter
+        // 条的 w-16 + 边距);名称不定宽,吃掉全部剩余 — 它是表的主键,
+        // 窗口变窄时也是它先变短,数字列不挤压。
+        <DataTable fill className="table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead className="w-0">
+              <TableHead className="w-14">
                 <Checkbox
                   aria-label="全选"
                   checked={allVisibleSelected}
@@ -481,12 +489,12 @@ export function SandboxesPage() {
                   onSort={toggleSort}
                 />
               </TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead>模板</TableHead>
-              <TableHead className="text-right">CPU</TableHead>
-              <TableHead className="text-right">内存</TableHead>
-              <TableHead className="text-right">磁盘</TableHead>
-              <TableHead>
+              <TableHead className="w-24">状态</TableHead>
+              <TableHead className="w-32">模板</TableHead>
+              <TableHead className="w-32 text-right">CPU</TableHead>
+              <TableHead className="w-32 text-right">内存</TableHead>
+              <TableHead className="w-32 text-right">磁盘</TableHead>
+              <TableHead className="w-26">
                 <SortableHead
                   label="创建"
                   sortKey="createdAt"
@@ -494,7 +502,7 @@ export function SandboxesPage() {
                   onSort={toggleSort}
                 />
               </TableHead>
-              <TableHead>
+              <TableHead className="w-26">
                 {/* 升序 = 最久没动的排最前:回收磁盘时先看这里 — 生命
                     周期策略从最后活动起算,这列才是"谁快被降温"的信号。
                     「策略」列刻意不设(2026-07-17 版式取舍):低频配置、
@@ -506,7 +514,7 @@ export function SandboxesPage() {
                   onSort={toggleSort}
                 />
               </TableHead>
-              <TableHead className="text-right">操作</TableHead>
+              <TableHead className="w-18 text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -526,7 +534,8 @@ export function SandboxesPage() {
                   <Link
                     to="/sandboxes/$name"
                     params={{ name: sandbox.name }}
-                    className="font-mono font-medium hover:underline"
+                    className="block truncate font-mono font-medium hover:underline"
+                    title={sandbox.name}
                   >
                     {sandbox.name}
                   </Link>
@@ -535,13 +544,16 @@ export function SandboxesPage() {
                   <SandboxStateBadge state={sandbox.state} />
                 </TableCell>
                 <TableCell className="text-muted-foreground">
-                  <span className="inline-flex items-center gap-1.5">
+                  {/* Badge 自带 shrink-0:列不够宽时省略的是模板名,
+                      「可升级」标记寸步不让 — 它是行动信号,名字有 title 兜底。 */}
+                  <span className="flex items-center gap-1.5">
                     {/* 链接指向模板列表页(没有逐模板详情页);基础镜像
                         不是模板,没有可去处,保持纯文本。 */}
                     {sandbox.template ? (
                       <Link
                         to="/templates"
-                        className="hover:text-foreground hover:underline"
+                        className="truncate hover:text-foreground hover:underline"
+                        title={sandbox.template}
                       >
                         {sandbox.template}
                       </Link>
@@ -565,35 +577,38 @@ export function SandboxesPage() {
                   return (
                     <>
                       <UsageCell
-                        value={`${Math.round(m.cpuUsedPct)}% / ${m.cpuCount} 核`}
+                        value={`${Math.round(m.cpuUsedPct)}%`}
+                        cap={`${m.cpuCount} vCPU`}
                         pct={m.cpuUsedPct / m.cpuCount}
-                        title="百分比按单核计,多核可超 100%"
+                        title="百分比按单 vCPU 计,多 vCPU 可超 100%"
                       />
                       <UsageCell
-                        value={`${formatBytes(m.memUsedBytes)} / ${formatCap(m.memTotalBytes)}`}
+                        value={formatBytes(m.memUsedBytes)}
+                        cap={formatCap(m.memTotalBytes)}
                         pct={pctOf(m.memUsedBytes, m.memTotalBytes)}
                       />
                       <UsageCell
-                        value={`${formatBytes(m.diskUsedBytes)} / ${formatCap(m.diskTotalBytes)}`}
+                        value={formatBytes(m.diskUsedBytes)}
+                        cap={formatCap(m.diskTotalBytes)}
                         pct={pctOf(m.diskUsedBytes, m.diskTotalBytes)}
                         title="上限是名义配额:稀疏镜像,未写入不占宿主盘"
                       />
                     </>
                   );
                 })()}
-                {/* 带「前」:光秃的时长会被读成存活状态;空闲列不带 —
-                    表头已说明它是一段仍在计数的时长。 */}
+                {/* 两列都是粗粒度相对时刻(ago),精确时间戳在 title —
+                    扫表要的是数量级,查证才要精确到秒。 */}
                 <TableCell
                   className="tabular-nums text-muted-foreground"
                   title={`创建于:${new Date(sandbox.createdAt).toLocaleString()}`}
                 >
-                  {since(sandbox.createdAt)}前
+                  {ago(sandbox.createdAt)}
                 </TableCell>
                 <TableCell
                   className="tabular-nums text-muted-foreground"
                   title={`最近活动:${new Date(sandbox.lastActiveAt).toLocaleString()}`}
                 >
-                  {since(sandbox.lastActiveAt)}
+                  {ago(sandbox.lastActiveAt)}
                 </TableCell>
                 <TableCell className="text-right">
                   <SandboxRowMenu name={sandbox.name} />

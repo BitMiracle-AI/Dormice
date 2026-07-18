@@ -20,7 +20,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { since } from '@/features/sandboxes/format';
+import { ago } from '@/features/sandboxes/format';
 import { MOCK_PAGES_ENABLED } from '@/lib/mock';
 import { cn } from '@/lib/utils';
 import { type DoctorStatus, SAMPLE_DOCTOR } from '../fixtures';
@@ -128,8 +128,8 @@ export function DoctorPage() {
           </Badge>
         )}
         <span className="text-muted-foreground">
-          {since(report.ranAt)}前跑完,耗时{' '}
-          {(report.durationMs / 1000).toFixed(1)}s(含 3 个真容器探针)
+          {ago(report.ranAt)}跑完,耗时 {(report.durationMs / 1000).toFixed(1)}
+          s(含 3 个真容器探针)
         </span>
       </div>
 

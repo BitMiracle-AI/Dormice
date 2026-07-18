@@ -73,9 +73,18 @@ export function durationHint(raw: string): string | null {
   return `= ${formatDuration(seconds)}`;
 }
 
-/** 距离某时刻过去了多久:"3分12秒"(调用方自己加"前")。 */
-export function since(iso: string): string {
-  return formatDuration((Date.now() - Date.parse(iso)) / 1000);
+/**
+ * 相对时刻,粗粒度:"刚刚" / "5 分钟前" / "3 小时前" / "2 天前"。
+ * 刻意只留一段 — "3小时20分前"的后一段是噪音,读者要的是数量级;
+ * 精确到秒的场合(策略倒计时)用 formatDuration,精确时刻在 title。
+ * "前"字自带:"刚刚"没有"前",由调用方拼会拼出"刚刚前"。
+ */
+export function ago(iso: string): string {
+  const s = (Date.now() - Date.parse(iso)) / 1000;
+  if (s < 60) return '刚刚';
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+  return `${Math.floor(s / 86400)} 天前`;
 }
 
 /** 距离某时刻还有多久:"6天3小时"(调用方自己加"后");已过去则为"0秒"。 */

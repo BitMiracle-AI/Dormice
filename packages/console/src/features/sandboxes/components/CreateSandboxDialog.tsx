@@ -112,7 +112,7 @@ export function CreateSandboxDialog() {
     >
       <DialogTrigger
         render={
-          <Button size="sm">
+          <Button>
             <HugeiconsIcon icon={Add01Icon} />
             创建沙箱
           </Button>

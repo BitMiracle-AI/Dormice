@@ -27,7 +27,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useApiKeys } from '@/features/api-keys/hooks/useApiKeys';
-import { since } from '@/features/sandboxes/format';
+import { ago } from '@/features/sandboxes/format';
 import { cn } from '@/lib/utils';
 import { actorLabel } from '../actors';
 import { useActivity } from '../hooks/useActivity';
@@ -186,7 +186,7 @@ export function ActivityPage() {
                   // 相对时间好扫读,绝对时间才对得上日志 — hover 给后者。
                   title={new Date(event.at).toLocaleString()}
                 >
-                  {since(event.at)}前
+                  {ago(event.at)}
                 </TableCell>
                 <TableCell>
                   <Badge

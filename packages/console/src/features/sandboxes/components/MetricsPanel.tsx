@@ -26,7 +26,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { withGapBreaks } from '@/lib/chart-gaps';
 import { formatBytes, pctOf } from '@/lib/format';
-import { since } from '../format';
+import { ago } from '../format';
 import {
   useSandboxMetrics,
   useSandboxMetricsHistory,
@@ -244,7 +244,7 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
             icon={CpuIcon}
             label="CPU"
             value={`${Math.round(sample.cpuUsedPct)}%`}
-            hint={`${sample.cpuCount} 核 · 百分比按单核计`}
+            hint={`${sample.cpuCount} vCPU · 百分比按单 vCPU 计`}
             pct={sample.cpuUsedPct / sample.cpuCount}
           />
           <MetricCard
@@ -314,7 +314,7 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
             )}
             xTickFormatter={clockFor(range)}
             tickFormatter={(v) => `${v}%`}
-            valueFormatter={(v) => `${v}%(按单核计)`}
+            valueFormatter={(v) => `${v}%(按单 vCPU 计)`}
           />
           <HistoryChart
             title="内存走势"
@@ -336,7 +336,7 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
 
       <p className="text-xs text-muted-foreground">
         {sample !== null &&
-          `当前值 5 秒刷新,本次读数取自 ${since(sample.timestamp)}前。`}
+          `当前值 5 秒刷新,本次读数取自 ${ago(sample.timestamp)}。`}
         历史由 daemon
         后台采样落库;沙箱睡着照样测(观察不唤醒),停止后曲线如实断流。
         {bucketSeconds !== null &&
