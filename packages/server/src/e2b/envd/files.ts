@@ -37,6 +37,68 @@ export function registerFileRoutes(
   );
 }
 
+/**
+ * Extension → MIME for the download face. Real envd serves the true type
+ * (Go's mime.TypeByExtension) plus a content-disposition filename; a bare
+ * octet-stream breaks consumers that read the type from headers — the
+ * signed URL keeps the path in the query, so Microsoft's Office online
+ * viewer sees neither a path extension nor a usable header and rejects
+ * docx/xlsx/pptx at preflight (A/B-measured against real envd 2026-07-18:
+ * these two headers alone flip the verdict). Unknown extensions honestly
+ * fall back to octet-stream.
+ */
+const MIME_BY_EXTENSION: Record<string, string> = {
+  txt: 'text/plain; charset=utf-8',
+  md: 'text/markdown; charset=utf-8',
+  csv: 'text/csv; charset=utf-8',
+  html: 'text/html; charset=utf-8',
+  htm: 'text/html; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  mjs: 'text/javascript; charset=utf-8',
+  json: 'application/json',
+  xml: 'text/xml; charset=utf-8',
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  svg: 'image/svg+xml',
+  webp: 'image/webp',
+  ico: 'image/x-icon',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  zip: 'application/zip',
+  gz: 'application/gzip',
+  tar: 'application/x-tar',
+  wasm: 'application/wasm',
+};
+
+function contentTypeOf(name: string): string {
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+  return MIME_BY_EXTENSION[ext] ?? 'application/octet-stream';
+}
+
+/**
+ * RFC 5987 ext-value for the content-disposition filename.
+ * encodeURIComponent leaves `'()*` bare, but they are not attr-chars.
+ */
+function rfc5987(name: string): string {
+  return encodeURIComponent(name).replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
 export async function serveFileDownload(
   ctx: EnvdContext,
   sandboxId: string,
@@ -72,9 +134,13 @@ export async function serveFileDownload(
     // Size first, then stream: the SDK needs content-length (an empty
     // file is detected by `content-length: 0`), and nothing buffers here.
     reply.hijack();
+    // No accept-ranges here although real envd sends it: Range requests
+    // are not honored, and advertising bytes we won't serve is a lie.
     reply.raw.writeHead(200, {
-      'content-type': 'application/octet-stream',
+      'content-type': contentTypeOf(entry.name),
+      'content-disposition': `inline; filename*=utf-8''${rfc5987(entry.name)}`,
       'content-length': String(entry.sizeBytes),
+      'last-modified': new Date(entry.modifiedTime).toUTCString(),
     });
     await executor.readFileStream(
       row.id,
