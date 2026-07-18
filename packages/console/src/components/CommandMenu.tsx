@@ -73,7 +73,6 @@ export function CommandMenu() {
     void navigate({
       to: '/sandboxes/$name',
       params: { name },
-      search: { tab: 'overview' },
     });
   };
 

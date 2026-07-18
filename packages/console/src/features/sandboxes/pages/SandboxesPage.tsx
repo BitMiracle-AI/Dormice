@@ -526,7 +526,6 @@ export function SandboxesPage() {
                   <Link
                     to="/sandboxes/$name"
                     params={{ name: sandbox.name }}
-                    search={{ tab: 'overview' }}
                     className="font-mono font-medium hover:underline"
                   >
                     {sandbox.name}

@@ -1,7 +1,7 @@
 import type { ActivityKind } from '@dormice/shared';
 import { Search01Icon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { Link } from '@tanstack/react-router';
+import { Link, useSearch } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { DataTable } from '@/components/DataTable';
 import { FilterMenu } from '@/components/FilterMenu';
@@ -52,7 +52,10 @@ export function ActivityPage() {
   const { data, isPending, isError, error } = useActivity();
   // 只为把 apikey:<id> 翻译回名字;密钥页共用一份缓存。
   const apiKeys = useApiKeys().data?.apiKeys;
-  const [search, setSearch] = useState('');
+  // ?sandbox= 是沙箱工作台「查看全部」带来的预筛,只当搜索框的一次性
+  // 种子 — 落地后搜索框归用户,不做双向同步。
+  const { sandbox: sandboxParam } = useSearch({ from: '/_app/activity' });
+  const [search, setSearch] = useState(() => sandboxParam ?? '');
   const [kindFilter, setKindFilter] = useState<'all' | ActivityKind>('all');
   const [actorFilter, setActorFilter] = useState('');
   const [page, setPage] = useState(1);
@@ -201,7 +204,6 @@ export function ActivityPage() {
                     <Link
                       to="/sandboxes/$name"
                       params={{ name: event.sandboxName }}
-                      search={{ tab: 'overview' as const }}
                       className="font-mono hover:underline"
                     >
                       {event.sandboxName}
