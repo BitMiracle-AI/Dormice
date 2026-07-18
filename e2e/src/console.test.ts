@@ -157,3 +157,85 @@ describe('web console over a real daemon', () => {
     expect((await listSandboxes(cookieOf(newLogin))).status).toBe(200);
   });
 });
+
+describe('browser-side signed download URLs (the Office preview foundation)', () => {
+  // The console's preview pane recomputes the file signature in the browser
+  // (envd-client.ts signedDownloadUrl) from the token /console/envdToken
+  // hands it. This pins the whole chain end-to-end — console minting, the
+  // formula REWRITTEN here rather than imported (a black box pins the
+  // formula itself, not a shared implementation's self-consistency), and
+  // the root /files door.
+  it('a console-minted token signs a working /files URL with the browser formula', async () => {
+    // Continue the account story: re-setup with the token so this describe
+    // owns known credentials regardless of what ran before it.
+    const session = cookieOf(
+      await post('/console/auth/setup', {
+        token: inject('dormiceToken'),
+        username: 'previewer',
+        password: 'preview e2e password',
+      }),
+    );
+    const bearer = {
+      authorization: `Bearer ${inject('dormiceToken')}`,
+      'content-type': 'application/json',
+    };
+    const acquired = (await (
+      await fetch(`${endpoint()}/acquireSandbox`, {
+        method: 'POST',
+        headers: bearer,
+        body: JSON.stringify({ name: 'signed-preview' }),
+      })
+    ).json()) as { sandbox: { id: string } };
+    // A real 1x1 PNG: the download must come back image/png, not a guess.
+    const PIXEL_PNG =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    await fetch(`${endpoint()}/writeFiles`, {
+      method: 'POST',
+      headers: bearer,
+      body: JSON.stringify({
+        name: 'signed-preview',
+        files: [{ path: 'pixel.png', contentBase64: PIXEL_PNG }],
+      }),
+    });
+
+    // Mint the token exactly the way the browser does: cookie + console header.
+    const minted = await fetch(`${endpoint()}/console/envdToken`, {
+      method: 'POST',
+      headers: {
+        cookie: session,
+        'x-dormice-console': '1',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ sandboxId: acquired.sandbox.id }),
+    });
+    expect(minted.status).toBe(200);
+    const { envdAccessToken } = (await minted.json()) as {
+      envdAccessToken: string;
+    };
+
+    // The browser formula, verbatim: sha256("path:read::token:exp"),
+    // standard-alphabet base64, padding stripped, v1_ prefix. The username
+    // slot is the empty string and the query carries NO username param.
+    const exp = Math.floor(Date.now() / 1000) + 900;
+    const digest = await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(`pixel.png:read::${envdAccessToken}:${exp}`),
+    );
+    const signature = `v1_${btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/=+$/, '')}`;
+    const url = (extra = '') =>
+      `${endpoint()}/files?path=pixel.png${extra}&signature=${encodeURIComponent(signature)}&signature_expiration=${exp}`;
+
+    const res = await fetch(url());
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/png');
+    expect(res.headers.get('content-disposition')).toContain('inline');
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(
+      new Uint8Array(Buffer.from(PIXEL_PNG, 'base64')),
+    );
+
+    // The username trap, pinned in reverse: a well-meant `username=` added
+    // to the query breaks the door (vetUsername throws on the empty string,
+    // and any non-empty value falls out of the signed material).
+    expect((await fetch(url('&username='))).status).not.toBe(200);
+  });
+});

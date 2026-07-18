@@ -124,14 +124,16 @@ export const removeWatcher = (auth: EnvdAuth, watcherId: string) =>
 
 // ---- 文件本体进出(纯 HTTP 面,流式无大小上限)---------------------------
 
-/** 下载整个文件为 Blob,交给浏览器落盘。 */
+/** 下载整个文件为 Blob,交给浏览器落盘或就地预览。 */
 export async function downloadFile(
   auth: EnvdAuth,
   path: string,
+  signal?: AbortSignal,
 ): Promise<Blob> {
   const query = new URLSearchParams({ path, username: 'user' });
   const res = await fetch(`${ENVD}/files?${query}`, {
     headers: headersOf(auth),
+    signal,
   });
   if (!res.ok) {
     const detail = (await res.json().catch(() => undefined)) as
@@ -197,3 +199,51 @@ export const killProcess = (
     process: { pid },
     signal,
   });
+
+// ---- 签名直链(daemon 根 /files,给第三方抓取用)---------------------------
+
+/**
+ * 15 分钟:Microsoft 查看器加载时抓取、大文档翻页可能补抓,太短会断
+ * 查看器的懒加载;再长只是白白加宽泄露窗 — 每次点击/刷新都重铸,
+ * 过期是一次点击的事。
+ */
+export const SIGNED_URL_TTL_SECONDS = 15 * 60;
+
+/**
+ * 浏览器侧复算签名直链 — 与 server/e2b/signing.ts 的 fileSignature
+ * 逐字对齐:`"v1_" + base64标准字母表剥padding( sha256(
+ * path:read:<username>:<token>:<exp> ) )`。浏览器本就持有本沙箱的
+ * envdAccessToken(它就是签名材料,秘密 signing secret 从不出 daemon),
+ * 所以不需要新的服务端动词。
+ *
+ * username 位置是空字符串,且 URL 里绝不带 username 参数:服务端校验
+ * 材料默认 `query.username ?? ''`,但 vetUsername('') 会 throw — 带空
+ * `username=` 是 401,带 `username=user` 则材料对不上,两头只能"缺席"
+ * (e2e/console.test 反向钉着这一条)。
+ *
+ * crypto.subtle 只在安全上下文存在(明文 HTTP 的 IP 访问没有)—
+ * 调用方先闸 window.isSecureContext。
+ */
+export async function signedDownloadUrl(
+  auth: EnvdAuth,
+  path: string,
+): Promise<string> {
+  const exp = Math.floor(Date.now() / 1000) + SIGNED_URL_TTL_SECONDS;
+  const material = `${path}:read::${auth.envdAccessToken}:${exp}`;
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(material),
+  );
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(digest))).replace(
+    /=+$/,
+    '',
+  );
+  const query = new URLSearchParams({
+    path,
+    signature: `v1_${b64}`,
+    signature_expiration: String(exp),
+  });
+  // daemon 根,不带 /e2b/envd 前缀 — 签名面刻意开在根上(见 server 的
+  // signed-files.ts 顶注);控制台与它同源,origin 即公网地址。
+  return `${window.location.origin}/files?${query}`;
+}
