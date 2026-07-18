@@ -50,28 +50,31 @@ template dropdown when templates are registered. After a
 running the old image carry an "upgradable" marker next to their
 template name — rebuild them to move.
 
-A sandbox's detail page is a workspace:
+A sandbox's detail page is a workbench laid out like a machine you're
+sitting at — file tree on the left, file preview and terminal in the
+middle, and a monitor rail on the right, with draggable dividers:
 
-- **Overview** — identity, policy thresholds with a countdown to the
-  next lifecycle step, last activity; an adjust-policy dialog (the
-  console's face of
-  [`updatePolicy`](/docs/lifecycle#change-the-policy-later)), plus
-  destroy and [rebuild](/docs/persistence#rebuild-a-sandbox) buttons,
+- **Header** — identity, state, a countdown to the next lifecycle
+  step, and the action buttons: an adjust-policy dialog (the console's
+  face of [`updatePolicy`](/docs/lifecycle#change-the-policy-later)),
+  plus destroy and [rebuild](/docs/persistence#rebuild-a-sandbox),
   each behind a confirmation dialog.
-- **Terminal** — a real interactive shell, kept behind an explicit
-  "open" button because opening one *wakes* the sandbox. The browser
-  speaks the same wire the official E2B SDK does. Closing the terminal
-  kills its shell rather than leaving an orphan behind.
-- **Files** — browse, preview, edit, upload (drag and drop works),
-  download, rename, delete under `/home/user`, refreshing live while
-  the sandbox runs. File operations wake the sandbox too, so a cold
-  sandbox shows an explicit "open" gate first.
-- **Processes** — the E2B process table, polled without waking (a
-  stopped sandbox honestly shows none).
-- **Metrics** — the sandbox's live resource snapshot, with an
-  in-session trend chart (the browser accumulates it — the daemon
-  [keeps no history](/docs/metrics)).
-- **History** — this sandbox's recent lifecycle events.
+- **Files** — a lazy-loading tree of `/home/user`: preview and edit
+  text files inline, upload (drag and drop works), download, rename,
+  delete; the listing refreshes live while the sandbox runs. File
+  operations *wake* the sandbox, so a cold sandbox shows an explicit
+  "open" gate first — just looking at the page never thaws anything.
+- **Terminal** — a real interactive shell in the middle-bottom pane,
+  kept behind an explicit "connect" button because opening one wakes
+  the sandbox. The browser speaks the same wire the official E2B SDK
+  does. Disconnecting kills the shell rather than leaving an orphan
+  behind.
+- **Monitor rail** — always on, because everything in it observes
+  without waking: the lifecycle card, CPU/memory/disk vitals with
+  one-hour sparklines (full 1h/24h/7d trend charts from the daemon's
+  [metrics history](/docs/metrics) open in a dialog), the E2B process
+  table (a stopped sandbox honestly shows none), this sandbox's recent
+  lifecycle events, and its identity details.
 
 ## Templates
 
