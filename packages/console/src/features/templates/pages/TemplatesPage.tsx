@@ -62,7 +62,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { since } from '@/features/sandboxes/format';
+import { ago } from '@/features/sandboxes/format';
 import { useSandboxes } from '@/features/sandboxes/hooks/useSandboxes';
 import {
   useRegisterTemplate,
@@ -363,7 +363,7 @@ export function TemplatesPage() {
                     )}
                   </TableCell>
                   <TableCell className="tabular-nums text-muted-foreground">
-                    {since(template.createdAt)}前
+                    {ago(template.createdAt)}
                   </TableCell>
                   {/* updatedAt 只在镜像真的换过时才走动;等于 createdAt
                       = 从没升级过,直说比重复注册时间更诚实。 */}
@@ -373,7 +373,7 @@ export function TemplatesPage() {
                   >
                     {template.updatedAt === template.createdAt
                       ? '还没升级'
-                      : `${since(template.updatedAt)}前`}
+                      : ago(template.updatedAt)}
                   </TableCell>
                   <TableCell className="text-right">
                     <TemplateRowMenu template={template} />

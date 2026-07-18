@@ -39,7 +39,7 @@ import { Sparkline } from '@/features/overview/components/Sparkline';
 import { copyText } from '@/lib/copy';
 import { formatBytes, pctOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { policyLine, since } from '../../format';
+import { ago, policyLine } from '../../format';
 import { useEnvdAuth, useKillProcess, useProcesses } from '../../hooks/useEnvd';
 import {
   useSandboxImages,
@@ -156,7 +156,9 @@ function VitalsSection({ sandbox }: { sandbox: Sandbox }) {
         icon={CpuIcon}
         label="CPU"
         value={sample ? `${Math.round(sample.cpuUsedPct)}%` : '—'}
-        hint={sample ? `${sample.cpuCount} 核 · 百分比按单核计` : offlineHint}
+        hint={
+          sample ? `${sample.cpuCount} vCPU · 百分比按单 vCPU 计` : offlineHint
+        }
         pct={sample ? sample.cpuUsedPct / sample.cpuCount : null}
         spark={samples.map((s) => s.cpuUsedPct)}
       />
@@ -349,7 +351,7 @@ function ActivityCard({ sandbox }: { sandbox: Sandbox }) {
                 {actorLabel(event.actor, apiKeys)}
               </span>
               <span className="shrink-0 tabular-nums text-muted-foreground">
-                {since(event.at)}前
+                {ago(event.at)}
               </span>
             </div>
           ))}
@@ -442,10 +444,10 @@ function InfoCard({ sandbox }: { sandbox: Sandbox }) {
         </InfoRow>
         <InfoRow label="创建于">
           <span title={new Date(sandbox.createdAt).toLocaleString()}>
-            {since(sandbox.createdAt)}前
+            {ago(sandbox.createdAt)}
           </span>
         </InfoRow>
-        <InfoRow label="最近活动">{since(sandbox.lastActiveAt)}前</InfoRow>
+        <InfoRow label="最近活动">{ago(sandbox.lastActiveAt)}</InfoRow>
       </dl>
     </RailCard>
   );

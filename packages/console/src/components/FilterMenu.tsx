@@ -40,9 +40,7 @@ export function FilterMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        render={
-          <Button variant="outline" size="sm" className="border-dashed" />
-        }
+        render={<Button variant="outline" className="border-dashed" />}
       >
         <HugeiconsIcon
           icon={PlusSignCircleIcon}

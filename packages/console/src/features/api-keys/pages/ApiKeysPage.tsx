@@ -64,7 +64,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { since, until } from '@/features/sandboxes/format';
+import { ago, until } from '@/features/sandboxes/format';
 import { copyText } from '@/lib/copy';
 import {
   useApiKeys,
@@ -752,7 +752,7 @@ export function ApiKeysPage() {
                   className="tabular-nums text-muted-foreground"
                   title={new Date(apiKey.createdAt).toLocaleString()}
                 >
-                  {since(apiKey.createdAt)}前
+                  {ago(apiKey.createdAt)}
                 </TableCell>
                 <TableCell
                   className="tabular-nums text-muted-foreground"
@@ -762,7 +762,7 @@ export function ApiKeysPage() {
                       : undefined
                   }
                 >
-                  {apiKey.lastUsedAt ? `${since(apiKey.lastUsedAt)}前` : '从未'}
+                  {apiKey.lastUsedAt ? ago(apiKey.lastUsedAt) : '从未'}
                 </TableCell>
                 <TableCell
                   className={`tabular-nums ${
