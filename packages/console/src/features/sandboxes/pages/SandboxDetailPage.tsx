@@ -81,7 +81,7 @@ export function SandboxDetailPage() {
         <LifecycleCountdown sandbox={sandbox} />
       </div>
       <div className="flex items-center gap-2">
-        <EditPolicyDialog sandbox={sandbox} />
+        <EditPolicyDialog sandboxes={[sandbox]} />
         <RebuildSandboxButton name={sandbox.name} />
         <DestroySandboxButton
           name={sandbox.name}
