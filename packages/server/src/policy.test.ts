@@ -140,6 +140,17 @@ describe('resolvePolicy with operator-edited defaults (runtime settings)', () =>
     });
   });
 
+  it('masks a stored archive default when the archiver is gone', () => {
+    // Drift: the operator set an archiving default while S3 was configured,
+    // then removed S3 and rebooted. The ledger still carries the threshold
+    // (and keeps it, in case S3 returns), but honoring it would mint
+    // policies the daemon cannot execute — the resolved default must be
+    // null, same as getConfig's archive.defaultSeconds masking.
+    expect(
+      resolvePolicy(undefined, ARCHIVER_DEFAULTS, false).archiveAfterSeconds,
+    ).toBeNull();
+  });
+
   it('a never-archive default still accepts an explicit archive override', () => {
     // The archiver exists; the operator merely changed what "asks for
     // nothing" means. An explicit request must not be refused.

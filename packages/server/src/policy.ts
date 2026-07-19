@@ -34,11 +34,16 @@ export class ArchiveDisabledError extends Error {
  * the archiver's presence; it is a separate flag because a null default
  * archive is ambiguous on its own — it means either "no archiver" or "an
  * operator chose never-archive by default", and only the first refuses an
- * explicit archive-asking override. The archive default yields to an
- * explicit stop rather than fighting it: a never-stop sandbox never
- * archives (only a stopped sandbox can), and a stop pushed past the archive
- * default drags the default along instead of turning a legal stop override
- * into an ordering error.
+ * explicit archive-asking override. The flag also masks the DEFAULT: the
+ * ledger may carry an archive threshold set in a previous life (S3
+ * configured then, removed since — updateSettings refuses new ones, but a
+ * stored one survives the reboot), and honoring it would mint policies the
+ * daemon cannot execute; the setting stays in the ledger and resurfaces if
+ * S3 comes back. The archive default yields to an explicit stop rather
+ * than fighting it: a never-stop sandbox never archives (only a stopped
+ * sandbox can), and a stop pushed past the archive default drags the
+ * default along instead of turning a legal stop override into an ordering
+ * error.
  */
 export function resolvePolicy(
   override: LifecyclePolicyOverride | undefined,
@@ -53,7 +58,9 @@ export function resolvePolicy(
       ? override.stopAfterSeconds
       : defaults.stopAfterSeconds;
   const archiveDefault =
-    defaults.archiveAfterSeconds === null || stopAfterSeconds === null
+    !archiveEnabled ||
+    defaults.archiveAfterSeconds === null ||
+    stopAfterSeconds === null
       ? null
       : Math.max(defaults.archiveAfterSeconds, stopAfterSeconds);
   return lifecyclePolicySchema.parse({

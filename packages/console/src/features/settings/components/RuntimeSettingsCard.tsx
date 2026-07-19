@@ -189,7 +189,8 @@ function SandboxDefaultsDialog({ settings }: { settings: RuntimeSettings }) {
           <DialogTitle>调整新沙箱的默认配额</DialogTitle>
           <DialogDescription>
             CPU/内存在下一次容器出生时生效(含停止后冷启动的存量沙箱);
-            磁盘只在沙箱第一次创建时定型 — 磁盘是沙箱的本体,永不原地改 尺寸。
+            磁盘在磁盘出生时定型(首次创建与归档恢复) —
+            磁盘是沙箱的本体,永不原地改尺寸,调小前注意别小于归档沙箱的真实内容。
           </DialogDescription>
         </DialogHeader>
         <form

@@ -7,6 +7,7 @@ import {
 } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from '../app';
+import type { Archiver } from '../archive/archiver';
 import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
 import { FakeExecutor } from '../executor/fake';
@@ -25,6 +26,7 @@ function freshDb() {
 function appOn(
   db: ReturnType<typeof freshDb>,
   env: Record<string, string> = {},
+  archiver?: Archiver,
 ) {
   const config = loadConfig({
     DORMICE_DB_PATH: ':memory:',
@@ -38,6 +40,7 @@ function appOn(
     executor: new FakeExecutor(),
     locks: new KeyedQueue(),
     logger: false,
+    archiver,
   });
 }
 
@@ -175,6 +178,37 @@ describe('updateSettings', () => {
       },
     });
     expect(disordered.statusCode).toBe(400);
+  });
+
+  it('masks a drifted archive default: archiver removed after it was set', async () => {
+    // First life: an archiver exists, the operator sets an archiving
+    // default — legal, accepted.
+    const db = freshDb();
+    // A hollow archiver: nothing in this test archives, its presence is
+    // what flips the boot's adjudication.
+    const withArchiver = appOn(db, {}, {} as unknown as Archiver);
+    const set = await rpc(withArchiver, '/updateSettings', {
+      defaultPolicy: {
+        freezeAfterSeconds: 600,
+        stopAfterSeconds: 3600,
+        archiveAfterSeconds: 7200,
+      },
+    });
+    expect(set.statusCode).toBe(200);
+
+    // Second life: same ledger, S3 removed from the env. The stored
+    // threshold survives (and would resurface with S3), but a new acquire
+    // must not be promised an archive the daemon cannot perform.
+    const withoutArchiver = appOn(db);
+    const acquired = await rpc(withoutArchiver, '/acquireSandbox', {
+      name: 'drift',
+    });
+    expect(acquired.statusCode).toBe(200);
+    expect(acquired.json().sandbox.policy.archiveAfterSeconds).toBeNull();
+    // The ledger itself still remembers the operator's choice.
+    expect(
+      (await settingsOf(withoutArchiver)).defaultPolicy.archiveAfterSeconds,
+    ).toBe(7200);
   });
 
   it('records the change in the activity ring with its actor', async () => {
