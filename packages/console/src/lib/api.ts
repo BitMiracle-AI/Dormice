@@ -20,6 +20,8 @@ import type {
   Sandbox,
   SetIngressResponse,
   Template,
+  UpdateSettingsRequest,
+  UpdateSettingsResponse,
 } from '@dormice/shared';
 import { clearSessionMarker, hasSessionMarker } from './session';
 
@@ -163,9 +165,15 @@ export const listSandboxImages = () =>
 export const listActivity = (limit?: number) =>
   rpc<ListActivityResponse>('/listActivity', limit ? { limit } : {});
 
-// Effective configuration, read-only. Secrets come back as "set", never as
-// their value; archive.enabled is the daemon's own adjudication.
+// Effective configuration. Secrets come back as "set", never as their
+// value; archive.enabled is the daemon's own adjudication. The env entries
+// stay read-only; `settings` 是账本里的运营旋钮,写入走 updateSettings。
 export const getConfig = () => rpc<GetConfigResponse>('/getConfig');
+
+// 运营旋钮的写半边(读半边在 getConfig.settings):给哪组就整组替换,
+// 立即生效,不重启不唤醒。admin 级动词 — console 会话可调,API key 不行。
+export const updateSettings = (patch: UpdateSettingsRequest) =>
+  rpc<UpdateSettingsResponse>('/updateSettings', patch);
 
 // Is a newer Dormice available? The daemon compares its built commit
 // against the origin's main and caches the answer for an hour; force is

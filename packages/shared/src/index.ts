@@ -13,6 +13,7 @@ export * from './metrics';
 export * from './policy';
 export * from './rebuild';
 export * from './sandbox';
+export * from './settings';
 export * from './states';
 export * from './templates';
 export * from './update-metadata';

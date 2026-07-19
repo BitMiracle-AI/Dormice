@@ -48,6 +48,14 @@ picks up current CPU/memory/pids values — but keeps the disk, so a
 changed disk size only applies to new sandboxes and restores from
 archive.
 
+The disk, CPU and memory variables are **first-boot seeds**: on the
+daemon's first start they are written into its database as runtime
+settings, and from then on the database value is what's in force — edit
+it live from the console's settings page (or the `updateSettings` verb),
+no restart needed. Once seeded, changing these variables in the
+environment has no effect. The same applies to `DORMICE_MAX_SANDBOXES`
+below. `DORMICE_SANDBOX_PIDS_LIMIT` stays a plain environment variable.
+
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `DORMICE_SANDBOX_DISK_GB` | `10` | Size of each sandbox's disk. The quota is physical and the image is sparse — unwritten space costs nothing. |
@@ -60,7 +68,7 @@ archive.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `DORMICE_SCAN_INTERVAL_SECONDS` | `60` | How often the idle scanner runs. Each sweep moves an idle sandbox down at most one state — see [Sandbox lifecycle](/docs/lifecycle). |
-| `DORMICE_MAX_SANDBOXES` | `100` | How many sandboxes may exist at once. Past the cap, *creation* answers 429; wakes of existing sandboxes are never blocked. |
+| `DORMICE_MAX_SANDBOXES` | `100` | How many sandboxes may exist at once. Past the cap, *creation* answers 429; wakes of existing sandboxes are never blocked. First-boot seed — after that, the live value is edited in the console's settings page. |
 | `DORMICE_RECLAIM_TIMEOUT_SECONDS` | `45` | Upper bound on the memory-reclaim step of a freeze. Hitting it is expected on stubborn workloads, not a failure. |
 
 ## Sandbox network

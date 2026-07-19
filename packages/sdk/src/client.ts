@@ -55,9 +55,12 @@ import {
   type UpdateApiKeyResponse,
   type UpdateMetadataResponse,
   type UpdatePolicyResponse,
+  type UpdateSettingsRequest,
+  type UpdateSettingsResponse,
   updateApiKeyResponseSchema,
   updateMetadataResponseSchema,
   updatePolicyResponseSchema,
+  updateSettingsResponseSchema,
   type WriteFileResponse,
   type WriteFilesResponse,
   writeFileResponseSchema,
@@ -284,6 +287,23 @@ export class Dormice {
   async getConfig(): Promise<GetConfigResponse> {
     const data = await this.rpc('getConfig', {});
     return getConfigResponseSchema.parse(data);
+  }
+
+  /**
+   * Rewrites the runtime settings — the operator knobs that live in the
+   * daemon's ledger instead of its environment (capacity cap, what new
+   * sandboxes get). Every provided group replaces that group whole; absent
+   * groups stay untouched. Takes effect immediately, restarts nothing and
+   * wakes nothing; existing sandboxes keep their own policy and disk size.
+   * Admin-only like the apiKey verbs: this client must be authenticated
+   * with DORMICE_API_TOKEN itself — a ledger key gets an honest 403.
+   * The read half rides on getConfig().settings.
+   */
+  async updateSettings(
+    patch: UpdateSettingsRequest,
+  ): Promise<UpdateSettingsResponse> {
+    const data = await this.rpc('updateSettings', patch);
+    return updateSettingsResponseSchema.parse(data);
   }
 
   /**

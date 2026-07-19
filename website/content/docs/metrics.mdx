@@ -68,7 +68,7 @@ The snapshot has four sections:
 | --- | --- |
 | `host` | CPU usage, available memory, and **swap** — the freeze mechanism's fuel. Frozen sandboxes live in swap; a full swap means "idle is free" is ending. |
 | `dataDisk` | The filesystem holding sandbox disks (`DORMICE_DATA_DIR`). This is the real capacity ceiling: past full, even the daemon's database cannot write. |
-| `sandboxes` | Totals from the daemon's records: sandbox count, the `DORMICE_MAX_SANDBOXES` cap, and a count per lifecycle state. |
+| `sandboxes` | Totals from the daemon's records: sandbox count, the capacity cap (seeded from `DORMICE_MAX_SANDBOXES`, edited live in the console's settings page), and a count per lifecycle state. |
 | `sandboxDisks` | What the sparse disk images *promise* (nominal) versus what they *occupy* (actual). The gap is your disk overcommit — watch it, because nothing else caps it. Measured on the test host: a sandbox promising 10 GiB actually occupied 68 MiB. |
 
 **Readings are honest about their limits:**

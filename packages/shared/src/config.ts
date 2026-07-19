@@ -1,11 +1,14 @@
 import { z } from 'zod';
+import { runtimeSettingsSchema } from './settings';
 
 /**
- * getConfig() — the daemon's effective configuration, read-only: every knob
- * with the value actually in force and where it came from. The same
- * discipline as doctor: report effective values, never parrot a config
- * file. Secrets are reported as present-or-absent only — their value never
- * crosses the wire, whoever asks.
+ * getConfig() — the daemon's effective configuration: every env knob with
+ * the value actually in force and where it came from, plus the runtime
+ * settings that live in the ledger (see settings.ts — for those knobs the
+ * env entries below are first-boot seeds, and `settings` is what is in
+ * force). The same discipline as doctor: report effective values, never
+ * parrot a config file. Secrets are reported as present-or-absent only —
+ * their value never crosses the wire, whoever asks.
  */
 export const configEntrySchema = z.object({
   /** The environment variable name, e.g. DORMICE_PORT. */
@@ -33,9 +36,14 @@ export const getConfigResponseSchema = z.object({
    */
   archive: z.object({
     enabled: z.boolean(),
-    /** Null exactly when disabled: a promise nobody can honor is never made. */
+    /**
+     * Null when disabled (a promise nobody can honor is never made) — and
+     * also when the operator set the default policy to never archive.
+     */
     defaultSeconds: z.number().int().nullable(),
   }),
+  /** The ledger-resident operator knobs actually in force — see settings.ts. */
+  settings: runtimeSettingsSchema,
 });
 
 export type GetConfigResponse = z.infer<typeof getConfigResponseSchema>;

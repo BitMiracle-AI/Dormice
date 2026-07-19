@@ -293,7 +293,7 @@ describe('apikey commands over real HTTP', () => {
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     const keyed = new Dormice({ endpoint, token });
     await expect(apikeyLs(keyed)).rejects.toThrow(
-      /cannot manage API keys — use DORMICE_API_TOKEN or the console/,
+      /cannot manage API keys or settings — use DORMICE_API_TOKEN or the console/,
     );
   });
 });

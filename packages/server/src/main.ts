@@ -10,12 +10,14 @@ import { recordActivity } from './db/activity';
 import { migrateDb, openDb } from './db/db';
 import { listSandboxes } from './db/ledger';
 import { acquireSingleWriterLock } from './db/lock';
+import { ensureRuntimeSettings, readRuntimeSettings } from './db/settings';
 import { DockerExecutor } from './executor/docker';
 import type { Executor } from './executor/executor';
 import { FakeExecutor } from './executor/fake';
 import { Ingress } from './ingress';
 import { KeyedQueue } from './keyed-queue';
 import { sampleOnce } from './metrics-sampler';
+import { ARCHIVE_DEFAULT_SECONDS } from './policy';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
 import { locallyClaimedCount, startupGuard } from './startup-guard';
@@ -50,6 +52,15 @@ if (config.DORMICE_DB_PATH !== ':memory:') {
 const db = openDb(config.DORMICE_DB_PATH);
 migrateDb(db, fileURLToPath(new URL('../drizzle', import.meta.url)));
 
+// Seed the runtime settings before anything can read a knob (the executor
+// reads them at every disk/container birth). The archive adjudication here
+// is the same one buildApp makes: archiver exists iff S3 is configured.
+ensureRuntimeSettings(
+  db,
+  config,
+  s3Settings(config) !== null ? ARCHIVE_DEFAULT_SECONDS : null,
+);
+
 function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
   if (cfg.DORMICE_EXECUTOR === 'fake') return new FakeExecutor();
   if (!cfg.DORMICE_BASE_IMAGE) {
@@ -60,9 +71,15 @@ function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
   return new DockerExecutor({
     baseImage: cfg.DORMICE_BASE_IMAGE,
     dataDir: cfg.DORMICE_DATA_DIR,
-    diskSizeGb: cfg.DORMICE_SANDBOX_DISK_GB,
-    cpus: cfg.DORMICE_SANDBOX_CPUS,
-    memoryGb: cfg.DORMICE_SANDBOX_MEMORY_GB,
+    // Live from the ledger: a console edit reaches the next birth directly.
+    resources: () => {
+      const { sandboxDefaults } = readRuntimeSettings(db);
+      return {
+        diskSizeGb: sandboxDefaults.diskGb,
+        cpus: sandboxDefaults.cpus,
+        memoryGb: sandboxDefaults.memoryGb,
+      };
+    },
     pidsLimit: cfg.DORMICE_SANDBOX_PIDS_LIMIT,
     reclaimTimeoutSeconds: cfg.DORMICE_RECLAIM_TIMEOUT_SECONDS,
     log,
