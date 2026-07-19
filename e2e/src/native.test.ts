@@ -638,6 +638,21 @@ describe('the observability verbs over a real daemon', () => {
     await client().updateSettings({ maxSandboxes: before.maxSandboxes });
   });
 
+  it('refuses the swap knob on a host that cannot manage swap', async () => {
+    // The exam daemon runs the fake executor, so managed swap is
+    // deterministically unavailable — getConfig says so up front, and
+    // setting a target is a 400, not a silently stored dead value.
+    expect((await client().getConfig()).swap).toEqual({
+      supported: false,
+      activeGb: 0,
+    });
+    await expect(client().updateSettings({ swapGb: 8 })).rejects.toMatchObject({
+      name: 'DormiceApiError',
+      status: 400,
+      message: expect.stringMatching(/Linux host with the docker executor/),
+    });
+  });
+
   it('getSandboxMetrics samples a live sandbox and 404s after destroy', async () => {
     await client().acquireSandbox('obs-metrics-key');
     const sample = await client().getSandboxMetrics('obs-metrics-key');

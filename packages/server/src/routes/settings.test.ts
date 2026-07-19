@@ -12,6 +12,7 @@ import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
 import { FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
+import type { SwapControl, SwapStatus } from '../swap';
 
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
@@ -27,6 +28,7 @@ function appOn(
   db: ReturnType<typeof freshDb>,
   env: Record<string, string> = {},
   archiver?: Archiver,
+  swap?: SwapControl,
 ) {
   const config = loadConfig({
     DORMICE_DB_PATH: ':memory:',
@@ -41,7 +43,23 @@ function appOn(
     locks: new KeyedQueue(),
     logger: false,
     archiver,
+    swap,
   });
+}
+
+/** A ledger of reconcile calls standing in for the real block juggler. */
+function fakeSwap(activeGb = 0): SwapControl & { reconciled: number[] } {
+  const status = (): Promise<SwapStatus> =>
+    Promise.resolve({ activeGb, blocks: [] });
+  const control = {
+    reconciled: [] as number[],
+    status,
+    reconcile(targetGb: number) {
+      control.reconciled.push(targetGb);
+      return status();
+    },
+  };
+  return control;
 }
 
 type App = ReturnType<typeof appOn>;
@@ -72,6 +90,8 @@ describe('runtime settings: seeding', () => {
       sandboxDefaults: { cpus: 1, memoryGb: 2, diskGb: 20 },
       // No archiver in this app, so the seeded default never archives.
       defaultPolicy: { ...DEFAULT_LIFECYCLE_POLICY, archiveAfterSeconds: null },
+      // Managed swap has no env seed — it is born from the console.
+      swapGb: 0,
       updatedAt: null,
     });
   });
@@ -209,6 +229,49 @@ describe('updateSettings', () => {
     expect(
       (await settingsOf(withoutArchiver)).defaultPolicy.archiveAfterSeconds,
     ).toBe(7200);
+  });
+
+  it('refuses a swap target where the daemon cannot manage swap', async () => {
+    // No SwapControl injected — the Mac-dev / fake-executor daemon shape.
+    const app = appOn(freshDb());
+    const res = await rpc(app, '/updateSettings', { swapGb: 32 });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toMatch(/Linux host with the docker executor/);
+    // And getConfig says so up front, so the console never offers the knob.
+    const body = getConfigResponseSchema.parse(
+      (await rpc(app, '/getConfig')).json(),
+    );
+    expect(body.swap).toEqual({ supported: false, activeGb: 0 });
+  });
+
+  it('saves a swap target and reconciles it immediately', async () => {
+    const swap = fakeSwap(32);
+    const app = appOn(freshDb(), {}, undefined, swap);
+    const res = await rpc(app, '/updateSettings', { swapGb: 32 });
+    expect(res.statusCode).toBe(200);
+    expect(updateSettingsResponseSchema.parse(res.json()).settings.swapGb).toBe(
+      32,
+    );
+    expect(swap.reconciled).toEqual([32]);
+    // A patch without swapGb must not re-trigger the block juggler.
+    await rpc(app, '/updateSettings', { maxSandboxes: 9 });
+    expect(swap.reconciled).toEqual([32]);
+    const body = getConfigResponseSchema.parse(
+      (await rpc(app, '/getConfig')).json(),
+    );
+    expect(body.swap).toEqual({ supported: true, activeGb: 32 });
+  });
+
+  it('keeps the saved target and answers 500 when applying it fails', async () => {
+    // ENOSPC mid-grow: the target must survive (boot and the next edit
+    // retry it) and the error must name what happened.
+    const swap = fakeSwap();
+    swap.reconcile = () => Promise.reject(new Error('fallocate: ENOSPC'));
+    const app = appOn(freshDb(), {}, undefined, swap);
+    const res = await rpc(app, '/updateSettings', { swapGb: 512 });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().message).toMatch(/target saved.*ENOSPC/);
+    expect((await settingsOf(app)).swapGb).toBe(512);
   });
 
   it('records the change in the activity ring with its actor', async () => {

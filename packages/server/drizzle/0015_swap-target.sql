@@ -1,0 +1,1 @@
+ALTER TABLE `runtime_settings` ADD `swap_gb` integer DEFAULT 0 NOT NULL;

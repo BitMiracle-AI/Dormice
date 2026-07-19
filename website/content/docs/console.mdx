@@ -119,12 +119,16 @@ Four more pages round out the operator view:
   green. See
   [Installation](/docs/installation#connect-from-another-machine).
 - **Settings** — two halves. The operational knobs (sandbox capacity
-  cap, default resources for new sandboxes, default lifecycle policy)
-  live in the daemon's database and are edited right here, taking effect
-  immediately — no restart, no sandbox touched. Everything else is the
-  effective environment configuration, read-only, with secrets shown as
-  present-or-absent only; changing those happens in `/etc/dormice/env`
-  plus a restart, never from the browser.
+  cap, default resources for new sandboxes, default lifecycle policy,
+  extra managed [swap](/docs/core-concepts#swap-and-freezing)) live in
+  the daemon's database and are edited right here, taking effect
+  immediately — no restart, no sandbox touched. The swap knob is the one
+  with an asymmetry: growing mounts new swap in seconds, shrinking waits
+  for the next host reboot — active swap is never unmounted, because
+  that would drag every frozen sandbox's memory back into RAM. Everything
+  else is the effective environment configuration, read-only, with
+  secrets shown as present-or-absent only; changing those happens in
+  `/etc/dormice/env` plus a restart, never from the browser.
 - **Version** — the build the daemon is running (a git commit — trunk
   commit titles are the changelog) compared against the latest, with a
   one-click [upgrade](/docs/upgrading) and live progress where the host

@@ -245,6 +245,8 @@ export const runtimeSettings = sqliteTable('runtime_settings', {
   defaultStopAfterSeconds: integer('default_stop_after_seconds'),
   /** NULL = never archive — forced when the daemon has no archiver. */
   defaultArchiveAfterSeconds: integer('default_archive_after_seconds'),
+  /** Daemon-managed swap target, GiB (see swap.ts); 0 = manage none. */
+  swapGb: integer('swap_gb').notNull().default(0),
   /** Null until the first updateSettings: "still exactly the seed" is information. */
   updatedAt: text('updated_at'),
 });
