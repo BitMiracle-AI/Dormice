@@ -112,7 +112,10 @@ affect using Dormice.
   real hardware: 0 bytes reclaimed at the default, 99.5% reclaimed
   at 100. Some cloud images (Alibaba Cloud, for one) ship
   `vm.swappiness=0`; check the effective value with
-  `sysctl vm.swappiness`.
+  `sysctl vm.swappiness`. Swap capacity is roughly "how much sandbox
+  memory can hibernate at once" — when the installer's swapfile stops
+  being enough, add more from the console's settings page (no shell
+  needed; see [Console](/docs/console)).
 - **Network hardening.** Sandboxes run untrusted code, and a cloud
   server exposes a special internal address that hands out the
   machine's cloud credentials to anything that asks (the metadata

@@ -3,6 +3,7 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { CONFIG_KEYS, type Config, type ConfigSources } from '../config';
 import type { Db } from '../db/db';
 import { readRuntimeSettings } from '../db/settings';
+import type { SwapControl } from '../swap';
 
 export interface ConfigRoutesOptions {
   config: Config;
@@ -10,6 +11,8 @@ export interface ConfigRoutesOptions {
   sources: ConfigSources;
   /** buildApp's one adjudication of the archive default (null = no archiver). */
   archiveDefaultSeconds: number | null;
+  /** The managed-swap surface; absent = this host cannot manage swap. */
+  swap?: SwapControl;
 }
 
 /**
@@ -24,7 +27,7 @@ export interface ConfigRoutesOptions {
  */
 export const configRoutes: FastifyPluginAsyncZod<ConfigRoutesOptions> = async (
   app,
-  { config, db, sources, archiveDefaultSeconds },
+  { config, db, sources, archiveDefaultSeconds, swap },
 ) => {
   app.post(
     '/getConfig',
@@ -57,6 +60,11 @@ export const configRoutes: FastifyPluginAsyncZod<ConfigRoutesOptions> = async (
               ? null
               : settings.defaultPolicy.archiveAfterSeconds,
         },
+        // Read live so a pending shrink (target < mounted, waiting for a
+        // host reboot) or a failed grow is visible, not papered over.
+        swap: swap
+          ? { supported: true, activeGb: (await swap.status()).activeGb }
+          : { supported: false, activeGb: 0 },
         settings,
       };
     },

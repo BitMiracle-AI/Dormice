@@ -38,6 +38,9 @@ export function ensureRuntimeSettings(
       defaultFreezeAfterSeconds: DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
       defaultStopAfterSeconds: DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds,
       defaultArchiveAfterSeconds: archiveDefaultSeconds,
+      // No env seed: managed swap is born from the console, not the env —
+      // install.sh's base swapfile already covers "a host needs swap".
+      swapGb: 0,
       updatedAt: null,
     })
     .onConflictDoNothing()
@@ -57,6 +60,7 @@ function toView(row: RuntimeSettingsRow): RuntimeSettings {
       stopAfterSeconds: row.defaultStopAfterSeconds,
       archiveAfterSeconds: row.defaultArchiveAfterSeconds,
     },
+    swapGb: row.swapGb,
     updatedAt: row.updatedAt,
   };
 }
@@ -113,6 +117,7 @@ export function writeRuntimeSettings(
             defaultArchiveAfterSeconds: patch.defaultPolicy.archiveAfterSeconds,
           }
         : {}),
+      ...(patch.swapGb !== undefined ? { swapGb: patch.swapGb } : {}),
       updatedAt: now.toISOString(),
     })
     .where(eq(runtimeSettings.id, SETTINGS_ROW_ID))

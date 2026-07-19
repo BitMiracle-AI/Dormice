@@ -36,6 +36,7 @@ import { settingsRoutes } from './routes/settings';
 import { templateRoutes } from './routes/templates';
 import { upgradeRoutes } from './routes/upgrade';
 import { createSandboxProxy } from './sandbox-proxy';
+import type { SwapControl } from './swap';
 import { Updater } from './updater';
 import { readBuildInfo } from './version';
 
@@ -76,6 +77,12 @@ export interface AppDeps {
    */
   ingress?: Ingress;
   /**
+   * The managed-swap surface, present exactly when the daemon can manage
+   * swap — main.ts builds one on Linux with the docker executor. Absent,
+   * getConfig reports { supported: false } and a swapGb patch is refused.
+   */
+  swap?: SwapControl;
+  /**
    * Which knobs came from the environment versus defaults, for getConfig.
    * Defaults to reading process.env — right for the daemon; tests that
    * assert on sources inject a fixed map instead of trusting the shell.
@@ -109,6 +116,7 @@ export function buildApp({
   consoleDistDir,
   archiver,
   ingress,
+  swap,
   sources = configSources(),
   updater = new Updater({
     repoDir: null,
@@ -257,6 +265,7 @@ export function buildApp({
       db,
       sources,
       archiveDefaultSeconds,
+      swap,
     });
     await api.register(upgradeRoutes, { updater, db });
   });
@@ -272,6 +281,7 @@ export function buildApp({
     await admin.register(settingsRoutes, {
       db,
       archiveEnabled: archiveDefaultSeconds !== null,
+      swap,
     });
   });
 

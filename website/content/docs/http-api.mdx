@@ -56,7 +56,7 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | `POST /listSandboxImages` | each sandbox's born image vs its template's current one | — |
 | `POST /listActivity` | the daemon's recent history with per-event [attribution](#who-did-what), newest first — a bounded ring, not an audit log | — |
 | `POST /getConfig` | effective configuration: env knobs (read-only; secrets reported present-or-absent, value never sent) plus the live runtime `settings` | — |
-| `POST /updateSettings` | rewrite the runtime settings (capacity cap, new-sandbox defaults, default policy) — immediate effect, no restart; each provided group replaces that group whole | 400 empty patch or a default policy that asks to archive with no S3 configured |
+| `POST /updateSettings` | rewrite the runtime settings (capacity cap, new-sandbox defaults, default policy, managed swap) — immediate effect, no restart; each provided group replaces that group whole. Managed swap (`swapGb`) grows immediately; shrinking waits for the next host reboot (an active swapfile is never unmounted — that would drag every frozen sandbox's memory back into RAM) | 400 empty patch, a default policy that asks to archive with no S3 configured, or `swapGb` on a host that cannot manage swap |
 | `POST /getIngress` | domains bound on the daemon's managed reverse proxy, with live DNS and certificate probes | — |
 | `POST /setIngress` | rewrite the managed proxy config to exactly this domain list (empty list unbinds all) | 400 when the daemon manages no proxy |
 

@@ -21,6 +21,7 @@ import { ARCHIVE_DEFAULT_SECONDS } from './policy';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
 import { locallyClaimedCount, startupGuard } from './startup-guard';
+import { SwapManager } from './swap';
 import { Updater } from './updater';
 import { readBuildInfo } from './version';
 
@@ -130,6 +131,28 @@ if (config.DORMICE_INGRESS_FILE) {
   log.info('ingress not managed: DORMICE_INGRESS_FILE not configured');
 }
 
+// Managed swap exists exactly where the daemon can honor it: a Linux host
+// (swapon is the kernel's) running the docker executor (the fake executor
+// is a test double — e2e boots real daemons with it, and those must never
+// touch the host's swap). The boot reconcile is what makes shrink-by-
+// reboot converge and puts grown blocks back after a restart; its failure
+// is loud but not fatal — swap is capacity, not correctness, and
+// getConfig's swap.activeGb reports the shortfall honestly.
+let swap: SwapManager | undefined;
+if (config.DORMICE_EXECUTOR === 'docker' && process.platform === 'linux') {
+  swap = new SwapManager({
+    dir: path.join(config.DORMICE_DATA_DIR, 'swap'),
+    log: (msg) => log.info(msg),
+  });
+  try {
+    await swap.reconcile(readRuntimeSettings(db).swapGb);
+  } catch (error) {
+    log.error(error, 'boot swap reconcile failed');
+  }
+} else {
+  log.info('managed swap unavailable: requires Linux + the docker executor');
+}
+
 // The web console ships beside the server in the monorepo; this file sits
 // one level under packages/server both as src/main.ts and as dist/main.js,
 // so the relative hop to packages/console/dist is the same either way. A
@@ -169,6 +192,7 @@ const app = buildApp({
   consoleDistDir: existsSync(consoleDistDir) ? consoleDistDir : undefined,
   archiver,
   ingress,
+  swap,
   updater,
 });
 

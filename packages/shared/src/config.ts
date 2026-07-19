@@ -42,6 +42,18 @@ export const getConfigResponseSchema = z.object({
      */
     defaultSeconds: z.number().int().nullable(),
   }),
+  /**
+   * The daemon-managed swap surface (see settings.ts `swapGb` — the
+   * target). `supported` is false where the daemon cannot manage swap
+   * (non-Linux, or the fake executor); `activeGb` is how much managed
+   * swap is actually mounted right now — it lags the target after a
+   * shrink (which waits for a host reboot) and after a failed grow, and
+   * clients surface that divergence instead of pretending.
+   */
+  swap: z.object({
+    supported: z.boolean(),
+    activeGb: z.number().nonnegative(),
+  }),
   /** The ledger-resident operator knobs actually in force — see settings.ts. */
   settings: runtimeSettingsSchema,
 });

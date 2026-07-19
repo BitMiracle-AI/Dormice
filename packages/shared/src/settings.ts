@@ -37,6 +37,19 @@ export const runtimeSettingsSchema = z.object({
   sandboxDefaults: sandboxResourceDefaultsSchema,
   /** What acquire() gives a sandbox that asks for nothing. Existing sandboxes keep theirs. */
   defaultPolicy: lifecyclePolicySchema,
+  /**
+   * Total daemon-managed swap, GiB, held as swapfiles on the data dir —
+   * ON TOP of whatever swap the host already has (the install-time
+   * swapfile stays fstab's business; the two never fight). Swap capacity
+   * is roughly "how much sandbox memory can hibernate at once" — freezing
+   * squeezes a sandbox's memory into swap. Growing takes effect
+   * immediately; shrinking is deferred to the next host reboot, because
+   * swapoff would drag every frozen sandbox's memory back into RAM
+   * (getConfig's `swap.activeGb` reports what is actually mounted).
+   * 0 = manage none. Ignored on hosts that cannot swap (see getConfig's
+   * `swap.supported`), where updateSettings refuses to set it.
+   */
+  swapGb: z.number().int().nonnegative(),
   /** ISO 8601 of the last updateSettings; null = still exactly the first-boot seed. */
   updatedAt: z.string().nullable(),
 });
@@ -54,15 +67,17 @@ export const updateSettingsRequestSchema = z
     maxSandboxes: z.number().int().positive().optional(),
     sandboxDefaults: sandboxResourceDefaultsSchema.optional(),
     defaultPolicy: lifecyclePolicySchema.optional(),
+    swapGb: z.number().int().nonnegative().optional(),
   })
   .refine(
     (patch) =>
       patch.maxSandboxes !== undefined ||
       patch.sandboxDefaults !== undefined ||
-      patch.defaultPolicy !== undefined,
+      patch.defaultPolicy !== undefined ||
+      patch.swapGb !== undefined,
     {
       message:
-        'updateSettings needs at least one of maxSandboxes, sandboxDefaults, defaultPolicy',
+        'updateSettings needs at least one of maxSandboxes, sandboxDefaults, defaultPolicy, swapGb',
     },
   );
 

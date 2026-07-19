@@ -33,11 +33,13 @@ import { queryClient } from '@/lib/queryClient';
 
 /**
  * 运营旋钮的编辑区:值住在账本里(env 同名变量只是首次启动的种子),
- * updateSettings 一改立即生效 — 不重启 daemon、不碰任何沙箱。三组各配
+ * updateSettings 一改立即生效 — 不重启 daemon、不碰任何沙箱。四组各配
  * 一个弹窗,给哪组就整组替换(updatePolicy 的规矩:界面上看到什么就写
  * 下什么)。改的是"之后"不是"已经":容量上限管下一次创建,默认配额管
  * 下一次出生的磁盘/容器,默认策略管下一次 acquire 创建的沙箱 — 存量
- * 沙箱一根汗毛都不动,这句话在每个弹窗里都说清。
+ * 沙箱一根汗毛都不动,这句话在每个弹窗里都说清。唯一的例外是 swap:
+ * 它改的是宿主不是沙箱,增容立即、缩容等重启(swapLine 负责把这个
+ * 时间差摆在明面上)。
  */
 
 function useSubmit(onDone: () => void) {
@@ -68,7 +70,8 @@ function EditRow({
 }: {
   label: string;
   value: string;
-  dialog: React.ReactNode;
+  /** 缺席 = 本宿主改不了这项(value 里说清为什么),不给一个点了报错的按钮。 */
+  dialog?: React.ReactNode;
 }) {
   return (
     <div className="flex items-center justify-between gap-3 px-4 py-3">
@@ -262,6 +265,91 @@ function SandboxDefaultsDialog({ settings }: { settings: RuntimeSettings }) {
   );
 }
 
+function SwapDialog({ settings }: { settings: RuntimeSettings }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState('');
+  const { pending, error, setError, submit } = useSubmit(() => setOpen(false));
+
+  const valid =
+    value.trim() !== '' &&
+    Number.isInteger(Number(value)) &&
+    Number(value) >= 0;
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) {
+          setValue(String(settings.swapGb));
+          setError(null);
+        }
+      }}
+    >
+      <EditTrigger />
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>调整追加 swap 空间</DialogTitle>
+          <DialogDescription>
+            swap 容量 ≈ 能同时冬眠多少沙箱内存(冻结把内存挤进 swap)。
+            调大立即生效;调小要等下次重启宿主 — 正在用的 swap
+            绝不强拆,那会把冬眠沙箱的内存全拽回物理内存。
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit(
+              { swapGb: Number(value) },
+              `追加 swap 目标已改为 ${Number(value)} GiB`,
+            );
+          }}
+        >
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="settings-swap-gb">
+                Dormice 管理的 swap 总量(GiB)
+              </FieldLabel>
+              <Input
+                id="settings-swap-gb"
+                type="number"
+                min={0}
+                value={value}
+                onChange={(event) => setValue(event.target.value)}
+              />
+              <FieldDescription>
+                在系统自带 swap 之外追加,0 = 不追加。swap
+                文件真实占据数据盘空间(不是稀疏的),调大前看一眼总览页的数据盘水位。
+              </FieldDescription>
+            </Field>
+            {error && <FieldError>{error}</FieldError>}
+          </FieldGroup>
+          <DialogFooter className="mt-6">
+            <Button type="submit" disabled={!valid || pending}>
+              {pending && <Spinner />}
+              保存
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * swap 行的真话:目标与现实一致时一句话完事;缩容等重启、增容没跑完时
+ * 把两个数都摆出来 — 只报目标会在这两种时刻撒谎。
+ */
+function swapLine(targetGb: number, activeGb: number): string {
+  if (activeGb > targetGb) {
+    return `目标 ${targetGb} GiB · 当前挂载 ${activeGb} GiB — 缩容在下次重启宿主时生效`;
+  }
+  if (activeGb < targetGb) {
+    return `目标 ${targetGb} GiB · 当前挂载 ${activeGb} GiB — 增容未完成,详见 daemon 日志`;
+  }
+  return `${targetGb} GiB(系统自带 swap 另计)`;
+}
+
 function DefaultPolicyDialog({
   settings,
   archiveEnabled,
@@ -453,6 +541,17 @@ export function RuntimeSettingsCard({ data }: { data: GetConfigResponse }) {
               settings={settings}
               archiveEnabled={data.archive.enabled}
             />
+          }
+        />
+        <EditRow
+          label="追加 swap 空间"
+          value={
+            data.swap.supported
+              ? swapLine(settings.swapGb, data.swap.activeGb)
+              : '本宿主不支持(需要 Linux 宿主 + docker 执行器)'
+          }
+          dialog={
+            data.swap.supported ? <SwapDialog settings={settings} /> : undefined
           }
         />
       </div>
