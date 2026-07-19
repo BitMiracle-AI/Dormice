@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, type Stats } from 'node:fs';
 import path from 'node:path';
 import { execa } from 'execa';
 
@@ -197,7 +197,17 @@ export class SwapManager implements SwapControl {
       // to judge here — never deleted by the planner.
       if (!match) continue;
       const filePath = path.join(this.dir, name);
-      const stat = await fs.stat(filePath);
+      let stat: Stats;
+      try {
+        stat = await fs.stat(filePath);
+      } catch (error) {
+        // status() deliberately bypasses the reconcile queue (getConfig
+        // must not wait behind a fallocate), so a block a concurrent
+        // reconcile just deleted can vanish between readdir and stat —
+        // then it simply is not a block anymore.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
       blocks.push({
         name,
         sizeGb: Math.round(stat.size / 2 ** 30),

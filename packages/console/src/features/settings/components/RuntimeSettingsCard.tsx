@@ -50,13 +50,15 @@ function useSubmit(onDone: () => void) {
     setError(null);
     try {
       await updateSettings(patch);
-      // 设置页读 config;总览的容量卡走 getHostMetrics 自己的轮询。
-      void queryClient.invalidateQueries({ queryKey: ['config'] });
       toast.success(done);
       onDone();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      // 失败也刷新:swap 的 500 语义是"目标已存但应用失败",账本真的变了,
+      // 行里必须立刻说真话。设置页读 config;总览的容量卡走 getHostMetrics
+      // 自己的轮询。
+      void queryClient.invalidateQueries({ queryKey: ['config'] });
       setPending(false);
     }
   };
