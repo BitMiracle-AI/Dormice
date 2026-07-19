@@ -17,6 +17,7 @@ import { getConsoleAccount } from './db/account';
 import { isLiveApiKey, verifyApiKeyToken } from './db/api-keys';
 import type { Db } from './db/db';
 import { getOrCreateSigningSecret } from './db/secrets';
+import { ensureRuntimeSettings } from './db/settings';
 import { registerE2bCompat } from './e2b';
 import { ProcessTable } from './e2b/process-table';
 import { WatcherTable } from './e2b/watcher-table';
@@ -31,6 +32,7 @@ import { consoleRoutes } from './routes/console';
 import { hostRoutes } from './routes/host';
 import { ingressRoutes } from './routes/ingress';
 import { sandboxRoutes } from './routes/sandboxes';
+import { settingsRoutes } from './routes/settings';
 import { templateRoutes } from './routes/templates';
 import { upgradeRoutes } from './routes/upgrade';
 import { createSandboxProxy } from './sandbox-proxy';
@@ -119,6 +121,9 @@ export function buildApp({
   // presence: with one, new sandboxes archive after a week of idleness;
   // without one, never — and asking is a 400.
   const archiveDefaultSeconds = archiver ? ARCHIVE_DEFAULT_SECONDS : null;
+  // Idempotent get-or-seed: main.ts already ran it (the executor reads
+  // settings before buildApp), tests build the app directly and need it here.
+  ensureRuntimeSettings(db, config, archiveDefaultSeconds);
   // Always a pino instance (booleans are normalized into one): two fastify()
   // call shapes would give the instance two different types.
   const loggerInstance =
@@ -249,18 +254,25 @@ export function buildApp({
     await api.register(ingressRoutes, { db, ingress });
     await api.register(configRoutes, {
       config,
+      db,
       sources,
       archiveDefaultSeconds,
     });
     await api.register(upgradeRoutes, { updater, db });
   });
 
-  // The apiKey management verbs sit behind the stricter admin gate — their
-  // own scope, because a Fastify hook guards a whole scope and these four
-  // verbs are the only ones with a different answer to "who may call".
+  // The apiKey management verbs and updateSettings sit behind the stricter
+  // admin gate — their own scope, because a Fastify hook guards a whole
+  // scope and these verbs share a different answer to "who may call":
+  // credentials must not manage credentials, and a leaked automation key
+  // must not be able to raise the very limits that contain it.
   app.register(async (admin) => {
     admin.addHook('onRequest', adminAuth);
     await admin.register(apiKeyRoutes, { db });
+    await admin.register(settingsRoutes, {
+      db,
+      archiveEnabled: archiveDefaultSeconds !== null,
+    });
   });
 
   // The web console: account + session endpoints (open — setup and login

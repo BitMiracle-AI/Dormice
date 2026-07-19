@@ -35,9 +35,9 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
         baseImage: image,
         dataDir,
         // Small and fast: the contract exercises lifecycle, not capacity.
-        diskSizeGb: 1,
-        cpus: 1,
-        memoryGb: 1,
+        // A static closure, not a ledger read: the contract exam runs the
+        // executor bare, without a daemon or its settings row.
+        resources: () => ({ diskSizeGb: 1, cpus: 1, memoryGb: 1 }),
         pidsLimit: 256,
         reclaimTimeoutSeconds: 45,
       });

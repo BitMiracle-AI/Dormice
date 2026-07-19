@@ -19,6 +19,7 @@ import {
   resolveWindow,
 } from '../db/metrics';
 import type { SandboxRow } from '../db/schema';
+import { readRuntimeSettings } from '../db/settings';
 import { findTemplate, resolveImage } from '../db/templates';
 import {
   destroySandbox,
@@ -199,6 +200,10 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
 
   /** What getInfo and list answer with. */
   function infoView(row: SandboxRow, state: 'running' | 'paused') {
+    // The ledger's live resource knobs, not the env seeds — CPU/memory
+    // apply at each container launch, so the current values are what a
+    // sandbox actually runs (or will run) with.
+    const { sandboxDefaults } = readRuntimeSettings(db);
     return {
       sandboxID: row.id,
       // Required by the Python SDK's models, like clientID above.
@@ -212,9 +217,9 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       endAt:
         row.deadlineAt ??
         new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-      cpuCount: config.DORMICE_SANDBOX_CPUS,
-      memoryMB: Math.round(config.DORMICE_SANDBOX_MEMORY_GB * 1024),
-      diskSizeMB: Math.round(config.DORMICE_SANDBOX_DISK_GB * 1024),
+      cpuCount: sandboxDefaults.cpus,
+      memoryMB: Math.round(sandboxDefaults.memoryGb * 1024),
+      diskSizeMB: Math.round(sandboxDefaults.diskGb * 1024),
       envdVersion: ENVD_VERSION,
       ...domainField,
     };
@@ -328,10 +333,11 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           );
         }
 
-        if (countSandboxes(db) >= config.DORMICE_MAX_SANDBOXES) {
+        const maxSandboxes = readRuntimeSettings(db).maxSandboxes;
+        if (countSandboxes(db) >= maxSandboxes) {
           throw apiError(
             429,
-            `sandbox limit reached (DORMICE_MAX_SANDBOXES=${config.DORMICE_MAX_SANDBOXES}) — destroy a sandbox or raise the limit`,
+            `sandbox limit reached (maxSandboxes=${maxSandboxes}) — destroy a sandbox or raise the limit in settings`,
           );
         }
         const id = randomUUID();
@@ -342,7 +348,11 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           id,
           name,
           nodeId: config.DORMICE_NODE_ID,
-          policy: resolvePolicy(undefined, archiveDefaultSeconds),
+          policy: resolvePolicy(
+            undefined,
+            readRuntimeSettings(db).defaultPolicy,
+            archiveDefaultSeconds !== null,
+          ),
           template,
           actor: request.actor,
           metadata:

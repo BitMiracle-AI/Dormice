@@ -59,6 +59,7 @@ import {
   resolveWindow,
 } from '../db/metrics';
 import type { SandboxRow } from '../db/schema';
+import { readRuntimeSettings } from '../db/settings';
 import { findTemplate, resolveImage } from '../db/templates';
 import { startExecHeartbeat } from '../exec-heartbeat';
 import {
@@ -189,11 +190,13 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     // The capacity check lives at the only verb that creates — wakes of
     // existing sandboxes are never blocked. Disk is the real ceiling: every
     // sandbox holds a disk image, and unbounded creation fills the host
-    // until the ledger itself can no longer write.
-    if (countSandboxes(db) >= config.DORMICE_MAX_SANDBOXES) {
+    // until the ledger itself can no longer write. Read live from the
+    // ledger: a console edit applies to the very next create.
+    const maxSandboxes = readRuntimeSettings(db).maxSandboxes;
+    if (countSandboxes(db) >= maxSandboxes) {
       throw httpError(
         429,
-        `sandbox limit reached (DORMICE_MAX_SANDBOXES=${config.DORMICE_MAX_SANDBOXES}) — destroy a sandbox or raise the limit`,
+        `sandbox limit reached (maxSandboxes=${maxSandboxes}) — destroy a sandbox or raise the limit in settings`,
       );
     }
 
@@ -271,7 +274,11 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       // deserves a 400, not a silent ignore.
       let policy: LifecyclePolicy;
       try {
-        policy = resolvePolicy(override, archiveDefaultSeconds);
+        policy = resolvePolicy(
+          override,
+          readRuntimeSettings(db).defaultPolicy,
+          archiveDefaultSeconds !== null,
+        );
       } catch (error) {
         if (error instanceof ZodError) {
           // The override passed shape validation but the merged policy broke

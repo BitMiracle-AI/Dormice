@@ -31,6 +31,8 @@ export const ACTIVITY_KINDS = [
   'daemon-started',
   /** An operator bound or cleared the console domain through setIngress. */
   'ingress-updated',
+  /** updateSettings rewrote runtime settings; the detail names the groups that moved. */
+  'settings-updated',
   /** An operator minted an API key (createApiKey). The token itself is never logged. */
   'apikey-created',
   /** updateApiKey changed a key's name or expiry; the detail names what moved. */

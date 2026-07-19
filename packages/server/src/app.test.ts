@@ -239,13 +239,14 @@ describe('error shape', () => {
 });
 
 describe('sandbox capacity', () => {
-  it('caps creation at DORMICE_MAX_SANDBOXES with an honest 429', async () => {
+  it('caps creation at maxSandboxes with an honest 429', async () => {
+    // The env variable seeds the ledger's runtime settings at first boot.
     const { app } = testApp(undefined, { DORMICE_MAX_SANDBOXES: '1' });
     expect((await acquire(app, { name: 'alice' })).statusCode).toBe(200);
 
     const capped = await acquire(app, { name: 'bob' });
     expect(capped.statusCode).toBe(429);
-    expect(capped.json().message).toMatch(/DORMICE_MAX_SANDBOXES/);
+    expect(capped.json().message).toMatch(/maxSandboxes=1/);
 
     // Existing sandboxes always wake — the cap only guards creation.
     expect((await acquire(app, { name: 'alice' })).statusCode).toBe(200);

@@ -211,13 +211,15 @@ export function requireApiAuth(
 }
 
 /**
- * The admin gate for the apiKey management verbs: only the env token
- * (Bearer) or a console session may pass. A key that is otherwise valid
- * gets an honest 403 instead of a silent 401 — key-manages-key would let
- * one leaked credential mint itself an unrevoked successor and revoke
- * every legitimate peer, so the refusal names the rule. The console-setup
- * door (routes/console.ts) rests on the same doctrine: a machine
- * credential must not escalate into managing credentials.
+ * The admin gate for the apiKey management verbs and updateSettings: only
+ * the env token (Bearer) or a console session may pass. A key that is
+ * otherwise valid gets an honest 403 instead of a silent 401 —
+ * key-manages-key would let one leaked credential mint itself an unrevoked
+ * successor and revoke every legitimate peer, and a leaked automation key
+ * must not be able to raise the very limits that contain it; the refusal
+ * names the rule. The console-setup door (routes/console.ts) rests on the
+ * same doctrine: a machine credential must not escalate into managing the
+ * daemon.
  *
  * Leg order matters twice. The isLiveApiKey lookup runs only after both
  * accepting legs failed, so a console session with a stray key header
@@ -246,7 +248,7 @@ export function requireAdminAuth(
     if (bare !== null && isLiveApiKey(bare)) {
       await reply.code(403).send({
         message:
-          'API keys cannot manage API keys — use DORMICE_API_TOKEN or the console',
+          'API keys cannot manage API keys or settings — use DORMICE_API_TOKEN or the console',
       });
       return;
     }

@@ -85,11 +85,12 @@ image probe warns about exactly this.
 
 ## `acquireSandbox` answers 429
 
-The sandbox limit (`DORMICE_MAX_SANDBOXES`, default 100) gates
-*creation* only — waking an existing sandbox is never blocked. Before
-raising it, look at the disk-overcommit figure in
-[`getHostMetrics`](/docs/metrics): disk is the real ceiling, and past
-full even the daemon's database cannot write.
+The sandbox limit (default 100, seeded from `DORMICE_MAX_SANDBOXES`)
+gates *creation* only — waking an existing sandbox is never blocked.
+Raise it live in the console's settings page (or the `updateSettings`
+verb); no restart needed. Before raising it, look at the disk-overcommit
+figure in [`getHostMetrics`](/docs/metrics): disk is the real ceiling,
+and past full even the daemon's database cannot write.
 
 ## Creating from a template fails: "image … is not on this host"
 

@@ -224,6 +224,34 @@ export const daemonSecrets = sqliteTable('daemon_secrets', {
 export type DaemonSecretsRow = typeof daemonSecrets.$inferSelect;
 
 /**
+ * Runtime settings — the operator knobs that must be changeable from the
+ * console without shell access and a restart (shared/settings.ts draws the
+ * line). One row, fixed id — the console_account singleton pattern. Born at
+ * first boot, seeded from the env variables of the same names; from then on
+ * this row is the single truth and env edits to those knobs are ignored
+ * (two live sources for one knob is a standing ambiguity).
+ *
+ * Typed columns, not a JSON blob: the schema IS the vocabulary, and a knob
+ * that exists but is invisible to migrations would drift silently.
+ */
+export const runtimeSettings = sqliteTable('runtime_settings', {
+  id: integer('id').primaryKey(),
+  maxSandboxes: integer('max_sandboxes').notNull(),
+  sandboxCpus: real('sandbox_cpus').notNull(),
+  sandboxMemoryGb: real('sandbox_memory_gb').notNull(),
+  sandboxDiskGb: real('sandbox_disk_gb').notNull(),
+  defaultFreezeAfterSeconds: integer('default_freeze_after_seconds').notNull(),
+  /** NULL = new sandboxes default to never stopping. */
+  defaultStopAfterSeconds: integer('default_stop_after_seconds'),
+  /** NULL = never archive — forced when the daemon has no archiver. */
+  defaultArchiveAfterSeconds: integer('default_archive_after_seconds'),
+  /** Null until the first updateSettings: "still exactly the seed" is information. */
+  updatedAt: text('updated_at'),
+});
+
+export type RuntimeSettingsRow = typeof runtimeSettings.$inferSelect;
+
+/**
  * Ledger-minted API keys: full-power peers of DORMICE_API_TOKEN that exist
  * so credentials can rotate without an env edit and a restart. The env
  * token itself never lives here — it stays the bootstrap/recovery

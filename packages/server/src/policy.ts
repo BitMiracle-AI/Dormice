@@ -1,5 +1,4 @@
 import {
-  DEFAULT_LIFECYCLE_POLICY,
   type LifecyclePolicy,
   type LifecyclePolicyOverride,
   lifecyclePolicySchema,
@@ -8,7 +7,9 @@ import {
 /**
  * The default distance from stopped to archived, applied only when the
  * daemon actually has an archiver (S3 configured) — the shared default
- * stays null because a promise nobody can honor is a standing lie.
+ * stays null because a promise nobody can honor is a standing lie. Since
+ * runtime settings landed this is only the first-boot SEED of the ledger's
+ * defaultPolicy.archiveAfterSeconds; the ledger value is what acquires read.
  */
 export const ARCHIVE_DEFAULT_SECONDS = 7 * 24 * 60 * 60;
 
@@ -27,34 +28,37 @@ export class ArchiveDisabledError extends Error {
  * `null` is meaningful for stop and archive ("never take that step"), so
  * only `undefined` falls back to the default.
  *
- * archiveDefaultSeconds is the caller's adjudication of "is the archiver
- * configured" (null = no): every call site answers explicitly. With no
- * archiver, an override explicitly asking to archive is refused — and the
- * archive default is null. With one, the default yields to an explicit
- * stop rather than fighting it: a never-stop sandbox never archives (only
- * a stopped sandbox can), and a stop pushed past the archive default drags
- * the default along instead of turning a legal stop override into an
- * ordering error.
+ * `defaults` is the ledger's defaultPolicy (runtime settings — what a
+ * sandbox that asks for nothing gets). `archiveEnabled` is the caller's
+ * adjudication of "is the archiver configured", decided once per boot by
+ * the archiver's presence; it is a separate flag because a null default
+ * archive is ambiguous on its own — it means either "no archiver" or "an
+ * operator chose never-archive by default", and only the first refuses an
+ * explicit archive-asking override. The archive default yields to an
+ * explicit stop rather than fighting it: a never-stop sandbox never
+ * archives (only a stopped sandbox can), and a stop pushed past the archive
+ * default drags the default along instead of turning a legal stop override
+ * into an ordering error.
  */
 export function resolvePolicy(
   override: LifecyclePolicyOverride | undefined,
-  archiveDefaultSeconds: number | null,
+  defaults: LifecyclePolicy,
+  archiveEnabled: boolean,
 ): LifecyclePolicy {
-  if (archiveDefaultSeconds === null && override?.archiveAfterSeconds != null) {
+  if (!archiveEnabled && override?.archiveAfterSeconds != null) {
     throw new ArchiveDisabledError();
   }
   const stopAfterSeconds =
     override?.stopAfterSeconds !== undefined
       ? override.stopAfterSeconds
-      : DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds;
+      : defaults.stopAfterSeconds;
   const archiveDefault =
-    archiveDefaultSeconds === null || stopAfterSeconds === null
+    defaults.archiveAfterSeconds === null || stopAfterSeconds === null
       ? null
-      : Math.max(archiveDefaultSeconds, stopAfterSeconds);
+      : Math.max(defaults.archiveAfterSeconds, stopAfterSeconds);
   return lifecyclePolicySchema.parse({
     freezeAfterSeconds:
-      override?.freezeAfterSeconds ??
-      DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+      override?.freezeAfterSeconds ?? defaults.freezeAfterSeconds,
     stopAfterSeconds,
     archiveAfterSeconds:
       override?.archiveAfterSeconds !== undefined

@@ -624,6 +624,20 @@ describe('the observability verbs over a real daemon', () => {
     });
   });
 
+  it('updateSettings moves a ledger knob with immediate effect', async () => {
+    const before = (await client().getConfig()).settings;
+    const { settings } = await client().updateSettings({
+      maxSandboxes: before.maxSandboxes + 1,
+    });
+    expect(settings.maxSandboxes).toBe(before.maxSandboxes + 1);
+    expect(settings.updatedAt).not.toBeNull();
+    expect((await client().getConfig()).settings.maxSandboxes).toBe(
+      before.maxSandboxes + 1,
+    );
+    // Restore: the exam daemon is shared by every suite in this run.
+    await client().updateSettings({ maxSandboxes: before.maxSandboxes });
+  });
+
   it('getSandboxMetrics samples a live sandbox and 404s after destroy', async () => {
     await client().acquireSandbox('obs-metrics-key');
     const sample = await client().getSandboxMetrics('obs-metrics-key');

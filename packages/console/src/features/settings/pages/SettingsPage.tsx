@@ -18,6 +18,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatDuration } from '@/features/sandboxes/format';
+import { RuntimeSettingsCard } from '../components/RuntimeSettingsCard';
 import { useConfig } from '../hooks/useConfig';
 
 /**
@@ -33,16 +34,16 @@ const KEY_HINTS: Record<string, string> = {
   DORMICE_EXECUTOR: '执行器:docker 是真沙箱,fake 是内存假执行器(开发/测试用)',
   DORMICE_BASE_IMAGE: '沙箱的默认镜像;docker 模式必填',
   DORMICE_DATA_DIR: '沙箱磁盘镜像的家(disks/*.img);归档临时文件也在这里',
-  DORMICE_MAX_SANDBOXES: '创建上限(撞上回 429);唤醒永不受限 — 磁盘才是真瓶颈',
+  DORMICE_MAX_SANDBOXES: '容量上限的首启种子值 — 生效值在上方运营旋钮里',
   DORMICE_SCAN_INTERVAL_SECONDS: '空闲扫描周期:每一轮把到阈值的沙箱降一格温度',
   DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS:
     '指标采样周期:历史曲线的分辨率,总览走势与指标历史都按它落库',
   DORMICE_METRICS_RETENTION_HOURS:
     '逐沙箱指标样本的保留时长;舰队状态计数恒保 30 天,不随它走',
-  DORMICE_SANDBOX_DISK_GB: '每个沙箱磁盘的名义大小;稀疏镜像只为真实内容付费',
-  DORMICE_SANDBOX_CPUS: '每个沙箱的 CPU 配额',
+  DORMICE_SANDBOX_DISK_GB: '默认磁盘配额的首启种子值 — 生效值在上方运营旋钮里',
+  DORMICE_SANDBOX_CPUS: '默认 CPU 配额的首启种子值 — 生效值在上方运营旋钮里',
   DORMICE_SANDBOX_MEMORY_GB:
-    '每个沙箱的内存上限;沙箱内 OOM 会让 gVisor 整箱退出(对账救回)',
+    '默认内存上限的首启种子值 — 生效值在上方运营旋钮里',
   DORMICE_SANDBOX_PIDS_LIMIT: '每个沙箱的进程数上限(fork 炸弹的物理闸)',
   DORMICE_RECLAIM_TIMEOUT_SECONDS: '冻结时挤内存进 swap 的最长等待',
   DORMICE_SANDBOX_DOMAIN:
@@ -72,9 +73,12 @@ function ValueCell({ entry }: { entry: ConfigEntry }) {
 const PAGE_SIZE = 50;
 
 /**
- * daemon 生效配置的只读观察窗:回答"这台 daemon 开了哪些旋钮"。刻意
- * 只读 — 配置的真身在 /etc/dormice/env,改完重启 daemon 生效;网页里
- * 改配置意味着 daemon 要能写自己的配置文件,那是另一个安全等级的决定。
+ * 设置页两段(2026-07-19 用户拍板加运营旋钮):上面是账本里的运营旋钮
+ * — 容量上限、新沙箱默认配额、默认策略,updateSettings 网页可改、立即
+ * 生效;下面仍是 env 配置的只读观察窗 — 端口、token、executor 这些
+ * "身份与地基"改了就是另一台 daemon,真身留在 /etc/dormice/env,改完
+ * 重启生效。daemon 从不写自己的环境文件(那是另一个安全等级的决定),
+ * 运营旋钮走的是账本:env 同名变量降级为首次启动的种子值。
  */
 export function SettingsPage() {
   const { data, isPending, isError, error } = useConfig();
@@ -108,17 +112,19 @@ export function SettingsPage() {
     <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-5 p-4 md:p-6">
       <header className="shrink-0">
         <h1 className="text-xl font-medium">设置</h1>
-        {/* 这行不是装饰:配置的真身与改法只在这里说 — 页面本体是只读的。 */}
+        {/* 这行不是装饰:两类旋钮的界限与 env 的改法只在这里说。 */}
         <p className="mt-1 text-sm text-muted-foreground">
-          daemon 的生效配置,只读。改配置在主机的{' '}
+          运营旋钮在下方卡片里直接改;其余配置只读,真身在主机的{' '}
           <code className="font-mono">/etc/dormice/env</code>,改完{' '}
           <code className="font-mono">systemctl restart dormice</code>。归档:
           {data.archive.enabled
-            ? `已启用(默认停止后 ${formatDuration(data.archive.defaultSeconds ?? 0)} 归档)`
+            ? `已启用(默认${data.archive.defaultSeconds === null ? '不归档' : `停止后 ${formatDuration(data.archive.defaultSeconds)} 归档`})`
             : '未启用 — 配齐 DORMICE_S3_* 四件套后可用'}
           。
         </p>
       </header>
+
+      <RuntimeSettingsCard data={data} />
 
       <DataTable fill>
         <TableHeader>

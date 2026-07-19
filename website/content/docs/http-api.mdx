@@ -55,7 +55,8 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | `POST /listSandboxMetrics` | every measurable sandbox's sample in one answer | — |
 | `POST /listSandboxImages` | each sandbox's born image vs its template's current one | — |
 | `POST /listActivity` | the daemon's recent history with per-event [attribution](#who-did-what), newest first — a bounded ring, not an audit log | — |
-| `POST /getConfig` | effective configuration, read-only; secrets reported present-or-absent, value never sent | — |
+| `POST /getConfig` | effective configuration: env knobs (read-only; secrets reported present-or-absent, value never sent) plus the live runtime `settings` | — |
+| `POST /updateSettings` | rewrite the runtime settings (capacity cap, new-sandbox defaults, default policy) — immediate effect, no restart; each provided group replaces that group whole | 400 empty patch or a default policy that asks to archive with no S3 configured |
 | `POST /getIngress` | domains bound on the daemon's managed reverse proxy, with live DNS and certificate probes | — |
 | `POST /setIngress` | rewrite the managed proxy config to exactly this domain list (empty list unbinds all) | 400 when the daemon manages no proxy |
 
@@ -120,11 +121,12 @@ key), with exactly two exceptions:
 
 - **Console account setup/reset** accepts only the env token — a leaked
   machine credential must not be able to take over the human account.
-- **The four apiKey verbs themselves** (`createApiKey`, `listApiKeys`,
-  `updateApiKey`, `revokeApiKey`) accept only the env token or a console
-  session. A key that could manage keys is a self-replication ladder —
-  one leaked credential minting itself an unrevoked successor — so a
-  valid key gets an honest 403 on these routes.
+- **The four apiKey verbs and `updateSettings`** accept only the env
+  token or a console session. A key that could manage keys is a
+  self-replication ladder — one leaked credential minting itself an
+  unrevoked successor — and a leaked key must not be able to raise the
+  very limits that contain it, so a valid key gets an honest 403 on
+  these routes.
 
 Each key has two handles: `name`, the human label (renameable through
 `updateApiKey`), and `id`, the stable address `updateApiKey` and

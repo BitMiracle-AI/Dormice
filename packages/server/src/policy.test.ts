@@ -2,14 +2,28 @@ import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { ARCHIVE_DEFAULT_SECONDS, resolvePolicy } from './policy';
 
-describe('resolvePolicy without an archiver (archiveDefaultSeconds = null)', () => {
-  it('returns the global defaults when no override is given', () => {
-    expect(resolvePolicy(undefined, null)).toEqual(DEFAULT_LIFECYCLE_POLICY);
-    expect(resolvePolicy({}, null)).toEqual(DEFAULT_LIFECYCLE_POLICY);
+// The two default shapes a real boot seeds into the ledger: without an
+// archiver the archive knob is null, with one it is the 7-day seed.
+const NO_ARCHIVER_DEFAULTS = DEFAULT_LIFECYCLE_POLICY;
+const ARCHIVER_DEFAULTS = {
+  ...DEFAULT_LIFECYCLE_POLICY,
+  archiveAfterSeconds: ARCHIVE_DEFAULT_SECONDS,
+};
+
+describe('resolvePolicy without an archiver (archiveEnabled = false)', () => {
+  it('returns the defaults when no override is given', () => {
+    expect(resolvePolicy(undefined, NO_ARCHIVER_DEFAULTS, false)).toEqual(
+      DEFAULT_LIFECYCLE_POLICY,
+    );
+    expect(resolvePolicy({}, NO_ARCHIVER_DEFAULTS, false)).toEqual(
+      DEFAULT_LIFECYCLE_POLICY,
+    );
   });
 
   it('merges a partial override over the defaults', () => {
-    expect(resolvePolicy({ freezeAfterSeconds: 60 }, null)).toEqual({
+    expect(
+      resolvePolicy({ freezeAfterSeconds: 60 }, NO_ARCHIVER_DEFAULTS, false),
+    ).toEqual({
       ...DEFAULT_LIFECYCLE_POLICY,
       freezeAfterSeconds: 60,
     });
@@ -17,19 +31,24 @@ describe('resolvePolicy without an archiver (archiveDefaultSeconds = null)', () 
 
   it('keeps an explicit null for archiveAfterSeconds (never archive)', () => {
     expect(
-      resolvePolicy({ archiveAfterSeconds: null }, null).archiveAfterSeconds,
+      resolvePolicy({ archiveAfterSeconds: null }, NO_ARCHIVER_DEFAULTS, false)
+        .archiveAfterSeconds,
     ).toBeNull();
   });
 
   it('refuses an explicit archive threshold — no archiver, no promise', () => {
-    expect(() => resolvePolicy({ archiveAfterSeconds: 60 }, null)).toThrow(
-      /archiving requires S3 \(DORMICE_S3_\*\) to be configured/,
-    );
+    expect(() =>
+      resolvePolicy({ archiveAfterSeconds: 60 }, NO_ARCHIVER_DEFAULTS, false),
+    ).toThrow(/archiving requires S3 \(DORMICE_S3_\*\) to be configured/);
   });
 
   it('rejects a merged result that violates freeze <= stop', () => {
     expect(() =>
-      resolvePolicy({ freezeAfterSeconds: 61, stopAfterSeconds: 60 }, null),
+      resolvePolicy(
+        { freezeAfterSeconds: 61, stopAfterSeconds: 60 },
+        NO_ARCHIVER_DEFAULTS,
+        false,
+      ),
     ).toThrow(/freezeAfterSeconds/);
   });
 
@@ -37,14 +56,15 @@ describe('resolvePolicy without an archiver (archiveDefaultSeconds = null)', () 
     // The resident-agent policy: park frozen forever, wake in ~50ms, never
     // decay to a cold boot.
     expect(
-      resolvePolicy({ stopAfterSeconds: null }, null).stopAfterSeconds,
+      resolvePolicy({ stopAfterSeconds: null }, NO_ARCHIVER_DEFAULTS, false)
+        .stopAfterSeconds,
     ).toBeNull();
   });
 });
 
-describe('resolvePolicy with an archiver (archiveDefaultSeconds = 7 days)', () => {
-  it('defaults new sandboxes to archiving after a week', () => {
-    expect(resolvePolicy(undefined, ARCHIVE_DEFAULT_SECONDS)).toEqual({
+describe('resolvePolicy with an archiver (archiveEnabled = true)', () => {
+  it('defaults new sandboxes to archiving after the seeded week', () => {
+    expect(resolvePolicy(undefined, ARCHIVER_DEFAULTS, true)).toEqual({
       ...DEFAULT_LIFECYCLE_POLICY,
       archiveAfterSeconds: ARCHIVE_DEFAULT_SECONDS,
     });
@@ -52,7 +72,7 @@ describe('resolvePolicy with an archiver (archiveDefaultSeconds = 7 days)', () =
 
   it('keeps an explicit null for archiveAfterSeconds (never archive)', () => {
     expect(
-      resolvePolicy({ archiveAfterSeconds: null }, ARCHIVE_DEFAULT_SECONDS)
+      resolvePolicy({ archiveAfterSeconds: null }, ARCHIVER_DEFAULTS, true)
         .archiveAfterSeconds,
     ).toBeNull();
   });
@@ -62,7 +82,7 @@ describe('resolvePolicy with an archiver (archiveDefaultSeconds = 7 days)', () =
     // 7-day default left in place would be an invalid policy, so the
     // default steps aside instead of turning the override into a 400.
     expect(
-      resolvePolicy({ stopAfterSeconds: null }, ARCHIVE_DEFAULT_SECONDS),
+      resolvePolicy({ stopAfterSeconds: null }, ARCHIVER_DEFAULTS, true),
     ).toEqual({
       ...DEFAULT_LIFECYCLE_POLICY,
       stopAfterSeconds: null,
@@ -75,7 +95,7 @@ describe('resolvePolicy with an archiver (archiveDefaultSeconds = 7 days)', () =
     // 7-day archive default — archiving then begins when stopping does.
     const thirtyDays = 30 * 24 * 60 * 60;
     expect(
-      resolvePolicy({ stopAfterSeconds: thirtyDays }, ARCHIVE_DEFAULT_SECONDS),
+      resolvePolicy({ stopAfterSeconds: thirtyDays }, ARCHIVER_DEFAULTS, true),
     ).toEqual({
       ...DEFAULT_LIFECYCLE_POLICY,
       stopAfterSeconds: thirtyDays,
@@ -86,7 +106,7 @@ describe('resolvePolicy with an archiver (archiveDefaultSeconds = 7 days)', () =
   it('rejects an explicit archive threshold below the stop threshold', () => {
     // Default stopAfterSeconds is 3 days; archiving after 1s must fail.
     expect(() =>
-      resolvePolicy({ archiveAfterSeconds: 1 }, ARCHIVE_DEFAULT_SECONDS),
+      resolvePolicy({ archiveAfterSeconds: 1 }, ARCHIVER_DEFAULTS, true),
     ).toThrow(/stopAfterSeconds/);
   });
 
@@ -94,8 +114,42 @@ describe('resolvePolicy with an archiver (archiveDefaultSeconds = 7 days)', () =
     expect(() =>
       resolvePolicy(
         { stopAfterSeconds: null, archiveAfterSeconds: 60 },
-        ARCHIVE_DEFAULT_SECONDS,
+        ARCHIVER_DEFAULTS,
+        true,
       ),
     ).toThrow(/archiveAfterSeconds requires a stopAfterSeconds/);
+  });
+});
+
+describe('resolvePolicy with operator-edited defaults (runtime settings)', () => {
+  it('an operator default of never-stop flows to new sandboxes', () => {
+    expect(
+      resolvePolicy(
+        undefined,
+        {
+          freezeAfterSeconds: 120,
+          stopAfterSeconds: null,
+          archiveAfterSeconds: null,
+        },
+        true,
+      ),
+    ).toEqual({
+      freezeAfterSeconds: 120,
+      stopAfterSeconds: null,
+      archiveAfterSeconds: null,
+    });
+  });
+
+  it('a never-archive default still accepts an explicit archive override', () => {
+    // The archiver exists; the operator merely changed what "asks for
+    // nothing" means. An explicit request must not be refused.
+    const week = 7 * 24 * 60 * 60;
+    expect(
+      resolvePolicy(
+        { archiveAfterSeconds: week },
+        { ...DEFAULT_LIFECYCLE_POLICY, archiveAfterSeconds: null },
+        true,
+      ).archiveAfterSeconds,
+    ).toBe(week);
   });
 });

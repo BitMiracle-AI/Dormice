@@ -432,6 +432,34 @@ describe('API keys over real HTTP', () => {
   });
 });
 
+describe('runtime settings over real HTTP', () => {
+  it('updates a knob and reads it back through getConfig', async () => {
+    const before = (await client.getConfig()).settings;
+    const { settings } = await client.updateSettings({
+      maxSandboxes: before.maxSandboxes + 1,
+    });
+    expect(settings.maxSandboxes).toBe(before.maxSandboxes + 1);
+    expect(settings.updatedAt).not.toBeNull();
+    expect((await client.getConfig()).settings.maxSandboxes).toBe(
+      before.maxSandboxes + 1,
+    );
+    // Restore: other suites share this daemon's ledger.
+    await client.updateSettings({ maxSandboxes: before.maxSandboxes });
+  });
+
+  it('is admin-only, like the apiKey verbs', async () => {
+    const { apiKey, token } = await client.createApiKey('sdk-settings');
+    const keyed = new Dormice({ endpoint, token });
+    await expect(
+      keyed.updateSettings({ maxSandboxes: 12345 }),
+    ).rejects.toMatchObject({
+      status: 403,
+      message: expect.stringMatching(/cannot manage API keys or settings/),
+    });
+    await client.revokeApiKey(apiKey.id);
+  });
+});
+
 describe('the observability verbs over real HTTP', () => {
   it('getConfig reports the knobs and withholds the token', async () => {
     // Source attribution is asserted server-side with injected sources;

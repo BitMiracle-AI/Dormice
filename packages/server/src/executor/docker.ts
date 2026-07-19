@@ -75,15 +75,27 @@ import {
  */
 export const SANDBOX_LABEL = 'dormice.sandbox';
 
+/** The per-sandbox resource knobs — runtime settings, so a live view. */
+export interface SandboxResources {
+  /** Size cap of each sandbox disk. The limit is physical: the image file simply ends. */
+  diskSizeGb: number;
+  cpus: number;
+  memoryGb: number;
+}
+
 export interface DockerExecutorOptions {
   /** Image every sandbox boots from, e.g. dormice-base:20260708. */
   baseImage: string;
   /** Sparse disk images and their mount points live under this directory. */
   dataDir: string;
-  /** Size cap of each sandbox disk. The limit is physical: the image file simply ends. */
-  diskSizeGb: number;
-  cpus: number;
-  memoryGb: number;
+  /**
+   * Live view of the resource knobs, read at each birth — a disk's at
+   * provisioning, a container's at launch — so a console edit applies to
+   * the next birth without a restart. Deliberately not three captured
+   * numbers: the knobs live in the ledger now (runtime settings), and the
+   * executor holding a stale copy would be a second truth.
+   */
+  resources: () => SandboxResources;
   pidsLimit: number;
   /** How long one memory.reclaim write may take before its subprocess is killed. */
   reclaimTimeoutSeconds: number;
@@ -459,7 +471,8 @@ export class DockerExecutor implements Executor {
     const systemDelta =
       (stats.cpu_stats?.system_cpu_usage ?? 0) -
       (stats.precpu_stats?.system_cpu_usage ?? 0);
-    const onlineCpus = stats.cpu_stats?.online_cpus || this.opts.cpus;
+    const resources = this.opts.resources();
+    const onlineCpus = stats.cpu_stats?.online_cpus || resources.cpus;
     // cgroup v2 calls the page cache inactive_file; v1 calls it cache.
     const memStats = (stats.memory_stats?.stats ?? {}) as Record<
       string,
@@ -467,14 +480,14 @@ export class DockerExecutor implements Executor {
     >;
     const disk = await statfs(this.mountDir(sandboxId));
     return {
-      cpuCount: this.opts.cpus,
+      cpuCount: resources.cpus,
       cpuUsedPct:
         systemDelta > 0 && cpuDelta > 0
           ? (cpuDelta / systemDelta) * onlineCpus * 100
           : 0,
       memUsedBytes: stats.memory_stats?.usage ?? 0,
       memTotalBytes:
-        stats.memory_stats?.limit || Math.round(this.opts.memoryGb * 1024 ** 3),
+        stats.memory_stats?.limit || Math.round(resources.memoryGb * 1024 ** 3),
       memCacheBytes: memStats.cache ?? memStats.inactive_file ?? 0,
       diskUsedBytes: (disk.blocks - disk.bfree) * disk.bsize,
       diskTotalBytes: disk.blocks * disk.bsize,
@@ -1300,8 +1313,8 @@ export class DockerExecutor implements Executor {
           Runtime: 'runsc',
           Init: true,
           SecurityOpt: ['no-new-privileges'],
-          NanoCpus: Math.round(this.opts.cpus * 1e9),
-          Memory: Math.round(this.opts.memoryGb * 1024 ** 3),
+          NanoCpus: Math.round(this.opts.resources().cpus * 1e9),
+          Memory: Math.round(this.opts.resources().memoryGb * 1024 ** 3),
           PidsLimit: this.opts.pidsLimit,
           Binds: [`${this.mountDir(sandboxId)}:/home/user`],
           // Life and death belong to the daemon's state machine; Docker
@@ -1340,7 +1353,7 @@ export class DockerExecutor implements Executor {
     await mkdir(mnt, { recursive: true });
     const file = await open(img, 'w');
     try {
-      await file.truncate(this.opts.diskSizeGb * 1024 ** 3);
+      await file.truncate(this.opts.resources().diskSizeGb * 1024 ** 3);
     } finally {
       await file.close();
     }
