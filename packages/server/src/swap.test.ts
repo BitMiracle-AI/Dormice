@@ -179,6 +179,16 @@ describe('SwapManager', () => {
     expect((await fs.readdir(swapDir)).sort()).toEqual(['notes.txt']);
   });
 
+  it('skips a block path that vanishes between readdir and stat', async () => {
+    // status() bypasses the reconcile queue, so a concurrent reconcile can
+    // delete a block mid-listing. A dangling symlink is the deterministic
+    // stand-in for that race: readdir sees the name, stat gets ENOENT.
+    await fs.mkdir(swapDir, { recursive: true });
+    await fs.symlink(path.join(dir, 'gone'), path.join(swapDir, 'block-3'));
+    const status = await manager().status();
+    expect(status.blocks).toEqual([]);
+  });
+
   it('reports status without mutating anything', async () => {
     const swap = manager();
     await swap.reconcile(2);
