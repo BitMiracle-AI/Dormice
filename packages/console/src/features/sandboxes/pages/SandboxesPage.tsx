@@ -62,6 +62,7 @@ import { queryClient } from '@/lib/queryClient';
 import { cn } from '@/lib/utils';
 import { CreateSandboxDialog } from '../components/CreateSandboxDialog';
 import { DestroySandboxDialog } from '../components/DestroySandboxButton';
+import { EditPolicyDialog } from '../components/EditPolicyDialog';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { UpgradableBadge } from '../components/UpgradableBadge';
 import { ago, STATE_LABELS } from '../format';
@@ -426,7 +427,11 @@ export function SandboxesPage() {
           {filtered.length} / {sandboxes.length} 个
         </span>
         {selectedVisible.length > 0 && (
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            {/* 批量改策略与批量销毁同住选中操作区:圈定沙箱靠的就是
+                这页的筛选+勾选,不另设策略页(策略不是实体)。改完不清
+                选中 — 行还在,顺手核对或接着销毁都用得上这批勾。 */}
+            <EditPolicyDialog sandboxes={selectedVisible} />
             <BulkDestroyButton
               names={selectedVisible.map((s) => s.name)}
               onDone={() => setSelected(new Set())}

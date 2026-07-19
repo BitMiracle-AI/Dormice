@@ -1,4 +1,4 @@
-import type { AcquireRequest, LifecyclePolicyOverride } from '@dormice/shared';
+import type { AcquireRequest } from '@dormice/shared';
 import {
   keepPreviousData,
   useMutation,
@@ -14,7 +14,6 @@ import {
   listSandboxImages,
   listSandboxMetrics,
   rebuildSandbox,
-  updatePolicy,
 } from '@/lib/api';
 
 /**
@@ -111,15 +110,6 @@ export function useAcquireSandbox() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (request: AcquireRequest) => acquireSandbox(request),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
-  });
-}
-
-export function useUpdatePolicy() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (args: { name: string; policy: LifecyclePolicyOverride }) =>
-      updatePolicy(args.name, args.policy),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
   });
 }
