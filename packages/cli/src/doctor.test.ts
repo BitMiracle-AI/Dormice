@@ -71,6 +71,11 @@ function fakeHost(
     '/proc/meminfo': 'MemTotal: 30000000 kB\nSwapTotal: 16777212 kB',
     '/proc/sys/vm/swappiness': '100\n',
     '/proc/sys/net/ipv4/ip_forward': '1\n',
+    // The stock Debian/Ubuntu file: a header comment that starts with
+    // `# /` but is not a file marker, and no keys. procps `sysctl
+    // --system` reads this file last; doctor checks it agrees.
+    '/etc/sysctl.conf':
+      '# /etc/sysctl.conf - Configuration file for setting system variables\n# See /etc/sysctl.d/ for additional settings\n',
     '/etc/iptables/rules.v4': IPTABLES_GOOD,
     [FIREWALL_UNIT_PATH]: FIREWALL_UNIT_GOOD,
     '/etc/caddy/Caddyfile':
@@ -210,6 +215,31 @@ describe('freezing prerequisites', () => {
     expect(results.swap).toMatchObject({
       status: 'fail',
       detail: expect.stringContaining('nowhere to push'),
+    });
+  });
+
+  it('effective 100 with a later boot file saying 0 warns and names the file', async () => {
+    // 100 right now, but a cloud vendor's file sorting after ours takes it
+    // back at the next reboot — the live value alone cannot see this yet.
+    const { results, failed } = await runDoctor(
+      fakeHost({
+        commands: {
+          '/usr/lib/systemd/systemd-sysctl --cat-config': ok(
+            [
+              '# /etc/sysctl.d/99-dormice.conf',
+              'vm.swappiness=100',
+              'net.ipv4.ip_forward=1',
+              '# /etc/sysctl.d/zz-cloud.conf',
+              'vm.swappiness = 0',
+            ].join('\n'),
+          ),
+        },
+      }),
+    );
+    expect(failed).toBe(false);
+    expect(results.swappiness).toMatchObject({
+      status: 'warn',
+      detail: expect.stringContaining('zz-cloud.conf sets 0 at boot'),
     });
   });
 });
@@ -391,6 +421,118 @@ describe('sandbox networking (net.ipv4.ip_forward)', () => {
       status: 'pass',
       detail: expect.stringContaining('dockerd re-enables'),
     });
+  });
+
+  it('a comment starting with "# /" is not a file marker — the warn names the real file', async () => {
+    // Stock /etc/sysctl.conf opens with `# /etc/sysctl.conf - Configuration
+    // file ...`, and --cat-config inlines it under the Debian 99-sysctl.conf
+    // symlink marker. A parser that takes any `# /` comment for a marker
+    // attributes the conflict to the comment text.
+    const { results } = await runDoctor(
+      fakeHost({
+        commands: {
+          '/usr/lib/systemd/systemd-sysctl --cat-config': ok(
+            [
+              '# /etc/sysctl.d/99-dormice.conf',
+              'vm.swappiness=100',
+              'net.ipv4.ip_forward=1',
+              '# /etc/sysctl.d/99-sysctl.conf',
+              '# /etc/sysctl.conf - Configuration file for setting system variables',
+              'net.ipv4.ip_forward = 0',
+            ].join('\n'),
+          ),
+        },
+      }),
+    );
+    expect(results['ip-forward']).toMatchObject({
+      status: 'warn',
+      detail: expect.stringContaining('/etc/sysctl.d/99-sysctl.conf sets 0'),
+    });
+  });
+
+  it('the "- key = value" ignore-error form is a setter like any other', async () => {
+    const { results } = await runDoctor(
+      fakeHost({
+        commands: {
+          '/usr/lib/systemd/systemd-sysctl --cat-config': ok(
+            [
+              '# /etc/sysctl.d/99-dormice.conf',
+              'vm.swappiness=100',
+              'net.ipv4.ip_forward=1',
+              '# /etc/sysctl.d/zz-operator.conf',
+              '- net.ipv4.ip_forward = 0',
+            ].join('\n'),
+          ),
+        },
+      }),
+    );
+    expect(results['ip-forward']).toMatchObject({
+      status: 'warn',
+      detail: expect.stringContaining('zz-operator.conf sets 0'),
+    });
+  });
+
+  it('an /etc/sysctl.conf that disagrees warns — procps sysctl --system applies it last', async () => {
+    // The systemd boot order ends with our 1, but procps replays
+    // /etc/sysctl.conf after every sysctl.d file, symlink or not.
+    const { results, failed } = await runDoctor(
+      fakeHost({ files: { '/etc/sysctl.conf': 'net.ipv4.ip_forward = 0\n' } }),
+    );
+    expect(failed).toBe(false);
+    expect(results['ip-forward']).toMatchObject({
+      status: 'warn',
+      detail: expect.stringContaining('/etc/sysctl.conf sets 0'),
+    });
+    expect(results['ip-forward']?.detail).toContain('applies that file last');
+  });
+
+  it('an unverifiable boot config warns — the live value cannot expose this hazard', async () => {
+    // Both probe paths fail (the fake answers nothing for /lib either).
+    const { results, failed } = await runDoctor(
+      fakeHost({
+        commands: {
+          '/usr/lib/systemd/systemd-sysctl --cat-config': boom(
+            'No such file or directory',
+          ),
+        },
+      }),
+    );
+    expect(failed).toBe(false);
+    expect(results['ip-forward']).toMatchObject({
+      status: 'warn',
+      detail: expect.stringContaining('/lib/systemd/systemd-sysctl'),
+    });
+    // swappiness keeps passing on its live value: swappiness drift
+    // surfaces there after a reboot; ip_forward's never does.
+    expect(statusOf(results, 'swappiness')).toBe('pass');
+  });
+
+  it('falls back to /lib/systemd/systemd-sysctl when /usr/lib has no binary', async () => {
+    const { results } = await runDoctor(
+      fakeHost({
+        commands: {
+          '/usr/lib/systemd/systemd-sysctl --cat-config': boom(
+            'No such file or directory',
+          ),
+          '/lib/systemd/systemd-sysctl --cat-config': ok(CAT_CONFIG_GOOD),
+        },
+      }),
+    );
+    expect(results['ip-forward']).toMatchObject({
+      status: 'pass',
+      detail: expect.stringContaining(
+        'persisted by /etc/sysctl.d/99-dormice.conf',
+      ),
+    });
+  });
+
+  it('a CRLF config line agreeing with us is agreement, not a conflict', async () => {
+    // An /etc/sysctl.conf written on Windows: the naive read of the value
+    // is "1\r", which is not "1".
+    const { results } = await runDoctor(
+      fakeHost({ files: { '/etc/sysctl.conf': 'net.ipv4.ip_forward=1\r\n' } }),
+    );
+    expect(results['ip-forward']).toMatchObject({ status: 'pass' });
   });
 });
 
