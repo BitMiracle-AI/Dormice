@@ -326,26 +326,26 @@ note 'verified: the sysctl boot order ends with our values for both keys'
 # curl to the metadata service steals live credentials. gVisor blocks kernel
 # attack surface, not network reachability — this must be firewalled.
 log 'cloud metadata firewall (DOCKER-USER chain)'
-docker_user=$(iptables -S DOCKER-USER 2>/dev/null) \
+iptables -w 10 -S DOCKER-USER >/dev/null 2>&1 \
   || die 'the DOCKER-USER chain is missing — is dockerd running?'
-added=''
-for target in 169.254.0.0/16 100.100.100.200; do
-  if ! printf '%s\n' "$docker_user" | grep -q -- "-d ${target%/*}\(/[0-9]*\)\? .*-j DROP"; then
-    iptables -I DOCKER-USER -d "$target" -j DROP
-    added="$added $target"
-  fi
-done
-if [ -n "$added" ]; then note "added DROP rules:$added"; else note '[skip] both DROP rules present'; fi
-# Persistence is our own oneshot unit that re-adds the rules after docker
-# creates the DOCKER-USER chain at boot (docker never flushes that chain
-# afterwards). Deliberately NOT iptables-persistent: installing it makes apt
+# One list, one writer: the oneshot unit below is the only mechanism that
+# inserts the rules — after docker creates the DOCKER-USER chain at boot
+# (docker never flushes that chain afterwards), and right here via the
+# restart. Deliberately NOT iptables-persistent: installing it makes apt
 # remove ufw (the packages conflict) — silently discarding an operator's
 # firewall — and `netfilter-persistent save` snapshots the whole ruleset,
 # operator rules and Docker's ephemeral NAT entries included, when exactly
 # two rules are ours to persist. Hosts persisted the old way keep their
 # /etc/iptables/rules.v4 untouched; the -C checks make duplicates impossible.
+# Every iptables call waits for the xtables lock (-w 10): at boot the unit
+# races dockerd for that lock, and without -w a lost race fails the unit
+# and silently leaves the metadata service reachable.
+METADATA_TARGETS='169.254.0.0/16 100.100.100.200'
 FIREWALL_UNIT=/etc/systemd/system/dormice-metadata-firewall.service
-firewall_unit=$(cat <<'EOF'
+firewall_exec=$(for target in $METADATA_TARGETS; do
+  printf "ExecStart=/bin/sh -c 'iptables -w 10 -C DOCKER-USER -d %s -j DROP 2>/dev/null || iptables -w 10 -I DOCKER-USER -d %s -j DROP'\n" "$target" "$target"
+done)
+firewall_unit=$(cat <<EOF
 # Written by Dormice install.sh — rewritten on every run. Sandboxes run
 # untrusted code; these rules keep them away from the cloud metadata service.
 [Unit]
@@ -357,8 +357,7 @@ Before=dormice.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'iptables -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP'
-ExecStart=/bin/sh -c 'iptables -C DOCKER-USER -d 100.100.100.200 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 100.100.100.200 -j DROP'
+$firewall_exec
 
 [Install]
 WantedBy=multi-user.target
@@ -371,10 +370,25 @@ else
   systemctl daemon-reload
   note "wrote $FIREWALL_UNIT (re-adds the rules after docker starts — survives reboot)"
 fi
-systemctl enable dormice-metadata-firewall >/dev/null 2>&1
-# Started now, not only at boot: a unit that has never run is an unproven
-# promise, and the start is a no-op when the rules are already in.
+systemctl -q enable dormice-metadata-firewall
+missing_before=''
+for target in $METADATA_TARGETS; do
+  iptables -w 10 -C DOCKER-USER -d "$target" -j DROP 2>/dev/null \
+    || missing_before="$missing_before $target"
+done
+# Restarted now, not only at boot: the unit is the only rule-writer, so this
+# restart IS the mechanism — a fresh install exercises the -C||-I insert
+# path (rules absent), a re-run the -C path, and -C keeps it idempotent.
 systemctl restart dormice-metadata-firewall
+for target in $METADATA_TARGETS; do
+  iptables -w 10 -C DOCKER-USER -d "$target" -j DROP 2>/dev/null \
+    || die "the unit ran but the rule for $target is absent — journalctl -u dormice-metadata-firewall has the story"
+done
+if [ -n "$missing_before" ]; then
+  note "the unit added DROP rules:$missing_before"
+else
+  note '[skip] both DROP rules were in place — the unit re-confirmed them'
+fi
 
 # ---- Dormice code -----------------------------------------------------------
 # Defined before the pull so the rollback in on_exit can always call it.
