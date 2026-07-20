@@ -35,6 +35,7 @@ import {
   NOT_A_FILE_EXIT,
   PTY_WRAPPER,
   parseInotifyLine,
+  READ_FILE_RANGE_SCRIPT,
   READ_FILE_SCRIPT,
   READ_FILE_STREAM_SCRIPT,
   REMOVE_SCRIPT,
@@ -47,6 +48,7 @@ import {
 } from './docker-scripts';
 import { CallbackSink, CappedBuffer } from './docker-streams';
 import {
+  type ByteRange,
   type ContainerState,
   DiskFullError,
   type DiskUsage,
@@ -821,6 +823,7 @@ export class DockerExecutor implements Executor {
     path: string,
     onChunk: (chunk: Buffer) => void | Promise<void>,
     user?: string,
+    range?: ByteRange,
   ): Promise<void> {
     const resolved = resolveSandboxPath(path);
     const containerId = await this.expectState(sandboxId, 'running');
@@ -833,9 +836,10 @@ export class DockerExecutor implements Executor {
         String(STREAM_FILE_OP_TIMEOUT_SECONDS),
         'bash',
         '-c',
-        READ_FILE_STREAM_SCRIPT,
+        range ? READ_FILE_RANGE_SCRIPT : READ_FILE_STREAM_SCRIPT,
         'bash',
         resolved,
+        ...(range ? [String(range.offset), String(range.length)] : []),
       ],
       stdout: new CallbackSink(onChunk),
       stderr,

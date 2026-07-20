@@ -9,7 +9,7 @@ import {
   NotAFileError,
   type SandboxEntry,
 } from '../../executor/executor';
-import { sendPreflight } from '../cors';
+import { EXPOSED_FILE_HEADERS, sendPreflight } from '../cors';
 import { E2bError } from '../protocol';
 import {
   type EnvdContext,
@@ -106,12 +106,48 @@ function rfc5987(name: string): string {
   );
 }
 
+type ParsedRange =
+  | { kind: 'full' }
+  | { kind: 'unsatisfiable' }
+  | { kind: 'slice'; offset: number; end: number; length: number };
+
+/**
+ * One byte-range spec against a known size — what a video player actually
+ * sends (an mp4's tail-of-file moov probe, a seek, Safari's opening
+ * `bytes=0-1`). Multi-range, foreign units, and malformed specs are
+ * lawfully ignored (RFC 9110 §14.2: Range is a request *modifier*) — the
+ * full 200 is always a correct answer, so nothing here ever guesses.
+ * A spec that names only bytes past EOF is the one hard refusal: 416,
+ * because serving the full file for it would loop a naive resumer forever.
+ */
+function parseRangeHeader(
+  header: string | string[] | undefined,
+  size: number,
+): ParsedRange {
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (!raw) return { kind: 'full' };
+  const match = /^bytes=(\d*)-(\d*)$/.exec(raw.trim());
+  if (!match || (match[1] === '' && match[2] === '')) return { kind: 'full' };
+  if (match[1] === '') {
+    // Suffix form: the last N bytes — the moov-atom fetch.
+    const n = Number(match[2]);
+    if (n === 0 || size === 0) return { kind: 'unsatisfiable' };
+    const offset = Math.max(0, size - n);
+    return { kind: 'slice', offset, end: size - 1, length: size - offset };
+  }
+  const offset = Number(match[1]);
+  if (offset >= size) return { kind: 'unsatisfiable' };
+  const end = match[2] === '' ? size - 1 : Math.min(Number(match[2]), size - 1);
+  if (end < offset) return { kind: 'full' };
+  return { kind: 'slice', offset, end, length: end - offset + 1 };
+}
+
 export async function serveFileDownload(
   ctx: EnvdContext,
   sandboxId: string,
   request: FastifyRequest,
   reply: FastifyReply,
-): Promise<void> {
+): Promise<unknown> {
   const { db, executor } = ctx;
   const query = request.query as { path?: string; username?: string };
   if (!query.path) {
@@ -138,20 +174,42 @@ export async function serveFileDownload(
       }
       throw error;
     }
+    const size = entry.sizeBytes;
+    const range = parseRangeHeader(request.headers.range, size);
+    if (range.kind === 'unsatisfiable') {
+      // Pre-hijack, so this rides the normal reply (the surface's CORS
+      // hook already stamped it); content-range names the real size —
+      // that is how a ranging client recovers.
+      return reply
+        .code(416)
+        .header('accept-ranges', 'bytes')
+        .header('content-range', `bytes */${size}`)
+        .send({
+          code: 'invalid_argument',
+          message: `range not satisfiable for a ${size}-byte file`,
+        });
+    }
+    const slice = range.kind === 'slice' ? range : undefined;
     // Size first, then stream: the SDK needs content-length (an empty
     // file is detected by `content-length: 0`), and nothing buffers here.
     reply.hijack();
-    // No accept-ranges here although real envd sends it: Range requests
-    // are not honored, and advertising bytes we won't serve is a lie.
-    reply.raw.writeHead(200, {
+    reply.raw.writeHead(slice ? 206 : 200, {
       'content-type': contentTypeOf(entry.name),
       'content-disposition': `inline; filename*=utf-8''${rfc5987(entry.name)}`,
-      'content-length': String(entry.sizeBytes),
+      'content-length': String(slice ? slice.length : size),
       'last-modified': new Date(entry.modifiedTime).toUTCString(),
+      // Real envd's promise, now kept: ranges are honored (video playback
+      // and download resume are impossible without them), so advertising
+      // them is the truth.
+      'accept-ranges': 'bytes',
+      ...(slice
+        ? { 'content-range': `bytes ${slice.offset}-${slice.end}/${size}` }
+        : {}),
       // The hijacked head bypasses reply.header(), so the CORS promise
       // (cors.ts: every file-face response is browser-readable) is
       // re-stated here.
       'access-control-allow-origin': '*',
+      'access-control-expose-headers': EXPOSED_FILE_HEADERS,
     });
     await executor.readFileStream(
       row.id,
@@ -166,6 +224,7 @@ export async function serveFileDownload(
         }
       },
       user,
+      slice ? { offset: slice.offset, length: slice.length } : undefined,
     );
     reply.raw.end();
   } catch (error) {

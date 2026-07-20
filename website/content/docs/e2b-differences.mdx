@@ -24,6 +24,7 @@ daemon:
 | `pty.*` | `create` / `sendInput` / `resize` / `kill` — a real interactive bash |
 | `files` read / write | text or bytes, streamed, no artificial size cap — the disk quota is the cap |
 | `uploadUrl()` / `downloadUrl()` | signed URLs: expiry enforced, a tampered signature is a 401; CORS-open, so a browser can POST/GET them directly — with `DORMICE_SANDBOX_DOMAIN` set, E2B's `49983-<sandboxId>.<domain>/files` form works too |
+| Range requests on downloads | single-range `Range: bytes=…` gets a `206` with `content-range`; downloads advertise `accept-ranges: bytes` — so `<video>` streams and seeks instead of downloading the whole file, and interrupted downloads resume |
 | `files.list` / `exists` / `makeDir` / `rename` / `remove` | typed errors match the SDK's expectations |
 | `files.watchDir` | streamed events, and the polling watcher API the Python sync SDK uses |
 | `getHost(port)` | port proxy with wake-on-traffic (set `DORMICE_SANDBOX_DOMAIN`) |

@@ -247,6 +247,37 @@ export function fileTests(ctx: ContractContext) {
     );
 
     it(
+      'a byte range slices the stream exactly — offset and length, byte math',
+      async () => {
+        // The HTTP Range request's muscle: a video player's tail-of-file
+        // moov probe and a seek are both "give me exactly these bytes".
+        const id = await ctx.fresh();
+        const content = Buffer.from('0123456789abcdefghij');
+        await ctx.executor.writeFiles(id, [
+          { path: '/home/user/range.bin', content },
+        ]);
+        const read = async (offset: number, length: number) => {
+          const chunks: Buffer[] = [];
+          await ctx.executor.readFileStream(
+            id,
+            '/home/user/range.bin',
+            (c) => {
+              chunks.push(Buffer.from(c));
+            },
+            undefined,
+            { offset, length },
+          );
+          return Buffer.concat(chunks).toString('utf8');
+        };
+        expect(await read(0, 5)).toBe('01234'); // head
+        expect(await read(10, 10)).toBe('abcdefghij'); // tail, to EOF exactly
+        expect(await read(19, 1)).toBe('j'); // the last byte alone
+        expect(await read(7, 6)).toBe('789abc'); // an interior seek
+      },
+      timeoutMs,
+    );
+
+    it(
       'streaming file verbs throw the same typed errors as the buffered ones',
       async () => {
         const id = await ctx.fresh();

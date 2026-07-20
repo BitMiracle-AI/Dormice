@@ -67,6 +67,18 @@ export const READ_FILE_STREAM_SCRIPT = [
 ].join('\n');
 
 /**
+ * $1 = absolute path, $2 = byte offset, $3 = byte count — the Range slice.
+ * dd is the one tool that takes both bounds in bytes and streams (bs-sized
+ * blocks, no buffering); a tail|head pipeline would work but dies by
+ * SIGPIPE races. GNU-only flags, like the find/stat scripts above.
+ */
+export const READ_FILE_RANGE_SCRIPT = [
+  `[ -e "$1" ] || exit ${NO_SUCH_FILE_EXIT}`,
+  `[ -f "$1" ] || exit ${NOT_A_FILE_EXIT}`,
+  'exec dd if="$1" iflag=skip_bytes,count_bytes skip="$2" count="$3" bs=65536 status=none',
+].join('\n');
+
+/**
  * $1 = absolute dir, $2 = depth. One NUL-terminated record per entry, tab
  * separated with the path last, so a path containing tabs still parses
  * (nothing else can contain a tab, and a path cannot contain a NUL).
