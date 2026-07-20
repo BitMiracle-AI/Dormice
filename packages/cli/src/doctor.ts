@@ -113,32 +113,87 @@ const RULES_V4 = '/etc/iptables/rules.v4';
 const METADATA_IP = '100.100.100.200';
 const METADATA_RANGE = '169.254.0.0/16';
 const SYSCTL_FILE = '/etc/sysctl.d/99-dormice.conf';
-// Not on PATH; /lib is merged into /usr/lib on every supported target.
-const SYSTEMD_SYSCTL = '/usr/lib/systemd/systemd-sysctl';
+// Not on PATH; same probe as install.sh — /usr/lib first, then /lib for
+// hosts without a merged /usr.
+const SYSTEMD_SYSCTL_PATHS = [
+  '/usr/lib/systemd/systemd-sysctl',
+  '/lib/systemd/systemd-sysctl',
+];
 
 /**
- * The file whose value for `key` wins at boot, parsed from
- * `systemd-sysctl --cat-config` — the authoritative application order,
- * with `# /path` lines marking each file. Last setter wins.
+ * The file whose value for `key` wins when `content` is replayed in
+ * order — last setter wins. `systemd-sysctl --cat-config` opens each file
+ * with a `# /path` marker: a comment that IS a path and nothing else; a
+ * comment merely starting with `# /` (the stock sysctl.conf header is one)
+ * is skipped like any other. Plain /etc/sysctl.conf content carries no
+ * markers, so callers name it via `initialFile`. Kept in sync by hand with
+ * the awk program in deploy/install.sh.
  */
 function sysctlBootWinner(
-  catConfig: string,
+  content: string,
   key: string,
+  initialFile = 'unknown',
 ): { file: string; value: string } | undefined {
-  let file = 'unknown';
+  let file = initialFile;
   let winner: { file: string; value: string } | undefined;
-  for (const line of catConfig.split('\n')) {
-    if (line.startsWith('# /')) {
-      file = line.slice(2).trim();
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.replace(/\r$/, '');
+    if (/^# \/\S+$/.test(line)) {
+      file = line.slice(2);
       continue;
     }
     if (/^\s*[#;]/.test(line)) continue;
     const eq = line.indexOf('=');
     if (eq < 0) continue;
-    const k = line.slice(0, eq).trim().replace(/^-/, '').replaceAll('/', '.');
+    const k = line
+      .slice(0, eq)
+      .replace(/\s+/g, '')
+      .replace(/^-/, '')
+      .replaceAll('/', '.');
     if (k === key) winner = { file, value: line.slice(eq + 1).trim() };
   }
   return winner;
+}
+
+/**
+ * Two replays can overwrite a sysctl after install.sh sets it:
+ * systemd-sysctl at boot (a global sort across the sysctl.d dirs), and
+ * procps `sysctl --system`, which reads /etc/sysctl.conf LAST — even
+ * without the Debian 99-sysctl.conf symlink. Both must end with the wanted
+ * value. Judged by value, not file: an operator file that sets the same
+ * value is agreement, not a conflict.
+ */
+async function sysctlReplayVerdict(
+  ctx: DoctorContext,
+  key: string,
+  want: string,
+): Promise<
+  | { kind: 'unreadable' }
+  | { kind: 'conflict'; file: string; value: string; order: 'boot' | 'procps' }
+  | { kind: 'agrees'; file?: string }
+> {
+  let catConfig: string | undefined;
+  for (const path of SYSTEMD_SYSCTL_PATHS) {
+    const res = await ctx.run(path, ['--cat-config']);
+    if (res.ok) {
+      catConfig = res.stdout;
+      break;
+    }
+  }
+  if (catConfig === undefined) return { kind: 'unreadable' };
+  const boot = sysctlBootWinner(catConfig, key);
+  if (boot !== undefined && boot.value !== want) {
+    return { kind: 'conflict', ...boot, order: 'boot' };
+  }
+  const conf = await ctx.readTextFile('/etc/sysctl.conf');
+  const last =
+    conf === undefined
+      ? undefined
+      : sysctlBootWinner(conf, key, '/etc/sysctl.conf');
+  if (last !== undefined && last.value !== want) {
+    return { kind: 'conflict', ...last, order: 'procps' };
+  }
+  return { kind: 'agrees', file: boot?.file };
 }
 
 async function daemonJson(
@@ -307,18 +362,31 @@ const CHECKS: DoctorCheck[] = [
     title: 'vm.swappiness = 100',
     needs: ['os-linux'],
     run: async (ctx) => {
-      // The live value, on purpose: some clouds ship swappiness=0 in their
-      // own sysctl.d file, so a config file existing proves nothing.
+      // The live value first, on purpose: some clouds ship swappiness=0 in
+      // their own sysctl.d file, so a config file existing proves nothing.
       const raw = await ctx.readTextFile('/proc/sys/vm/swappiness');
       const value = raw?.trim();
       if (value === undefined)
         return fail('cannot read /proc/sys/vm/swappiness');
-      return value === '100'
-        ? pass('100 (effective value)')
-        : fail(
-            `effective value is ${value} — below 100 the kernel refuses to swap gVisor's shmem-held sandbox memory (measured at 60: 0 bytes reclaimed)`,
-            `re-run install.sh — it persists 100 in ${SYSCTL_FILE}, applies it scoped, and verifies nothing later in the sysctl boot order overrides it`,
-          );
+      if (value !== '100') {
+        return fail(
+          `effective value is ${value} — below 100 the kernel refuses to swap gVisor's shmem-held sandbox memory (measured at 60: 0 bytes reclaimed)`,
+          `re-run install.sh — it persists 100 in ${SYSCTL_FILE}, applies it scoped, and verifies nothing later in the sysctl boot order overrides it`,
+        );
+      }
+      const verdict = await sysctlReplayVerdict(ctx, 'vm.swappiness', '100');
+      if (verdict.kind === 'conflict') {
+        return warn(
+          verdict.order === 'boot'
+            ? `100 now, but ${verdict.file} sets ${verdict.value} at boot — after the next reboot, freezing reclaims nothing`
+            : `100 now, but ${verdict.file} sets ${verdict.value} — procps sysctl --system applies that file last, so the next config replay drops it and freezing reclaims nothing`,
+          `drop vm.swappiness from ${verdict.file}, or re-run install.sh and let it verify the boot order`,
+        );
+      }
+      // An unreadable boot config still passes here, unlike ip_forward:
+      // nothing masks swappiness drift — a boot config saying otherwise
+      // surfaces in this live value after the next reboot.
+      return pass('100 (effective value)');
     },
   },
   {
@@ -341,23 +409,31 @@ const CHECKS: DoctorCheck[] = [
       // other installer's `sysctl --system`) re-applies it and cuts sandbox
       // networking until dockerd restarts. Unlike swappiness, whose drift
       // surfaces in the effective value after a reboot, this one can stay
-      // masked forever — so this check alone also reads the boot config, in
-      // systemd-sysctl's own application order.
-      const res = await ctx.run(SYSTEMD_SYSCTL, ['--cat-config']);
-      if (!res.ok) {
-        return pass('1 (effective value; boot config unreadable here)');
-      }
-      const winner = sysctlBootWinner(res.stdout, 'net.ipv4.ip_forward');
-      if (winner !== undefined && winner.value !== '1') {
+      // masked forever — so this check alone reads the boot config in both
+      // orders that can replay it, and an unreadable boot config is a
+      // warn, not a pass: the live value cannot expose this hazard.
+      const verdict = await sysctlReplayVerdict(
+        ctx,
+        'net.ipv4.ip_forward',
+        '1',
+      );
+      if (verdict.kind === 'unreadable') {
         return warn(
-          `1 now, but ${winner.file} sets ${winner.value} at boot — the next sysctl config replay cuts every sandbox's networking`,
-          `drop net.ipv4.ip_forward from ${winner.file}, or re-run install.sh and let it verify the boot order`,
+          `1 now, but the boot config cannot be verified — systemd-sysctl --cat-config failed at both ${SYSTEMD_SYSCTL_PATHS.join(' and ')}; a boot config saying 0 stays masked by dockerd until the next sysctl replay cuts every sandbox's networking`,
+        );
+      }
+      if (verdict.kind === 'conflict') {
+        return warn(
+          verdict.order === 'boot'
+            ? `1 now, but ${verdict.file} sets ${verdict.value} at boot — the next sysctl config replay cuts every sandbox's networking`
+            : `1 now, but ${verdict.file} sets ${verdict.value} — procps sysctl --system applies that file last, so the next config replay cuts every sandbox's networking`,
+          `drop net.ipv4.ip_forward from ${verdict.file}, or re-run install.sh and let it verify the boot order`,
         );
       }
       return pass(
-        winner === undefined
+        verdict.file === undefined
           ? '1 (effective value; no boot config sets it — dockerd re-enables it at every start)'
-          : `1 (effective value, persisted by ${winner.file})`,
+          : `1 (effective value, persisted by ${verdict.file})`,
       );
     },
   },

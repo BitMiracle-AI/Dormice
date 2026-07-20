@@ -67,8 +67,10 @@ know why; the Linux terms in it are covered in
   check where the live value can lie: dockerd re-enables forwarding at
   every daemon start, masking a boot config that says 0 until the next
   sysctl config replay switches it back off — so it also reads the
-  boot config, in systemd-sysctl's own application order, and *warns*
-  naming the file that would turn it off.
+  boot config, in both orders that can replay it (systemd-sysctl's
+  boot order, and procps `sysctl --system`, which applies
+  `/etc/sysctl.conf` last), and *warns* naming the file that would
+  turn it off.
 - **cloud metadata firewall** — `DROP` rules in the `DOCKER-USER` chain
   for `169.254.0.0/16` and `100.100.100.200`; without them a sandbox
   can steal cloud credentials from the metadata service.

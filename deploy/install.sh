@@ -285,11 +285,14 @@ fi
 # network. The file is named to sort after cloud-vendor sysctl.d files that
 # ship swappiness=0. Applied scoped — `sysctl --system` here would replay
 # every operator setting mid-install (an ip_forward=0 in /etc/sysctl.conf did
-# exactly that and killed the base-image build two steps later). Boot-order
-# effectiveness is verified against systemd-sysctl's own application order:
-# the winning value of each key must be the one we need. The value, not the
-# file — a host may legitimately set ip_forward=1 in its own later-sorting
-# config (the test host does), and that is agreement, not a conflict.
+# exactly that and killed the base-image build two steps later). Two replays
+# can overwrite these keys later, and both are verified: systemd-sysctl's
+# boot order (a global sort across the sysctl.d dirs, last setter wins), and
+# procps `sysctl --system`, which reads /etc/sysctl.conf LAST — even without
+# the 99-sysctl.conf symlink. In each order the winning value of every key
+# must be the one we need. The value, not the file — a host may legitimately
+# set ip_forward=1 in its own later-sorting config (the test host does), and
+# that is agreement, not a conflict.
 log 'kernel parameters (vm.swappiness = 100, net.ipv4.ip_forward = 1)'
 SYSCTL_FILE=/etc/sysctl.d/99-dormice.conf
 sysctl_wanted='# Managed by Dormice install.sh — rewritten on every run.
@@ -306,20 +309,48 @@ systemd_sysctl=/usr/lib/systemd/systemd-sysctl
 [ -x "$systemd_sysctl" ] || systemd_sysctl=/lib/systemd/systemd-sysctl
 [ -x "$systemd_sysctl" ] \
   || die 'cannot find systemd-sysctl to verify the sysctl boot order — non-systemd hosts are not supported'
-for kv in vm.swappiness=100 net.ipv4.ip_forward=1; do
-  key=${kv%%=*} want=${kv#*=}
-  winner=$("$systemd_sysctl" --cat-config | awk -v key="$key" '
-    /^# \//       { file = $2; next }
-    /^[ \t]*[#;]/ { next }
+# Last setter of `$1` in a sysctl config stream (stdin, or the file `$2`),
+# printed as
+# `file|value`. A file marker is a comment that IS a path and nothing else
+# (`# /path`) — `--cat-config` emits one before each file's lines; a comment
+# merely starting with `# /` (the stock sysctl.conf header is one) is
+# skipped like any other; `$2`, when given, is a marker-less file to read
+# and the name to report for it. Keys
+# tolerate the `- key` ignore-error form and `/` as the separator; values
+# keep internal whitespace and shed CRLF. Kept in sync by hand with
+# sysctlBootWinner in packages/cli/src/doctor.ts.
+sysctl_winner() {
+  awk -v key="$1" -v file="${2:-unknown}" '
+    /^# \// && NF == 2 { file = $2; next }
+    /^[ \t\r]*[#;]/    { next }
     {
       eq = index($0, "="); if (eq == 0) next
-      k = substr($0, 1, eq - 1); gsub(/[ \t]/, "", k); sub(/^-/, "", k); gsub("/", ".", k)
-      if (k == key) { v = substr($0, eq + 1); gsub(/[ \t]/, "", v); print file " " v }
-    }' | tail -n 1)
-  [ "${winner#* }" = "$want" ] \
-    || die "$key must be $want at boot, but the sysctl boot order ends with ${winner% *} setting it to ${winner#* } — change or remove that line, then re-run"
+      k = substr($0, 1, eq - 1); gsub(/[ \t\r]/, "", k); sub(/^-/, "", k); gsub("/", ".", k)
+      if (k != key) next
+      v = substr($0, eq + 1); sub(/^[ \t\r]+/, "", v); sub(/[ \t\r]+$/, "", v)
+      print file "|" v
+    }' ${2:+"$2"} | tail -n 1
+}
+cat_config=$("$systemd_sysctl" --cat-config)
+for kv in $(printf '%s\n' "$sysctl_wanted" | grep -v '^#'); do
+  key=${kv%%=*} want=${kv#*=}
+  winner=$(printf '%s\n' "$cat_config" | sysctl_winner "$key")
+  [ -n "$winner" ] \
+    || die "could not find $key anywhere in systemd-sysctl --cat-config output — expected at least $SYSCTL_FILE to appear; parse failure"
+  [ "${winner#*|}" = "$want" ] \
+    || die "$key must be $want at boot, but the sysctl boot order ends with ${winner%%|*} setting it to ${winner#*|} — change or remove that line, then re-run"
+  # procps `sysctl --system` (other installers run it) applies
+  # /etc/sysctl.conf after every sysctl.d file, symlink or not — a
+  # disagreeing value there overrides us at the very next replay even when
+  # the systemd boot order ends with ours.
+  if [ -f /etc/sysctl.conf ]; then
+    conf_value=$(sysctl_winner "$key" /etc/sysctl.conf)
+    conf_value=${conf_value#*|}
+    [ -z "$conf_value" ] || [ "$conf_value" = "$want" ] \
+      || die "$key must be $want, but /etc/sysctl.conf sets it to $conf_value — procps sysctl --system applies that file last, so the next config replay overrides us; change or remove that line, then re-run"
+  fi
 done
-note 'verified: the sysctl boot order ends with our values for both keys'
+note 'verified: both keys survive the sysctl boot order and a procps sysctl --system replay'
 
 # ---- cloud metadata firewall -------------------------------------------------
 # Sandboxes run untrusted code; on a cloud host with an attached role, one
