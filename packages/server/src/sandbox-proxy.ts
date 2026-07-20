@@ -30,6 +30,25 @@ import { wakeSandbox } from './lifecycle';
  */
 
 /**
+ * envd's fixed port in E2B's URL grammar: `49983-<sandboxId>.<domain>`
+ * reaches the sandbox's envd, never a user process — it is how the SDK's
+ * uploadUrl/downloadUrl become browser-postable URLs. Dormice runs no envd
+ * inside the container (the daemon plays that role), so /files on this
+ * port is carved out of the proxy and lands on the daemon's signed-URL
+ * file door, with the Host label pinning which sandbox the signature must
+ * speak for. Every other path keeps the honest proxy answer: nothing
+ * listens on 49983 inside the sandbox.
+ */
+export const ENVD_PORT = 49983;
+
+/** Path-only match for the carve-out: exactly /files, query ignored. */
+function isEnvdFilesRequest(req: http.IncomingMessage): boolean {
+  const url = req.url ?? '';
+  const q = url.indexOf('?');
+  return (q === -1 ? url : url.slice(0, q)) === '/files';
+}
+
+/**
  * Host header -> { port, sandboxId }, or null when it is not sandbox
  * traffic (then the request belongs to Fastify). The port suffix of the
  * header itself (`:3676`) is not the sandbox port — the label carries that.
@@ -121,7 +140,12 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
 
   return {
     matches(req) {
-      return parseSandboxHost(req.headers.host, domain) !== null;
+      const parsed = parseSandboxHost(req.headers.host, domain);
+      if (!parsed) return false;
+      // The envd file face on its fixed port belongs to Fastify's signed
+      // door, not to a dial into the container (see ENVD_PORT).
+      if (parsed.port === ENVD_PORT && isEnvdFilesRequest(req)) return false;
+      return true;
     },
 
     handleRequest(req, res) {

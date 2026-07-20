@@ -1,8 +1,10 @@
 import multipart from '@fastify/multipart';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { findById } from '../../db/ledger';
+import { allowCorsOrigin } from '../cors';
 import type { E2bDeps } from '../deps';
 import { E2bError, verifyEnvdToken } from '../protocol';
+import { authenticateSignedQuery, type SignedFileQuery } from '../signing';
 import { e2bView } from '../view';
 import { registerFileRoutes } from './files';
 import { registerFilesystemRoutes } from './filesystem';
@@ -77,14 +79,48 @@ export const e2bEnvdRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     });
   });
 
+  /** Path-only /files match; the query never changes what a URL names. */
+  const isFilesRequest = (url: string) => {
+    const q = url.indexOf('?');
+    return (q === -1 ? url : url.slice(0, q)).endsWith('/files');
+  };
+
+  // CORS rides in FRONT of auth on the file face (hooks run in
+  // registration order): a browser must be able to read the 401, or every
+  // refusal collapses into an opaque "CORS error" (see cors.ts).
+  app.addHook('onRequest', async (request, reply) => {
+    if (isFilesRequest(request.url)) allowCorsOrigin(reply);
+  });
+
   // Auth: X-Access-Token must be the HMAC minted for exactly this sandbox.
   // /health stays open like real envd's — it is how isRunning() probes.
+  // Preflights pass by necessity: browsers send them credential-less, so
+  // there is nothing to judge — the actual request is.
   app.addHook('onRequest', async (request) => {
     if (request.method === 'GET' && request.url.endsWith('/health')) return;
+    if (request.method === 'OPTIONS') return;
     const sandboxId = sandboxIdOf(request);
     const header = request.headers['x-access-token'];
     const token = Array.isArray(header) ? header[0] : header;
-    if (!token || !verifyEnvdToken(deps.envdSigningSecret, sandboxId, token)) {
+    if (!token) {
+      // Real envd's file routes accept either credential; token-less file
+      // requests may present the signed-URL query instead, judged against
+      // exactly the header's sandbox (the pin — a signature minted for
+      // another sandbox opens nothing here).
+      const query = request.query as SignedFileQuery;
+      if (isFilesRequest(request.url) && query.signature) {
+        authenticateSignedQuery({
+          db,
+          signingSecret: deps.envdSigningSecret,
+          query,
+          operation: request.method === 'GET' ? 'read' : 'write',
+          pinnedSandboxId: sandboxId,
+        });
+        return;
+      }
+      throw new E2bError(401, 'unauthenticated', 'invalid envd access token');
+    }
+    if (!verifyEnvdToken(deps.envdSigningSecret, sandboxId, token)) {
       throw new E2bError(401, 'unauthenticated', 'invalid envd access token');
     }
   });

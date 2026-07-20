@@ -9,6 +9,7 @@ import {
   NotAFileError,
   type SandboxEntry,
 } from '../../executor/executor';
+import { sendPreflight } from '../cors';
 import { E2bError } from '../protocol';
 import {
   type EnvdContext,
@@ -28,6 +29,12 @@ export function registerFileRoutes(
   app: FastifyInstance,
   ctx: EnvdContext,
 ): void {
+  // The browser preflight (see cors.ts); the auth hook waves OPTIONS
+  // through — preflights are credential-less by spec.
+  app.options('/files', async (request, reply) =>
+    sendPreflight(request, reply),
+  );
+
   app.get('/files', async (request, reply) =>
     serveFileDownload(ctx, sandboxIdOf(request), request, reply),
   );
@@ -141,6 +148,10 @@ export async function serveFileDownload(
       'content-disposition': `inline; filename*=utf-8''${rfc5987(entry.name)}`,
       'content-length': String(entry.sizeBytes),
       'last-modified': new Date(entry.modifiedTime).toUTCString(),
+      // The hijacked head bypasses reply.header(), so the CORS promise
+      // (cors.ts: every file-face response is browser-readable) is
+      // re-stated here.
+      'access-control-allow-origin': '*',
     });
     await executor.readFileStream(
       row.id,
