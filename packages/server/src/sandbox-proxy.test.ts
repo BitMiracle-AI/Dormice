@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +7,8 @@ import { buildApp } from './app';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
 import { findById } from './db/ledger';
+import { getOrCreateSigningSecret } from './db/secrets';
+import { mintEnvdToken } from './e2b/protocol';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
 import { parseSandboxHost } from './sandbox-proxy';
@@ -48,26 +51,55 @@ describe('sandbox port proxy', () => {
     return { app, db, executor, locks, port: address.port };
   }
 
-  /** Raw GET with an explicit Host header (fetch refuses to set one). */
-  function rawGet(
+  /** Raw request with an explicit Host header (fetch refuses to set one). */
+  function rawRequest(
     port: number,
-    path: string,
-    host: string,
-  ): Promise<{ status: number; body: string }> {
+    opts: {
+      method?: string;
+      path: string;
+      host: string;
+      headers?: Record<string, string>;
+      body?: string;
+    },
+  ): Promise<{
+    status: number;
+    body: string;
+    headers: http.IncomingHttpHeaders;
+  }> {
     return new Promise((resolve, reject) => {
       const req = http.request(
-        { host: '127.0.0.1', port, path, headers: { host } },
+        {
+          host: '127.0.0.1',
+          port,
+          method: opts.method ?? 'GET',
+          path: opts.path,
+          headers: { host: opts.host, ...opts.headers },
+        },
         (res) => {
           let body = '';
           res.on('data', (chunk) => {
             body += chunk;
           });
-          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+          res.on('end', () =>
+            resolve({
+              status: res.statusCode ?? 0,
+              body,
+              headers: res.headers,
+            }),
+          );
         },
       );
       req.on('error', reject);
-      req.end();
+      req.end(opts.body);
     });
+  }
+
+  function rawGet(
+    port: number,
+    path: string,
+    host: string,
+  ): Promise<{ status: number; body: string }> {
+    return rawRequest(port, { path, host });
   }
 
   async function createSandbox(port: number): Promise<string> {
@@ -151,6 +183,64 @@ describe('sandbox port proxy', () => {
     const res = await rawGet(t.port, '/warm', `3000-${sandboxId}.${DOMAIN}`);
     expect(res.status).toBe(200);
     expect(t.executor.stateOf(sandboxId)).toBe('running');
+  });
+
+  it('carves /files on the envd port out of the proxy — browser-direct upload, end to end', async () => {
+    const t = await listeningApp();
+    const sandboxId = await createSandbox(t.port);
+    const host = `49983-${sandboxId}.${DOMAIN}`;
+
+    // The preflight reaches Fastify's open CORS answer, not a container dial.
+    const preflight = await rawRequest(t.port, {
+      method: 'OPTIONS',
+      path: '/files',
+      host,
+      headers: {
+        origin: 'https://app.example.test',
+        'access-control-request-method': 'POST',
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers['access-control-allow-origin']).toBe('*');
+
+    // A signed multipart POST, exactly the URL + body shape a browser
+    // builds from the SDK's uploadUrl — no headers beyond content-type.
+    const token = mintEnvdToken(getOrCreateSigningSecret(t.db), sandboxId);
+    const path = '/home/user/probe/a.txt';
+    const exp = Math.floor(Date.now() / 1000) + 300;
+    const sig = `v1_${createHash('sha256')
+      .update([path, 'write', '', token, String(exp)].join(':'), 'utf8')
+      .digest('base64')
+      .replace(/=+$/, '')}`;
+    const boundary = 'proxy-carveout-boundary';
+    const body = [
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="file"; filename="${path}"`,
+      'Content-Type: text/plain',
+      '',
+      'straight from the browser\n',
+      `--${boundary}--`,
+      '',
+    ].join('\r\n');
+    const up = await rawRequest(t.port, {
+      method: 'POST',
+      path: `/files?path=${encodeURIComponent(path)}&signature=${encodeURIComponent(sig)}&signature_expiration=${exp}`,
+      host,
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      body,
+    });
+    expect(up.status).toBe(200);
+    expect(JSON.parse(up.body)).toEqual([
+      { name: 'a.txt', type: 'file', path },
+    ]);
+    expect(up.headers['access-control-allow-origin']).toBe('*');
+
+    // Only /files is carved out: any other path on the envd port still
+    // dials the container (the fake's echo upstream answers, proving the
+    // proxy handled it, not Fastify).
+    const other = await rawGet(t.port, '/health', host);
+    expect(other.status).toBe(200);
+    expect(JSON.parse(other.body)).toMatchObject({ sandboxId });
   });
 
   it('passes WebSocket upgrades through, both directions', async () => {

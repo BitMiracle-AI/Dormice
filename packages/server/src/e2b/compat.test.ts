@@ -1855,6 +1855,250 @@ describe('signed file URLs at the daemon root', () => {
   });
 });
 
+/**
+ * The browser-direct form: a page on any origin POSTs a signed URL of the
+ * `49983-<sandboxId>.<domain>` shape straight into the sandbox. inject()
+ * bypasses the serverFactory, so what these tests exercise is the Fastify
+ * half — the Host pin and CORS; the proxy's carve-out that delivers such
+ * requests here is sandbox-proxy.test.ts's business.
+ */
+describe('browser-direct signed files: the 49983 subdomain form and CORS', () => {
+  const DOMAIN = 'sbx.dormice.test';
+  const subdomainApp = () =>
+    testApp(new FakeExecutor(), { DORMICE_SANDBOX_DOMAIN: DOMAIN });
+
+  it('answers the preflight open and cacheable — it carries no credentials to judge', async () => {
+    const t = testApp();
+    for (const url of ['/files', '/e2b/envd/files']) {
+      const res = await t.app.inject({
+        method: 'OPTIONS',
+        url,
+        headers: {
+          origin: 'https://app.example.test',
+          'access-control-request-method': 'POST',
+        },
+      });
+      expect(res.statusCode).toBe(204);
+      expect(res.headers['access-control-allow-origin']).toBe('*');
+      expect(res.headers['access-control-allow-methods']).toContain('POST');
+      expect(res.headers['access-control-max-age']).toBe('7200');
+    }
+  });
+
+  it('the Host label pins the sandbox: its own signature opens it, another sandbox’s opens nothing', async () => {
+    const t = subdomainApp();
+    const a = await createSandbox(t);
+    const b = await createSandbox(t);
+    const path = '/home/user/probe/a.txt';
+    const upload = (host: string, envdAccessToken: string) => {
+      const exp = Math.floor(Date.now() / 1000) + 300;
+      const sig = sdkSignature({
+        path,
+        operation: 'write',
+        envdAccessToken,
+        expiration: exp,
+      });
+      const boundary = 'browser-direct-boundary';
+      const body = [
+        `--${boundary}`,
+        `Content-Disposition: form-data; name="file"; filename="${path}"`,
+        'Content-Type: text/plain',
+        '',
+        'straight from the browser\n',
+        `--${boundary}--`,
+        '',
+      ].join('\r\n');
+      return t.app.inject({
+        method: 'POST',
+        url: `/files?path=${encodeURIComponent(path)}&signature=${encodeURIComponent(sig)}&signature_expiration=${exp}`,
+        headers: {
+          host,
+          'content-type': `multipart/form-data; boundary=${boundary}`,
+        },
+        payload: body,
+      });
+    };
+
+    const ok = await upload(
+      `49983-${a.sandboxID}.${DOMAIN}`,
+      a.envdAccessToken,
+    );
+    expect(ok.statusCode).toBe(200);
+    // The response reports the true landing path (migration checks read it)
+    // and stays browser-readable.
+    expect(ok.json()).toEqual([{ name: 'a.txt', type: 'file', path }]);
+    expect(ok.headers['access-control-allow-origin']).toBe('*');
+
+    // B's signature is valid — for B. Against A's subdomain it must be
+    // refused, however many ledger rows it would match unpinned.
+    const crossed = await upload(
+      `49983-${a.sandboxID}.${DOMAIN}`,
+      b.envdAccessToken,
+    );
+    expect(crossed.statusCode).toBe(401);
+    expect(crossed.json().message).toBe('invalid signature');
+    // The refusal is browser-readable — without ACAO on the 401 a browser
+    // reports an opaque CORS failure instead of the real error.
+    expect(crossed.headers['access-control-allow-origin']).toBe('*');
+
+    // A signature over path a.txt opens no other path: the material pins it.
+    const expNow = Math.floor(Date.now() / 1000) + 300;
+    const sigA = sdkSignature({
+      path,
+      operation: 'write',
+      envdAccessToken: a.envdAccessToken,
+      expiration: expNow,
+    });
+    const swapped = await t.app.inject({
+      method: 'POST',
+      url: `/files?path=${encodeURIComponent('/home/user/probe/b.txt')}&signature=${encodeURIComponent(sigA)}&signature_expiration=${expNow}`,
+      headers: {
+        host: `49983-${a.sandboxID}.${DOMAIN}`,
+        'content-type': 'application/octet-stream',
+      },
+      payload: 'nope',
+    });
+    expect(swapped.statusCode).toBe(401);
+    expect(swapped.json().message).toBe('invalid signature');
+  });
+
+  it('refusals through the subdomain keep the envd order and carry CORS', async () => {
+    const t = subdomainApp();
+    const { sandboxID, envdAccessToken } = await createSandbox(t);
+    const host = `49983-${sandboxID}.${DOMAIN}`;
+
+    const bare = await t.app.inject({
+      method: 'POST',
+      url: '/files?path=x',
+      headers: { host, 'content-type': 'application/octet-stream' },
+      payload: 'x',
+    });
+    expect(bare.statusCode).toBe(401);
+    expect(bare.json().message).toBe('missing signature query parameter');
+    expect(bare.headers['access-control-allow-origin']).toBe('*');
+
+    // An expired signature (validly signed over the past timestamp).
+    const past = Math.floor(Date.now() / 1000) - 10;
+    const expiredSig = sdkSignature({
+      path: 'x',
+      operation: 'write',
+      envdAccessToken,
+      expiration: past,
+    });
+    const expired = await t.app.inject({
+      method: 'POST',
+      url: `/files?path=x&signature=${encodeURIComponent(expiredSig)}&signature_expiration=${past}`,
+      headers: { host, 'content-type': 'application/octet-stream' },
+      payload: 'x',
+    });
+    expect(expired.statusCode).toBe(401);
+    expect(expired.json().message).toBe('signature is already expired');
+    expect(expired.headers['access-control-allow-origin']).toBe('*');
+  });
+
+  it('a signed subdomain download streams with CORS on the hijacked head', async () => {
+    const t = subdomainApp();
+    const { sandboxID, envdAccessToken } = await createSandbox(t);
+    await putFile(t, sandboxID, 'probe/read.txt', 'readable cross-origin\n');
+    const sig = sdkSignature({
+      path: 'probe/read.txt',
+      operation: 'read',
+      envdAccessToken,
+    });
+    const res = await t.app.inject({
+      method: 'GET',
+      url: `/files?path=${encodeURIComponent('probe/read.txt')}&signature=${encodeURIComponent(sig)}`,
+      headers: { host: `49983-${sandboxID}.${DOMAIN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('readable cross-origin\n');
+    expect(res.headers['access-control-allow-origin']).toBe('*');
+  });
+
+  it('the envd gateway accepts the signed query when the token header is absent', async () => {
+    const t = testApp();
+    const { sandboxID, envdAccessToken } = await createSandbox(t);
+
+    // Write through the gateway with signature-only auth (real envd's file
+    // routes accept either credential).
+    const sig = sdkSignature({
+      path: 'gw.txt',
+      operation: 'write',
+      envdAccessToken,
+    });
+    const up = await t.app.inject({
+      method: 'POST',
+      url: `/e2b/envd/files?path=gw.txt&signature=${encodeURIComponent(sig)}`,
+      headers: {
+        'e2b-sandbox-id': sandboxID,
+        'content-type': 'application/octet-stream',
+      },
+      payload: 'through the gateway\n',
+    });
+    expect(up.statusCode).toBe(200);
+    expect(up.headers['access-control-allow-origin']).toBe('*');
+
+    const readSig = sdkSignature({
+      path: 'gw.txt',
+      operation: 'read',
+      envdAccessToken,
+    });
+    const back = await t.app.inject({
+      method: 'GET',
+      url: `/e2b/envd/files?path=gw.txt&signature=${encodeURIComponent(readSig)}`,
+      headers: { 'e2b-sandbox-id': sandboxID },
+    });
+    expect(back.statusCode).toBe(200);
+    expect(back.body).toBe('through the gateway\n');
+
+    // The pin is the header's sandbox: a signature for another one is
+    // refused even though it would match that other sandbox's token.
+    const other = await createSandbox(t);
+    const crossed = await t.app.inject({
+      method: 'POST',
+      url: `/e2b/envd/files?path=gw.txt&signature=${encodeURIComponent(
+        sdkSignature({
+          path: 'gw.txt',
+          operation: 'write',
+          envdAccessToken: other.envdAccessToken,
+        }),
+      )}`,
+      headers: {
+        'e2b-sandbox-id': sandboxID,
+        'content-type': 'application/octet-stream',
+      },
+      payload: 'nope',
+    });
+    expect(crossed.statusCode).toBe(401);
+    expect(crossed.json().message).toBe('invalid signature');
+    expect(crossed.headers['access-control-allow-origin']).toBe('*');
+
+    // No token and no signature keeps the standing refusal, now readable.
+    const naked = await t.app.inject({
+      method: 'POST',
+      url: '/e2b/envd/files?path=gw.txt',
+      headers: {
+        'e2b-sandbox-id': sandboxID,
+        'content-type': 'application/octet-stream',
+      },
+      payload: 'nope',
+    });
+    expect(naked.statusCode).toBe(401);
+    expect(naked.json().message).toBe('invalid envd access token');
+    expect(naked.headers['access-control-allow-origin']).toBe('*');
+
+    // The signed query buys nothing off the file face: a token-less RPC
+    // stays refused whatever its query says.
+    const rpc = await t.app.inject({
+      method: 'POST',
+      url: `/e2b/envd/filesystem.Filesystem/Stat?signature=${encodeURIComponent(sig)}`,
+      headers: { 'e2b-sandbox-id': sandboxID },
+      payload: { path: 'gw.txt' },
+    });
+    expect(rpc.statusCode).toBe(401);
+  });
+});
+
 describe('E2B templates', () => {
   // Registration is a native verb; the compat surface only consumes it.
   async function registerTemplate(t: TestApp, name: string, image: string) {

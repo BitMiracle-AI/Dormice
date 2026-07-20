@@ -1,11 +1,17 @@
 import multipart from '@fastify/multipart';
 import type { FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
+import { parseSandboxHost } from '../sandbox-proxy';
+import { allowCorsOrigin, sendPreflight } from './cors';
 import type { E2bDeps } from './deps';
 import { serveFileDownload, serveFileUpload } from './envd/files';
 import { createEnvdContext, UNLIMITED_BODY_BYTES } from './envd/shared';
 import { E2bError } from './protocol';
-import { findRowBySignature, type SigningOperation } from './signing';
+import {
+  authenticateSignedQuery,
+  type SignedFileQuery,
+  type SigningOperation,
+} from './signing';
 
 /**
  * The signed-URL file surface, at the DAEMON ROOT — not under /e2b/envd.
@@ -14,7 +20,15 @@ import { findRowBySignature, type SigningOperation } from './signing';
  * whole path — the /e2b/envd prefix is stripped (verified against the SDK
  * source). The consumer is a bare browser or curl: no E2b-Sandbox-Id
  * header, no token, nothing but the query. The signature alone
- * authenticates AND identifies the sandbox (see findRowBySignature).
+ * authenticates AND identifies the sandbox (see authenticateSignedQuery).
+ *
+ * Two Host spellings land here, one door: the bare daemon origin (the URL
+ * uploadUrl mints verbatim) and — with DORMICE_SANDBOX_DOMAIN set —
+ * `49983-<sandboxId>.<domain>`, real E2B's browser-postable form, which
+ * the sandbox proxy carves out of port forwarding (see ENVD_PORT). On the
+ * subdomain form the Host label pins the sandbox: a signature minted for
+ * any other sandbox is refused, exactly as each real envd only ever
+ * accepts its own.
  *
  * Deliberately signature-only: a header token here would be a second door
  * to the same room — token-authenticated file traffic already has
@@ -58,69 +72,52 @@ export const signedFileRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     });
   });
 
+  // Browser-consumable means CORS-consumable: every response on this door,
+  // refusals included, carries the wildcard origin (see cors.ts). The
+  // hijacked download path writes its own head and re-states it there.
+  app.addHook('onRequest', async (_request, reply) => {
+    allowCorsOrigin(reply);
+  });
+
   const ctx = createEnvdContext(deps);
+  const domain = deps.config.DORMICE_SANDBOX_DOMAIN;
 
   /**
-   * Real envd's validateSigning, in its order: missing signature first,
-   * then the constant-time match (which here also recovers the sandbox),
-   * and only then the expiration — a wrong signature must never learn from
-   * the error whether it was also expired.
+   * The signature check plus, on the subdomain form, the Host pin: which
+   * sandbox the label names is which sandbox the signature must speak for.
+   * The signed username also names the execution identity; the file
+   * handler cores vet it against the image's users (a tampered username
+   * never gets that far — the signature covers it).
    */
-  function authenticate(request: FastifyRequest, operation: SigningOperation) {
-    const query = request.query as {
-      path?: string;
-      username?: string;
-      signature?: string;
-      signature_expiration?: string;
-    };
-    if (!query.signature) {
-      throw new E2bError(
-        401,
-        'unauthenticated',
-        'missing signature query parameter',
-      );
-    }
-    const expirationUnix =
-      query.signature_expiration === undefined
-        ? undefined
-        : Number(query.signature_expiration);
-    const row = findRowBySignature(
-      deps.db,
-      deps.envdSigningSecret,
-      {
-        path: query.path ?? '',
-        operation,
-        username: query.username ?? '',
-        ...(expirationUnix === undefined ? {} : { expirationUnix }),
-      },
-      query.signature,
-    );
-    if (!row) {
-      throw new E2bError(401, 'unauthenticated', 'invalid signature');
-    }
-    if (
-      expirationUnix !== undefined &&
-      expirationUnix < Math.floor(Date.now() / 1000)
-    ) {
-      throw new E2bError(
-        401,
-        'unauthenticated',
-        'signature is already expired',
-      );
-    }
-    // The signed username also names the execution identity; the file
-    // handler cores vet it against the image's users (a tampered username
-    // never gets that far — the signature covers it).
-    return row;
+  function authenticate(
+    request: FastifyRequest,
+    operation: SigningOperation,
+  ): string {
+    const pinned = domain
+      ? parseSandboxHost(request.headers.host, domain)?.sandboxId
+      : undefined;
+    return authenticateSignedQuery({
+      db: deps.db,
+      signingSecret: deps.envdSigningSecret,
+      query: request.query as SignedFileQuery,
+      operation,
+      ...(pinned === undefined ? {} : { pinnedSandboxId: pinned }),
+    });
   }
 
+  // The preflight the whole browser flow hangs on — an XHR with
+  // upload.onprogress always sends one, credential-less by spec.
+  app.options('/files', async (request, reply) =>
+    sendPreflight(request, reply),
+  );
+
   app.get('/files', async (request, reply) => {
-    const row = authenticate(request, 'read');
-    return serveFileDownload(ctx, row.id, request, reply);
+    const sandboxId = authenticate(request, 'read');
+    return serveFileDownload(ctx, sandboxId, request, reply);
   });
 
   app.post('/files', { bodyLimit: UNLIMITED_BODY_BYTES }, (request, reply) => {
-    const row = authenticate(request, 'write');
-    return serveFileUpload(ctx, row.id, request, reply);
+    const sandboxId = authenticate(request, 'write');
+    return serveFileUpload(ctx, sandboxId, request, reply);
   });
 };
