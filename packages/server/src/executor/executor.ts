@@ -127,6 +127,12 @@ export interface FileToWrite {
   content: Buffer;
 }
 
+/** A byte span of a file, both bounds resolved and in-range by the caller. */
+export interface ByteRange {
+  offset: number;
+  length: number;
+}
+
 /**
  * One filesystem change under a watched directory — fsnotify's vocabulary,
  * because that is what the E2B wire speaks. A move fires 'rename' on the
@@ -416,12 +422,18 @@ export interface Executor {
    * shape's own rule and does not reach here). A returned promise from the
    * callback is awaited before the next chunk: backpressure travels through
    * to the in-container reader. Errors as readFile, minus the size gate.
+   *
+   * `range` slices the stream to exact bytes — the HTTP Range request's
+   * muscle (a video player fetching the mp4's tail-of-file metadata, a
+   * seek). The caller resolves the span against the file's stat'd size
+   * first; the executor just delivers offset..offset+length.
    */
   readFileStream(
     sandboxId: string,
     path: string,
     onChunk: (chunk: Buffer) => void | Promise<void>,
     user?: string,
+    range?: ByteRange,
   ): Promise<void>;
   /**
    * Streams content into one file, uncapped, parents created, overwriting —

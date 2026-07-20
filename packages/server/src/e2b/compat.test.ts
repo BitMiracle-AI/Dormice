@@ -798,6 +798,71 @@ describe('E2B envd surface', () => {
     expect(missing.json().code).toBe('not_found');
   });
 
+  it('honors single byte ranges on the download face — video playback lives here', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const content = '0123456789abcdefghij';
+    const up = await t.app.inject({
+      method: 'POST',
+      url: '/e2b/envd/files?path=range.txt&username=user',
+      headers: {
+        ...envdHeaders(t, sandboxID),
+        'content-type': 'application/octet-stream',
+      },
+      payload: content,
+    });
+    expect(up.statusCode).toBe(200);
+    const get = (range?: string) =>
+      t.app.inject({
+        method: 'GET',
+        url: '/e2b/envd/files?path=range.txt&username=user',
+        headers: { ...envdHeaders(t, sandboxID), ...(range ? { range } : {}) },
+      });
+
+    // The plain 200 now advertises ranges — the player's cue to even try.
+    const full = await get();
+    expect(full.statusCode).toBe(200);
+    expect(full.headers['accept-ranges']).toBe('bytes');
+    expect(full.headers['access-control-expose-headers']).toContain(
+      'content-range',
+    );
+
+    const slice = await get('bytes=2-5');
+    expect(slice.statusCode).toBe(206);
+    expect(slice.body).toBe('2345');
+    expect(slice.headers['content-range']).toBe('bytes 2-5/20');
+    expect(slice.headers['content-length']).toBe('4');
+
+    // The suffix form — an mp4 player's tail-of-file moov probe.
+    const tail = await get('bytes=-4');
+    expect(tail.statusCode).toBe(206);
+    expect(tail.body).toBe('ghij');
+    expect(tail.headers['content-range']).toBe('bytes 16-19/20');
+
+    // Open-ended — every seek is bytes=N-.
+    const open = await get('bytes=15-');
+    expect(open.statusCode).toBe(206);
+    expect(open.body).toBe('fghij');
+
+    // An end past EOF clamps (RFC's rule; players lean on it)…
+    const clamped = await get('bytes=18-9999');
+    expect(clamped.statusCode).toBe(206);
+    expect(clamped.body).toBe('ij');
+    expect(clamped.headers['content-range']).toBe('bytes 18-19/20');
+
+    // …but a START past EOF is the one hard refusal, naming the real size
+    // so a resuming client can recover instead of looping.
+    const past = await get('bytes=20-');
+    expect(past.statusCode).toBe(416);
+    expect(past.headers['content-range']).toBe('bytes */20');
+    expect(past.json().code).toBe('invalid_argument');
+
+    // Multi-range (and any other spec we don't speak) is lawfully ignored.
+    const multi = await get('bytes=0-1,4-5');
+    expect(multi.statusCode).toBe(200);
+    expect(multi.body).toBe(content);
+  });
+
   it('accepts octet-stream uploads with the path in the query', async () => {
     const t = testApp();
     const { sandboxID } = await createSandbox(t);

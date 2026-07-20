@@ -7,6 +7,7 @@ import {
   resolveSandboxPath,
 } from '@dormice/shared';
 import {
+  type ByteRange,
   type ContainerState,
   type DiskUsage,
   type ExecOptions,
@@ -729,11 +730,17 @@ export class FakeExecutor implements Executor {
     sandboxId: string,
     path: string,
     onChunk: (chunk: Buffer) => void | Promise<void>,
+    _user?: string,
+    range?: ByteRange,
   ): Promise<void> {
     // The uncapped path: no size gate, one chunk (the fake has no reason to
-    // slice; chunking is the real pipe's business, not the contract's).
+    // slice into chunks; chunking is the real pipe's business, not the
+    // contract's). The range IS the contract: exact bytes or nothing.
     const node = this.fileNode(sandboxId, resolveSandboxPath(path));
-    await onChunk(Buffer.from(node.content));
+    const body = range
+      ? node.content.subarray(range.offset, range.offset + range.length)
+      : node.content;
+    await onChunk(Buffer.from(body));
   }
 
   async writeFileStream(

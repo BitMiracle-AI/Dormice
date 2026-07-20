@@ -235,6 +235,23 @@ describe('sandbox port proxy', () => {
     ]);
     expect(up.headers['access-control-allow-origin']).toBe('*');
 
+    // A ranged read through the same door — how a <video> tag actually
+    // consumes a signed downloadUrl: Range in, 206 + content-range out.
+    const readSig = `v1_${createHash('sha256')
+      .update([path, 'read', '', token, String(exp)].join(':'), 'utf8')
+      .digest('base64')
+      .replace(/=+$/, '')}`;
+    const ranged = await rawRequest(t.port, {
+      path: `/files?path=${encodeURIComponent(path)}&signature=${encodeURIComponent(readSig)}&signature_expiration=${exp}`,
+      host,
+      headers: { range: 'bytes=0-7' },
+    });
+    expect(ranged.status).toBe(206);
+    expect(ranged.body).toBe('straight');
+    expect(ranged.headers['content-range']).toBe('bytes 0-7/26');
+    expect(ranged.headers['accept-ranges']).toBe('bytes');
+    expect(ranged.headers['access-control-allow-origin']).toBe('*');
+
     // Only /files is carved out: any other path on the envd port still
     // dials the container (the fake's echo upstream answers, proving the
     // proxy handled it, not Fastify).

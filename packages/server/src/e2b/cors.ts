@@ -15,7 +15,17 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
  */
 export function allowCorsOrigin(reply: FastifyReply): void {
   reply.header('access-control-allow-origin', '*');
+  reply.header('access-control-expose-headers', EXPOSED_FILE_HEADERS);
 }
+
+/**
+ * Response headers browser JS may read beyond the CORS safelist:
+ * content-range/accept-ranges carry the Range contract (a JS video player
+ * or resuming downloader is blind without them), content-disposition
+ * carries the filename. The hijacked download head re-states this list.
+ */
+export const EXPOSED_FILE_HEADERS =
+  'accept-ranges, content-range, content-disposition';
 
 /**
  * The preflight answer, real E2B's shape (204 + methods + a 2h cache).
