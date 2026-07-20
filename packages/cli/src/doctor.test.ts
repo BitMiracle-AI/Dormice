@@ -26,6 +26,15 @@ const IPTABLES_GOOD = [
   '-A DOCKER-USER -j RETURN',
 ].join('\n');
 
+const FIREWALL_UNIT_PATH =
+  '/etc/systemd/system/dormice-metadata-firewall.service';
+const FIREWALL_UNIT_GOOD = [
+  '[Service]',
+  'Type=oneshot',
+  "ExecStart=/bin/sh -c 'iptables -w 10 -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || iptables -w 10 -I DOCKER-USER -d 169.254.0.0/16 -j DROP'",
+  "ExecStart=/bin/sh -c 'iptables -w 10 -C DOCKER-USER -d 100.100.100.200 -j DROP 2>/dev/null || iptables -w 10 -I DOCKER-USER -d 100.100.100.200 -j DROP'",
+].join('\n');
+
 const DF_ROOMY =
   'Filesystem 1024-blocks Used Available Capacity Mounted on\n' +
   '/dev/vda3 200000000 50000000 150000000 25% /';
@@ -63,6 +72,7 @@ function fakeHost(
     '/proc/sys/vm/swappiness': '100\n',
     '/proc/sys/net/ipv4/ip_forward': '1\n',
     '/etc/iptables/rules.v4': IPTABLES_GOOD,
+    [FIREWALL_UNIT_PATH]: FIREWALL_UNIT_GOOD,
     '/etc/caddy/Caddyfile':
       '# Managed by Dormice — setIngress rewrites this file.\n\n:80 {\n\treverse_proxy 127.0.0.1:3676\n}\n',
     ...overrides.files,
@@ -74,6 +84,7 @@ function fakeHost(
     ),
     'iptables -S DOCKER-USER': ok(IPTABLES_GOOD),
     'systemctl is-enabled dormice-metadata-firewall': ok('enabled\n'),
+    'systemctl is-active dormice-metadata-firewall': ok('active\n'),
     '/usr/lib/systemd/systemd-sysctl --cat-config': ok(CAT_CONFIG_GOOD),
     [`docker image inspect ${IMAGE}`]: ok('[{}]'),
     'df -Pk /var/lib/dormice': ok(DF_ROOMY),
@@ -274,6 +285,57 @@ describe('metadata firewall', () => {
     expect(results['metadata-persisted']).toMatchObject({
       status: 'pass',
       detail: expect.stringContaining('rules.v4'),
+    });
+  });
+
+  it("is-enabled exiting 0 with 'enabled-runtime' is not persistence", async () => {
+    // is-enabled exits 0 for enabled-runtime, static, alias and generated
+    // too — none of which start this unit at the next boot.
+    const { results, failed } = await runDoctor(
+      fakeHost({
+        files: { '/etc/iptables/rules.v4': undefined },
+        commands: {
+          'systemctl is-enabled dormice-metadata-firewall':
+            ok('enabled-runtime\n'),
+        },
+      }),
+    );
+    expect(results['metadata-persisted']).toMatchObject({
+      status: 'warn',
+      detail: expect.stringContaining('enabled-runtime'),
+      fix: expect.stringContaining('install.sh'),
+    });
+    expect(failed).toBe(false);
+  });
+
+  it('an enabled unit whose file lost a DROP target warns and names it', async () => {
+    const { results } = await runDoctor(
+      fakeHost({
+        files: {
+          [FIREWALL_UNIT_PATH]:
+            "[Service]\nExecStart=/bin/sh -c 'iptables -w 10 -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || iptables -w 10 -I DOCKER-USER -d 169.254.0.0/16 -j DROP'",
+        },
+      }),
+    );
+    expect(results['metadata-persisted']).toMatchObject({
+      status: 'warn',
+      detail: expect.stringContaining('100.100.100.200'),
+      fix: expect.stringContaining('install.sh'),
+    });
+  });
+
+  it('an enabled unit whose last run failed warns — boot may come up bare', async () => {
+    const { results } = await runDoctor(
+      fakeHost({
+        commands: {
+          'systemctl is-active dormice-metadata-firewall': boom('failed'),
+        },
+      }),
+    );
+    expect(results['metadata-persisted']).toMatchObject({
+      status: 'warn',
+      detail: expect.stringContaining('last run failed'),
+      fix: expect.stringContaining('install.sh'),
     });
   });
 });
