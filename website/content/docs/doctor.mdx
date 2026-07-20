@@ -88,6 +88,15 @@ know why; the Linux terms in it are covered in
   a half-configured archiver anyway).
 - **zstd available** — the archiver shells out to `tar -I zstd` on the
   host at every archive and restore.
+- **ingress (Caddy)** — skipped when `DORMICE_INGRESS_FILE` is not
+  set: the daemon manages no reverse proxy, and you bind domains by
+  editing your proxy config directly. Set, the `caddy` binary must be
+  installed and the caddy service active — a missing binary means
+  `setIngress` cannot reload anything, and an inactive service means
+  nothing proxies the outside world to the daemon. A config file that
+  doesn't exist yet is a *warn* (the first bind creates it), and so is
+  one the daemon did not write: `setIngress` refuses to overwrite it,
+  so web domain binding is effectively off.
 - **base image available** — present locally; the fix names
   `images/Dockerfile`, and doctor never pulls.
 - **docker-mode paths absolute** — a relative `DORMICE_DB_PATH` depends
