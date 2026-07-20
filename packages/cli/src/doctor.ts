@@ -110,6 +110,7 @@ const skip = (detail: string): CheckResult => ({ status: 'skip', detail });
 
 const DAEMON_JSON = '/etc/docker/daemon.json';
 const RULES_V4 = '/etc/iptables/rules.v4';
+const FIREWALL_UNIT = '/etc/systemd/system/dormice-metadata-firewall.service';
 const METADATA_IP = '100.100.100.200';
 const METADATA_RANGE = '169.254.0.0/16';
 const SYSCTL_FILE = '/etc/sysctl.d/99-dormice.conf';
@@ -393,11 +394,42 @@ const CHECKS: DoctorCheck[] = [
     title: 'firewall rules persisted',
     needs: ['metadata-firewall'],
     run: async (ctx) => {
-      const unit = await ctx.run('systemctl', [
+      const enabled = await ctx.run('systemctl', [
         'is-enabled',
         'dormice-metadata-firewall',
       ]);
-      if (unit.ok) {
+      // Exit 0 alone is not the fact we need: is-enabled also exits 0 for
+      // enabled-runtime, static, alias and generated — states that do not
+      // start this unit at the next boot. Only the word "enabled" does.
+      if (enabled.stdout.trim() === 'enabled') {
+        const unitText = await ctx.readTextFile(FIREWALL_UNIT);
+        const missingTargets = [METADATA_RANGE, METADATA_IP].filter(
+          (target) => !unitText?.includes(target),
+        );
+        if (unitText === undefined) {
+          return warn(
+            `the unit is enabled but ${FIREWALL_UNIT} is missing or unreadable — what it re-adds at boot cannot be verified`,
+            're-run install.sh (it rewrites the dormice-metadata-firewall systemd unit)',
+          );
+        }
+        if (missingTargets.length > 0) {
+          return warn(
+            `the unit is enabled but ${FIREWALL_UNIT} does not drop ${missingTargets.join(' or ')} — the next boot re-adds an incomplete firewall`,
+            're-run install.sh (it rewrites the dormice-metadata-firewall systemd unit)',
+          );
+        }
+        // A failed last run means the boot-time insert path is broken —
+        // the rules present now came from install time, not from the unit.
+        const active = await ctx.run('systemctl', [
+          'is-active',
+          'dormice-metadata-firewall',
+        ]);
+        if (!active.ok) {
+          return warn(
+            'the unit is enabled but its last run failed — the next boot may come up without the rules',
+            're-run install.sh (`journalctl -u dormice-metadata-firewall` has why the run failed)',
+          );
+        }
         return pass(
           'dormice-metadata-firewall.service re-adds the rules after docker starts',
         );
@@ -407,6 +439,12 @@ const CHECKS: DoctorCheck[] = [
       const rules = await ctx.readTextFile(RULES_V4);
       if (rules?.includes(METADATA_IP) && rules.includes('169.254')) {
         return pass(`both rules in ${RULES_V4} (iptables-persistent)`);
+      }
+      if (enabled.ok) {
+        return warn(
+          `systemctl calls the unit "${enabled.stdout.trim()}", not "enabled" — that state does not re-add the rules at the next boot`,
+          're-run install.sh (it enables the dormice-metadata-firewall systemd unit)',
+        );
       }
       return warn(
         'the DROP rules live only in memory — a reboot silently drops them',
