@@ -124,12 +124,24 @@ export function useDirectoryWatch(
   useEffect(() => {
     if (!opts.enabled || !auth) return;
     let watcherId: string | null = null;
+    let disposed = false;
     let busy = false;
 
     const arm = async () => {
       if (!activeRef.current) return; // 冻结/停止:武装会唤醒,等真实使用
       try {
-        watcherId = await createWatcher(auth, path);
+        const id = await createWatcher(auth, path);
+        if (disposed) {
+          // effect 已在建监听的往返途中被拆(切目录或卸载);这个 id 归
+          // 属已死的闭包,同步 cleanup 那时读到的还是 null,拆不掉它 ——
+          // 在此补拆,别把 inotifywait 漏在容器里。active 闸同 cleanup:
+          // 沙箱睡了就留给容器随手回收。
+          if (activeRef.current) {
+            void removeWatcher(auth, id).catch(() => undefined);
+          }
+          return;
+        }
+        watcherId = id;
       } catch {
         watcherId = null; // 冷启动窗口或目录暂不可达;下一拍再试
       }
@@ -162,6 +174,7 @@ export function useDirectoryWatch(
     }, 2000);
 
     return () => {
+      disposed = true;
       clearInterval(timer);
       // 只有沙箱还醒着才顺手拆(RemoveWatcher 要容器活着);睡了就留给
       // 容器回收 — 一个 inotifywait 活不过下一次停止。
