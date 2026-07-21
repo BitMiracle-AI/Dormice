@@ -25,7 +25,7 @@ export function OverviewPage() {
       <FleetStatCards range={range} />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
         <FleetChart range={range} className="min-h-[420px] lg:col-span-3" />
-        <HostHealthCard className="min-h-[420px] lg:col-span-1" />
+        <HostHealthCard range={range} className="min-h-[420px] lg:col-span-1" />
       </div>
       <QuickConnectCard />
     </div>

@@ -14,6 +14,7 @@ import { ensureRuntimeSettings, readRuntimeSettings } from './db/settings';
 import { DockerExecutor } from './executor/docker';
 import type { Executor } from './executor/executor';
 import { FakeExecutor } from './executor/fake';
+import { CpuSampler } from './host-metrics';
 import { Ingress } from './ingress';
 import { KeyedQueue } from './keyed-queue';
 import { sampleOnce } from './metrics-sampler';
@@ -278,10 +279,19 @@ setTimeout(tick, config.DORMICE_SCAN_INTERVAL_SECONDS * 1000);
 // immediately: a restart's gap in the curves should equal the downtime, not
 // downtime plus one interval. Same failure stance as the heartbeat: log,
 // never fatal, next tick retries.
+//
+// The ticker's private CpuSampler, primed here so even the immediate first
+// tick has a (short) interval to report on. Private because a CPU delta
+// spans "since this instance's last sample": the getHostMetrics route owns
+// a separate instance, and sharing would let console polls steal windows.
+const hostCpu = new CpuSampler();
+hostCpu.sample();
 async function metricsTick() {
   try {
     await sampleOnce(db, executor, new Date(), {
       retentionHours: config.DORMICE_METRICS_RETENTION_HOURS,
+      hostCpu,
+      dataDir: config.DORMICE_DATA_DIR,
     });
   } catch (error) {
     app.log.error(error, 'metrics sampler tick failed');

@@ -1,19 +1,32 @@
-import { and, asc, desc, eq, gte, inArray, lt, lte } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  lt,
+  lte,
+} from 'drizzle-orm';
 import type { SandboxMetrics } from '../executor/executor';
+import type { HostSample } from '../host-metrics';
 import type { Db } from './db';
 import {
   type FleetSnapshotRow,
   fleetSnapshots,
+  type HostMetricsSampleRow,
+  hostMetricsSamples,
   type SandboxMetricsSampleRow,
   sandboxes,
   sandboxMetricsSamples,
 } from './schema';
 
 /**
- * How long fleet snapshots live. Not a knob: the dashboard's widest range
- * (30 days) defines the need, and at one small row per tick the table stays
- * a few megabytes — nobody sizes an explanation window (ACTIVITY_KEEP's
- * reasoning). Per-sandbox samples DO get a knob
+ * How long fleet snapshots and host samples live. Not a knob: the
+ * dashboard's widest range (30 days) defines the need, and at one small row
+ * per tick each table stays a few megabytes — nobody sizes an explanation
+ * window (ACTIVITY_KEEP's reasoning). Per-sandbox samples DO get a knob
  * (DORMICE_METRICS_RETENTION_HOURS): their volume scales with fleet size.
  */
 export const FLEET_SNAPSHOT_KEEP_DAYS = 30;
@@ -39,6 +52,7 @@ export interface MetricsTickInput {
   /** ISO 8601 UTC — the tick's single timestamp, shared by every row. */
   at: string;
   fleetCounts: FleetCounts;
+  host: HostSample;
   samples: Array<{ sandboxId: string; metrics: SandboxMetrics }>;
   retentionHours: number;
 }
@@ -67,6 +81,10 @@ export function insertMetricsTick(db: Db, input: MetricsTickInput): void {
       .values({ at: input.at, ...input.fleetCounts })
       .run();
 
+    tx.insert(hostMetricsSamples)
+      .values({ at: input.at, ...input.host })
+      .run();
+
     if (input.samples.length > 0) {
       const liveIds = new Set(
         tx
@@ -93,6 +111,9 @@ export function insertMetricsTick(db: Db, input: MetricsTickInput): void {
       .where(lt(sandboxMetricsSamples.at, sampleCutoff))
       .run();
     tx.delete(fleetSnapshots).where(lt(fleetSnapshots.at, fleetCutoff)).run();
+    tx.delete(hostMetricsSamples)
+      .where(lt(hostMetricsSamples.at, fleetCutoff))
+      .run();
   });
 }
 
@@ -125,6 +146,56 @@ export function querySandboxSamples(
     )
     .orderBy(asc(sandboxMetricsSamples.at))
     .all();
+}
+
+/** Ascending slice of host samples. */
+export function queryHostSamples(
+  db: Db,
+  startIso: string,
+  endIso: string,
+): HostMetricsSampleRow[] {
+  return db
+    .select()
+    .from(hostMetricsSamples)
+    .where(
+      and(
+        gte(hostMetricsSamples.at, startIso),
+        lte(hostMetricsSamples.at, endIso),
+      ),
+    )
+    .orderBy(asc(hostMetricsSamples.at))
+    .all();
+}
+
+/**
+ * The window's host CPU peak, from raw rows so no bucketing can flatten
+ * it: highest whole-machine percentage, and the earliest instant it was
+ * observed. Null-CPU rows (the tick after a daemon start) don't compete.
+ */
+export function queryHostCpuPeak(
+  db: Db,
+  startIso: string,
+  endIso: string,
+): { cpuUsedPct: number; at: string } | null {
+  const row = db
+    .select({
+      cpuUsedPct: hostMetricsSamples.cpuUsedPct,
+      at: hostMetricsSamples.at,
+    })
+    .from(hostMetricsSamples)
+    .where(
+      and(
+        gte(hostMetricsSamples.at, startIso),
+        lte(hostMetricsSamples.at, endIso),
+        isNotNull(hostMetricsSamples.cpuUsedPct),
+      ),
+    )
+    .orderBy(desc(hostMetricsSamples.cpuUsedPct), asc(hostMetricsSamples.at))
+    .limit(1)
+    .get();
+  return row && row.cpuUsedPct !== null
+    ? { cpuUsedPct: row.cpuUsedPct, at: row.at }
+    : null;
 }
 
 /** Ascending slice of fleet snapshots. */
@@ -234,6 +305,62 @@ export function bucketSamples(
     seen.memCacheBytes = Math.max(seen.memCacheBytes, row.memCacheBytes);
     seen.diskUsedBytes = Math.max(seen.diskUsedBytes, row.diskUsedBytes);
     seen.diskTotalBytes = Math.max(seen.diskTotalBytes, row.diskTotalBytes);
+  }
+  return [...buckets.entries()].sort(([a], [b]) => a - b).map(([, row]) => row);
+}
+
+/** Per-field extreme where either side may be an honest null. */
+function extremeNullable(
+  pick: (a: number, b: number) => number,
+  a: number | null,
+  b: number | null,
+): number | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return pick(a, b);
+}
+
+/**
+ * Buckets host samples the per-sandbox way — a per-field envelope, because
+ * a reader of host history is hunting spikes. Each field keeps its own
+ * WORST case, which is max for usage but MIN for the "available" fields: a
+ * memory-pressure spike is a low point of MemAvailable, and a max would
+ * erase exactly what the reader came for. Nullable fields aggregate over
+ * non-null readings and stay null only when the whole bucket had nothing
+ * to say.
+ */
+export function bucketHostSamples(
+  rows: HostMetricsSampleRow[],
+  startMs: number,
+  bucketSeconds: number,
+): HostMetricsSampleRow[] {
+  const max = extremeNullable.bind(null, Math.max);
+  const min = extremeNullable.bind(null, Math.min);
+  const buckets = new Map<number, HostMetricsSampleRow>();
+  for (const row of rows) {
+    const idx = bucketIndex(row.at, startMs, bucketSeconds);
+    const seen = buckets.get(idx);
+    if (!seen) {
+      buckets.set(idx, {
+        ...row,
+        at: new Date(startMs + idx * bucketSeconds * 1000).toISOString(),
+      });
+      continue;
+    }
+    seen.cpuUsedPct = max(seen.cpuUsedPct, row.cpuUsedPct);
+    seen.memTotalBytes = Math.max(seen.memTotalBytes, row.memTotalBytes);
+    seen.memAvailableBytes = Math.min(
+      seen.memAvailableBytes,
+      row.memAvailableBytes,
+    );
+    seen.swapTotalBytes = max(seen.swapTotalBytes, row.swapTotalBytes);
+    seen.swapUsedBytes = max(seen.swapUsedBytes, row.swapUsedBytes);
+    seen.diskTotalBytes = max(seen.diskTotalBytes, row.diskTotalBytes);
+    seen.diskUsedBytes = max(seen.diskUsedBytes, row.diskUsedBytes);
+    seen.diskAvailableBytes = min(
+      seen.diskAvailableBytes,
+      row.diskAvailableBytes,
+    );
   }
   return [...buckets.entries()].sort(([a], [b]) => a - b).map(([, row]) => row);
 }

@@ -2,17 +2,21 @@ import type { Db } from './db/db';
 import { countByState, listSandboxes } from './db/ledger';
 import { insertMetricsTick } from './db/metrics';
 import type { Executor, SandboxMetrics } from './executor/executor';
+import { type CpuSampler, readHostSample } from './host-metrics';
 
 /**
- * The metrics sampler: one tick reads every measurable sandbox and the
- * fleet's state census, and persists both. This is the daemon keeping
- * history — a reversal of the original "observation window, not a
- * monitoring system" stance, overturned for three reasons (2026-07-15):
- * the E2B metrics endpoint's start/end slice is a compatibility contract
- * we were answering with a single sample; per-sandbox readings cannot be
- * scraped from outside the ledger (host trends still belong to
- * Prometheus); and the console was hoarding session-local history in the
- * browser as a workaround. What did NOT reverse: observation never wakes a
+ * The metrics sampler: one tick reads every measurable sandbox, the
+ * fleet's state census and the host machine itself, and persists all
+ * three. This is the daemon keeping history — a reversal of the original
+ * "observation window, not a monitoring system" stance, overturned for
+ * three reasons (2026-07-15): the E2B metrics endpoint's start/end slice
+ * is a compatibility contract we were answering with a single sample;
+ * per-sandbox readings cannot be scraped from outside the ledger; and the
+ * console was hoarding session-local history in the browser as a
+ * workaround. Host history joined 2026-07-21 ("host trends belong to
+ * Prometheus" was the last holdout of that stance): on a self-hosted
+ * single box nobody runs Prometheus, and overcommit-by-observation needs
+ * a peak to observe. What did NOT reverse: observation never wakes a
  * sandbox — executor.metrics reads running and paused containers alike and
  * starts nothing — and a window the daemon slept through stays honestly
  * empty.
@@ -41,7 +45,17 @@ export async function sampleOnce(
   db: Db,
   executor: Executor,
   now: Date,
-  opts: { retentionHours: number },
+  opts: {
+    retentionHours: number;
+    /**
+     * The ticker's OWN CpuSampler (main.ts constructs it once and primes
+     * it) — never the getHostMetrics route's: a shared instance would let
+     * every console poll reset the delta window and turn the persisted
+     * 30s readings into noise.
+     */
+    hostCpu: CpuSampler;
+    dataDir: string;
+  },
 ): Promise<SampleResult> {
   const rows = listSandboxes(db);
   const { byState, total } = countByState(rows);
@@ -65,9 +79,11 @@ export async function sampleOnce(
     ),
   );
   const samples = readings.filter((reading) => reading !== null);
+  const host = await readHostSample(opts.hostCpu, opts.dataDir);
   insertMetricsTick(db, {
     at: now.toISOString(),
     fleetCounts: { ...byState, total },
+    host,
     samples,
     retentionHours: opts.retentionHours,
   });

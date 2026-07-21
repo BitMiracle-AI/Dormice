@@ -7,6 +7,7 @@ import type {
   CreateApiKeyResponse,
   GetConfigResponse,
   GetFleetTimelineResponse,
+  GetHostMetricsHistoryResponse,
   GetIngressResponse,
   GetSandboxMetricsHistoryResponse,
   GetSandboxMetricsResponse,
@@ -152,6 +153,12 @@ export const getSandboxMetricsHistory = (
 // computed from raw rows and immune to bucketing.
 export const getFleetTimeline = (start: string, end: string) =>
   rpc<GetFleetTimelineResponse>('/getFleetTimeline', { start, end });
+
+// The machine's sampled past — the host health card's trend food. Buckets
+// keep each field's worst case (max usage, min available) so spikes
+// survive; peak carries the window's raw CPU high point.
+export const getHostMetricsHistory = (start: string, end: string) =>
+  rpc<GetHostMetricsHistoryResponse>('/getHostMetricsHistory', { start, end });
 
 // Every sandbox's image lineage: the born image of the current shell (null
 // when no shell exists), the image the next shell would boot, and whether a

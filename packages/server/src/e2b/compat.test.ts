@@ -14,6 +14,7 @@ import { migrateDb, openDb } from '../db/db';
 import { findById, setDeadline } from '../db/ledger';
 import { getOrCreateSigningSecret } from '../db/secrets';
 import { FAKE_BASE_IMAGE, FakeExecutor } from '../executor/fake';
+import { CpuSampler } from '../host-metrics';
 import { KeyedQueue } from '../keyed-queue';
 import { sampleOnce } from '../metrics-sampler';
 import { scanOnce } from '../scanner';
@@ -21,6 +22,15 @@ import { mintEnvdToken } from './protocol';
 
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
+
+/** One sampler tick's non-sandbox inputs (host reading lands as nulls). */
+function tickOpts() {
+  return {
+    retentionHours: 168,
+    hostCpu: new CpuSampler(),
+    dataDir: '/nowhere/dormice-compat-test',
+  };
+}
 
 function testApp(
   executor: FakeExecutor = new FakeExecutor(),
@@ -553,9 +563,7 @@ describe('E2B control plane', () => {
     // Three sampler ticks 30s apart, in the recent past.
     const t0 = Date.now() - 120_000;
     for (let i = 0; i < 3; i += 1) {
-      await sampleOnce(t.db, t.executor, new Date(t0 + i * 30_000), {
-        retentionHours: 168,
-      });
+      await sampleOnce(t.db, t.executor, new Date(t0 + i * 30_000), tickOpts());
     }
     // A window around the middle tick: exactly that sample, ISO and unix
     // spellings agreeing.
