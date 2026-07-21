@@ -7,6 +7,7 @@ import {
   type ConfigEntry,
   getConfigResponseSchema,
   getFleetTimelineResponseSchema,
+  getHostMetricsHistoryResponseSchema,
   getSandboxMetricsHistoryResponseSchema,
   getSandboxMetricsResponseSchema,
   listActivityResponseSchema,
@@ -24,6 +25,7 @@ import { migrateDb, openDb } from '../db/db';
 import { insertMetricsTick, MAX_POINTS } from '../db/metrics';
 import { activity } from '../db/schema';
 import { FAKE_BASE_IMAGE, FakeExecutor } from '../executor/fake';
+import { CpuSampler, type HostSample } from '../host-metrics';
 import { KeyedQueue } from '../keyed-queue';
 import { freezeSandbox, stopSandbox } from '../lifecycle';
 import { sampleOnce } from '../metrics-sampler';
@@ -77,6 +79,34 @@ async function events(app: App): Promise<ActivityEvent[]> {
   const res = await rpc(app, '/listActivity');
   expect(res.statusCode).toBe(200);
   return listActivityResponseSchema.parse(res.json()).events;
+}
+
+// One tick's non-sandbox inputs. A fresh CpuSampler per call is fine: its
+// delta-less first reading is an honest null; the data dir doesn't exist,
+// so disk is null too.
+function tickOpts() {
+  return {
+    retentionHours: 168,
+    hostCpu: new CpuSampler(),
+    dataDir: '/nowhere/dormice-observability-test',
+  };
+}
+
+// A fixed host reading for straight-to-the-writer tests; hostReading(cpu)
+// varies the one field the history assertions care about.
+const HOST: HostSample = hostReading(12);
+
+function hostReading(cpuUsedPct: number | null): HostSample {
+  return {
+    cpuUsedPct,
+    memTotalBytes: 4096,
+    memAvailableBytes: 2048,
+    swapTotalBytes: 1024,
+    swapUsedBytes: 256,
+    diskTotalBytes: null,
+    diskUsedBytes: null,
+    diskAvailableBytes: null,
+  };
 }
 
 describe('getConfig', () => {
@@ -334,9 +364,7 @@ describe('getSandboxMetricsHistory', () => {
     await rpc(app, '/acquireSandbox', { name: 'sliced' });
     const t0 = Date.parse('2026-07-15T10:00:00.000Z');
     for (let i = 0; i < 3; i += 1) {
-      await sampleOnce(db, executor, new Date(t0 + i * 30_000), {
-        retentionHours: 168,
-      });
+      await sampleOnce(db, executor, new Date(t0 + i * 30_000), tickOpts());
     }
     const res = await rpc(app, '/getSandboxMetricsHistory', {
       name: 'sliced',
@@ -362,6 +390,7 @@ describe('getSandboxMetricsHistory', () => {
     for (let i = 0; i < rows; i += 1) {
       insertMetricsTick(db, {
         at: new Date(t0 + i * 30_000).toISOString(),
+        host: HOST,
         fleetCounts: {
           active: 1,
           frozen: 0,
@@ -409,11 +438,9 @@ describe('getFleetTimeline', () => {
     const { app, db, executor } = testApp();
     await rpc(app, '/acquireSandbox', { name: 'one' });
     const t0 = Date.parse('2026-07-15T10:00:00.000Z');
-    await sampleOnce(db, executor, new Date(t0), { retentionHours: 168 });
+    await sampleOnce(db, executor, new Date(t0), tickOpts());
     await rpc(app, '/acquireSandbox', { name: 'two' });
-    await sampleOnce(db, executor, new Date(t0 + 30_000), {
-      retentionHours: 168,
-    });
+    await sampleOnce(db, executor, new Date(t0 + 30_000), tickOpts());
 
     const res = await rpc(app, '/getFleetTimeline', {
       start: new Date(t0 - 1000).toISOString(),
@@ -451,6 +478,7 @@ describe('getFleetTimeline', () => {
     for (let i = 0; i < rows; i += 1) {
       insertMetricsTick(db, {
         at: new Date(t0 + i * 30_000).toISOString(),
+        host: HOST,
         fleetCounts: counts(1),
         samples: [],
         retentionHours: 168,
@@ -461,12 +489,14 @@ describe('getFleetTimeline', () => {
     // field is the only honest carrier.
     insertMetricsTick(db, {
       at: new Date(t0 + 200 * 30_000 + 1000).toISOString(),
+      host: HOST,
       fleetCounts: counts(9),
       samples: [],
       retentionHours: 168,
     });
     insertMetricsTick(db, {
       at: new Date(t0 + 200 * 30_000 + 2000).toISOString(),
+      host: HOST,
       fleetCounts: counts(1),
       samples: [],
       retentionHours: 168,
@@ -489,6 +519,132 @@ describe('getFleetTimeline', () => {
       const sum = Object.values(point.byState).reduce((a, b) => a + b, 0);
       expect(sum).toBe(point.total);
     }
+  });
+});
+
+describe('getHostMetricsHistory', () => {
+  it('answers an empty window with no points and a null peak', async () => {
+    const { app } = testApp();
+    const res = await rpc(app, '/getHostMetricsHistory', {});
+    expect(res.statusCode).toBe(200);
+    const body = getHostMetricsHistoryResponseSchema.parse(res.json());
+    expect(body).toEqual({ points: [], bucketSeconds: null, peak: null });
+  });
+
+  it('rejects an unparseable timestamp at the door', async () => {
+    const { app } = testApp();
+    const res = await rpc(app, '/getHostMetricsHistory', {
+      start: 'yesterday-ish',
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('slices ascending with real readings, nulls staying honest', async () => {
+    const { app, db, executor } = testApp();
+    const t0 = Date.parse('2026-07-15T10:00:00.000Z');
+    for (let i = 0; i < 3; i += 1) {
+      await sampleOnce(db, executor, new Date(t0 + i * 30_000), tickOpts());
+    }
+    const res = await rpc(app, '/getHostMetricsHistory', {
+      start: new Date(t0 + 15_000).toISOString(),
+      end: new Date(t0 + 65_000).toISOString(),
+    });
+    const { points, bucketSeconds } = getHostMetricsHistoryResponseSchema.parse(
+      res.json(),
+    );
+    expect(bucketSeconds).toBe(null);
+    expect(points.map((p) => p.at)).toEqual([
+      new Date(t0 + 30_000).toISOString(),
+      new Date(t0 + 60_000).toISOString(),
+    ]);
+    for (const point of points) {
+      // Real memory from this very machine; honest nulls for the missing
+      // data dir and the CPU delta a fresh sampler doesn't have.
+      expect(point.memTotalBytes).toBeGreaterThan(0);
+      expect(point.memAvailableBytes).toBeGreaterThan(0);
+      expect(point.dataDisk).toBe(null);
+      expect(point.cpuUsedPct).toBe(null);
+    }
+  });
+
+  it('buckets by per-field worst case and carries the CPU peak raw', async () => {
+    const { app, db } = testApp();
+    const t0 = Date.parse('2026-07-15T00:00:00.000Z');
+    const rows = MAX_POINTS + 40;
+    for (let i = 0; i < rows; i += 1) {
+      insertMetricsTick(db, {
+        at: new Date(t0 + i * 30_000).toISOString(),
+        // One reading spikes; every neighbor idles. Averaging would bury it.
+        host: hostReading(i === 200 ? 95 : 5),
+        fleetCounts: {
+          active: 0,
+          frozen: 0,
+          stopped: 0,
+          archived: 0,
+          restoring: 0,
+          total: 0,
+        },
+        samples: [],
+        retentionHours: 168,
+      });
+    }
+    const res = await rpc(app, '/getHostMetricsHistory', {
+      start: new Date(t0).toISOString(),
+      end: new Date(t0 + rows * 30_000).toISOString(),
+    });
+    const { points, bucketSeconds, peak } =
+      getHostMetricsHistoryResponseSchema.parse(res.json());
+    expect(bucketSeconds).not.toBe(null);
+    expect(points.length).toBeLessThanOrEqual(MAX_POINTS);
+    // Ascending, and the bucket holding the spike reports the spike.
+    const times = points.map((p) => Date.parse(p.at));
+    expect([...times].sort((a, b) => a - b)).toEqual(times);
+    expect(Math.max(...points.map((p) => p.cpuUsedPct ?? 0))).toBe(95);
+    // The peak is computed from raw rows, at the raw instant — not the
+    // bucket's synthetic start.
+    expect(peak).toEqual({
+      cpuUsedPct: 95,
+      at: new Date(t0 + 200 * 30_000).toISOString(),
+    });
+  });
+
+  it('a null-CPU tick never competes for the peak', async () => {
+    const { app, db } = testApp();
+    const t0 = Date.parse('2026-07-15T10:00:00.000Z');
+    const counts = {
+      active: 0,
+      frozen: 0,
+      stopped: 0,
+      archived: 0,
+      restoring: 0,
+      total: 0,
+    };
+    insertMetricsTick(db, {
+      at: new Date(t0).toISOString(),
+      host: hostReading(null),
+      fleetCounts: counts,
+      samples: [],
+      retentionHours: 168,
+    });
+    insertMetricsTick(db, {
+      at: new Date(t0 + 30_000).toISOString(),
+      host: hostReading(40),
+      fleetCounts: counts,
+      samples: [],
+      retentionHours: 168,
+    });
+    const res = await rpc(app, '/getHostMetricsHistory', {
+      start: new Date(t0).toISOString(),
+      end: new Date(t0 + 60_000).toISOString(),
+    });
+    const { points, peak } = getHostMetricsHistoryResponseSchema.parse(
+      res.json(),
+    );
+    expect(points).toHaveLength(2);
+    expect(peak).toEqual({
+      cpuUsedPct: 40,
+      at: new Date(t0 + 30_000).toISOString(),
+    });
   });
 });
 

@@ -16,11 +16,13 @@ import {
   execCommandResponseSchema,
   type GetConfigResponse,
   type GetFleetTimelineResponse,
+  type GetHostMetricsHistoryResponse,
   type GetIngressResponse,
   type GetSandboxMetricsHistoryResponse,
   type GetUpgradeStatusResponse,
   getConfigResponseSchema,
   getFleetTimelineResponseSchema,
+  getHostMetricsHistoryResponseSchema,
   getIngressResponseSchema,
   getSandboxMetricsHistoryResponseSchema,
   getSandboxMetricsResponseSchema,
@@ -192,6 +194,26 @@ export class Dormice {
   async getHostMetrics(): Promise<HostMetricsResponse> {
     const data = await this.rpc('getHostMetrics', {});
     return hostMetricsResponseSchema.parse(data);
+  }
+
+  /**
+   * The host machine's sampled history, sliced by an optional ISO window
+   * (default: the last 24 hours). Past 360 points the server buckets the
+   * answer — `bucketSeconds` says how wide — keeping each field's worst
+   * case (max usage, min available), so spikes survive. `peak` carries the
+   * window's highest whole-machine CPU percentage from raw rows, immune to
+   * bucketing. Nulls inside a point are honest platform gaps, and a window
+   * the daemon was down for shows the gap.
+   */
+  async getHostMetricsHistory(options?: {
+    start?: string;
+    end?: string;
+  }): Promise<GetHostMetricsHistoryResponse> {
+    const data = await this.rpc('getHostMetricsHistory', {
+      start: options?.start,
+      end: options?.end,
+    });
+    return getHostMetricsHistoryResponseSchema.parse(data);
   }
 
   /**

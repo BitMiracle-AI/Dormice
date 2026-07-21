@@ -79,7 +79,7 @@ export type ListSandboxMetricsResponse = z.infer<
  * verb slices that history. History exists because it is a compatibility
  * contract (the E2B metrics endpoint takes start/end) and because no
  * external monitor can measure per-sandbox from outside the ledger —
- * host-level trends still belong to Prometheus.
+ * host-level history lives beside it (getHostMetricsHistory in host.ts).
  *
  * Wire honesty rules:
  * - start/end are ISO 8601 (unix seconds are the E2B surface's dialect,

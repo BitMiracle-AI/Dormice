@@ -723,4 +723,26 @@ describe('the observability verbs over a real daemon', () => {
     }
     await client().destroySandbox('obs-timeline-key');
   });
+
+  it("getHostMetricsHistory reports the machine's past with a CPU peak", async () => {
+    // Wait for two ticks: the first after a daemon start has no CPU delta
+    // (an honest null), the second does — and with it the window's peak.
+    const deadline = Date.now() + 15_000;
+    let history = await client().getHostMetricsHistory();
+    while (
+      (history.points.length < 2 || history.peak === null) &&
+      Date.now() < deadline
+    ) {
+      await sleep(0.5);
+      history = await client().getHostMetricsHistory();
+    }
+    expect(history.points.length).toBeGreaterThanOrEqual(2);
+    expect(history.peak?.cpuUsedPct).toBeGreaterThanOrEqual(0);
+    // Real memory from the machine under the daemon; a short window comes
+    // back raw, not bucketed.
+    const newest = history.points.at(-1);
+    expect(newest?.memTotalBytes).toBeGreaterThan(0);
+    expect(newest?.memAvailableBytes).toBeGreaterThan(0);
+    expect(history.bucketSeconds).toBe(null);
+  });
 });

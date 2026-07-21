@@ -113,6 +113,13 @@
       "when": 1784461661884,
       "tag": "0015_swap-target",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1784632504378,
+      "tag": "0016_host-metrics-history",
+      "breakpoints": true
     }
   ]
 }

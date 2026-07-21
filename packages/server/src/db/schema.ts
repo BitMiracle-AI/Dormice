@@ -115,13 +115,13 @@ export type ActivityRow = typeof activity.$inferSelect;
  * DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS for each measurable (running or
  * paused) sandbox. The daemon keeps this history because it is a
  * compatibility contract — the E2B metrics endpoint slices by start/end —
- * and because nothing outside the ledger can measure per-sandbox; host
- * trends still belong to Prometheus.
+ * and because nothing outside the ledger can measure per-sandbox.
  *
- * Two tables, not one: this and fleet_snapshots differ in unit of meaning
- * (one sandbox's resources vs the whole fleet's state counts), retention
- * (DORMICE_METRICS_RETENTION_HOURS vs a fixed 30 days) and deletion path
- * (destroy cascades here, never there).
+ * Three tables, not one: this, fleet_snapshots and host_metrics_samples
+ * differ in unit of meaning (one sandbox's resources vs the fleet's state
+ * counts vs the machine's own resources), retention
+ * (DORMICE_METRICS_RETENTION_HOURS vs a fixed 30 days for the other two)
+ * and deletion path (destroy cascades here, never there).
  *
  * Keyed by the sandbox's platform id, not its name: rebuild replaces the
  * shell but keeps the id, so history stays continuous across rebuilds;
@@ -179,6 +179,39 @@ export const fleetSnapshots = sqliteTable('fleet_snapshots', {
 });
 
 export type FleetSnapshotRow = typeof fleetSnapshots.$inferSelect;
+
+/**
+ * The host machine's own resource history, one row per sampler tick — the
+ * historical sibling of getHostMetrics' snapshot. The original ruling
+ * ("host trends belong to Prometheus") was overturned 2026-07-21: on a
+ * self-hosted single box nobody runs Prometheus, and overcommit-by-
+ * observation — the platform's own capacity story — is impossible without
+ * a peak to look at. Owned by no sandbox (destroy never touches it), kept
+ * a fixed 30 days like fleet_snapshots and for the same reason: the
+ * dashboard's widest range defines the need.
+ *
+ * Nullable columns are honest platform gaps, never zeros: cpu_used_pct is
+ * null on the tick after a daemon start (a delta needs two samples), swap
+ * is null where /proc/meminfo does not exist (Mac dev box), disk is null
+ * until the data directory does (fake executor, fresh install).
+ */
+export const hostMetricsSamples = sqliteTable('host_metrics_samples', {
+  /** ISO 8601 UTC; one row per tick, so time itself is the key. */
+  at: text('at').primaryKey(),
+  /** Percent of the whole machine, 0-100. */
+  cpuUsedPct: real('cpu_used_pct'),
+  memTotalBytes: integer('mem_total_bytes').notNull(),
+  /** /proc/meminfo MemAvailable semantics (counts reclaimable cache). */
+  memAvailableBytes: integer('mem_available_bytes').notNull(),
+  swapTotalBytes: integer('swap_total_bytes'),
+  swapUsedBytes: integer('swap_used_bytes'),
+  /** The filesystem holding DORMICE_DATA_DIR, df semantics. */
+  diskTotalBytes: integer('disk_total_bytes'),
+  diskUsedBytes: integer('disk_used_bytes'),
+  diskAvailableBytes: integer('disk_available_bytes'),
+});
+
+export type HostMetricsSampleRow = typeof hostMetricsSamples.$inferSelect;
 
 /**
  * The console's one human account (the fixed id makes "at most one row" a

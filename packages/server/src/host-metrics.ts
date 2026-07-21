@@ -101,6 +101,42 @@ export interface DiskSpace {
 }
 
 /**
+ * One tick's whole-host reading, flattened to the shape of a
+ * host_metrics_samples row. Collected by the metrics sampler with its OWN
+ * CpuSampler instance: a CPU delta spans "since this instance's previous
+ * sample", so sharing the getHostMetrics route's instance would let every
+ * console poll steal the ticker's window and turn 30s readings into noise.
+ */
+export interface HostSample {
+  cpuUsedPct: number | null;
+  memTotalBytes: number;
+  memAvailableBytes: number;
+  swapTotalBytes: number | null;
+  swapUsedBytes: number | null;
+  diskTotalBytes: number | null;
+  diskUsedBytes: number | null;
+  diskAvailableBytes: number | null;
+}
+
+export async function readHostSample(
+  cpu: CpuSampler,
+  dataDir: string,
+): Promise<HostSample> {
+  const memory = await readHostMemory();
+  const disk = await readDiskSpace(dataDir);
+  return {
+    cpuUsedPct: cpu.sample(),
+    memTotalBytes: memory.memTotalBytes,
+    memAvailableBytes: memory.memAvailableBytes,
+    swapTotalBytes: memory.swap?.totalBytes ?? null,
+    swapUsedBytes: memory.swap?.usedBytes ?? null,
+    diskTotalBytes: disk?.totalBytes ?? null,
+    diskUsedBytes: disk?.usedBytes ?? null,
+    diskAvailableBytes: disk?.availableBytes ?? null,
+  };
+}
+
+/**
  * The filesystem holding `dirPath`, df semantics: available is what a
  * non-root writer can still use (bavail, not bfree). Null when the
  * directory does not exist — the fake executor never creates the data
