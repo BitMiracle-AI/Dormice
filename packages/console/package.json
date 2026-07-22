@@ -9,6 +9,7 @@
     "build": "vite build",
     "dev": "vite",
     "seed": "node scripts/seed.mjs",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

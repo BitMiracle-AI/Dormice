@@ -37,10 +37,15 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
+    this.name = 'ApiError';
   }
 }
+
+const redirectingUnauthorized = new Promise<never>(() => {});
+let unauthorizedRedirectStarted = false;
 
 /**
  * Session-expiry backstop, in one place instead of per page: any business
@@ -49,12 +54,22 @@ export class ApiError extends Error {
  * do a full-page jump to the login route — a reload guarantees no leftover
  * query cache or component state survives, and the redirect param brings
  * the operator back to where they were.
+ *
+ * The latch covers concurrent calls: the first response clears the marker,
+ * so later 401s cannot use the marker alone to know a redirect is underway.
  */
-function interceptUnauthorized(): void {
-  if (!hasSessionMarker()) return;
+function interceptUnauthorized(): boolean {
+  if (unauthorizedRedirectStarted) return true;
+  if (!hasSessionMarker()) return false;
+
+  unauthorizedRedirectStarted = true;
   clearSessionMarker();
-  const here = window.location.pathname + window.location.search;
-  window.location.href = `/console/login?redirect=${encodeURIComponent(here)}`;
+  const here =
+    window.location.pathname + window.location.search + window.location.hash;
+  window.location.replace(
+    `/console/login?redirect=${encodeURIComponent(here)}`,
+  );
+  return true;
 }
 
 async function rpc<T>(
@@ -70,8 +85,8 @@ async function rpc<T>(
     },
     body: JSON.stringify(body),
   });
-  if (res.status === 401 && intercept401) {
-    interceptUnauthorized();
+  if (res.status === 401 && intercept401 && interceptUnauthorized()) {
+    return redirectingUnauthorized;
   }
   if (!res.ok) {
     const message = await res
@@ -83,7 +98,15 @@ async function rpc<T>(
       res.status,
     );
   }
-  return res.json() as Promise<T>;
+  try {
+    return (await res.json()) as T;
+  } catch (cause) {
+    throw new ApiError(
+      `${path} returned invalid JSON with ${res.status}`,
+      res.status,
+      { cause },
+    );
+  }
 }
 
 // Whether setup has happened — the login page's fork: no account yet means
