@@ -3,11 +3,12 @@ interface WatchExit {
   error: Error | undefined;
 }
 
+export type FailedStopDisposition = 'retry' | 'terminal';
+
 interface WatchProcessLifecycleOptions {
   exit: Promise<WatchExit>;
   stopProcess(): Promise<void>;
-  /** True only while another stop attempt can still reach the process. */
-  canRetryStop(): Promise<boolean>;
+  classifyFailedStop(): Promise<FailedStopDisposition>;
   onNaturalEnd(outcome: WatchExit): void;
 }
 
@@ -60,14 +61,29 @@ export class WatchProcessLifecycle {
     if (this.exited) return;
     try {
       await this.opts.stopProcess();
-    } catch (error) {
-      const canRetry = this.exited ? false : await this.opts.canRetryStop();
-      if (this.exited || !canRetry) {
+    } catch (signalError) {
+      let disposition: FailedStopDisposition;
+      try {
+        disposition = this.exited
+          ? 'terminal'
+          : await this.opts.classifyFailedStop();
+      } catch (inspectError) {
+        if (this.exited) {
+          this.state = 'stopped';
+          return;
+        }
+        this.state = 'running';
+        throw new AggregateError(
+          [signalError, inspectError],
+          'watcher stop failed and container state is unknown',
+        );
+      }
+      if (this.exited || disposition === 'terminal') {
         this.state = 'stopped';
         return;
       }
       this.state = 'running';
-      throw error;
+      throw signalError;
     }
     await this.opts.exit;
     this.state = 'stopped';
