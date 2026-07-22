@@ -30,7 +30,10 @@ processes. A runnable version of this pattern lives at
 A frozen sandbox's processes stop mid-flight and resume exactly where
 they were: a REPL (an interactive language session) keeps its state, a
 dev server its connections, an agent process its memory. Nothing
-running in a resident sandbox is ever killed by idleness.
+running in a resident sandbox is ever killed by idleness. (One deliberate
+exception: [upgrading the sandbox's
+template](/docs/templates#update-a-template) swaps the container on the
+next wake, which restarts it cold.)
 
 **The flip side:** a background process does not *keep* its sandbox
 warm. Once nothing is watching it, the idle clock runs, the sandbox

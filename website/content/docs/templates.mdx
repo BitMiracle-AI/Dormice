@@ -46,20 +46,27 @@ surface — never silently substituted with the base image.
 
 ## Update a template
 
-Re-registering a name points it at a new image. Sandboxes pick up the
-new image the next time their container is built — on a rebuild, a cold
-start, or a restore from archive:
+Re-registering a name points it at a new image. Existing sandboxes
+converge onto it on their next wake from any cold state — frozen,
+stopped, or archived — each paying one container swap (a few seconds, no
+image pull) the first time, then back to millisecond wakes:
 
 ```sh
 docker build -t my-agent-env:v2 .
 dor template add my-agent-env my-agent-env:v2  # re-registering re-points the name
-dor sandbox rebuild user-42                    # per sandbox: new container, same /home/user
+dor sandbox rebuild user-42                    # optional: swap one sandbox NOW, don't wait for its next wake
 ```
 
-Until rebuilt (or cold-started), existing sandboxes keep running the
-image they were born on. Through a rebuild, `/home/user` carries over
-untouched and everything outside it resets onto the new image — see
+A running sandbox is never touched behind its back: the swap happens
+only when the sandbox is next woken (or explicitly rebuilt). Through the
+swap, `/home/user` carries over untouched and everything outside it
+resets onto the new image — including any processes a frozen sandbox
+had alive, which is within the platform's crash-only contract (sandboxed
+code must survive its container being replaced anyway). See
 [Rebuild a sandbox](/docs/persistence#rebuild-a-sandbox).
+
+Removing a template's registration follows the same rule: its sandboxes
+converge onto the daemon's base image at their next cold wake.
 
 You can ask which sandboxes still run an old image with the
 `listSandboxImages` verb (SDK method of the same name), or look for the

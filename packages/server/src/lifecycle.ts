@@ -137,15 +137,17 @@ export async function destroySandbox(
  * path builds a fresh container from the surviving disk, and therefore from
  * the *current* image of the sandbox's template (or the daemon's current
  * base image). This is how an existing sandbox picks up new shared layers
- * without losing a byte of /home/user. Already-stopped rows skip the ledger
- * write: removing a pruned-away container is a no-op and stopped -> stopped
- * is not a transition.
+ * without losing a byte of /home/user — immediately, without waiting for
+ * the next wake's own stale-shell convergence (wakeSandbox). Already-stopped
+ * rows skip the ledger write: removing a pruned-away container is a no-op
+ * and stopped -> stopped is not a transition.
  */
 export async function rebuildSandbox(
   db: Db,
   executor: Executor,
   row: SandboxRow,
   actor?: string | null,
+  detail?: string,
 ): Promise<SandboxRow> {
   await executor.removeContainer(row.id);
   recordActivity(db, {
@@ -154,6 +156,7 @@ export async function rebuildSandbox(
     sandboxId: row.id,
     actor,
     detail:
+      detail ??
       'shell removed, disk kept — next wake builds from the current image',
   });
   if (row.state === 'stopped') {
@@ -162,7 +165,27 @@ export async function rebuildSandbox(
   return transition(db, row.id, 'stopped');
 }
 
-/** Brings a sandbox in any cold state back to active. No-op when already active. */
+/**
+ * Brings a sandbox in any cold state back to active. No-op when already
+ * active.
+ *
+ * Every cold wake first converges the shell onto the template's *current*
+ * image — the same verdict listSandboxImages calls `upgradable` (imageOf
+ * against resolveImage ?? baseImage; a null imageOf is not stale: a shell
+ * that does not exist boots the current image by itself). A stale shell is
+ * swapped through rebuildSandbox — removed, ledger to stopped — and the
+ * stopped arm builds the new one; a fresh shell keeps its millisecond
+ * unpause / restart path untouched. This is what makes `dor template add`
+ * reach existing sandboxes: without it a frozen or stopped shell revives
+ * as-is and the fleet never upgrades short of a manual rebuildSandbox
+ * (which stays the front door for "swap now, don't wait for a wake").
+ *
+ * The honest cost: a frozen sandbox is a paused container — its processes
+ * and memory are alive — and the swap kills them for a cold start. That is
+ * within the crash-only contract (code must survive the container
+ * vanishing anyway) and only ever triggered by an operator deliberately
+ * re-registering the template.
+ */
 export async function wakeSandbox(
   db: Db,
   executor: Executor,
@@ -173,15 +196,35 @@ export async function wakeSandbox(
     case 'active':
       return row;
     case 'frozen':
-      await executor.unfreeze(row.id);
-      return awaken(db, row, 'from frozen (memory back out of swap)', actor);
-    case 'stopped':
-      // If the container object was pruned away, start rebuilds the shell —
-      // from the template's current image, resolved here at wake time.
-      await executor.start(row.id, {
-        image: resolveImage(db, row.template),
+    case 'stopped': {
+      const next = resolveImage(db, row.template) ?? executor.baseImage;
+      const born = await executor.imageOf(row.id);
+      const fresh =
+        born !== null && born !== next
+          ? await rebuildSandbox(
+              db,
+              executor,
+              row,
+              actor,
+              `stale shell swapped at wake: ${born} -> ${next}`,
+            )
+          : row;
+      if (fresh.state === 'frozen') {
+        await executor.unfreeze(fresh.id);
+        return awaken(
+          db,
+          fresh,
+          'from frozen (memory back out of swap)',
+          actor,
+        );
+      }
+      // If no container object exists (pruned away, or the stale shell was
+      // just removed), start rebuilds it from the current image.
+      await executor.start(fresh.id, {
+        image: resolveImage(db, fresh.template),
       });
-      return awaken(db, row, 'cold start from the surviving disk', actor);
+      return awaken(db, fresh, 'cold start from the surviving disk', actor);
+    }
     case 'archived':
     case 'restoring':
       // Every legitimate path branches to the archiver before landing here
