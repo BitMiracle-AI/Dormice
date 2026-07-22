@@ -8,6 +8,7 @@ import {
   overwriteState,
 } from './db/ledger';
 import type { SandboxRow } from './db/schema';
+import type { WatcherTable } from './e2b/watcher-table';
 import type { ContainerState, Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
 
@@ -98,6 +99,7 @@ export async function reconcile(
   locks: KeyedQueue,
   priorSuspects?: ReadonlySet<string>,
   archiver?: { hasLiveRestore(sandboxId: string): boolean },
+  watchers?: WatcherTable,
 ): Promise<ReconcileResult> {
   const rows = listSandboxes(db);
   const containers = await executor.listContainers();
@@ -191,6 +193,7 @@ export async function reconcile(
       owners.add(row.id);
       if (LEDGER_STATE[observed] !== row.state) {
         await repairUnderLock(row, () => {
+          if (observed === 'stopped') watchers?.disposeSandbox(row.id);
           overwriteState(db, row.id, LEDGER_STATE[observed]);
           result.repairedStates += 1;
           note(
@@ -203,6 +206,7 @@ export async function reconcile(
       owners.add(row.id);
       if (row.state !== 'stopped') {
         await repairUnderLock(row, () => {
+          watchers?.disposeSandbox(row.id);
           overwriteState(db, row.id, 'stopped');
           result.repairedStates += 1;
           note(
@@ -213,6 +217,7 @@ export async function reconcile(
       }
     } else {
       await repairUnderLock(row, () => {
+        watchers?.disposeSandbox(row.id);
         deleteSandbox(db, row.id);
         result.deletedRows += 1;
         note(row, 'container and disk both gone — row deleted, key freed');

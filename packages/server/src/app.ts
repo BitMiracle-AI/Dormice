@@ -171,6 +171,12 @@ export function buildApp({
   }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
+  // Streaming WatchDir requests stay open until their watcher is stopped;
+  // preClose must cut those resources before Fastify waits for in-flight
+  // requests to drain. onClose would never be reached while a stream is live.
+  app.addHook('preClose', async () => {
+    await watchers.shutdown();
+  });
 
   // The single arbiter for the wire's error shape: every non-2xx body is
   // { message }, whoever produced the error. Without this, Fastify's own

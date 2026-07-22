@@ -57,8 +57,10 @@ export async function stopSandbox(
   sandboxId: string,
   cause?: string,
   actor?: string | null,
+  watchers?: WatcherTable,
 ): Promise<SandboxRow> {
   await executor.stop(sandboxId);
+  watchers?.disposeSandbox(sandboxId);
   const row = transition(db, sandboxId, 'stopped');
   recordActivity(db, {
     kind: 'stopped',
@@ -96,6 +98,7 @@ export async function destroySandbox(
     kind: 'destroyed',
     cause: 'via destroySandbox',
   },
+  watchers?: WatcherTable,
 ): Promise<void> {
   const row = findById(db, sandboxId);
   if (row?.state === 'archived') {
@@ -105,6 +108,7 @@ export async function destroySandbox(
       );
     }
     await store.delete(objectKey(sandboxId));
+    watchers?.disposeSandbox(sandboxId);
     deleteSandbox(db, sandboxId);
     // With the disk gone its metrics history has no owner; fleet snapshots
     // belong to no sandbox and stay.
@@ -119,6 +123,7 @@ export async function destroySandbox(
     return;
   }
   await executor.destroy(sandboxId);
+  watchers?.disposeSandbox(sandboxId);
   deleteSandbox(db, sandboxId);
   deleteSandboxMetricsSamples(db, sandboxId);
   if (row) {
@@ -149,8 +154,10 @@ export async function rebuildSandbox(
   row: SandboxRow,
   actor?: string | null,
   detail?: string,
+  watchers?: WatcherTable,
 ): Promise<SandboxRow> {
   await executor.removeContainer(row.id);
+  watchers?.disposeSandbox(row.id);
   recordActivity(db, {
     kind: 'rebuilt',
     sandboxName: row.name,
@@ -196,7 +203,7 @@ export async function wakeSandbox(
 ): Promise<SandboxRow> {
   switch (row.state) {
     case 'active':
-      await watchers?.reapRetired(row.id);
+      await watchers?.reapDeferred(row.id);
       return row;
     case 'frozen':
     case 'stopped': {
@@ -210,11 +217,12 @@ export async function wakeSandbox(
               row,
               actor,
               `stale shell swapped at wake: ${born} -> ${next}`,
+              watchers,
             )
           : row;
       if (fresh.state === 'frozen') {
         await executor.unfreeze(fresh.id);
-        await watchers?.reapRetired(fresh.id);
+        await watchers?.reapDeferred(fresh.id);
         return awaken(
           db,
           fresh,
@@ -227,7 +235,7 @@ export async function wakeSandbox(
       await executor.start(fresh.id, {
         image: resolveImage(db, fresh.template),
       });
-      await watchers?.reapRetired(fresh.id);
+      await watchers?.reapDeferred(fresh.id);
       return awaken(db, fresh, 'cold start from the surviving disk', actor);
     }
     case 'archived':

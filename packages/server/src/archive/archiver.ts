@@ -5,6 +5,7 @@ import type { Db } from '../db/db';
 import { findById, setPausedByUser, touch, transition } from '../db/ledger';
 import type { SandboxRow } from '../db/schema';
 import { resolveImage } from '../db/templates';
+import type { WatcherTable } from '../e2b/watcher-table';
 import type { Executor } from '../executor/executor';
 import type { KeyedQueue } from '../keyed-queue';
 import { type ArchiveStore, objectKey } from './store';
@@ -36,6 +37,7 @@ export interface ArchiverDeps {
    */
   tmpDir: string;
   log?: (msg: string) => void;
+  watchers?: WatcherTable;
 }
 
 function clampPercent(fraction: number): number {
@@ -56,6 +58,7 @@ export class Archiver {
   private readonly locks: KeyedQueue;
   private readonly tmpDir: string;
   private readonly log: (msg: string) => void;
+  private readonly watchers: WatcherTable | undefined;
   private readonly restores = new Map<string, RestoreEntry>();
 
   constructor(deps: ArchiverDeps) {
@@ -65,6 +68,7 @@ export class Archiver {
     this.store = deps.store;
     this.tmpDir = deps.tmpDir;
     this.log = deps.log ?? (() => {});
+    this.watchers = deps.watchers;
   }
 
   /**
@@ -221,6 +225,7 @@ export class Archiver {
         await this.executor.start(sandboxId, {
           image: resolveImage(this.db, fresh.template),
         });
+        await this.watchers?.reapDeferred(sandboxId);
         // Awaken semantics, like every wake: an awake sandbox is by
         // definition not paused — without this, an autoPause-archived row
         // would restore into a logically-paused sandbox no one can reach.

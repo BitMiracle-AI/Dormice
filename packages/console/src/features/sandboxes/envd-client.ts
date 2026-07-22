@@ -29,8 +29,9 @@ export class EnvdError extends Error {
     message: string,
     readonly code: string | undefined,
     readonly status: number,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
   }
 }
 
@@ -38,10 +39,15 @@ async function unary<T>(
   auth: EnvdAuth,
   rpc: string,
   body: unknown,
+  extraHeaders: Record<string, string> = {},
 ): Promise<T> {
   const res = await fetch(`${ENVD}/${rpc}`, {
     method: 'POST',
-    headers: { ...headersOf(auth), 'content-type': 'application/json' },
+    headers: {
+      ...headersOf(auth),
+      ...extraHeaders,
+      'content-type': 'application/json',
+    },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -54,7 +60,16 @@ async function unary<T>(
       res.status,
     );
   }
-  return res.json() as Promise<T>;
+  try {
+    return (await res.json()) as T;
+  } catch (error) {
+    throw new EnvdError(
+      `${rpc} 响应无效`,
+      undefined,
+      0,
+      error instanceof Error ? { cause: error } : undefined,
+    );
+  }
 }
 
 // ---- Filesystem(unary Connect RPC,JSON 编码)---------------------------
@@ -104,10 +119,17 @@ export interface EnvdWatchEvent {
   type: string;
 }
 
-export const createWatcher = (auth: EnvdAuth, path: string) =>
-  unary<{ watcherId: string }>(auth, 'filesystem.Filesystem/CreateWatcher', {
-    path,
-  }).then((r) => r.watcherId);
+export const createWatcher = (
+  auth: EnvdAuth,
+  path: string,
+  operationId: string,
+) =>
+  unary<{ watcherId: string }>(
+    auth,
+    'filesystem.Filesystem/CreateWatcher',
+    { path },
+    { 'x-dormice-watcher-operation-id': operationId },
+  ).then((r) => r.watcherId);
 
 /** 只读不唤醒(与 Process/List 同一原则):挂着监听不养沙箱的体温。 */
 export const getWatcherEvents = (auth: EnvdAuth, watcherId: string) =>

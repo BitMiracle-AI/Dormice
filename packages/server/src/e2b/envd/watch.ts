@@ -1,5 +1,5 @@
 import type { Buffer } from 'node:buffer';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   FileNotFoundError,
   NotADirectoryError,
@@ -12,7 +12,11 @@ import {
   FLAG_MESSAGE,
   readFirstMessage,
 } from '../protocol';
-import { WatcherLimitError } from '../watcher-table';
+import {
+  WatcherLimitError,
+  WatcherOperationConflictError,
+  WatcherOperationLimitError,
+} from '../watcher-table';
 import {
   type EnvdContext,
   MAX_KEEPALIVE_SECONDS,
@@ -30,6 +34,34 @@ const WATCH_EVENT_WIRE: Record<WatchEvent['type'], string> = {
   rename: 'EVENT_TYPE_RENAME',
   chmod: 'EVENT_TYPE_CHMOD',
 };
+
+export const WATCHER_OPERATION_HEADER = 'x-dormice-watcher-operation-id';
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function operationIdOf(request: FastifyRequest): string | undefined {
+  const header = request.headers[WATCHER_OPERATION_HEADER];
+  const value = Array.isArray(header) ? header[0] : header;
+  if (value === undefined) return undefined;
+  const normalized = value.toLowerCase();
+  if (!UUID.test(normalized)) {
+    throw connectError(
+      'invalid_argument',
+      `${WATCHER_OPERATION_HEADER} must be a UUID`,
+    );
+  }
+  return normalized;
+}
+
+function watcherIdOf(body: { watcherId?: string }): string {
+  if (!body.watcherId) {
+    throw connectError('invalid_argument', 'missing watcher id');
+  }
+  if (!UUID.test(body.watcherId)) {
+    throw connectError('invalid_argument', 'watcher id must be a UUID');
+  }
+  return body.watcherId.toLowerCase();
+}
 
 /**
  * Path validation errors travel differently on the two watch surfaces
@@ -78,8 +110,27 @@ export function registerWatchRoutes(
     if (!message.path) {
       return streamError(reply, 'invalid_argument', 'missing path');
     }
-    const row = await ctx.wakeForStream(request, reply);
-    if (!row) return;
+    const sandboxId = sandboxIdOf(request);
+    let reservationId: string;
+    try {
+      reservationId = watchers.reserveStreaming(sandboxId);
+    } catch (error) {
+      if (error instanceof WatcherLimitError) {
+        return streamError(reply, 'resource_exhausted', error.message);
+      }
+      throw error;
+    }
+    let row: Awaited<ReturnType<typeof ctx.wakeForStream>>;
+    try {
+      row = await ctx.wakeForStream(request, reply);
+    } catch (error) {
+      watchers.cancelStreamingReservation(sandboxId, reservationId);
+      throw error;
+    }
+    if (!row) {
+      watchers.cancelStreamingReservation(sandboxId, reservationId);
+      return;
+    }
 
     const write = rawWriter(reply);
     // Events hold at this gate until the start frame is on the wire — the
@@ -93,9 +144,12 @@ export function registerWatchRoutes(
     const ended = new Promise<Error>((resolve) => {
       settleEnd = resolve;
     });
-    let watcher: Awaited<ReturnType<typeof executor.watchDir>>;
+    let watcherId: string;
     try {
-      watcher = await executor.watchDir(row.id, {
+      watcherId = await watchers.createStreaming({
+        executor,
+        sandboxId: row.id,
+        reservationId,
         path: message.path,
         recursive: message.recursive === true,
         onEvent: async (event) => {
@@ -113,6 +167,9 @@ export function registerWatchRoutes(
           settleEnd(error ?? new Error('watcher ended unexpectedly')),
       });
     } catch (error) {
+      if (error instanceof WatcherLimitError) {
+        return streamError(reply, 'resource_exhausted', error.message);
+      }
       const { code, message: text } = watchStartError(error);
       return streamError(reply, code, text);
     }
@@ -162,9 +219,11 @@ export function registerWatchRoutes(
       clearInterval(keepalive);
       clearTimeout(deadlineTimer);
       try {
-        await watcher.stop();
-      } catch {
-        // The sandbox died under the watcher; its ending already spoke.
+        await watchers.closeStreaming(row.id, watcherId, {
+          runnable: ctx.isRunnable(row.id),
+        });
+      } catch (error) {
+        request.log.warn(error, 'streaming watcher cleanup deferred');
       }
       reply.raw.end();
     }
@@ -177,6 +236,7 @@ export function registerWatchRoutes(
     const body = request.body as { path?: string; recursive?: boolean };
     if (!body.path) throw connectError('invalid_argument', 'missing path');
     const path = body.path;
+    const operationId = operationIdOf(request);
     return ctx.inSlot(sandboxIdOf(request), async (row) => {
       try {
         const watcherId = await watchers.create({
@@ -184,11 +244,18 @@ export function registerWatchRoutes(
           sandboxId: row.id,
           path,
           recursive: body.recursive === true,
+          operationId,
         });
         return { watcherId };
       } catch (error) {
-        if (error instanceof WatcherLimitError) {
+        if (
+          error instanceof WatcherLimitError ||
+          error instanceof WatcherOperationLimitError
+        ) {
           throw connectError('resource_exhausted', error.message);
+        }
+        if (error instanceof WatcherOperationConflictError) {
+          throw connectError('already_exists', error.message);
         }
         const { code, message } = watchStartError(error);
         throw connectError(code, message);
@@ -220,23 +287,15 @@ export function registerWatchRoutes(
   });
 
   app.post('/filesystem.Filesystem/RemoveWatcher', async (request) => {
-    const body = request.body as { watcherId?: string };
-    if (!body.watcherId) {
-      throw connectError('invalid_argument', 'missing watcher id');
-    }
+    const watcherId = watcherIdOf(request.body as { watcherId?: string });
     return ctx.withoutWake(sandboxIdOf(request), async (row) => {
-      // A frozen watcher survives physically. Retire it in daemon memory now
-      // and let the next real wake reap it; cleanup must not wake by itself.
-      const removed =
-        row.state === 'active'
-          ? await watchers.remove(row.id, body.watcherId as string)
-          : watchers.retire(row.id, body.watcherId as string);
-      if (!removed) {
-        throw connectError(
-          'not_found',
-          `watcher with id ${body.watcherId} not found`,
-        );
-      }
+      // The verb expresses the goal "this ID is absent from this sandbox".
+      // Unknown and cross-sandbox IDs already satisfy it and deliberately look
+      // alike. Only a physically active sandbox can accept a signal now; every
+      // colder or protocol-dead state retires in memory without waking.
+      await watchers.removeGoal(row.id, watcherId, {
+        runnable: row.state === 'active',
+      });
       return {};
     });
   });

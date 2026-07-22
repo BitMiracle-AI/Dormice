@@ -4,10 +4,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { type Db, migrateDb, openDb } from '../db/db';
 import { createSandbox, findByName, transition } from '../db/ledger';
 import type { SandboxRow } from '../db/schema';
+import { WatcherTable } from '../e2b/watcher-table';
+import type { Executor } from '../executor/executor';
 import { FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
 import { Archiver } from './archiver';
@@ -23,8 +25,16 @@ function setup() {
   const locks = new KeyedQueue();
   const store = new MemStore();
   const tmpDir = mkdtempSync(path.join(tmpdir(), 'dormice-archiver-'));
-  const archiver = new Archiver({ db, executor, locks, store, tmpDir });
-  return { db, executor, locks, store, tmpDir, archiver };
+  const watchers = new WatcherTable();
+  const archiver = new Archiver({
+    db,
+    executor,
+    locks,
+    store,
+    tmpDir,
+    watchers,
+  });
+  return { db, executor, locks, store, tmpDir, watchers, archiver };
 }
 
 /** A stopped sandbox with a marker file — the archiver's raw material. */
@@ -169,6 +179,33 @@ describe('Archiver.beginRestore', () => {
     // "the row is archived" — release never chases stale copies.
     expect(store.has(objectKey(row.id))).toBe(false);
     expect(readdirSync(tmpDir)).toEqual([]);
+  });
+
+  it('reaps deferred watcher cleanup before restored user work resumes', async () => {
+    const { db, executor, watchers, archiver } = setup();
+    const row = await seedStopped(db, executor, 'alice');
+    await archiver.archive(row);
+    const stop = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('cleanup deferred'))
+      .mockResolvedValueOnce(undefined);
+    const watcherExecutor = {
+      watchDir: vi.fn().mockResolvedValue({ stop }),
+    } as unknown as Executor;
+    const watcherId = await watchers.create({
+      executor: watcherExecutor,
+      sandboxId: row.id,
+      path: '/home/user',
+      recursive: false,
+    });
+    await expect(
+      watchers.removeGoal(row.id, watcherId, { runnable: true }),
+    ).rejects.toThrow('cleanup deferred');
+
+    await archiver.restoreJoin(row.id);
+
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(watchers.count(row.id)).toBe(0);
   });
 
   it('a missing archive object reverts the row to archived', async () => {

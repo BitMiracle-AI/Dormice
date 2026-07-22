@@ -115,6 +115,8 @@ export function streamError(
 export interface EnvdContext extends E2bDeps {
   /** The protocol-liveness gate: only a logically-running sandbox serves envd traffic. */
   requireRunningRow(sandboxId: string): SandboxRow;
+  /** Current ledger state says the container can receive a cleanup signal. */
+  isRunnable(sandboxId: string): boolean;
   /** Wake under the key's slot, like every native verb. */
   wakeForUse(sandboxId: string): Promise<SandboxRow>;
   /** Unary filesystem RPCs run entirely in the key's slot, like native file verbs. */
@@ -193,6 +195,10 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
    * Wake under the key's slot, like every native verb: physical wake-ups
    * take seconds and must not race the scanner or a destroy.
    */
+  function isRunnable(sandboxId: string): boolean {
+    return findById(db, sandboxId)?.state === 'active';
+  }
+
   async function wakeForUse(sandboxId: string): Promise<SandboxRow> {
     // The logical gate first: a paused-by-deadline sandbox answers 502
     // whether it is frozen or archived — restoring it for a request that
@@ -282,6 +288,7 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
   return {
     ...deps,
     requireRunningRow,
+    isRunnable,
     wakeForUse,
     inSlot,
     withoutWake,

@@ -2,6 +2,7 @@ import type { Archiver } from './archive/archiver';
 import type { Db } from './db/db';
 import { findById, listSandboxes } from './db/ledger';
 import type { SandboxRow } from './db/schema';
+import type { WatcherTable } from './e2b/watcher-table';
 import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
 import { destroySandbox, freezeSandbox, stopSandbox } from './lifecycle';
@@ -110,6 +111,7 @@ export async function scanOnce(
   locks: KeyedQueue,
   now: Date,
   archiver?: Archiver,
+  watchers?: WatcherTable,
 ): Promise<ScanResult> {
   const result: ScanResult = {
     frozen: 0,
@@ -143,6 +145,7 @@ export async function scanOnce(
             fresh.id,
             archiver?.store ?? null,
             { kind: 'expired-killed', cause: 'E2B deadline (kill) reached' },
+            watchers,
           );
           result.expiredKilled += 1;
           return;
@@ -172,6 +175,8 @@ export async function scanOnce(
             executor,
             fresh.id,
             `idle ${fresh.stopAfterSeconds}s reached — container torn down, disk kept (scanner)`,
+            undefined,
+            watchers,
           );
           result.stopped += 1;
         }

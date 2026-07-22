@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { type Db, migrateDb, openDb } from './db/db';
 import { createSandbox, findByName, transition } from './db/ledger';
 import type { SandboxRow } from './db/schema';
+import { WatcherTable } from './e2b/watcher-table';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
 import { reconcile } from './reconciler';
@@ -66,17 +67,32 @@ describe('startup reconcile', () => {
     expect(findByName(db, 'alice')?.state).toBe('frozen');
   });
 
-  it('repairs across rungs the transition table would forbid', async () => {
+  it('repairs across rungs and drops ownership when reality is stopped', async () => {
     const { db, executor, locks } = setup();
     // Ledger says active, container is fully stopped — a two-rung gap that
     // transition() would reject. The reconciler records facts, not moves.
     const row = await seed(db, executor, 'alice');
+    const watchers = new WatcherTable();
+    await watchers.create({
+      executor,
+      sandboxId: row.id,
+      path: '/home/user',
+      recursive: false,
+    });
     await executor.freeze(row.id);
     await executor.stop(row.id);
 
-    const result = await reconcile(db, executor, locks);
+    const result = await reconcile(
+      db,
+      executor,
+      locks,
+      undefined,
+      undefined,
+      watchers,
+    );
     expect(result).toEqual({ ...NONE, repairedStates: 1 });
     expect(findByName(db, 'alice')?.state).toBe('stopped');
+    expect(watchers.count(row.id)).toBe(0);
   });
 
   it('keeps the row of a pruned container: the disk is the sandbox', async () => {

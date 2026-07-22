@@ -721,7 +721,14 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
             `sandbox "${name}" is ${existing.state} — it has no container to rebuild`,
           );
         }
-        const row = await rebuildSandbox(db, executor, existing, request.actor);
+        const row = await rebuildSandbox(
+          db,
+          executor,
+          existing,
+          request.actor,
+          undefined,
+          watchers,
+        );
         return { sandbox: toSandbox(row, endpoint) };
       });
     },
@@ -902,6 +909,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
             cause: 'via destroySandbox',
             actor: request.actor,
           },
+          watchers,
         );
         return { destroyed: true };
       });

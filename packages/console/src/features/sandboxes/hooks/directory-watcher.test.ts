@@ -16,7 +16,9 @@ function deferred<T>() {
 }
 
 function harness(overrides: Partial<DirectoryWatcherDeps> = {}) {
-  const create = vi.fn<() => Promise<string>>().mockResolvedValue('watch-1');
+  const create = vi
+    .fn<(operationId: string) => Promise<string>>()
+    .mockResolvedValue('watch-1');
   const poll = vi
     .fn<(id: string) => Promise<EnvdWatchEvent[]>>()
     .mockResolvedValue([]);
@@ -30,6 +32,9 @@ function harness(overrides: Partial<DirectoryWatcherDeps> = {}) {
     isActive: () => active,
     isNotFound: (error) =>
       error instanceof EnvdError && error.code === 'not_found',
+    isRetryable: (error) => !(error instanceof EnvdError),
+    operationId: () => 'operation-1',
+    delay: async () => {},
     onDirty,
     ...overrides,
   });
@@ -89,6 +94,81 @@ describe('DirectoryWatcherController', () => {
     await t.controller.tick();
     expect(t.poll).toHaveBeenCalledWith('watch-1');
     expect(t.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses one operation ID while retrying an ambiguous create outcome', async () => {
+    const create = vi
+      .fn<(operationId: string) => Promise<string>>()
+      .mockRejectedValueOnce(new Error('response lost'))
+      .mockResolvedValueOnce('watch-1');
+    const t = harness({ create });
+
+    await t.controller.tick();
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls).toEqual([['operation-1'], ['operation-1']]);
+  });
+
+  it('recovers and removes an ambiguous create after disposal', async () => {
+    const create = vi
+      .fn<(operationId: string) => Promise<string>>()
+      .mockRejectedValueOnce(new Error('response lost 1'))
+      .mockRejectedValueOnce(new Error('response lost 2'))
+      .mockRejectedValueOnce(new Error('response lost 3'))
+      .mockResolvedValueOnce('watch-1');
+    const t = harness({ create });
+    await t.controller.tick();
+    expect(create).toHaveBeenCalledTimes(3);
+
+    t.controller.dispose();
+
+    await vi.waitFor(() => expect(t.remove).toHaveBeenCalledWith('watch-1'));
+    expect(create.mock.calls).toEqual([
+      ['operation-1'],
+      ['operation-1'],
+      ['operation-1'],
+      ['operation-1'],
+    ]);
+  });
+
+  it('does not retry a deterministic create error', async () => {
+    const create = vi
+      .fn<(operationId: string) => Promise<string>>()
+      .mockRejectedValue(new EnvdError('bad path', 'invalid_argument', 400));
+    const t = harness({ create });
+
+    await t.controller.tick();
+
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries ambiguous remove outcomes with bounded backoff', async () => {
+    const remove = vi
+      .fn<(id: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error('response lost'))
+      .mockResolvedValueOnce(undefined);
+    const delay = vi.fn().mockResolvedValue(undefined);
+    const t = harness({ remove, delay });
+    await t.controller.tick();
+
+    t.controller.dispose();
+
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledTimes(2));
+    expect(remove).toHaveBeenNthCalledWith(1, 'watch-1');
+    expect(remove).toHaveBeenNthCalledWith(2, 'watch-1');
+    expect(delay).toHaveBeenCalledWith(100);
+  });
+
+  it('does not retry deterministic remove errors', async () => {
+    const remove = vi
+      .fn<(id: string) => Promise<void>>()
+      .mockRejectedValue(new EnvdError('unauthorized', 'unauthenticated', 401));
+    const t = harness({ remove });
+    await t.controller.tick();
+
+    t.controller.dispose();
+
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
   });
 
   it('retains the watcher after a transient poll error', async () => {

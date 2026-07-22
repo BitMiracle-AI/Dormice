@@ -26,7 +26,7 @@ daemon:
 | `uploadUrl()` / `downloadUrl()` | signed URLs: expiry enforced, a tampered signature is a 401; CORS-open, so a browser can POST/GET them directly — with `DORMICE_SANDBOX_DOMAIN` set, E2B's `49983-<sandboxId>.<domain>/files` form works too |
 | Range requests on downloads | single-range `Range: bytes=…` gets a `206` with `content-range`; downloads advertise `accept-ranges: bytes` — so `<video>` streams and seeks instead of downloading the whole file, and interrupted downloads resume |
 | `files.list` / `exists` / `makeDir` / `rename` / `remove` | typed errors match the SDK's expectations |
-| `files.watchDir` | streamed events, and the polling watcher API the Python sync SDK uses |
+| `files.watchDir` | streamed events, and the polling watcher API the Python sync SDK uses; failed cleanup stays daemon-owned until it converges |
 | `getHost(port)` | port proxy with wake-on-traffic (set `DORMICE_SANDBOX_DOMAIN`) |
 | `getMetrics()` | one live sample; observing never wakes a frozen sandbox |
 | Templates by name | `Sandbox.create('name')` resolves a registered template; an unregistered name is an honest 404 |
@@ -46,6 +46,16 @@ daemon:
 - **`metadata.name`** turns `Sandbox.create` into Dormice's
   idempotent acquire — see
   [Using the official E2B SDKs](/docs/e2b-sdks).
+- **Replay-safe polling watches are opt-in.** `CreateWatcher` accepts the
+  Dormice extension header `x-dormice-watcher-operation-id` with a UUID.
+  Within one sandbox, reusing it with the same normalized path and
+  `recursive` value returns the original watcher ID; changing either is a
+  `409`. The binding lives as long as its watcher, then for a bounded
+  five-minute replay window. The header is outside the protobuf message,
+  so official SDKs remain wire-compatible and keep their native behavior.
+  `RemoveWatcher` is a goal-state operation: any well-formed ID succeeds
+  once it is absent, including retries after cleanup. A daemon restart
+  clears this in-memory identity state, like the process and watcher tables.
 - **One domain, not one subdomain per sandbox.** The SDK addresses
   sandboxes through a header on a single endpoint, so no wildcard DNS is
   needed for the API itself — only `getHost()` preview URLs want a
