@@ -1164,16 +1164,24 @@ export class DockerExecutor implements Executor {
     return {
       stop: async () => {
         if (stopped) return;
-        stopped = true;
         try {
           await this.signalProcess(container, sandboxId, pidfile, 'SIGKILL');
-        } catch {
-          // The container is paused or gone: the signal cannot land, so
-          // waiting for the exit would hang. The stopped flag already
-          // silences the watcher; the process itself is reaped by the
-          // container's own death or the 24h backstop.
-          return;
+        } catch (error) {
+          const state = await container.inspect().then(
+            (info) => info.State,
+            () => undefined,
+          );
+          if (!state?.Running || state.Paused) {
+            // A paused/gone container cannot run the signal exec. Keep the
+            // watcher silent; lifecycle death or the 24h backstop reaps it.
+            stopped = true;
+            return;
+          }
+          // The container is still runnable: preserve ownership so a later
+          // legitimate wake/use can retry instead of orphaning inotifywait.
+          throw error;
         }
+        stopped = true;
         await exitInfo;
       },
     };
