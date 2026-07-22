@@ -1465,7 +1465,7 @@ describe('templates', () => {
     });
   });
 
-  it('re-point then rebuild moves the sandbox onto the new image — the upgrade front door', async () => {
+  it('re-point then rebuild moves the sandbox onto the new image — the immediate front door', async () => {
     const { app, executor } = testApp();
     await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
     const created = (
@@ -1473,8 +1473,9 @@ describe('templates', () => {
     ).json().sandbox;
     expect(await executor.imageOf(created.id)).toBe('img-v1');
 
-    // Operator builds a new image and re-points the name; the stock moves
-    // per sandbox, on its own rebuild — never behind its back.
+    // Operator builds a new image and re-points the name; a running shell
+    // is never touched behind the sandbox's back — the stock moves on an
+    // explicit rebuild (here) or on the next cold wake (tests below).
     await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
     expect(await executor.imageOf(created.id)).toBe('img-v1');
 
@@ -1483,6 +1484,150 @@ describe('templates', () => {
     expect(woken.id).toBe(created.id);
     // The rebuilt shell was born from the template's *current* image.
     expect(await executor.imageOf(created.id)).toBe('img-v2');
+  });
+});
+
+describe('cold wakes converge onto the current image', () => {
+  it('frozen + stale: the wake swaps the shell, keeps the data, and records the swap', async () => {
+    const { app, db, executor, locks } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const created = (
+      await acquire(app, { name: 'alice', template: 'py' })
+    ).json().sandbox;
+    await rpc(app, '/writeFiles', {
+      name: 'alice',
+      files: [
+        {
+          path: 'keep.txt',
+          contentBase64: Buffer.from('survives').toString('base64'),
+        },
+      ],
+    });
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(created.lastActiveAt, DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds),
+    );
+    expect(executor.stateOf(created.id)).toBe('paused');
+
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+    const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
+    expect(woken.id).toBe(created.id);
+    expect(woken.state).toBe('active');
+    // The new shell, the old body.
+    expect(await executor.imageOf(created.id)).toBe('img-v2');
+    const read = await rpc(app, '/readFile', {
+      name: 'alice',
+      path: 'keep.txt',
+    });
+    expect(Buffer.from(read.json().contentBase64, 'base64').toString()).toBe(
+      'survives',
+    );
+    // The audit trail names both halves of the move.
+    const kinds = (await rpc(app, '/listActivity'))
+      .json()
+      .events.map((e: { kind: string }) => e.kind);
+    expect(kinds.slice(0, 2)).toEqual(['woken', 'rebuilt']);
+    const rebuilt = (await rpc(app, '/listActivity'))
+      .json()
+      .events.find((e: { kind: string }) => e.kind === 'rebuilt');
+    expect(rebuilt.detail).toBe(
+      'stale shell swapped at wake: img-v1 -> img-v2',
+    );
+  });
+
+  it('frozen + fresh: a plain unpause, no shell removed', async () => {
+    const { app, db, executor, locks } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const created = (
+      await acquire(app, { name: 'alice', template: 'py' })
+    ).json().sandbox;
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(created.lastActiveAt, DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds),
+    );
+
+    const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
+    expect(woken.state).toBe('active');
+    expect(await executor.imageOf(created.id)).toBe('img-v1');
+    const kinds = (await rpc(app, '/listActivity'))
+      .json()
+      .events.map((e: { kind: string }) => e.kind);
+    expect(kinds).not.toContain('rebuilt');
+  });
+
+  it('stopped + stale: the same convergence — stop kept the old shell, the wake replaces it', async () => {
+    const { app, db, executor, locks } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const created = (
+      await acquire(app, {
+        name: 'alice',
+        template: 'py',
+        policy: { freezeAfterSeconds: 60, stopAfterSeconds: 120 },
+      })
+    ).json().sandbox;
+    await scanOnce(db, executor, locks, after(created.lastActiveAt, 60));
+    await scanOnce(db, executor, locks, after(created.lastActiveAt, 120));
+    // The stopped container object survives, still born from the old image.
+    expect(executor.stateOf(created.id)).toBe('stopped');
+    expect(await executor.imageOf(created.id)).toBe('img-v1');
+
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+    const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
+    expect(woken.state).toBe('active');
+    expect(await executor.imageOf(created.id)).toBe('img-v2');
+    const kinds = (await rpc(app, '/listActivity'))
+      .json()
+      .events.map((e: { kind: string }) => e.kind);
+    expect(kinds.slice(0, 2)).toEqual(['woken', 'rebuilt']);
+  });
+
+  it('a template-less sandbox is judged against the base image — fresh, so untouched', async () => {
+    const { app, db, executor, locks } = testApp();
+    const created = (await acquire(app, { name: 'alice' })).json().sandbox;
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(created.lastActiveAt, DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds),
+    );
+
+    const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
+    expect(woken.state).toBe('active');
+    expect(await executor.imageOf(created.id)).toBe(executor.baseImage);
+    const kinds = (await rpc(app, '/listActivity'))
+      .json()
+      .events.map((e: { kind: string }) => e.kind);
+    expect(kinds).not.toContain('rebuilt');
+  });
+
+  it('a vanished shell is not judged stale — the start builds from the current image by itself', async () => {
+    const { app, db, executor, locks } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const created = (
+      await acquire(app, {
+        name: 'alice',
+        template: 'py',
+        policy: { freezeAfterSeconds: 60, stopAfterSeconds: 120 },
+      })
+    ).json().sandbox;
+    await scanOnce(db, executor, locks, after(created.lastActiveAt, 60));
+    await scanOnce(db, executor, locks, after(created.lastActiveAt, 120));
+    executor.vanishContainer(created.id);
+
+    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+    const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
+    expect(woken.state).toBe('active');
+    // Converged all the same, but through start's own rebuild — no shell
+    // was removed, so no 'rebuilt' entry claims one was.
+    expect(await executor.imageOf(created.id)).toBe('img-v2');
+    const kinds = (await rpc(app, '/listActivity'))
+      .json()
+      .events.map((e: { kind: string }) => e.kind);
+    expect(kinds).not.toContain('rebuilt');
   });
 });
 

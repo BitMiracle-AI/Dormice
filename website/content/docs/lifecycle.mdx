@@ -109,6 +109,12 @@ wake — and never decays to a cold start. Its processes are never killed
 by idleness; they suspend and resume mid-flight, indefinitely. See
 [Resident agents](/docs/resident-agents) for the full pattern.
 
+The one exception: after you [re-register the sandbox's
+template](/docs/templates#update-a-template) onto a new image, its next
+wake swaps the container for one built from that image — a one-time
+cold start that replaces the suspended processes. You asked for the
+upgrade; the wake is when it lands.
+
 ## What counts as activity
 
 Running commands, file operations, and `acquireSandbox` reset the idle

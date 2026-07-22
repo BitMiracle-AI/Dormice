@@ -530,6 +530,73 @@ describe('native API over a real daemon', () => {
     });
   });
 
+  // The swap needs a second image the engine could actually boot, and only
+  // the fake plays arbitrary names — so docker mode skips this exam. Its
+  // physics are pinned on the real machine by the executor contract's
+  // altImage questions (rebuilt shell boots the requested image over the
+  // same disk; removeContainer takes a paused container down).
+  it.skipIf(process.env.DORMICE_EXECUTOR === 'docker')(
+    'a template upgrade reaches a frozen sandbox on its next touch: shell swapped, data kept, audited',
+    async () => {
+      await client().registerTemplate('swap-tpl', 'img:swap-v1');
+      await client().acquireSandbox('swap-key', {
+        template: 'swap-tpl',
+        policy: {
+          freezeAfterSeconds: 1,
+          stopAfterSeconds: null,
+          archiveAfterSeconds: null,
+        },
+      });
+      await client().writeFiles('swap-key', [
+        { path: 'keep.txt', content: 'survives the swap' },
+      ]);
+      // Watch it actually freeze from outside, on real wall-clock time.
+      const deadline = Date.now() + 15_000;
+      for (;;) {
+        const cold = (await client().listSandboxes()).find(
+          (s) => s.name === 'swap-key',
+        );
+        if (cold?.state === 'frozen') break;
+        if (Date.now() > deadline) {
+          throw new Error(
+            `sandbox never reached frozen; last observed: ${cold?.state}`,
+          );
+        }
+        await sleep(0.25);
+      }
+
+      // Operator re-points the template; the frozen shell is now stale.
+      await client().registerTemplate('swap-tpl', 'img:swap-v2');
+
+      // The touch is an ordinary use verb — every wake entry (native, envd,
+      // port proxy) funnels into the same wakeSandbox, and the read itself
+      // proves /home/user crossed the swap intact.
+      const read = await client().readFile('swap-key', 'keep.txt');
+      expect(new TextDecoder().decode(read.content)).toBe('survives the swap');
+
+      // The deployment check: the lineage row reports the new image and the
+      // upgradable flag has cleared.
+      expect(
+        (await client().listSandboxImages()).find(
+          (e) => e.sandboxName === 'swap-key',
+        ),
+      ).toMatchObject({ image: 'img:swap-v2', upgradable: false });
+
+      // Both halves of the move made the audit trail, in order.
+      const story = (await client().listActivity({ limit: 500 })).filter(
+        (e) => e.sandboxName === 'swap-key',
+      );
+      const kinds = story.map((e) => e.kind);
+      expect(kinds.slice(0, 2)).toEqual(['woken', 'rebuilt']);
+      expect(story[1]?.detail).toBe(
+        'stale shell swapped at wake: img:swap-v1 -> img:swap-v2',
+      );
+
+      await client().destroySandbox('swap-key');
+      await client().removeTemplate('swap-tpl');
+    },
+  );
+
   // Registration never checks the image; only a real engine can show what
   // happens when the promise is broken at create time.
   it.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
