@@ -7,6 +7,7 @@ import type { Db } from './db/db';
 import { findById, touch } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import { e2bView } from './e2b/view';
+import type { WatcherTable } from './e2b/watcher-table';
 import { startExecHeartbeat } from './exec-heartbeat';
 import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
@@ -76,6 +77,7 @@ export interface SandboxProxyDeps {
   db: Db;
   executor: Executor;
   locks: KeyedQueue;
+  watchers: WatcherTable;
 }
 
 export interface SandboxProxy {
@@ -88,7 +90,7 @@ export interface SandboxProxy {
 class ProxyRefusal extends Error {}
 
 export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
-  const { config, db, executor, locks } = deps;
+  const { config, db, executor, locks, watchers } = deps;
   const domain = config.DORMICE_SANDBOX_DOMAIN ?? '';
 
   function liveRow(sandboxId: string): SandboxRow {
@@ -118,7 +120,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
     const before = liveRow(parsed.sandboxId);
     const row = await locks.run(before.name, async () => {
       const fresh = liveRow(parsed.sandboxId);
-      const awake = await wakeSandbox(db, executor, fresh);
+      const awake = await wakeSandbox(db, executor, fresh, undefined, watchers);
       return touch(db, awake.id);
     });
     const target = await executor.resolvePortTarget(row.id, parsed.port);

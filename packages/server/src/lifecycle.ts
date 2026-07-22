@@ -10,6 +10,7 @@ import {
 import { deleteSandboxMetricsSamples } from './db/metrics';
 import type { SandboxRow } from './db/schema';
 import { resolveImage } from './db/templates';
+import type { WatcherTable } from './e2b/watcher-table';
 import type { Executor } from './executor/executor';
 
 /**
@@ -191,9 +192,11 @@ export async function wakeSandbox(
   executor: Executor,
   row: SandboxRow,
   actor?: string | null,
+  watchers?: WatcherTable,
 ): Promise<SandboxRow> {
   switch (row.state) {
     case 'active':
+      await watchers?.reapRetired(row.id);
       return row;
     case 'frozen':
     case 'stopped': {
@@ -211,6 +214,7 @@ export async function wakeSandbox(
           : row;
       if (fresh.state === 'frozen') {
         await executor.unfreeze(fresh.id);
+        await watchers?.reapRetired(fresh.id);
         return awaken(
           db,
           fresh,
@@ -223,6 +227,7 @@ export async function wakeSandbox(
       await executor.start(fresh.id, {
         image: resolveImage(db, fresh.template),
       });
+      await watchers?.reapRetired(fresh.id);
       return awaken(db, fresh, 'cold start from the surviving disk', actor);
     }
     case 'archived':
