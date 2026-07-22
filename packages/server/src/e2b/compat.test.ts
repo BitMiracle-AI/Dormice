@@ -1813,7 +1813,10 @@ describe('E2B envd surface', () => {
       '/filesystem.Filesystem/RemoveWatcher',
       { watcherId },
     );
-    expect(removed.statusCode).toBe(404);
+    // Container death owns finalization. The fake conducts it synchronously and
+    // answers not_found; Docker may accept the goal-state remove while its exec
+    // exit is still arriving. Neither path may restart the stopped container.
+    expect([200, 404]).toContain(removed.statusCode);
     expect(t.executor.stateOf(sandboxID)).toBe('stopped');
   });
 
