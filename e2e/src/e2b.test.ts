@@ -624,7 +624,11 @@ describe('official e2b SDK against the daemon', () => {
       const { envdAccessToken } = (await connectRes.json()) as {
         envdAccessToken: string;
       };
-      const rpc = async (method: string, body: Record<string, unknown>) => {
+      const rpc = async (
+        method: string,
+        body: Record<string, unknown>,
+        headers: Record<string, string> = {},
+      ) => {
         const res = await fetch(
           `${inject('dormiceEndpoint')}/e2b/envd/filesystem.Filesystem/${method}`,
           {
@@ -633,6 +637,7 @@ describe('official e2b SDK against the daemon', () => {
               'content-type': 'application/json',
               'e2b-sandbox-id': sbx.sandboxId,
               'x-access-token': envdAccessToken,
+              ...headers,
             },
             body: JSON.stringify(body),
           },
@@ -642,9 +647,21 @@ describe('official e2b SDK against the daemon', () => {
           json: (await res.json()) as Record<string, unknown>,
         };
       };
-      const created = await rpc('CreateWatcher', { path: '/home/user' });
+      const operationId = crypto.randomUUID();
+      const created = await rpc(
+        'CreateWatcher',
+        { path: '/home/user' },
+        { 'x-dormice-watcher-operation-id': operationId },
+      );
       expect(created.status).toBe(200);
       const watcherId = created.json.watcherId as string;
+      // Model a lost first response by issuing the same operation again.
+      const replayed = await rpc(
+        'CreateWatcher',
+        { path: '/home/user/./' },
+        { 'x-dormice-watcher-operation-id': operationId },
+      );
+      expect(replayed).toEqual({ status: 200, json: { watcherId } });
 
       await sbx.files.write('polled.txt', 'x');
       // Poll like a sync SDK: drain until the event shows up.
@@ -665,6 +682,9 @@ describe('official e2b SDK against the daemon', () => {
 
       const removed = await rpc('RemoveWatcher', { watcherId });
       expect(removed.status).toBe(200);
+      // A retry after the successful response was lost is still success.
+      const removedAgain = await rpc('RemoveWatcher', { watcherId });
+      expect(removedAgain.status).toBe(200);
       const gone = await rpc('GetWatcherEvents', { watcherId });
       expect(gone.status).toBe(404);
       expect(gone.json.code).toBe('not_found');

@@ -18,6 +18,20 @@ import {
 } from '../envd-client';
 import { DirectoryWatcherController } from './directory-watcher';
 
+function operationId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes.set([((bytes.at(6) ?? 0) & 0x0f) | 0x40], 6);
+  bytes.set([((bytes.at(8) ?? 0) & 0x3f) | 0x80], 8);
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0'));
+  return [
+    hex.slice(0, 4).join(''),
+    hex.slice(4, 6).join(''),
+    hex.slice(6, 8).join(''),
+    hex.slice(8, 10).join(''),
+    hex.slice(10).join(''),
+  ].join('-');
+}
+
 /**
  * 一个沙箱的 envd 面数据层:token、文件、进程。token 是无状态 HMAC,
  * 不过期 — 铸一次缓存整个会话(轮换 API token 才作废,那时 401 拦截兜底)。
@@ -125,7 +139,7 @@ export function useDirectoryWatch(
   useEffect(() => {
     if (!opts.enabled || !auth) return;
     const watcher = new DirectoryWatcherController({
-      create: () => createWatcher(auth, path),
+      create: (operationId) => createWatcher(auth, path, operationId),
       poll: (watcherId) => getWatcherEvents(auth, watcherId),
       remove: async (watcherId) => {
         await removeWatcher(auth, watcherId);
@@ -133,6 +147,14 @@ export function useDirectoryWatch(
       isActive: () => activeRef.current,
       isNotFound: (error) =>
         error instanceof EnvdError && error.code === 'not_found',
+      isRetryable: (error) =>
+        !(error instanceof EnvdError) ||
+        error.status === 408 ||
+        error.status === 429 ||
+        error.status >= 500,
+      operationId,
+      delay: (milliseconds) =>
+        new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
       onDirty: (active) => {
         const queryKey = ['envdDir', auth.sandboxId, path];
         if (active) {
