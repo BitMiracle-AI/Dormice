@@ -1156,15 +1156,19 @@ export class DockerExecutor implements Executor {
       exit: exitInfo,
       stopProcess: () =>
         this.signalProcess(container, sandboxId, pidfile, 'SIGKILL'),
-      canRetryStop: async () => {
-        const state = await container.inspect().then(
-          (info) => info.State,
-          () => undefined,
-        );
-        // A paused/gone container cannot run the signal exec. Keep the watcher
-        // silent; lifecycle death or the 24h backstop reaps it. A runnable
-        // container keeps ownership so a later legitimate use can retry.
-        return state?.Running === true && !state.Paused;
+      classifyFailedStop: async () => {
+        try {
+          const { State: state } = await container.inspect();
+          // A paused watcher still exists and becomes signalable after the
+          // next legitimate unfreeze. Only proved death releases ownership.
+          return state.Running ? 'retry' : 'terminal';
+        } catch (error) {
+          if (isDockerApiError(error) && error.statusCode === 404) {
+            return 'terminal';
+          }
+          // Unknown is not gone: retain ownership so a later reap can retry.
+          throw error;
+        }
       },
       onNaturalEnd: ({ exitCode, error }) => {
         opts.onEnd(

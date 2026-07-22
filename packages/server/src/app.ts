@@ -56,6 +56,8 @@ export interface AppDeps {
    * before anything that needs it.
    */
   logger?: boolean | Logger;
+  /** Tests may inspect the one daemon-wide watcher registry. */
+  watchers?: WatcherTable;
   /**
    * Where the built web console lives; main.ts resolves the monorepo
    * layout, tests inject a fixture. Absent means /console answers an
@@ -113,6 +115,7 @@ export function buildApp({
   executor,
   locks,
   logger = true,
+  watchers = new WatcherTable(),
   consoleDistDir,
   archiver,
   ingress,
@@ -139,7 +142,6 @@ export function buildApp({
   // Process and watcher tables are per-daemon state. The watcher table is
   // also the single deferred-cleanup registry every wake path consults.
   const processes = new ProcessTable();
-  const watchers = new WatcherTable();
 
   // The sandbox port proxy sits in front of routing — it triages by Host
   // header, so it must see the request before Fastify's router 404s a

@@ -3,10 +3,12 @@ import { WatchProcessLifecycle } from './watch-lifecycle';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 const cleanExit = { exitCode: 137, error: undefined };
@@ -18,7 +20,7 @@ describe('WatchProcessLifecycle', () => {
     const lifecycle = new WatchProcessLifecycle({
       exit: exited.promise,
       stopProcess: async () => exited.resolve(cleanExit),
-      canRetryStop: async () => true,
+      classifyFailedStop: async () => 'retry',
       onNaturalEnd,
     });
 
@@ -35,7 +37,7 @@ describe('WatchProcessLifecycle', () => {
     const lifecycle = new WatchProcessLifecycle({
       exit: exited.promise,
       stopProcess,
-      canRetryStop: async () => true,
+      classifyFailedStop: async () => 'retry',
       onNaturalEnd: vi.fn(),
     });
 
@@ -58,7 +60,7 @@ describe('WatchProcessLifecycle', () => {
     const lifecycle = new WatchProcessLifecycle({
       exit: exited.promise,
       stopProcess,
-      canRetryStop: async () => true,
+      classifyFailedStop: async () => 'retry',
       onNaturalEnd,
     });
 
@@ -70,6 +72,55 @@ describe('WatchProcessLifecycle', () => {
     expect(onNaturalEnd).not.toHaveBeenCalled();
   });
 
+  it('keeps cleanup retryable when signal and container inspection both fail', async () => {
+    const exited = deferred<typeof cleanExit>();
+    const signalError = new Error('docker exec unavailable');
+    const inspectError = new Error('docker socket unavailable');
+    const stopProcess = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(signalError)
+      .mockImplementationOnce(async () => exited.resolve(cleanExit));
+    const onNaturalEnd = vi.fn();
+    const lifecycle = new WatchProcessLifecycle({
+      exit: exited.promise,
+      stopProcess,
+      classifyFailedStop: vi.fn().mockRejectedValue(inspectError),
+      onNaturalEnd,
+    });
+
+    const failed = lifecycle.stop().catch((error) => error);
+    await expect(failed).resolves.toMatchObject({
+      message: 'watcher stop failed and container state is unknown',
+      errors: [signalError, inspectError],
+    });
+    expect(lifecycle.delivering).toBe(true);
+    await lifecycle.stop();
+
+    expect(stopProcess).toHaveBeenCalledTimes(2);
+    expect(onNaturalEnd).not.toHaveBeenCalled();
+  });
+
+  it('settles when process exit wins while failed-stop inspection is pending', async () => {
+    const exited = deferred<typeof cleanExit>();
+    const inspected = deferred<'retry'>();
+    const onNaturalEnd = vi.fn();
+    const lifecycle = new WatchProcessLifecycle({
+      exit: exited.promise,
+      stopProcess: vi.fn().mockRejectedValue(new Error('signal failed')),
+      classifyFailedStop: () => inspected.promise,
+      onNaturalEnd,
+    });
+
+    const stopping = lifecycle.stop();
+    exited.resolve(cleanExit);
+    await Promise.resolve();
+    inspected.reject(new Error('inspect failed'));
+    await stopping;
+
+    expect(lifecycle.delivering).toBe(false);
+    expect(onNaturalEnd).not.toHaveBeenCalled();
+  });
+
   it('settles cleanup when a failed signal finds the container unavailable', async () => {
     const exited = deferred<typeof cleanExit>();
     const onNaturalEnd = vi.fn();
@@ -78,7 +129,7 @@ describe('WatchProcessLifecycle', () => {
       stopProcess: async () => {
         throw new Error('container paused');
       },
-      canRetryStop: async () => false,
+      classifyFailedStop: async () => 'terminal',
       onNaturalEnd,
     });
 
@@ -92,21 +143,21 @@ describe('WatchProcessLifecycle', () => {
 
   it('makes a later stop observe an in-progress non-retryable cleanup', async () => {
     const exited = deferred<typeof cleanExit>();
-    const inspected = deferred<boolean>();
+    const inspected = deferred<'terminal'>();
     const stopProcess = vi
       .fn<() => Promise<void>>()
       .mockRejectedValue(new Error('container paused'));
     const lifecycle = new WatchProcessLifecycle({
       exit: exited.promise,
       stopProcess,
-      canRetryStop: () => inspected.promise,
+      classifyFailedStop: () => inspected.promise,
       onNaturalEnd: vi.fn(),
     });
 
     const first = lifecycle.stop();
     const second = lifecycle.stop();
     expect(second).toBe(first);
-    inspected.resolve(false);
+    inspected.resolve('terminal');
     await Promise.all([first, second]);
 
     expect(stopProcess).toHaveBeenCalledTimes(1);
@@ -118,7 +169,7 @@ describe('WatchProcessLifecycle', () => {
     const lifecycle = new WatchProcessLifecycle({
       exit: exited.promise,
       stopProcess: vi.fn(),
-      canRetryStop: async () => true,
+      classifyFailedStop: async () => 'retry',
       onNaturalEnd,
     });
 
