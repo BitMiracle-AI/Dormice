@@ -4,6 +4,7 @@ import type {
   WatchDirHandle,
   WatchDirOptions,
 } from '../executor/executor';
+import { WatchProcessLifecycle } from '../executor/watch-lifecycle';
 import {
   MAX_WATCHERS_PER_SANDBOX,
   WatcherLimitError,
@@ -131,6 +132,39 @@ describe('WatcherTable', () => {
     expect(table.drain('sandbox-1', id)).toBeUndefined();
     await expect(table.reapRetired('sandbox-1')).resolves.toBeUndefined();
     expect(stop).toHaveBeenCalledTimes(2);
+    expect(table.count('sandbox-1')).toBe(0);
+  });
+
+  it('retains the record when signal and inspection fail, then reaps it', async () => {
+    const exited = deferred<{ exitCode: number; error: undefined }>();
+    const stopProcess = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('signal failed'))
+      .mockImplementationOnce(async () =>
+        exited.resolve({ exitCode: 137, error: undefined }),
+      );
+    const lifecycle = new WatchProcessLifecycle({
+      exit: exited.promise,
+      stopProcess,
+      classifyFailedStop: vi
+        .fn()
+        .mockRejectedValue(new Error('inspect failed')),
+      onNaturalEnd: vi.fn(),
+    });
+    const executor = {
+      watchDir: vi.fn().mockResolvedValue({ stop: () => lifecycle.stop() }),
+    } as unknown as Executor;
+    const table = new WatcherTable();
+    const id = await table.create(args(executor));
+
+    await expect(table.remove('sandbox-1', id)).rejects.toThrow(
+      'container state is unknown',
+    );
+    expect(table.count('sandbox-1')).toBe(1);
+    expect(table.drain('sandbox-1', id)).toBeUndefined();
+
+    await table.reapRetired('sandbox-1');
+    expect(stopProcess).toHaveBeenCalledTimes(2);
     expect(table.count('sandbox-1')).toBe(0);
   });
 

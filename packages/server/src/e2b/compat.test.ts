@@ -20,6 +20,7 @@ import { freezeSandbox, stopSandbox } from '../lifecycle';
 import { sampleOnce } from '../metrics-sampler';
 import { scanOnce } from '../scanner';
 import { mintEnvdToken } from './protocol';
+import { WatcherTable } from './watcher-table';
 
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
@@ -46,8 +47,16 @@ function testApp(
     ...env,
   });
   const locks = new KeyedQueue();
-  const app = buildApp({ config, db, executor, locks, logger: false });
-  return { app, db, executor, locks };
+  const watchers = new WatcherTable();
+  const app = buildApp({
+    config,
+    db,
+    executor,
+    locks,
+    watchers,
+    logger: false,
+  });
+  return { app, db, executor, locks, watchers };
 }
 
 type TestApp = ReturnType<typeof testApp>;
@@ -75,6 +84,16 @@ async function createSandbox(
   const res = await control(t, 'POST', '/sandboxes', payload);
   expect(res.statusCode).toBe(201);
   return res.json();
+}
+
+async function registerTemplate(t: TestApp, name: string, image: string) {
+  const res = await t.app.inject({
+    method: 'POST',
+    url: '/registerTemplate',
+    headers: { authorization: `Bearer ${TOKEN}` },
+    payload: { name, image },
+  });
+  expect(res.statusCode).toBe(200);
 }
 
 // The envd token derives from the app's ledger-stored signing secret, not
@@ -1593,9 +1612,14 @@ describe('E2B envd surface', () => {
     });
   });
 
-  it('removing a frozen watcher stays cold and the next real use reaps it', async () => {
+  it('stale frozen wake swaps the shell and reaps its retired watcher', async () => {
     const t = testApp();
-    const { sandboxID } = await createSandbox(t);
+    await registerTemplate(t, 'watch-tpl', 'img-v1');
+    const name = 'watch-reap';
+    const { sandboxID } = await createSandbox(t, {
+      templateID: 'watch-tpl',
+      metadata: { name },
+    });
     const created = await envdRpc(
       t,
       sandboxID,
@@ -1603,7 +1627,10 @@ describe('E2B envd surface', () => {
       { path: '/home/user' },
     );
     const { watcherId } = created.json() as { watcherId: string };
-    await t.locks.run('e2b-test', async () => {
+    await t.executor.writeFiles(sandboxID, [
+      { path: 'keep.txt', content: Buffer.from('survives') },
+    ]);
+    await t.locks.run(name, async () => {
       await freezeSandbox(t.db, t.executor, sandboxID);
     });
 
@@ -1615,12 +1642,19 @@ describe('E2B envd surface', () => {
     );
     expect(removed.statusCode).toBe(200);
     expect(t.executor.stateOf(sandboxID)).toBe('paused');
+    expect(t.watchers.count(sandboxID)).toBe(1);
 
+    await registerTemplate(t, 'watch-tpl', 'img-v2');
     const used = await envdRpc(t, sandboxID, '/filesystem.Filesystem/MakeDir', {
       path: '/home/user/awake',
     });
     expect(used.statusCode).toBe(200);
     expect(t.executor.stateOf(sandboxID)).toBe('running');
+    expect(await t.executor.imageOf(sandboxID)).toBe('img-v2');
+    expect((await t.executor.readFile(sandboxID, 'keep.txt')).toString()).toBe(
+      'survives',
+    );
+    expect(t.watchers.count(sandboxID)).toBe(0);
     const gone = await envdRpc(
       t,
       sandboxID,
@@ -1630,9 +1664,14 @@ describe('E2B envd surface', () => {
     expect(gone.statusCode).toBe(404);
   });
 
-  it('control-plane connect also reaps a frozen retired watcher', async () => {
+  it('control connect swaps a stale frozen shell and reaps its watcher', async () => {
     const t = testApp();
-    const { sandboxID } = await createSandbox(t);
+    await registerTemplate(t, 'connect-tpl', 'img-v1');
+    const name = 'connect-reap';
+    const { sandboxID } = await createSandbox(t, {
+      templateID: 'connect-tpl',
+      metadata: { name },
+    });
     const created = await envdRpc(
       t,
       sandboxID,
@@ -1640,7 +1679,7 @@ describe('E2B envd surface', () => {
       { path: '/home/user' },
     );
     const { watcherId } = created.json() as { watcherId: string };
-    await t.locks.run('e2b-test', async () => {
+    await t.locks.run(name, async () => {
       await freezeSandbox(t.db, t.executor, sandboxID);
     });
     expect(
@@ -1650,16 +1689,17 @@ describe('E2B envd surface', () => {
         })
       ).statusCode,
     ).toBe(200);
+    await registerTemplate(t, 'connect-tpl', 'img-v2');
 
     const connected = await control(
       t,
       'POST',
       `/sandboxes/${sandboxID}/connect`,
-      {
-        timeout: 60,
-      },
+      { timeout: 60 },
     );
     expect(connected.statusCode).toBe(200);
+    expect(await t.executor.imageOf(sandboxID)).toBe('img-v2');
+    expect(t.watchers.count(sandboxID)).toBe(0);
     const gone = await envdRpc(
       t,
       sandboxID,
@@ -1667,6 +1707,61 @@ describe('E2B envd surface', () => {
       { watcherId },
     );
     expect(gone.statusCode).toBe(404);
+  });
+
+  it('stale shell replacement finalizes a live watcher through natural end', async () => {
+    const t = testApp();
+    await registerTemplate(t, 'natural-tpl', 'img-v1');
+    const name = 'natural-end';
+    const { sandboxID } = await createSandbox(t, {
+      templateID: 'natural-tpl',
+      metadata: { name },
+    });
+    const created = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/CreateWatcher',
+      { path: '/home/user' },
+    );
+    const { watcherId } = created.json() as { watcherId: string };
+    await t.locks.run(name, async () => {
+      await freezeSandbox(t.db, t.executor, sandboxID);
+    });
+    await registerTemplate(t, 'natural-tpl', 'img-v2');
+
+    const connected = await control(
+      t,
+      'POST',
+      `/sandboxes/${sandboxID}/connect`,
+      { timeout: 60 },
+    );
+    expect(connected.statusCode).toBe(200);
+    expect(await t.executor.imageOf(sandboxID)).toBe('img-v2');
+    expect(t.watchers.count(sandboxID)).toBe(0);
+    expect(
+      (
+        await envdRpc(t, sandboxID, '/filesystem.Filesystem/GetWatcherEvents', {
+          watcherId,
+        })
+      ).statusCode,
+    ).toBe(404);
+
+    const replacement = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/CreateWatcher',
+      { path: '/home/user' },
+    );
+    expect(replacement.statusCode).toBe(200);
+    expect(t.watchers.count(sandboxID)).toBe(1);
+    expect(
+      (
+        await envdRpc(t, sandboxID, '/filesystem.Filesystem/RemoveWatcher', {
+          watcherId: replacement.json().watcherId,
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(t.watchers.count(sandboxID)).toBe(0);
   });
 
   it('removing while logically paused still retires without waking', async () => {
@@ -2303,17 +2398,6 @@ describe('browser-direct signed files: the 49983 subdomain form and CORS', () =>
 });
 
 describe('E2B templates', () => {
-  // Registration is a native verb; the compat surface only consumes it.
-  async function registerTemplate(t: TestApp, name: string, image: string) {
-    const res = await t.app.inject({
-      method: 'POST',
-      url: '/registerTemplate',
-      headers: { authorization: `Bearer ${TOKEN}` },
-      payload: { name, image },
-    });
-    expect(res.statusCode).toBe(200);
-  }
-
   it('creates from a registered templateID: its image boots, name echoes as templateID and alias', async () => {
     const t = testApp();
     await registerTemplate(t, 'py311', 'img-py');
@@ -2414,6 +2498,7 @@ describe('E2B surface vs the archiver', () => {
       DORMICE_API_TOKEN: TOKEN,
     });
     const locks = new KeyedQueue();
+    const watchers = new WatcherTable();
     const store = new MemStore();
     const archiver = new Archiver({
       db,
@@ -2427,10 +2512,11 @@ describe('E2B surface vs the archiver', () => {
       db,
       executor,
       locks,
+      watchers,
       logger: false,
       archiver,
     });
-    return { app, db, executor, locks, store, archiver };
+    return { app, db, executor, locks, watchers, store, archiver };
   }
 
   /**
