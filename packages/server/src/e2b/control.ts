@@ -332,6 +332,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
               cause: 'protocol-dead row reaped by E2B create',
               actor: request.actor,
             },
+            watchers,
           );
         }
 
@@ -535,11 +536,18 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     await locks.run(row.name, async () => {
       const fresh = findById(db, id);
       if (!fresh) throw notFound(id);
-      await destroySandbox(db, executor, fresh.id, archiver?.store ?? null, {
-        kind: 'destroyed',
-        cause: 'via E2B kill',
-        actor: request.actor,
-      });
+      await destroySandbox(
+        db,
+        executor,
+        fresh.id,
+        archiver?.store ?? null,
+        {
+          kind: 'destroyed',
+          cause: 'via E2B kill',
+          actor: request.actor,
+        },
+        watchers,
+      );
     });
     return reply.code(204).send();
   });
@@ -596,6 +604,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
             current.id,
             'paused via E2B (memory discarded)',
             request.actor,
+            watchers,
           );
         }
         setPausedByUser(db, fresh.id, true);

@@ -1612,6 +1612,114 @@ describe('E2B envd surface', () => {
     });
   });
 
+  it('replays CreateWatcher by operation ID and rejects a mismatched payload', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const operationId = '11111111-1111-4111-8111-111111111111';
+    const create = (path: string, recursive = false) =>
+      t.app.inject({
+        method: 'POST',
+        url: '/e2b/envd/filesystem.Filesystem/CreateWatcher',
+        headers: {
+          ...envdHeaders(t, sandboxID),
+          'x-dormice-watcher-operation-id': operationId,
+        },
+        payload: { path, recursive },
+      });
+
+    // Treat the first response as lost: the replay still recovers its ID.
+    const first = await create('/home/user');
+    const replay = await create('/home/user/./');
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual(first.json());
+    expect(t.watchers.count(sandboxID)).toBe(1);
+
+    const conflict = await create('/home/user/other');
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json().code).toBe('already_exists');
+    expect(t.watchers.count(sandboxID)).toBe(1);
+
+    const removed = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/RemoveWatcher',
+      first.json() as { watcherId: string },
+    );
+    expect(removed.statusCode).toBe(200);
+  });
+
+  it('validates operation and watcher IDs at the envd boundary', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const malformedOperation = await t.app.inject({
+      method: 'POST',
+      url: '/e2b/envd/filesystem.Filesystem/CreateWatcher',
+      headers: {
+        ...envdHeaders(t, sandboxID),
+        'x-dormice-watcher-operation-id': 'not-a-uuid',
+      },
+      payload: { path: '/home/user' },
+    });
+    expect(malformedOperation.statusCode).toBe(400);
+    expect(malformedOperation.json().code).toBe('invalid_argument');
+
+    const malformedWatcher = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/RemoveWatcher',
+      { watcherId: 'not-a-uuid' },
+    );
+    expect(malformedWatcher.statusCode).toBe(400);
+    expect(malformedWatcher.json().code).toBe('invalid_argument');
+  });
+
+  it('RemoveWatcher is a goal-state operation after lost responses and across sandboxes', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const { sandboxID: otherSandbox } = await createSandbox(t);
+    const created = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/CreateWatcher',
+      { path: '/home/user' },
+    );
+    const { watcherId } = created.json() as { watcherId: string };
+
+    // The other sandbox must not learn that this ID exists or affect it.
+    const crossSandbox = await envdRpc(
+      t,
+      otherSandbox,
+      '/filesystem.Filesystem/RemoveWatcher',
+      { watcherId },
+    );
+    expect(crossSandbox.statusCode).toBe(200);
+    expect(t.watchers.count(sandboxID)).toBe(1);
+
+    // Discard the first successful response, then replay after finalization.
+    expect(
+      (
+        await envdRpc(t, sandboxID, '/filesystem.Filesystem/RemoveWatcher', {
+          watcherId,
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await envdRpc(t, sandboxID, '/filesystem.Filesystem/RemoveWatcher', {
+          watcherId,
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await envdRpc(t, sandboxID, '/filesystem.Filesystem/RemoveWatcher', {
+          watcherId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(t.watchers.count(sandboxID)).toBe(0);
+  });
+
   it('stale frozen wake swaps the shell and reaps its retired watcher', async () => {
     const t = testApp();
     await registerTemplate(t, 'watch-tpl', 'img-v1');
@@ -1813,10 +1921,9 @@ describe('E2B envd surface', () => {
       '/filesystem.Filesystem/RemoveWatcher',
       { watcherId },
     );
-    // Container death owns finalization. The fake conducts it synchronously and
-    // answers not_found; Docker may accept the goal-state remove while its exec
-    // exit is still arriving. Neither path may restart the stopped container.
-    expect([200, 404]).toContain(removed.statusCode);
+    // Container death owns physical finalization; goal-state remove is stable
+    // whether its exit conduction already arrived or is still in flight.
+    expect(removed.statusCode).toBe(200);
     expect(t.executor.stateOf(sandboxID)).toBe('stopped');
   });
 
@@ -2509,6 +2616,7 @@ describe('E2B surface vs the archiver', () => {
       locks,
       store,
       tmpDir: mkdtempSync(path.join(tmpdir(), 'dormice-compat-')),
+      watchers,
     });
     const app = buildApp({
       config,

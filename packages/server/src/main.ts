@@ -11,6 +11,7 @@ import { migrateDb, openDb } from './db/db';
 import { listSandboxes } from './db/ledger';
 import { acquireSingleWriterLock } from './db/lock';
 import { ensureRuntimeSettings, readRuntimeSettings } from './db/settings';
+import { WatcherTable } from './e2b/watcher-table';
 import { DockerExecutor } from './executor/docker';
 import type { Executor } from './executor/executor';
 import { FakeExecutor } from './executor/fake';
@@ -93,6 +94,7 @@ const executor = buildExecutor(config, (msg) => log.info(msg));
 // One queue for the whole daemon: HTTP verbs and the heartbeat's actors
 // must share the same per-sandbox slots or the serialization means nothing.
 const locks = new KeyedQueue();
+const watchers = new WatcherTable();
 
 // The archiver exists exactly when S3 is configured; without it the daemon
 // is byte-for-byte the archive-less daemon. Temp transfers stage next to
@@ -107,6 +109,7 @@ if (s3 !== null) {
     store: new S3Store(s3),
     tmpDir: path.join(config.DORMICE_DATA_DIR, 'tmp'),
     log: (msg) => log.info(msg),
+    watchers,
   });
   await archiver.init();
   log.info(`archiver enabled: bucket ${s3.bucket} at ${s3.endpoint}`);
@@ -195,6 +198,7 @@ const app = buildApp({
   ingress,
   swap,
   updater,
+  watchers,
 });
 
 // Before trusting the pairing of this ledger and this reality, check it:
@@ -217,7 +221,14 @@ if (refusal !== null) {
 // should not pretend to manage it. The archiver's restore tracker is empty
 // at boot, so this pass is also what repairs restoring zombies — before
 // listen, so no request ever observes one.
-const repaired = await reconcile(db, executor, locks, undefined, archiver);
+const repaired = await reconcile(
+  db,
+  executor,
+  locks,
+  undefined,
+  archiver,
+  watchers,
+);
 app.log.info(repaired, 'startup reconcile');
 recordActivity(db, {
   kind: 'daemon-started',
@@ -231,6 +242,32 @@ recordActivity(db, {
 // not configurable — a knob would be one typo away from 0.0.0.0. Exposing
 // the daemon to the outside world is a reverse proxy's job.
 await app.listen({ host: '127.0.0.1', port: config.DORMICE_PORT });
+
+// systemd stops the daemon with SIGTERM. Route both terminal signals through
+// Fastify so preClose can end long-lived streams and reap watcher ownership
+// before Node exits. The first signal owns shutdown; a second one still has
+// the platform's default behavior instead of leaving a wedged process forever.
+let closing = false;
+let heartbeatTimer: NodeJS.Timeout | undefined;
+let metricsTimer: NodeJS.Timeout | undefined;
+const close = async (signal: NodeJS.Signals) => {
+  if (closing) return;
+  closing = true;
+  process.removeListener('SIGTERM', onSigterm);
+  process.removeListener('SIGINT', onSigint);
+  clearTimeout(heartbeatTimer);
+  clearTimeout(metricsTimer);
+  try {
+    await app.close();
+  } catch (error) {
+    app.log.error(error, `graceful shutdown after ${signal} failed`);
+    process.exitCode = 1;
+  }
+};
+const onSigterm = () => void close('SIGTERM');
+const onSigint = () => void close('SIGINT');
+process.once('SIGTERM', onSigterm);
+process.once('SIGINT', onSigint);
 
 // The daemon's heartbeat: reconcile, then scan. Reconciling every tick is
 // what keeps the ledger honest while the daemon runs — a sandbox whose
@@ -249,7 +286,14 @@ await app.listen({ host: '127.0.0.1', port: config.DORMICE_PORT });
 let suspects: ReadonlySet<string> = new Set();
 async function tick() {
   try {
-    const drift = await reconcile(db, executor, locks, suspects, archiver);
+    const drift = await reconcile(
+      db,
+      executor,
+      locks,
+      suspects,
+      archiver,
+      watchers,
+    );
     suspects = new Set(drift.suspects);
     if (
       drift.repairedStates +
@@ -261,17 +305,29 @@ async function tick() {
     ) {
       app.log.warn(drift, 'runtime reconcile repaired drift');
     }
-    const scan = await scanOnce(db, executor, locks, new Date(), archiver);
+    const scan = await scanOnce(
+      db,
+      executor,
+      locks,
+      new Date(),
+      archiver,
+      watchers,
+    );
     for (const failure of scan.failures) {
       app.log.error(failure, 'idle scan: sandbox transition failed');
     }
   } catch (error) {
     app.log.error(error, 'heartbeat tick failed');
   } finally {
-    setTimeout(tick, config.DORMICE_SCAN_INTERVAL_SECONDS * 1000);
+    if (!closing) {
+      heartbeatTimer = setTimeout(
+        tick,
+        config.DORMICE_SCAN_INTERVAL_SECONDS * 1000,
+      );
+    }
   }
 }
-setTimeout(tick, config.DORMICE_SCAN_INTERVAL_SECONDS * 1000);
+heartbeatTimer = setTimeout(tick, config.DORMICE_SCAN_INTERVAL_SECONDS * 1000);
 
 // The metrics sampler's own chained ticker — deliberately not a passenger
 // on the heartbeat, whose ticks legitimately run 45s+ (memory.reclaim) and
@@ -296,10 +352,12 @@ async function metricsTick() {
   } catch (error) {
     app.log.error(error, 'metrics sampler tick failed');
   } finally {
-    setTimeout(
-      metricsTick,
-      config.DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS * 1000,
-    );
+    if (!closing) {
+      metricsTimer = setTimeout(
+        metricsTick,
+        config.DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS * 1000,
+      );
+    }
   }
 }
-setTimeout(metricsTick, 0);
+metricsTimer = setTimeout(metricsTick, 0);

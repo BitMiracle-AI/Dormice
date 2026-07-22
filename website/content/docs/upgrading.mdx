@@ -40,12 +40,13 @@ the repo.
   listening it reconciles its records against what Docker actually
   shows, so restarting it is always safe.
 
-Two footnotes. The E2B process and watcher tables live in daemon
-memory: processes started over that surface keep running inside their
-containers across a restart, but the fresh daemon no longer lists them
-([details](/docs/e2b-differences)). And the pinned toolchain (Node,
-gVisor) is only *installed* when missing — an already-present gVisor is
-kept as-is, not upgraded.
+Two footnotes. The E2B process and watcher registries live in daemon
+memory: processes and in-container watcher processes may outlive a hard
+daemon crash, but the fresh daemon no longer lists or controls those old
+handles; normal graceful shutdown first makes a bounded best-effort
+cleanup pass ([details](/docs/e2b-differences)). And the pinned toolchain
+(Node, gVisor) is only *installed* when missing — an already-present
+gVisor is kept as-is, not upgraded.
 
 ## Upgrade sandbox images
 
