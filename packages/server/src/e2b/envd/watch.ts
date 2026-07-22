@@ -176,22 +176,24 @@ export function registerWatchRoutes(
   app.post('/filesystem.Filesystem/CreateWatcher', async (request) => {
     const body = request.body as { path?: string; recursive?: boolean };
     if (!body.path) throw connectError('invalid_argument', 'missing path');
-    const row = await ctx.wakeForUse(sandboxIdOf(request));
-    try {
-      const watcherId = await watchers.create({
-        executor,
-        sandboxId: row.id,
-        path: body.path,
-        recursive: body.recursive === true,
-      });
-      return { watcherId };
-    } catch (error) {
-      if (error instanceof WatcherLimitError) {
-        throw connectError('resource_exhausted', error.message);
+    const path = body.path;
+    return ctx.inSlot(sandboxIdOf(request), async (row) => {
+      try {
+        const watcherId = await watchers.create({
+          executor,
+          sandboxId: row.id,
+          path,
+          recursive: body.recursive === true,
+        });
+        return { watcherId };
+      } catch (error) {
+        if (error instanceof WatcherLimitError) {
+          throw connectError('resource_exhausted', error.message);
+        }
+        const { code, message } = watchStartError(error);
+        throw connectError(code, message);
       }
-      const { code, message } = watchStartError(error);
-      throw connectError(code, message);
-    }
+    });
   });
 
   app.post('/filesystem.Filesystem/GetWatcherEvents', async (request) => {
@@ -222,15 +224,20 @@ export function registerWatchRoutes(
     if (!body.watcherId) {
       throw connectError('invalid_argument', 'missing watcher id');
     }
-    // Wakes: stopping the in-container inotifywait needs the container up.
-    const row = await ctx.wakeForUse(sandboxIdOf(request));
-    const removed = await watchers.remove(row.id, body.watcherId);
-    if (!removed) {
-      throw connectError(
-        'not_found',
-        `watcher with id ${body.watcherId} not found`,
-      );
-    }
-    return {};
+    return ctx.withoutWake(sandboxIdOf(request), async (row) => {
+      // A frozen watcher survives physically. Retire it in daemon memory now
+      // and let the next real wake reap it; cleanup must not wake by itself.
+      const removed =
+        row.state === 'active'
+          ? await watchers.remove(row.id, body.watcherId as string)
+          : watchers.retire(row.id, body.watcherId as string);
+      if (!removed) {
+        throw connectError(
+          'not_found',
+          `watcher with id ${body.watcherId} not found`,
+        );
+      }
+      return {};
+    });
   });
 }
