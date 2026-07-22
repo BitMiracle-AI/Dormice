@@ -6,7 +6,7 @@ export interface DirectoryWatcherDeps {
   remove(watcherId: string): Promise<void>;
   isActive(): boolean;
   isNotFound(error: unknown): boolean;
-  onDirty(): void;
+  onDirty(active: boolean): void;
 }
 
 /**
@@ -17,12 +17,17 @@ export interface DirectoryWatcherDeps {
 export class DirectoryWatcherController {
   private watcherId: string | null = null;
   private disposed = false;
+  private inactiveDirty = false;
   private inFlight: Promise<void> | null = null;
 
   constructor(private readonly deps: DirectoryWatcherDeps) {}
 
   tick(): Promise<void> {
     if (this.disposed) return Promise.resolve();
+    if (this.deps.isActive() && this.inactiveDirty) {
+      this.inactiveDirty = false;
+      this.deps.onDirty(true);
+    }
     if (this.inFlight) return this.inFlight;
 
     const run = this.runTick();
@@ -61,7 +66,7 @@ export class DirectoryWatcherController {
     try {
       const events = await this.deps.poll(current);
       if (!this.disposed && this.watcherId === current && events.length > 0) {
-        this.deps.onDirty();
+        this.reportDirty();
       }
     } catch (error) {
       if (this.deps.isNotFound(error) && this.watcherId === current) {
@@ -69,9 +74,15 @@ export class DirectoryWatcherController {
       } else if (!this.disposed && this.watcherId === current) {
         // Drain is destructive at the daemon. A lost response may have eaten
         // events, so the directory must converge even though this ID remains.
-        this.deps.onDirty();
+        this.reportDirty();
       }
     }
+  }
+
+  private reportDirty(): void {
+    const active = this.deps.isActive();
+    if (!active) this.inactiveDirty = true;
+    this.deps.onDirty(active);
   }
 
   private takeWatcher(): string | null {

@@ -69,6 +69,7 @@ import {
   type WatchDirHandle,
   type WatchDirOptions,
 } from './executor';
+import { WatchProcessLifecycle } from './watch-lifecycle';
 
 /**
  * Label that marks a container as ours, holding the sandbox id. Listing by
@@ -1086,9 +1087,7 @@ export class DockerExecutor implements Executor {
     const container = this.docker.getContainer(containerId);
     const pidfile = `/tmp/.dormice-exec-${randomUUID()}.pid`;
 
-    // Once true, arriving lines drain and drop — after stop() nothing is
-    // delivered, even the pipe's stragglers.
-    let stopped = false;
+    let lifecycle: WatchProcessLifecycle | undefined;
     let pending = '';
     const onStdout = async (chunk: Buffer) => {
       pending += chunk.toString('utf8');
@@ -1099,7 +1098,7 @@ export class DockerExecutor implements Executor {
         pending = pending.slice(eol + 1);
         for (const event of parseInotifyLine(line, resolved)) {
           // Awaited: backpressure travels through to inotifywait's pipe.
-          if (!stopped) await opts.onEvent(event);
+          if (lifecycle?.delivering !== false) await opts.onEvent(event);
         }
       }
     };
@@ -1153,38 +1152,28 @@ export class DockerExecutor implements Executor {
       );
     }
 
-    void exitInfo.then(({ exitCode, error }) => {
-      if (stopped) return;
-      stopped = true;
-      opts.onEnd(
-        error ?? new Error(`watcher on ${resolved} exited with ${exitCode}`),
-      );
+    lifecycle = new WatchProcessLifecycle({
+      exit: exitInfo,
+      stopProcess: () =>
+        this.signalProcess(container, sandboxId, pidfile, 'SIGKILL'),
+      canRetryStop: async () => {
+        const state = await container.inspect().then(
+          (info) => info.State,
+          () => undefined,
+        );
+        // A paused/gone container cannot run the signal exec. Keep the watcher
+        // silent; lifecycle death or the 24h backstop reaps it. A runnable
+        // container keeps ownership so a later legitimate use can retry.
+        return state?.Running === true && !state.Paused;
+      },
+      onNaturalEnd: ({ exitCode, error }) => {
+        opts.onEnd(
+          error ?? new Error(`watcher on ${resolved} exited with ${exitCode}`),
+        );
+      },
     });
 
-    return {
-      stop: async () => {
-        if (stopped) return;
-        try {
-          await this.signalProcess(container, sandboxId, pidfile, 'SIGKILL');
-        } catch (error) {
-          const state = await container.inspect().then(
-            (info) => info.State,
-            () => undefined,
-          );
-          if (!state?.Running || state.Paused) {
-            // A paused/gone container cannot run the signal exec. Keep the
-            // watcher silent; lifecycle death or the 24h backstop reaps it.
-            stopped = true;
-            return;
-          }
-          // The container is still runnable: preserve ownership so a later
-          // legitimate wake/use can retry instead of orphaning inotifywait.
-          throw error;
-        }
-        stopped = true;
-        await exitInfo;
-      },
-    };
+    return { stop: () => lifecycle?.stop() ?? Promise.resolve() };
   }
 
   /** The buffered face of the exec pipeline: capped sinks, awaited to the end. */

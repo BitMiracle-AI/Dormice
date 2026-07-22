@@ -120,19 +120,7 @@ export function useDirectoryWatch(
 ) {
   const queryClient = useQueryClient();
   const activeRef = useRef(opts.active);
-  const previousActiveRef = useRef(opts.active);
   activeRef.current = opts.active;
-
-  useEffect(() => {
-    const wasActive = previousActiveRef.current;
-    previousActiveRef.current = opts.active;
-    if (!opts.enabled) return;
-    if (!wasActive && opts.active && auth) {
-      void queryClient.invalidateQueries({
-        queryKey: ['envdDir', auth.sandboxId, path],
-      });
-    }
-  }, [auth, opts.active, opts.enabled, path, queryClient]);
 
   useEffect(() => {
     if (!opts.enabled || !auth) return;
@@ -145,9 +133,9 @@ export function useDirectoryWatch(
       isActive: () => activeRef.current,
       isNotFound: (error) =>
         error instanceof EnvdError && error.code === 'not_found',
-      onDirty: () => {
+      onDirty: (active) => {
         const queryKey = ['envdDir', auth.sandboxId, path];
-        if (activeRef.current) {
+        if (active) {
           void queryClient.invalidateQueries({ queryKey });
         } else {
           // Mark stale without refetching: ListDir would wake a frozen sandbox.

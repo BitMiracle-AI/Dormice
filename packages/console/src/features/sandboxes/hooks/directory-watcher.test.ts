@@ -110,8 +110,24 @@ describe('DirectoryWatcherController', () => {
       { name: 'queued.txt', type: 'EVENT_TYPE_CREATE' },
     ]);
     await t.controller.tick();
-    expect(t.onDirty).toHaveBeenCalledTimes(1);
+    expect(t.onDirty).toHaveBeenCalledWith(false);
     expect(t.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes once after a dirty frozen watcher becomes active again', async () => {
+    const t = harness();
+    await t.controller.tick();
+    t.setActive(false);
+    t.poll.mockResolvedValueOnce([
+      { name: 'queued.txt', type: 'EVENT_TYPE_CREATE' },
+    ]);
+    await t.controller.tick();
+
+    t.setActive(true);
+    await t.controller.tick();
+    await t.controller.tick();
+
+    expect(t.onDirty.mock.calls).toEqual([[false], [true]]);
   });
 
   it('rearms only after a confirmed not_found response', async () => {
