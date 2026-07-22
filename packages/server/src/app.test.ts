@@ -15,7 +15,7 @@ import { objectKey } from './archive/store';
 import { CONSOLE_HEADER, SESSION_COOKIE } from './auth';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
-import { transition } from './db/ledger';
+import { findById, transition } from './db/ledger';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
 import { ARCHIVE_DEFAULT_SECONDS } from './policy';
@@ -1503,12 +1503,16 @@ describe('cold wakes converge onto the current image', () => {
         },
       ],
     });
-    await scanOnce(
+    const current = findById(db, created.id);
+    if (!current) throw new Error('sandbox disappeared after write');
+    const sweep = await scanOnce(
       db,
       executor,
       locks,
-      after(created.lastActiveAt, DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds),
+      after(current.lastActiveAt, DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds),
     );
+    expect(sweep.frozen).toBe(1);
+    expect(sweep.failures).toEqual([]);
     expect(executor.stateOf(created.id)).toBe('paused');
 
     await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
