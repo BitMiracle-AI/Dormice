@@ -16,6 +16,7 @@ import { getOrCreateSigningSecret } from '../db/secrets';
 import { FAKE_BASE_IMAGE, FakeExecutor } from '../executor/fake';
 import { CpuSampler } from '../host-metrics';
 import { KeyedQueue } from '../keyed-queue';
+import { freezeSandbox, stopSandbox } from '../lifecycle';
 import { sampleOnce } from '../metrics-sampler';
 import { scanOnce } from '../scanner';
 import { mintEnvdToken } from './protocol';
@@ -1590,6 +1591,135 @@ describe('E2B envd surface', () => {
       code: 'not_found',
       message: `watcher with id ${watcherId} not found`,
     });
+  });
+
+  it('removing a frozen watcher stays cold and the next real use reaps it', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const created = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/CreateWatcher',
+      { path: '/home/user' },
+    );
+    const { watcherId } = created.json() as { watcherId: string };
+    await t.locks.run('e2b-test', async () => {
+      await freezeSandbox(t.db, t.executor, sandboxID);
+    });
+
+    const removed = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/RemoveWatcher',
+      { watcherId },
+    );
+    expect(removed.statusCode).toBe(200);
+    expect(t.executor.stateOf(sandboxID)).toBe('paused');
+
+    const used = await envdRpc(t, sandboxID, '/filesystem.Filesystem/MakeDir', {
+      path: '/home/user/awake',
+    });
+    expect(used.statusCode).toBe(200);
+    expect(t.executor.stateOf(sandboxID)).toBe('running');
+    const gone = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/GetWatcherEvents',
+      { watcherId },
+    );
+    expect(gone.statusCode).toBe(404);
+  });
+
+  it('control-plane connect also reaps a frozen retired watcher', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const created = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/CreateWatcher',
+      { path: '/home/user' },
+    );
+    const { watcherId } = created.json() as { watcherId: string };
+    await t.locks.run('e2b-test', async () => {
+      await freezeSandbox(t.db, t.executor, sandboxID);
+    });
+    expect(
+      (
+        await envdRpc(t, sandboxID, '/filesystem.Filesystem/RemoveWatcher', {
+          watcherId,
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    const connected = await control(
+      t,
+      'POST',
+      `/sandboxes/${sandboxID}/connect`,
+      {
+        timeout: 60,
+      },
+    );
+    expect(connected.statusCode).toBe(200);
+    const gone = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/GetWatcherEvents',
+      { watcherId },
+    );
+    expect(gone.statusCode).toBe(404);
+  });
+
+  it('removing while logically paused still retires without waking', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const created = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/CreateWatcher',
+      { path: '/home/user' },
+    );
+    const { watcherId } = created.json() as { watcherId: string };
+    const paused = await control(
+      t,
+      'POST',
+      `/sandboxes/${sandboxID}/pause`,
+      {},
+    );
+    expect(paused.statusCode).toBe(204);
+
+    const removed = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/RemoveWatcher',
+      { watcherId },
+    );
+    expect(removed.statusCode).toBe(200);
+    expect(t.executor.stateOf(sandboxID)).toBe('paused');
+  });
+
+  it('removing after stop does not restart the container', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const created = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/CreateWatcher',
+      { path: '/home/user' },
+    );
+    const { watcherId } = created.json() as { watcherId: string };
+    await t.locks.run('e2b-test', async () => {
+      await freezeSandbox(t.db, t.executor, sandboxID);
+      await stopSandbox(t.db, t.executor, sandboxID);
+    });
+
+    const removed = await envdRpc(
+      t,
+      sandboxID,
+      '/filesystem.Filesystem/RemoveWatcher',
+      { watcherId },
+    );
+    expect(removed.statusCode).toBe(404);
+    expect(t.executor.stateOf(sandboxID)).toBe('stopped');
   });
 
   it('a polled watcher dies with its container: the next poll answers not_found', async () => {

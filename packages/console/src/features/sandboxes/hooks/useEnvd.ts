@@ -5,6 +5,7 @@ import {
   createWatcher,
   downloadFile,
   type EnvdAuth,
+  EnvdError,
   getWatcherEvents,
   killProcess,
   listDir,
@@ -15,6 +16,7 @@ import {
   removeWatcher,
   uploadFile,
 } from '../envd-client';
+import { DirectoryWatcherController } from './directory-watcher';
 
 /**
  * 一个沙箱的 envd 面数据层:token、文件、进程。token 是无状态 HMAC,
@@ -106,11 +108,10 @@ export function useFileMutations(auth: EnvdAuth | undefined) {
  * → RemoveWatcher),沙箱里(agent、终端)动了文件,面板 2 秒内自己跟上。
  *
  * 唤醒纪律是这个 hook 的全部难点:GetWatcherEvents 不唤醒(读 daemon
- * 内存,冻结沙箱的盘也不会变),可以放心轮询;但 Create/Remove 都要容器
- * 活着(容器里有个 inotifywait 要起/停)— 所以**只在沙箱 active 时武装
- * 或拆除**。沙箱睡了就让监听器随容器一起消亡(404 是预期收场),等它下
- * 次因真实使用而醒来再重新武装;绝不为"接着看"或"收拾干净"把沙箱吵醒。
- * active 走 ref:降温/回暖不重跑 effect,轮询循环自己看当下的状态。
+ * 内存,冻结沙箱的盘也不会变),可以放心轮询;Create 只在 active 时发。
+ * Remove 交给服务端按物理状态裁决,清理本身绝不唤醒。active 走 ref:
+ * 降温/回暖不重跑 effect,单一所有者循环自己看当下状态;冻结保留既有
+ * watcher,只有 not_found 才放下旧 ID 并在真实回暖后重建。
  */
 export function useDirectoryWatch(
   auth: EnvdAuth | undefined,
@@ -123,64 +124,31 @@ export function useDirectoryWatch(
 
   useEffect(() => {
     if (!opts.enabled || !auth) return;
-    let watcherId: string | null = null;
-    let disposed = false;
-    let busy = false;
-
-    const arm = async () => {
-      if (!activeRef.current) return; // 冻结/停止:武装会唤醒,等真实使用
-      try {
-        const id = await createWatcher(auth, path);
-        if (disposed) {
-          // effect 已在建监听的往返途中被拆(切目录或卸载);这个 id 归
-          // 属已死的闭包,同步 cleanup 那时读到的还是 null,拆不掉它 ——
-          // 在此补拆,别把 inotifywait 漏在容器里。active 闸同 cleanup:
-          // 沙箱睡了就留给容器随手回收。
-          if (activeRef.current) {
-            void removeWatcher(auth, id).catch(() => undefined);
-          }
-          return;
+    const watcher = new DirectoryWatcherController({
+      create: () => createWatcher(auth, path),
+      poll: (watcherId) => getWatcherEvents(auth, watcherId),
+      remove: async (watcherId) => {
+        await removeWatcher(auth, watcherId);
+      },
+      isActive: () => activeRef.current,
+      isNotFound: (error) =>
+        error instanceof EnvdError && error.code === 'not_found',
+      onDirty: () => {
+        const queryKey = ['envdDir', auth.sandboxId, path];
+        if (activeRef.current) {
+          void queryClient.invalidateQueries({ queryKey });
+        } else {
+          // Mark stale without refetching: ListDir would wake a frozen sandbox.
+          void queryClient.invalidateQueries({ queryKey, refetchType: 'none' });
         }
-        watcherId = id;
-      } catch {
-        watcherId = null; // 冷启动窗口或目录暂不可达;下一拍再试
-      }
-    };
+      },
+    });
 
-    void arm();
-    const timer = setInterval(() => {
-      if (busy) return;
-      busy = true;
-      void (async () => {
-        if (watcherId === null) {
-          await arm();
-          return;
-        }
-        try {
-          const events = await getWatcherEvents(auth, watcherId);
-          if (events.length > 0) {
-            void queryClient.invalidateQueries({
-              queryKey: ['envdDir', auth.sandboxId, path],
-            });
-          }
-        } catch {
-          // 404:监听器随容器没了(停止/重建)。回到未武装态,由 arm
-          // 的 active 闸决定何时重来 — 绝不在这里直接重建。
-          watcherId = null;
-        }
-      })().finally(() => {
-        busy = false;
-      });
-    }, 2000);
-
+    void watcher.tick();
+    const timer = setInterval(() => void watcher.tick(), 2000);
     return () => {
-      disposed = true;
       clearInterval(timer);
-      // 只有沙箱还醒着才顺手拆(RemoveWatcher 要容器活着);睡了就留给
-      // 容器回收 — 一个 inotifywait 活不过下一次停止。
-      if (watcherId !== null && activeRef.current) {
-        void removeWatcher(auth, watcherId).catch(() => undefined);
-      }
+      watcher.dispose();
     };
   }, [auth, path, opts.enabled, queryClient]);
 }

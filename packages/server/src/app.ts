@@ -136,6 +136,11 @@ export function buildApp({
   // call shapes would give the instance two different types.
   const loggerInstance =
     typeof logger === 'boolean' ? pino({ enabled: logger }) : logger;
+  // Process and watcher tables are per-daemon state. The watcher table is
+  // also the single deferred-cleanup registry every wake path consults.
+  const processes = new ProcessTable();
+  const watchers = new WatcherTable();
+
   // The sandbox port proxy sits in front of routing — it triages by Host
   // header, so it must see the request before Fastify's router 404s a
   // wildcard host's arbitrary path. Only with the domain knob set; without
@@ -143,7 +148,7 @@ export function buildApp({
   // the factory, so the proxy is exercised over real sockets only.
   let serverFactory: FastifyServerFactory | undefined;
   if (config.DORMICE_SANDBOX_DOMAIN) {
-    const proxy = createSandboxProxy({ config, db, executor, locks });
+    const proxy = createSandboxProxy({ config, db, executor, locks, watchers });
     serverFactory = (handler) => {
       const server = http.createServer((req, res) => {
         if (proxy.matches(req)) proxy.handleRequest(req, res);
@@ -253,6 +258,7 @@ export function buildApp({
       db,
       executor,
       locks,
+      watchers,
       archiver,
       archiveDefaultSeconds,
     });
@@ -299,11 +305,7 @@ export function buildApp({
   });
 
   // The E2B compatibility surface lives beside the native API with its own
-  // auth (X-API-KEY / X-Access-Token) and its own error dialect. The process
-  // and watcher tables are per-daemon state, born with the app and gone
-  // with it — a restart honestly empties them.
-  const processes = new ProcessTable();
-  const watchers = new WatcherTable();
+  // auth (X-API-KEY / X-Access-Token) and its own error dialect.
   app.register(async (compat) => {
     await registerE2bCompat(compat, {
       config,

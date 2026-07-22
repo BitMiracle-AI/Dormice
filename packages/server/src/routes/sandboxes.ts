@@ -61,6 +61,7 @@ import {
 import type { SandboxRow } from '../db/schema';
 import { readRuntimeSettings } from '../db/settings';
 import { findTemplate, resolveImage } from '../db/templates';
+import type { WatcherTable } from '../e2b/watcher-table';
 import { startExecHeartbeat } from '../exec-heartbeat';
 import {
   type Executor,
@@ -78,6 +79,7 @@ export interface SandboxRoutesOptions {
   db: Db;
   executor: Executor;
   locks: KeyedQueue;
+  watchers: WatcherTable;
   /** Absent = no S3 configured: archiving and restores are honestly off. */
   archiver?: Archiver;
   /** buildApp's one adjudication of the archive policy default (null = off). */
@@ -127,7 +129,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   SandboxRoutesOptions
 > = async (
   app,
-  { config, db, executor, locks, archiver, archiveDefaultSeconds },
+  { config, db, executor, locks, watchers, archiver, archiveDefaultSeconds },
 ) => {
   // Every sandbox lives on this daemon today, so the endpoint is our own
   // address; with sharding it may point at another node.
@@ -183,7 +185,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       // Requested template and metadata are not applied: like policy, they
       // take effect only when this acquire creates the sandbox (metadata
       // has its own update verb, updateMetadata).
-      const awake = await wakeSandbox(db, executor, existing, actor);
+      const awake = await wakeSandbox(db, executor, existing, actor, watchers);
       return { status: 'ready', created: false, row: touch(db, awake.id) };
     }
 
@@ -245,7 +247,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         `sandbox "${name}" is ${existing.state} — call acquireSandbox and poll until it is ready`,
       );
     }
-    const awake = await wakeSandbox(db, executor, existing, actor);
+    const awake = await wakeSandbox(db, executor, existing, actor, watchers);
     return touch(db, awake.id);
   }
 

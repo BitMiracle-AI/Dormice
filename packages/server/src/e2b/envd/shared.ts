@@ -122,6 +122,11 @@ export interface EnvdContext extends E2bDeps {
     sandboxId: string,
     work: (row: SandboxRow) => Promise<T>,
   ): Promise<T>;
+  /** Serializes daemon-memory work without waking or touching the sandbox. */
+  withoutWake<T>(
+    sandboxId: string,
+    work: (row: SandboxRow) => Promise<T>,
+  ): Promise<T>;
   /** Wake-for-use with streaming-dialect errors: streamError, not thrown JSON. */
   wakeForStream(
     request: FastifyRequest,
@@ -196,7 +201,13 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
     await joinRestore(sandboxId);
     return locks.run(before.name, async () => {
       const fresh = requireRunningRow(sandboxId);
-      const awake = await wakeSandbox(db, executor, fresh);
+      const awake = await wakeSandbox(
+        db,
+        executor,
+        fresh,
+        undefined,
+        deps.watchers,
+      );
       return touch(db, awake.id);
     });
   }
@@ -209,10 +220,37 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
     await joinRestore(sandboxId);
     return locks.run(before.name, async () => {
       const fresh = requireRunningRow(sandboxId);
-      const awake = await wakeSandbox(db, executor, fresh);
+      const awake = await wakeSandbox(
+        db,
+        executor,
+        fresh,
+        undefined,
+        deps.watchers,
+      );
       const row = touch(db, awake.id);
       try {
         return await work(row);
+      } catch (error) {
+        throw toConnectError(error);
+      }
+    });
+  }
+
+  async function withoutWake<T>(
+    sandboxId: string,
+    work: (row: SandboxRow) => Promise<T>,
+  ): Promise<T> {
+    const before = findById(db, sandboxId);
+    if (!before) {
+      throw new E2bError(502, 'unavailable', 'sandbox not found');
+    }
+    return locks.run(before.name, async () => {
+      const fresh = findById(db, sandboxId);
+      if (!fresh) {
+        throw new E2bError(502, 'unavailable', 'sandbox not found');
+      }
+      try {
+        return await work(fresh);
       } catch (error) {
         throw toConnectError(error);
       }
@@ -241,5 +279,12 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
     }
   }
 
-  return { ...deps, requireRunningRow, wakeForUse, inSlot, wakeForStream };
+  return {
+    ...deps,
+    requireRunningRow,
+    wakeForUse,
+    inSlot,
+    withoutWake,
+    wakeForStream,
+  };
 }

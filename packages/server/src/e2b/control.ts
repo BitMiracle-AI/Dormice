@@ -98,6 +98,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     db,
     executor,
     locks,
+    watchers,
     archiver,
     archiveDefaultSeconds,
     envdSigningSecret,
@@ -313,6 +314,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
             executor,
             existing,
             request.actor,
+            watchers,
           );
           extendDeadline(awake, timeoutSeconds);
           return touch(db, awake.id);
@@ -392,7 +394,13 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         if (!fresh || e2bView(fresh, new Date()) === 'dead') {
           throw notFound(id);
         }
-        const awake = await wakeSandbox(db, executor, fresh, request.actor);
+        const awake = await wakeSandbox(
+          db,
+          executor,
+          fresh,
+          request.actor,
+          watchers,
+        );
         extendDeadline(awake, request.body.timeout ?? DEFAULT_TIMEOUT_SECONDS);
         return touch(db, awake.id);
       });
