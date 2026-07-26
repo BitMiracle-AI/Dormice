@@ -270,3 +270,65 @@ describe('Archiver.restoreJoin', () => {
     expect(executor.stateOf(row.id)).toBe('running');
   });
 });
+
+describe('the swappable store provider', () => {
+  it('enabled() is the provider answer, live', () => {
+    const { db, executor, locks, tmpDir } = setup();
+    let current: MemStore | null = null;
+    const archiver = new Archiver({
+      db,
+      executor,
+      locks,
+      store: { current: () => current },
+      tmpDir,
+    });
+    expect(archiver.enabled()).toBe(false);
+    expect(archiver.currentStore()).toBeNull();
+    current = new MemStore();
+    expect(archiver.enabled()).toBe(true);
+    expect(archiver.currentStore()).toBe(current);
+  });
+
+  it('a transfer keeps the store it began with across a provider switch', async () => {
+    const { db, executor, locks, tmpDir } = setup();
+    const storeA = new MemStore();
+    const storeB = new MemStore();
+    let current: MemStore = storeA;
+    const archiver = new Archiver({
+      db,
+      executor,
+      locks,
+      store: { current: () => current },
+      tmpDir,
+    });
+    const row = await seedStopped(db, executor, 'alice');
+    await archiver.archive(row);
+    expect(storeA.has(objectKey(row.id))).toBe(true);
+
+    // The restore's download hangs on a gate; the provider switches to B
+    // mid-flight (a credentials rotation — the moving-store guard forbids
+    // changing endpoint/bucket while rows are archived, so in production
+    // A and B would address the same objects).
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const innerGet = storeA.get.bind(storeA);
+    storeA.get = async (key, dest, onProgress) => {
+      await gate;
+      return innerGet(key, dest, onProgress);
+    };
+    const archived = findByName(db, 'alice');
+    if (!archived) throw new Error('row vanished');
+    archiver.beginRestore(archived);
+    current = storeB;
+    release();
+    await archiver.restoreJoin(row.id);
+
+    // The task ran start to finish against A: object downloaded from A and
+    // deleted from A; B never heard of it.
+    expect(findByName(db, 'alice')?.state).toBe('active');
+    expect(storeA.has(objectKey(row.id))).toBe(false);
+    expect(storeB.size).toBe(0);
+  });
+});

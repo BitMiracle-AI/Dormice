@@ -13,10 +13,12 @@ import {
  */
 export const ARCHIVE_DEFAULT_SECONDS = 7 * 24 * 60 * 60;
 
-/** An archive-asking policy on a daemon that has no archiver. */
+/** An archive-asking policy on a daemon that has no archive store. */
 export class ArchiveDisabledError extends Error {
   constructor() {
-    super('archiving requires S3 (DORMICE_S3_*) to be configured');
+    super(
+      'archiving requires an S3 archive store — configure one in the console settings first',
+    );
   }
 }
 

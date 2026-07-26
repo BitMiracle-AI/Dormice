@@ -83,8 +83,12 @@ export default async function setup(project: TestProject) {
       DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS: '1',
       // A wildcard sandbox domain so getHost() and the port proxy are
       // exercised — no DNS needed, tests spoof the Host header locally.
+      // A first-boot seed since the setting moved into the ledger: every
+      // exam starts on a fresh DB, so the seed lands every run, and
+      // settings-hot.test.ts exercises the live edit on top of it.
       DORMICE_SANDBOX_DOMAIN: 'sbx.dormice.test',
-      // The archiver, pointed at the exam's mini S3. Deliberately NOT in
+      // The archiver, pointed at the exam's mini S3 — likewise a
+      // first-boot seed for the ledger's S3 settings. Deliberately NOT in
       // the inherited allowlist: a developer's real DORMICE_S3_* exports
       // must never leak an exam's archives into a production bucket.
       DORMICE_S3_ENDPOINT: miniS3.url,

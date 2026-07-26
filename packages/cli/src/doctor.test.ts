@@ -726,15 +726,32 @@ describe('the S3 archive checks', () => {
     DORMICE_DATA_DIR: '/var/lib/dormice',
   };
 
-  it('skips both checks when no S3 is configured', async () => {
-    const { results, failed } = await runDoctor(fakeHost({ env: NO_S3_ENV }));
+  it('skips the seed check without S3 and warns (not fails) on missing zstd', async () => {
+    const { results, failed } = await runDoctor(
+      fakeHost({
+        env: NO_S3_ENV,
+        commands: { 'zstd --version': boom('not found') },
+      }),
+    );
     expect(results['s3-config']).toMatchObject({
       status: 'skip',
-      detail: expect.stringContaining('archiver is disabled'),
+      detail: expect.stringContaining('console settings'),
     });
-    // zstd is gated on s3-config passing, and skips are not failures.
-    expect(results.zstd).toMatchObject({ status: 'skip' });
+    // No seed means archiving may start later from the console — a missing
+    // zstd is a warning to get ready, not a failure.
+    expect(results.zstd).toMatchObject({
+      status: 'warn',
+      fix: 'apt-get install -y zstd',
+    });
     expect(failed).toBe(false);
+  });
+
+  it('checks zstd even without an S3 seed and passes when present', async () => {
+    const { results } = await runDoctor(fakeHost({ env: NO_S3_ENV }));
+    expect(results.zstd).toMatchObject({
+      status: 'pass',
+      detail: expect.stringContaining('zstd'),
+    });
   });
 
   it('fails a partial S3 set, naming the missing variables', async () => {

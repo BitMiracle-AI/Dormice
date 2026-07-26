@@ -21,7 +21,11 @@ separate from the domain you may have bound for the API and console in
 
 ## 1. Set the sandbox domain
 
-Pick a domain for sandbox traffic and tell the daemon about it:
+Pick a domain for sandbox traffic and set it on the console's
+**Domains** page (the sandbox domain card) — it applies live, no
+restart. The card shows the exact wildcard DNS record to copy. The
+`DORMICE_SANDBOX_DOMAIN` environment variable still works as a
+first-boot seed:
 
 ```sh
 DORMICE_SANDBOX_DOMAIN=sbx.example.com
@@ -66,7 +70,7 @@ the sandbox — headers untouched, WebSocket upgrades passed through both
 ways. If nothing listens on the port, the proxy answers a 502 naming the
 port, not a hang.
 
-If `DORMICE_SANDBOX_DOMAIN` is unset, the feature is off: responses
+With no sandbox domain configured, the feature is off: responses
 carry no domain and the SDK has nothing to build URLs from.
 
 ## Frozen sandboxes wake on traffic

@@ -551,6 +551,10 @@ const CHECKS: DoctorCheck[] = [
     id: 's3-config',
     title: 'S3 archive configuration',
     run: async (ctx) => {
+      // Since the settings moved into the ledger these variables are
+      // first-boot seeds; doctor stays an offline preflight (env, files,
+      // commands — never the daemon), so it reports on the seed and points
+      // at the console for the value in force.
       const wanted = [
         'DORMICE_S3_ENDPOINT',
         'DORMICE_S3_BUCKET',
@@ -560,35 +564,46 @@ const CHECKS: DoctorCheck[] = [
       const missing = wanted.filter((name) => !ctx.env[name]);
       if (missing.length === wanted.length) {
         return skip(
-          'DORMICE_S3_* not set — the archiver is disabled; sandboxes park at stopped forever',
+          'DORMICE_S3_* not set — no first-boot seed; archiving can be switched on from the console settings at any time',
         );
       }
       if (missing.length > 0) {
         // The daemon's config schema refuses this too; naming it here saves
         // one failed boot.
         return fail(
-          `partial S3 set: ${missing.join(', ')} missing — the daemon refuses a half-configured archiver`,
+          `partial S3 set: ${missing.join(', ')} missing — the daemon refuses a half-configured seed`,
           'set all four DORMICE_S3_* variables (endpoint, bucket, key id, secret) or none',
         );
       }
-      return pass('all four DORMICE_S3_* variables set — archiver enabled');
+      return pass(
+        'all four DORMICE_S3_* variables set — a first-boot seed; once the daemon has booted, the ledger (console settings) rules',
+      );
     },
   },
   {
     id: 'zstd',
     title: 'zstd available',
-    needs: ['s3-config'],
     run: async (ctx) => {
       // Only the docker executor shells out to tar/zstd; the archiver runs
-      // `tar -I zstd` on the host at every archive and restore.
+      // `tar -I zstd` on the host at every archive and restore. Not gated
+      // on s3-config: archiving can be switched on from the console at any
+      // moment, so a docker host should have zstd ready — a missing binary
+      // is fatal only when an env seed says archiving starts at boot.
       if (ctx.env.DORMICE_EXECUTOR !== 'docker') {
         return skip('only the docker executor archives with host tar+zstd');
       }
       const res = await ctx.run('zstd', ['--version']);
-      return res.ok
-        ? pass(res.stdout.trim().split('\n')[0] ?? 'present')
-        : fail(
+      if (res.ok) {
+        return pass(res.stdout.trim().split('\n')[0] ?? 'present');
+      }
+      const seeded = ctx.env.DORMICE_S3_ENDPOINT !== undefined;
+      return seeded
+        ? fail(
             'zstd is not installed — every archive attempt will fail at tar',
+            'apt-get install -y zstd',
+          )
+        : warn(
+            'zstd is not installed — archiving can be switched on from the console at any time, and every attempt would then fail at tar',
             'apt-get install -y zstd',
           );
     },

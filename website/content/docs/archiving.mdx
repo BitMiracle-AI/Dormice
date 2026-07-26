@@ -13,12 +13,20 @@ storage.
 
 ## Enable archiving
 
-Set the four `DORMICE_S3_*` variables
-([reference](/docs/configuration#archiver-s3)). Any S3-compatible store
-works: AWS, Cloudflare R2, MinIO, Alibaba OSS in S3-compat mode.
+Configure the store in the console's settings page (the archive store
+card) — endpoint, bucket, credentials, region, path style. Any
+S3-compatible store works: AWS, Cloudflare R2, MinIO, Alibaba OSS in
+S3-compat mode. Before anything is saved, the daemon writes and reads
+back a probe object against the bucket, so a wrong endpoint or
+credential fails immediately with S3's own error — nothing half-works
+silently. The change applies live; no restart.
 
-With them set, stopped sandboxes archive after 7 more idle days by
-default. Tune it per sandbox with the policy:
+(The four `DORMICE_S3_*` environment variables still exist as
+first-boot seeds — [reference](/docs/configuration#archiver-s3) — handy
+for provisioning a fresh machine from a config file.)
+
+With a store configured, stopped sandboxes archive after 7 more idle
+days by default. Tune it per sandbox with the policy:
 
 ```ts
 await client.acquireSandbox('user-42', {
@@ -29,9 +37,12 @@ await client.acquireSandbox('user-42', {
 });
 ```
 
-Without the S3 variables, archiving is off: sandboxes park at stopped
+With no store configured, archiving is off: sandboxes park at stopped
 forever, and a policy asking to archive is rejected at acquire time —
-never stored as a promise the daemon cannot keep.
+never stored as a promise the daemon cannot keep. Clearing the store
+(or pointing it at a different endpoint or bucket) is refused while any
+sandbox is archived or restoring in the current one — their disks live
+there, and moving the pointer would strand them.
 
 ## Restore an archived sandbox
 

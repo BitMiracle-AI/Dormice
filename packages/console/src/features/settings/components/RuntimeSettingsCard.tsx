@@ -1,12 +1,7 @@
-import type {
-  GetConfigResponse,
-  RuntimeSettings,
-  UpdateSettingsRequest,
-} from '@dormice/shared';
+import type { GetConfigResponse, RuntimeSettings } from '@dormice/shared';
 import { PencilEdit02Icon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { useState } from 'react';
-import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -28,10 +23,9 @@ import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { durationHint, policyLine } from '@/features/sandboxes/format';
-import { updateSettings } from '@/lib/api';
 import { formatDateTime } from '@/lib/datetime';
-import { queryClient } from '@/lib/queryClient';
 import { m } from '@/paraglide/messages';
+import { useUpdateSettings } from '../hooks/useUpdateSettings';
 
 /**
  * 运营旋钮的编辑区:值住在账本里(env 同名变量只是首次启动的种子),
@@ -41,31 +35,9 @@ import { m } from '@/paraglide/messages';
  * 下一次出生的磁盘/容器,默认策略管下一次 acquire 创建的沙箱 — 存量
  * 沙箱一根汗毛都不动,这句话在每个弹窗里都说清。唯一的例外是 swap:
  * 它改的是宿主不是沙箱,增容立即、缩容等重启(swapLine 负责把这个
- * 时间差摆在明面上)。
+ * 时间差摆在明面上)。归档存储与沙箱域名不在这张卡:前者是独立的
+ * 归档卡(六字段撑不进一行的形制),后者语义归域名页。
  */
-
-function useSubmit(onDone: () => void) {
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const submit = async (patch: UpdateSettingsRequest, done: string) => {
-    setPending(true);
-    setError(null);
-    try {
-      await updateSettings(patch);
-      toast.success(done);
-      onDone();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      // 失败也刷新:swap 的 500 语义是"目标已存但应用失败",账本真的变了,
-      // 行里必须立刻说真话。设置页读 config;总览的容量卡走 getHostMetrics
-      // 自己的轮询。
-      void queryClient.invalidateQueries({ queryKey: ['config'] });
-      setPending(false);
-    }
-  };
-  return { pending, error, setError, submit };
-}
 
 function EditRow({
   label,
@@ -106,7 +78,9 @@ function EditTrigger() {
 function MaxSandboxesDialog({ settings }: { settings: RuntimeSettings }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
-  const { pending, error, setError, submit } = useSubmit(() => setOpen(false));
+  const { pending, error, setError, submit } = useUpdateSettings(() =>
+    setOpen(false),
+  );
 
   const valid =
     value.trim() !== '' && Number.isInteger(Number(value)) && Number(value) > 0;
@@ -169,7 +143,9 @@ function SandboxDefaultsDialog({ settings }: { settings: RuntimeSettings }) {
   const [cpus, setCpus] = useState('');
   const [memoryGb, setMemoryGb] = useState('');
   const [diskGb, setDiskGb] = useState('');
-  const { pending, error, setError, submit } = useSubmit(() => setOpen(false));
+  const { pending, error, setError, submit } = useUpdateSettings(() =>
+    setOpen(false),
+  );
 
   const filled = (raw: string) => raw.trim() !== '' && Number(raw) > 0;
   const valid = filled(cpus) && filled(memoryGb) && filled(diskGb);
@@ -273,7 +249,9 @@ function SandboxDefaultsDialog({ settings }: { settings: RuntimeSettings }) {
 function SwapDialog({ settings }: { settings: RuntimeSettings }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
-  const { pending, error, setError, submit } = useSubmit(() => setOpen(false));
+  const { pending, error, setError, submit } = useUpdateSettings(() =>
+    setOpen(false),
+  );
 
   const valid =
     value.trim() !== '' &&
@@ -363,7 +341,9 @@ function DefaultPolicyDialog({
   const [stopAfter, setStopAfter] = useState('');
   const [neverArchive, setNeverArchive] = useState(false);
   const [archiveAfter, setArchiveAfter] = useState('');
-  const { pending, error, setError, submit } = useSubmit(() => setOpen(false));
+  const { pending, error, setError, submit } = useUpdateSettings(() =>
+    setOpen(false),
+  );
 
   const filled = (raw: string) => raw.trim() !== '' && Number(raw) > 0;
   const valid =

@@ -152,8 +152,8 @@ describe('getConfig', () => {
     expect(body.archive).toEqual({ enabled: false, defaultSeconds: null });
   });
 
-  it('reports the archive default when an archiver is wired', async () => {
-    // buildApp derives the default purely from the archiver's presence.
+  it('reports the archive default when an S3 store is configured', async () => {
+    // The adjudication is the ledger's, seeded here from the env S3 set.
     const db = openDb(':memory:');
     migrateDb(db, MIGRATIONS);
     const executor = new FakeExecutor();
@@ -161,6 +161,10 @@ describe('getConfig', () => {
     const config = loadConfig({
       DORMICE_DB_PATH: ':memory:',
       DORMICE_API_TOKEN: TOKEN,
+      DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
+      DORMICE_S3_BUCKET: 'exam',
+      DORMICE_S3_ACCESS_KEY_ID: 'exam-key',
+      DORMICE_S3_SECRET_ACCESS_KEY: 'exam-secret',
     });
     const archiver = new Archiver({
       db,

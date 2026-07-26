@@ -30,7 +30,9 @@ import {
 import { Spinner } from '@/components/ui/spinner';
 import { m } from '@/paraglide/messages';
 import { BindDomainDialog } from '../components/BindDomainDialog';
+import { SandboxDomainCard } from '../components/SandboxDomainCard';
 import { useIngress, useSetIngress } from '../hooks/useIngress';
+import { detectPublicIp } from '../lib/publicIp';
 
 /**
  * 每个域名此刻的收敛阶段,从两个探测推出来:绿 = 事实成立,黄 = 还没
@@ -54,24 +56,6 @@ function phaseOf(probe: IngressProbe, publicIp: string | null): DomainPhase {
   if (probe.dnsAddresses.length === 0) return 'waiting-dns';
   if (publicIp && !probe.dnsAddresses.includes(publicIp)) return 'dns-mismatch';
   return 'issuing';
-}
-
-/**
- * 本机公网 IP 的来源是"浏览器此刻怎么够到这台服务器"——这比 daemon
- * 自己猜可靠(云上 NAT 环境 daemon 只看得见内网地址):引导期直接用
- * IP 访问,地址栏就是答案;已经走域名访问,当前域名(或任一绿灯域名)
- * 的解析值就是答案。两个来源都没有(如 localhost dev)则诚实返回 null。
- */
-function detectPublicIp(statuses: IngressDomainStatus[]): string | null {
-  const host = window.location.hostname;
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return host;
-  const here = statuses.find(
-    (status) => status.domain === host && status.probe.dnsAddresses.length > 0,
-  );
-  const ready = statuses.find(
-    (status) => status.probe.tlsOk && status.probe.dnsAddresses.length > 0,
-  );
-  return (here ?? ready)?.probe.dnsAddresses[0] ?? null;
 }
 
 const PHASE_BADGES: Record<
@@ -225,10 +209,14 @@ function DomainItem({
 }
 
 /**
- * 域名页:setIngress 改写 daemon 托管的 Caddy 配置并热重载,证书全权
- * 归 Caddy(ACME)。wire 是集合语义 — 增删都是"把想要的完整清单发过
- * 去",绑定弹窗在已绑清单上加一个、解绑在清单上减一个再整体提交。
- * 绑定失败不锁门::80 的 IP 访问在每次改写里都保留。
+ * 域名页两个分区(2026-07-26 沙箱域名进 webui):
+ * — 「控制台域名(HTTPS)」:setIngress 改写 daemon 托管的 Caddy 配置并
+ *   热重载,证书全权归 Caddy(ACME)。wire 是集合语义 — 增删都是"把想
+ *   要的完整清单发过去",绑定弹窗在已绑清单上加一个、解绑在清单上减一
+ *   个再整体提交。绑定失败不锁门::80 的 IP 访问在每次改写里都保留。
+ * — 「沙箱域名(端口预览)」:getHost 的泛域名,住在账本设置里
+ *   (updateSettings),与托管 Caddyfile 无关 — 所以它恒渲染,绝不被
+ *   "未接管反向代理"的空态挡住。
  */
 export function DomainsPage() {
   const { data, isPending, isError, error } = useIngress();
@@ -261,61 +249,76 @@ export function DomainsPage() {
         )}
       </header>
 
-      {isPending ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner /> {m.domains_loading()}
-        </div>
-      ) : isError ? (
-        <Empty className="border border-dashed">
-          <EmptyHeader>
-            <EmptyTitle>{m.domains_load_failed()}</EmptyTitle>
-            <EmptyDescription>{error.message}</EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      ) : !data.managed ? (
-        <Empty className="border border-dashed">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <HugeiconsIcon icon={Globe02Icon} />
-            </EmptyMedia>
-            <EmptyTitle>{m.domains_unmanaged_title()}</EmptyTitle>
-            <EmptyDescription>
-              {m.domains_unmanaged_description()}
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      ) : statuses.length === 0 ? (
-        <Empty className="border border-dashed">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <HugeiconsIcon icon={Globe02Icon} />
-            </EmptyMedia>
-            <EmptyTitle>{m.domains_empty_title()}</EmptyTitle>
-            <EmptyDescription>{m.domains_empty_description()}</EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <BindDomainDialog bound={bound} publicIp={publicIp} />
-          </EmptyContent>
-        </Empty>
-      ) : (
-        <>
-          <ItemGroup className="gap-2">
-            {statuses.map((status) => (
-              <DomainItem
-                key={status.domain}
-                status={status}
-                publicIp={publicIp}
-                removing={removing === status.domain}
-                busy={mutation.isPending}
-                onRemove={() => remove(status.domain)}
-              />
-            ))}
-          </ItemGroup>
-          <p className="text-sm text-muted-foreground">
-            {m.domains_probe_footnote()}
-          </p>
-        </>
-      )}
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-medium text-muted-foreground">
+          {m.domains_section_console()}
+        </h2>
+        {isPending ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Spinner /> {m.domains_loading()}
+          </div>
+        ) : isError ? (
+          <Empty className="border border-dashed">
+            <EmptyHeader>
+              <EmptyTitle>{m.domains_load_failed()}</EmptyTitle>
+              <EmptyDescription>{error.message}</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : !data.managed ? (
+          <Empty className="border border-dashed">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <HugeiconsIcon icon={Globe02Icon} />
+              </EmptyMedia>
+              <EmptyTitle>{m.domains_unmanaged_title()}</EmptyTitle>
+              <EmptyDescription>
+                {m.domains_unmanaged_description()}
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : statuses.length === 0 ? (
+          <Empty className="border border-dashed">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <HugeiconsIcon icon={Globe02Icon} />
+              </EmptyMedia>
+              <EmptyTitle>{m.domains_empty_title()}</EmptyTitle>
+              <EmptyDescription>
+                {m.domains_empty_description()}
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <BindDomainDialog bound={bound} publicIp={publicIp} />
+            </EmptyContent>
+          </Empty>
+        ) : (
+          <>
+            <ItemGroup className="gap-2">
+              {statuses.map((status) => (
+                <DomainItem
+                  key={status.domain}
+                  status={status}
+                  publicIp={publicIp}
+                  removing={removing === status.domain}
+                  busy={mutation.isPending}
+                  onRemove={() => remove(status.domain)}
+                />
+              ))}
+            </ItemGroup>
+            <p className="text-sm text-muted-foreground">
+              {m.domains_probe_footnote()}
+            </p>
+          </>
+        )}
+      </section>
+
+      {/* 沙箱域名与托管 Caddyfile 是两套机制:ingress 读失败/未接管都不影响这张卡。 */}
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-medium text-muted-foreground">
+          {m.domains_section_sandbox()}
+        </h2>
+        <SandboxDomainCard publicIp={publicIp} />
+      </section>
     </div>
   );
 }

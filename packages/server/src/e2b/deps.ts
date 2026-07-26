@@ -19,13 +19,12 @@ export interface E2bDeps {
   processes: ProcessTable;
   watchers: WatcherTable;
   /**
-   * Present exactly when S3 is configured. E2B has no restoring concept,
-   * so this surface's verbs block on restoreJoin — resuming an archived
-   * sandbox just takes longer, which is the faithful behavior.
+   * The archive/restore engine; whether archiving is available is its
+   * enabled() — a live ledger read. E2B has no restoring concept, so this
+   * surface's verbs block on restoreJoin — resuming an archived sandbox
+   * just takes longer, which is the faithful behavior.
    */
   archiver?: Archiver;
-  /** buildApp's one adjudication of the archive policy default (null = off). */
-  archiveDefaultSeconds: number | null;
   /**
    * HMAC key for envd access tokens and signed URLs — the ledger's
    * signing secret, never the API token (they rotate independently).

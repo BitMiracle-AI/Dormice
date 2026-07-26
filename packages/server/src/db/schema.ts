@@ -261,8 +261,11 @@ export type DaemonSecretsRow = typeof daemonSecrets.$inferSelect;
  * console without shell access and a restart (shared/settings.ts draws the
  * line). One row, fixed id — the console_account singleton pattern. Born at
  * first boot, seeded from the env variables of the same names; from then on
- * this row is the single truth and env edits to those knobs are ignored
- * (two live sources for one knob is a standing ambiguity).
+ * the ledger is the single truth and env edits to those knobs are ignored
+ * (two live sources for one knob is a standing ambiguity). The discipline
+ * is per knob, not per row: a column added by a later migration gets its
+ * one env consultation on the first boot that sees it NULL (see
+ * ensureRuntimeSettings' adopt step).
  *
  * Typed columns, not a JSON blob: the schema IS the vocabulary, and a knob
  * that exists but is invisible to migrations would drift silently.
@@ -280,6 +283,27 @@ export const runtimeSettings = sqliteTable('runtime_settings', {
   defaultArchiveAfterSeconds: integer('default_archive_after_seconds'),
   /** Daemon-managed swap target, GiB (see swap.ts); 0 = manage none. */
   swapGb: integer('swap_gb').notNull().default(0),
+  /**
+   * The S3 archive store and the sandbox domain (added 2026-07-26). These
+   * columns are per-knob three-state: NULL = the column is younger than
+   * this row and has never been adjudicated (alive only between the
+   * migration and the next boot's ensureRuntimeSettings, which adopts the
+   * env value once); '' on the two decider columns (s3Endpoint,
+   * sandboxDomain) = explicitly off. The sentinel never leaves
+   * db/settings.ts — toView maps '' back to the wire's null.
+   *
+   * s3SecretAccessKey is stored plaintext, like envdSigningSecret and
+   * sessionSecret above: a credential the daemon must present verbatim to
+   * S3 cannot be hashed. It never crosses the wire (shared/settings.ts
+   * s3ArchiveViewSchema withholds both keys).
+   */
+  s3Endpoint: text('s3_endpoint'),
+  s3Bucket: text('s3_bucket'),
+  s3AccessKeyId: text('s3_access_key_id'),
+  s3SecretAccessKey: text('s3_secret_access_key'),
+  s3Region: text('s3_region'),
+  s3ForcePathStyle: integer('s3_force_path_style', { mode: 'boolean' }),
+  sandboxDomain: text('sandbox_domain'),
   /** Null until the first updateSettings: "still exactly the seed" is information. */
   updatedAt: text('updated_at'),
 });

@@ -2598,7 +2598,11 @@ describe('E2B templates', () => {
 });
 
 describe('E2B surface vs the archiver', () => {
-  /** testApp plus a MemStore-backed archiver — the S3-configured daemon. */
+  /**
+   * testApp plus a MemStore-backed archiver — the S3-configured daemon.
+   * The env S3 seed flips the ledger's live adjudication (archiveEnabled);
+   * the MemStore stands in for the S3 those settings describe.
+   */
   function archiverTestApp(executor: FakeExecutor = new FakeExecutor()) {
     const db = openDb(':memory:');
     migrateDb(db, MIGRATIONS);
@@ -2606,6 +2610,10 @@ describe('E2B surface vs the archiver', () => {
       DORMICE_DB_PATH: ':memory:',
       DORMICE_NODE_ID: 'node-test',
       DORMICE_API_TOKEN: TOKEN,
+      DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
+      DORMICE_S3_BUCKET: 'exam',
+      DORMICE_S3_ACCESS_KEY_ID: 'exam-key',
+      DORMICE_S3_SECRET_ACCESS_KEY: 'exam-secret',
     });
     const locks = new KeyedQueue();
     const watchers = new WatcherTable();

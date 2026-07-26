@@ -61,6 +61,7 @@ export default defineConfig({
       '/checkUpgrade': 'http://127.0.0.1:3676',
       '/applyUpgrade': 'http://127.0.0.1:3676',
       '/getUpgradeStatus': 'http://127.0.0.1:3676',
+      '/updateSettings': 'http://127.0.0.1:3676',
       '/getIngress': 'http://127.0.0.1:3676',
       '/setIngress': 'http://127.0.0.1:3676',
       // The terminal speaks the envd surface directly, like the e2b SDK.

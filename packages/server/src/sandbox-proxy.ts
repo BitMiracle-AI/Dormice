@@ -2,10 +2,10 @@ import type http from 'node:http';
 import { request as httpRequest } from 'node:http';
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
-import type { Config } from './config';
 import type { Db } from './db/db';
 import { findById, touch } from './db/ledger';
 import type { SandboxRow } from './db/schema';
+import { readRuntimeSettings } from './db/settings';
 import { e2bView } from './e2b/view';
 import type { WatcherTable } from './e2b/watcher-table';
 import { startExecHeartbeat } from './exec-heartbeat';
@@ -58,6 +58,9 @@ export function parseSandboxHost(
   hostHeader: string | undefined,
   domain: string,
 ): { port: number; sandboxId: string } | null {
+  // Empty means "no domain in force" — never a match. Explicit, not left
+  // to the suffix check: `.` + '' would make every dotted host a candidate.
+  if (!domain) return null;
   if (!hostHeader) return null;
   const host = hostHeader.replace(/:\d+$/, '').toLowerCase();
   const suffix = `.${domain.toLowerCase()}`;
@@ -73,7 +76,6 @@ export function parseSandboxHost(
 }
 
 export interface SandboxProxyDeps {
-  config: Config;
   db: Db;
   executor: Executor;
   locks: KeyedQueue;
@@ -90,8 +92,12 @@ export interface SandboxProxy {
 class ProxyRefusal extends Error {}
 
 export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
-  const { config, db, executor, locks, watchers } = deps;
-  const domain = config.DORMICE_SANDBOX_DOMAIN ?? '';
+  const { db, executor, locks, watchers } = deps;
+  // Read per request, not captured: the domain is a ledger setting now
+  // (console domains page), and the proxy instance is mounted for the
+  // daemon's whole life — a getter is what makes an edit apply to the
+  // very next request.
+  const domain = () => readRuntimeSettings(db).sandboxDomain ?? '';
 
   function liveRow(sandboxId: string): SandboxRow {
     const row = findById(db, sandboxId);
@@ -115,7 +121,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
     port: number;
     target: { host: string; port: number };
   }> {
-    const parsed = parseSandboxHost(req.headers.host, domain);
+    const parsed = parseSandboxHost(req.headers.host, domain());
     if (!parsed) throw new ProxyRefusal('not sandbox traffic');
     const before = liveRow(parsed.sandboxId);
     const row = await locks.run(before.name, async () => {
@@ -142,7 +148,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
 
   return {
     matches(req) {
-      const parsed = parseSandboxHost(req.headers.host, domain);
+      const parsed = parseSandboxHost(req.headers.host, domain());
       if (!parsed) return false;
       // The envd file face on its fixed port belongs to Fastify's signed
       // door, not to a dial into the container (see ENVD_PORT).

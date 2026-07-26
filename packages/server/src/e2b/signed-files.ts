@@ -1,6 +1,7 @@
 import multipart from '@fastify/multipart';
 import type { FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
+import { readRuntimeSettings } from '../db/settings';
 import { parseSandboxHost } from '../sandbox-proxy';
 import { allowCorsOrigin, sendPreflight } from './cors';
 import type { E2bDeps } from './deps';
@@ -23,7 +24,8 @@ import {
  * authenticates AND identifies the sandbox (see authenticateSignedQuery).
  *
  * Two Host spellings land here, one door: the bare daemon origin (the URL
- * uploadUrl mints verbatim) and — with DORMICE_SANDBOX_DOMAIN set —
+ * uploadUrl mints verbatim) and — with a sandbox domain in force (a live
+ * ledger setting) —
  * `49983-<sandboxId>.<domain>`, real E2B's browser-postable form, which
  * the sandbox proxy carves out of port forwarding (see ENVD_PORT). On the
  * subdomain form the Host label pins the sandbox: a signature minted for
@@ -80,12 +82,14 @@ export const signedFileRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   });
 
   const ctx = createEnvdContext(deps);
-  const domain = deps.config.DORMICE_SANDBOX_DOMAIN;
 
   /**
    * The signature check plus, on the subdomain form, the Host pin: which
    * sandbox the label names is which sandbox the signature must speak for.
-   * The signed username also names the execution identity; the file
+   * The domain is read per request — it is a live ledger setting, and a
+   * signature (HMAC over sandbox/path/operation, never the domain) minted
+   * before a domain change verifies unchanged after it. The signed
+   * username also names the execution identity; the file
    * handler cores vet it against the image's users (a tampered username
    * never gets that far — the signature covers it).
    */
@@ -93,6 +97,7 @@ export const signedFileRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     request: FastifyRequest,
     operation: SigningOperation,
   ): string {
+    const domain = readRuntimeSettings(deps.db).sandboxDomain;
     const pinned = domain
       ? parseSandboxHost(request.headers.host, domain)?.sandboxId
       : undefined;

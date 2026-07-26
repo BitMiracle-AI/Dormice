@@ -95,7 +95,8 @@ function dueTransition(
  * otherwise stall every freeze, stop and deadline-kill behind them for the
  * whole heartbeat tick. Every cheap move lands first; archives then run
  * serially (one disk's worth of I/O at a time — the host has one disk),
- * each re-verified inside its own slot. With no archiver the archive rung
+ * each re-verified inside its own slot. With no archiver — or archiving
+ * switched off in the ledger settings — the archive rung
  * simply never moves and rows keep their recorded intent.
  *
  * One sandbox's failure must not punish the rest: a vanished container (a
@@ -123,7 +124,7 @@ export async function scanOnce(
   const archiveDue: SandboxRow[] = [];
   for (const row of listSandboxes(db)) {
     const due = dueTransition(row, now);
-    if (due === 'archive' && archiver !== undefined) {
+    if (due === 'archive' && archiver !== undefined && archiver.enabled()) {
       archiveDue.push(row);
     }
     if (dueDeadline(row, now) === null && (due === null || due === 'archive')) {
@@ -143,7 +144,7 @@ export async function scanOnce(
             db,
             executor,
             fresh.id,
-            archiver?.store ?? null,
+            archiver?.currentStore() ?? null,
             { kind: 'expired-killed', cause: 'E2B deadline (kill) reached' },
             watchers,
           );

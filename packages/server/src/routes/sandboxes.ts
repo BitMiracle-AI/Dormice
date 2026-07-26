@@ -59,7 +59,7 @@ import {
   resolveWindow,
 } from '../db/metrics';
 import type { SandboxRow } from '../db/schema';
-import { readRuntimeSettings } from '../db/settings';
+import { archiveEnabled, readRuntimeSettings } from '../db/settings';
 import { findTemplate, resolveImage } from '../db/templates';
 import type { WatcherTable } from '../e2b/watcher-table';
 import { startExecHeartbeat } from '../exec-heartbeat';
@@ -80,10 +80,8 @@ export interface SandboxRoutesOptions {
   executor: Executor;
   locks: KeyedQueue;
   watchers: WatcherTable;
-  /** Absent = no S3 configured: archiving and restores are honestly off. */
+  /** Whether archiving is available is its enabled() — a live ledger read; absent equals disabled. */
   archiver?: Archiver;
-  /** buildApp's one adjudication of the archive policy default (null = off). */
-  archiveDefaultSeconds: number | null;
 }
 
 /** What acquire's slot work resolves to — the wire union's two arms. */
@@ -127,10 +125,7 @@ function serializeMetadata(
 
 export const sandboxRoutes: FastifyPluginAsyncZod<
   SandboxRoutesOptions
-> = async (
-  app,
-  { config, db, executor, locks, watchers, archiver, archiveDefaultSeconds },
-) => {
+> = async (app, { config, db, executor, locks, watchers, archiver }) => {
   // Every sandbox lives on this daemon today, so the endpoint is our own
   // address; with sharding it may point at another node.
   const endpoint = `http://127.0.0.1:${config.DORMICE_PORT}`;
@@ -154,10 +149,10 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       // The protocol's promise: acquire never blocks on a slow wake-up. An
       // archived sandbox starts its restore and answers `restoring` with
       // progress at once; the caller polls acquire until it flips to ready.
-      if (!archiver) {
+      if (!archiver?.enabled()) {
         throw httpError(
           503,
-          `sandbox "${name}" is ${existing.state} but the daemon has no S3 configured (DORMICE_S3_*) — restore is impossible until it is`,
+          `sandbox "${name}" is ${existing.state} but no S3 archive store is configured — restore is impossible until one is configured in the console settings`,
         );
       }
       if (existing.state === 'archived') {
@@ -279,7 +274,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         policy = resolvePolicy(
           override,
           readRuntimeSettings(db).defaultPolicy,
-          archiveDefaultSeconds !== null,
+          archiveEnabled(db),
         );
       } catch (error) {
         if (error instanceof ZodError) {
@@ -782,13 +777,10 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
                 .join('; ')}`,
             };
           }
-          if (
-            archiveDefaultSeconds === null &&
-            merged.data.archiveAfterSeconds !== null
-          ) {
+          if (!archiveEnabled(db) && merged.data.archiveAfterSeconds !== null) {
             return {
               error:
-                'invalid lifecycle policy: archiving requires S3 (DORMICE_S3_*) to be configured',
+                'invalid lifecycle policy: archiving requires an S3 archive store — configure one in the console settings first',
             };
           }
           const before = {
@@ -903,7 +895,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           db,
           executor,
           existing.id,
-          archiver?.store ?? null,
+          archiver?.currentStore() ?? null,
           {
             kind: 'destroyed',
             cause: 'via destroySandbox',

@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/table';
 import { formatDuration } from '@/features/sandboxes/format';
 import { m } from '@/paraglide/messages';
+import { ArchiveStoreCard } from '../components/ArchiveStoreCard';
 import { RuntimeSettingsCard } from '../components/RuntimeSettingsCard';
 import { useConfig } from '../hooks/useConfig';
 
@@ -130,6 +131,8 @@ export function SettingsPage() {
       </header>
 
       <RuntimeSettingsCard data={data} />
+
+      <ArchiveStoreCard data={data} />
 
       <DataTable fill>
         <TableHeader>

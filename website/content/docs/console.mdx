@@ -113,19 +113,26 @@ Four more pages round out the operator view:
   daemon's own moves. Filterable by event kind, actor, and sandbox
   name: filtering by a key is how you read a leaked key's blast radius
   before revoking it. A bounded window, not an audit log.
-- **Domains** — bind domains to the daemon's front door (the managed
-  reverse proxy), with a copyable DNS record guide and a live per-domain
-  probe that shows DNS and certificate progress until each one turns
-  green. See
-  [Installation](/docs/installation#connect-from-another-machine).
+- **Domains** — two sections. Console domains bind to the daemon's
+  front door (the managed reverse proxy), with a copyable DNS record
+  guide and a live per-domain probe that shows DNS and certificate
+  progress until each one turns green — see
+  [Installation](/docs/installation#connect-from-another-machine). The
+  sandbox domain card sets the wildcard domain behind
+  [port previews](/docs/ports) — a copyable wildcard DNS record guide,
+  applied live; it does not depend on the managed reverse proxy.
 - **Settings** — two halves. The operational knobs (sandbox capacity
   cap, default resources for new sandboxes, default lifecycle policy,
-  extra managed [swap](/docs/core-concepts#swap-and-freezing)) live in
+  extra managed [swap](/docs/core-concepts#swap-and-freezing), and the
+  S3 [archive store](/docs/archiving)) live in
   the daemon's database and are edited right here, taking effect
   immediately — no restart, no sandbox touched. The swap knob is the one
   with an asymmetry: growing mounts new swap in seconds, shrinking waits
   for the next host reboot — active swap is never unmounted, because
-  that would drag every frozen sandbox's memory back into RAM. Everything
+  that would drag every frozen sandbox's memory back into RAM. The
+  archive store card probes the bucket with a real write-read-delete
+  round trip before saving, never shows the keys back, and refuses to
+  move or clear the store while sandboxes are archived in it. Everything
   else is the effective environment configuration, read-only, with
   secrets shown as present-or-absent only; changing those happens in
   `/etc/dormice/env` plus a restart, never from the browser.

@@ -30,14 +30,16 @@ describe('sandbox port proxy', () => {
     while (cleanups.length > 0) await cleanups.pop()?.();
   });
 
-  async function listeningApp() {
+  async function listeningApp(opts: { domain?: string | null } = {}) {
     const db = openDb(':memory:');
     migrateDb(db, MIGRATIONS);
+    // domain: null boots with no sandbox domain at all (no env seed).
+    const domainSeed = opts.domain === undefined ? DOMAIN : opts.domain;
     const config = loadConfig({
       DORMICE_DB_PATH: ':memory:',
       DORMICE_NODE_ID: 'node-test',
       DORMICE_API_TOKEN: TOKEN,
-      DORMICE_SANDBOX_DOMAIN: DOMAIN,
+      ...(domainSeed === null ? {} : { DORMICE_SANDBOX_DOMAIN: domainSeed }),
     });
     const executor = new FakeExecutor();
     const locks = new KeyedQueue();
@@ -102,7 +104,10 @@ describe('sandbox port proxy', () => {
     return rawRequest(port, { path, host });
   }
 
-  async function createSandbox(port: number): Promise<string> {
+  async function createSandbox(
+    port: number,
+    opts: { expectDomain?: boolean } = {},
+  ): Promise<string> {
     const res = await fetch(`http://127.0.0.1:${port}/e2b/api/sandboxes`, {
       method: 'POST',
       headers: {
@@ -116,8 +121,11 @@ describe('sandbox port proxy', () => {
       sandboxID: string;
       domain?: string;
     };
-    // The domain field is getHost's raw material — configured, so present.
-    expect(created.domain).toBe(DOMAIN);
+    // The domain field is getHost's raw material — present exactly while a
+    // domain is in force.
+    expect(created.domain).toBe(
+      (opts.expectDomain ?? true) ? DOMAIN : undefined,
+    );
     return created.sandboxID;
   }
 
@@ -137,6 +145,9 @@ describe('sandbox port proxy', () => {
     expect(parseSandboxHost(`0-${id}.${DOMAIN}`, DOMAIN)).toBeNull();
     expect(parseSandboxHost(`8000-not-a-uuid.${DOMAIN}`, DOMAIN)).toBeNull();
     expect(parseSandboxHost(undefined, DOMAIN)).toBeNull();
+    // No domain in force: never a match, whatever the Host says.
+    expect(parseSandboxHost(`8000-${id}.${DOMAIN}`, '')).toBeNull();
+    expect(parseSandboxHost(`8000-${id}.`, '')).toBeNull();
   });
 
   it('routes a sandbox Host into the sandbox, transparently', async () => {
@@ -398,5 +409,50 @@ describe('sandbox port proxy', () => {
     });
     expect(echoed).toContain('101');
     expect(echoed).toContain('marco');
+  });
+
+  it('the domain is live: set after boot it engages, cleared it disengages', async () => {
+    // Booted with NO domain — the daemon a fresh install runs before the
+    // operator opens the console's domains page.
+    const t = await listeningApp({ domain: null });
+    const sandboxId = await createSandbox(t.port, { expectDomain: false });
+    const host = `8000-${sandboxId}.${DOMAIN}`;
+
+    // Sandbox-shaped Hosts are ordinary Fastify traffic: the router 404s.
+    const before = await rawGet(t.port, '/hello', host);
+    expect(before.status).toBe(404);
+
+    // The console sets the domain — same daemon, no restart.
+    const set = await rawRequest(t.port, {
+      method: 'POST',
+      path: '/updateSettings',
+      host: '127.0.0.1',
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ sandboxDomain: DOMAIN }),
+    });
+    expect(set.status).toBe(200);
+
+    // The always-mounted proxy now matches, and create responses carry it.
+    const after = await rawGet(t.port, '/hello', host);
+    expect(after.status).toBe(200);
+    expect(JSON.parse(after.body).sandboxId).toBe(sandboxId);
+    await createSandbox(t.port);
+
+    // Cleared: back to stock-Fastify behavior for the same Host.
+    const clear = await rawRequest(t.port, {
+      method: 'POST',
+      path: '/updateSettings',
+      host: '127.0.0.1',
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ sandboxDomain: null }),
+    });
+    expect(clear.status).toBe(200);
+    expect((await rawGet(t.port, '/hello', host)).status).toBe(404);
   });
 });

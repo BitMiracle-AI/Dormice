@@ -75,15 +75,17 @@ below. `DORMICE_SANDBOX_PIDS_LIMIT` stays a plain environment variable.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `DORMICE_SANDBOX_DOMAIN` | — | The wildcard domain behind the E2B SDK's `getHost(port)` — see [Exposing ports](/docs/ports). Set a bare hostname like `sbx.example.com`; you point `*.<domain>` DNS plus a TLS-terminating reverse proxy at the daemon. Unset, the feature is off. |
+| `DORMICE_SANDBOX_DOMAIN` | — | First-boot seed for the sandbox wildcard domain behind the E2B SDK's `getHost(port)` — see [Exposing ports](/docs/ports). The value in force lives in the daemon's database and is edited live on the console's **Domains** page; once seeded, editing this variable has no effect. A bare hostname like `sbx.example.com`; you point `*.<domain>` DNS plus a TLS-terminating reverse proxy at the daemon. |
 
 ## Archiver (S3)
 
-The four core variables come as a set. With none of them, archiving is
-off — sandboxes park at stopped forever, and a policy asking to archive
-is rejected. With all four, stopped sandboxes
-[archive](/docs/archiving) after 7 more idle days by default. A partial
-set refuses to boot, naming the missing variables.
+These are **first-boot seeds** too: the store in force lives in the
+daemon's database and is configured live from the console's settings
+page (the archive store card) — including on a daemon that booted with
+none of them set. The four core variables come as a set; a partial set
+refuses to boot, naming the missing variables. With a store configured,
+stopped sandboxes [archive](/docs/archiving) after 7 more idle days by
+default.
 
 | Variable | Default | What it does |
 | --- | --- | --- |

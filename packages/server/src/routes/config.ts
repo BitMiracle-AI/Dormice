@@ -9,8 +9,6 @@ export interface ConfigRoutesOptions {
   config: Config;
   db: Db;
   sources: ConfigSources;
-  /** buildApp's one adjudication of the archive default (null = no archiver). */
-  archiveDefaultSeconds: number | null;
   /** The managed-swap surface; absent = this host cannot manage swap. */
   swap?: SwapControl;
 }
@@ -21,13 +19,14 @@ export interface ConfigRoutesOptions {
  * daemon that rewrites its own environment is a different security
  * decision entirely) plus the ledger-resident runtime settings, which DO
  * have a write verb (updateSettings, admin scope). For the knobs that
- * moved into the ledger the env entries below are first-boot seeds;
- * `settings` is what is in force. Secrets never cross the wire: set-or-
- * unset is all anyone learns.
+ * moved into the ledger — capacity, sandbox defaults, the default policy,
+ * the S3 archive store, the sandbox domain — the env entries below are
+ * first-boot seeds; `settings` is what is in force. Secrets never cross
+ * the wire: set-or-unset is all anyone learns.
  */
 export const configRoutes: FastifyPluginAsyncZod<ConfigRoutesOptions> = async (
   app,
-  { config, db, sources, archiveDefaultSeconds, swap },
+  { config, db, sources, swap },
 ) => {
   app.post(
     '/getConfig',
@@ -38,6 +37,9 @@ export const configRoutes: FastifyPluginAsyncZod<ConfigRoutesOptions> = async (
     },
     async () => {
       const settings = readRuntimeSettings(db);
+      // "Is archiving available" is the ledger's live answer — the same
+      // adjudication every consumer reads (db/settings.ts archiveEnabled).
+      const enabled = settings.s3 !== null;
       return {
         entries: (Object.keys(CONFIG_KEYS) as Array<keyof Config>).map(
           (key) => {
@@ -52,13 +54,10 @@ export const configRoutes: FastifyPluginAsyncZod<ConfigRoutesOptions> = async (
           },
         ),
         archive: {
-          enabled: archiveDefaultSeconds !== null,
-          // What new sandboxes actually get is the ledger's default policy
-          // — the boot constant is only its seed.
-          defaultSeconds:
-            archiveDefaultSeconds === null
-              ? null
-              : settings.defaultPolicy.archiveAfterSeconds,
+          enabled,
+          defaultSeconds: enabled
+            ? settings.defaultPolicy.archiveAfterSeconds
+            : null,
         },
         // Read live so a pending shrink (target < mounted, waiting for a
         // host reboot) or a failed grow is visible, not papered over.

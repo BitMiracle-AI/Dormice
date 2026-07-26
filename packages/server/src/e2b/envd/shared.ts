@@ -147,7 +147,7 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
    * not archived/restoring.
    */
   async function joinRestore(sandboxId: string): Promise<void> {
-    if (archiver) {
+    if (archiver?.enabled()) {
       try {
         await archiver.restoreJoin(sandboxId);
       } catch (error) {
@@ -164,7 +164,7 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
       throw new E2bError(
         502,
         'unavailable',
-        'sandbox is archived and the daemon has no S3 configured (DORMICE_S3_*)',
+        'sandbox is archived and no S3 archive store is configured',
       );
     }
   }

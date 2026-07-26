@@ -81,9 +81,9 @@ export async function stopSandbox(
  * An archived sandbox's body is its S3 object — nothing physical exists
  * locally, so destroy deletes the object instead of calling destroy (which
  * would honestly throw at the double absence). Every caller passes the
- * store explicitly (null = no archiver configured): releasing an archived
- * row without a store fails loudly and keeps the row, retryable once the
- * operator restores the DORMICE_S3_* configuration.
+ * store explicitly (null = no archive store configured): releasing an
+ * archived row without a store fails loudly and keeps the row, retryable
+ * once the operator configures the store again (console settings).
  */
 export async function destroySandbox(
   db: Db,
@@ -104,7 +104,7 @@ export async function destroySandbox(
   if (row?.state === 'archived') {
     if (store === null) {
       throw new Error(
-        `sandbox ${sandboxId} is archived but the daemon has no S3 configured (DORMICE_S3_*) — its archive object cannot be deleted`,
+        `sandbox ${sandboxId} is archived but no S3 archive store is configured — its archive object cannot be deleted`,
       );
     }
     await store.delete(objectKey(sandboxId));

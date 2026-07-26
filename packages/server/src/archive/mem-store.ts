@@ -1,13 +1,22 @@
 import { readFile, writeFile } from 'node:fs/promises';
+import type { ArchiveStoreProvider } from './archiver';
 import { ArchiveObjectMissingError, type ArchiveStore } from './store';
 
 /**
  * The permanent test double (FakeExecutor's discipline): objects in memory,
  * but the file ends are real — the archiver hands this store the same real
  * paths it hands S3Store, so what unit tests exercise is the same plumbing.
+ *
+ * Also its own always-on ArchiveStoreProvider (current() returns itself),
+ * so tests keep the plain `new Archiver({ store: memStore })` construction;
+ * tests about switching or disabling stores build their own provider.
  */
-export class MemStore implements ArchiveStore {
+export class MemStore implements ArchiveStore, ArchiveStoreProvider {
   private readonly objects = new Map<string, Buffer>();
+
+  current(): ArchiveStore {
+    return this;
+  }
 
   async put(key: string, filePath: string): Promise<void> {
     this.objects.set(key, await readFile(filePath));

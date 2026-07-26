@@ -120,6 +120,13 @@
       "when": 1784632504378,
       "tag": "0016_host-metrics-history",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1785071294047,
+      "tag": "0017_s3-domain-settings",
+      "breakpoints": true
     }
   ]
 }

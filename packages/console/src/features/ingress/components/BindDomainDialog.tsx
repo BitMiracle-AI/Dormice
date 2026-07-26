@@ -1,4 +1,4 @@
-import { Add01Icon, Copy01Icon } from '@hugeicons/core-free-icons';
+import { Add01Icon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { useState } from 'react';
 import { toast } from 'sonner';
@@ -21,9 +21,9 @@ import {
 } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
-import { copyText } from '@/lib/copy';
 import { m } from '@/paraglide/messages';
 import { useSetIngress } from '../hooks/useIngress';
+import { DnsRecordGuide } from './DnsRecordGuide';
 
 /**
  * 绑定就是"照抄一条 A 记录":弹窗把要填的记录值(本机公网 IP)直接给
@@ -88,44 +88,23 @@ export function BindDomainDialog({
           }}
         >
           <FieldGroup>
-            <div className="rounded-md border bg-muted/30 px-4 py-3">
-              <p className="text-xs text-muted-foreground">
-                {m.domains_bind_step1()}
-              </p>
-              <div className="mt-2 grid grid-cols-[4.5rem_1fr] items-center gap-y-1 font-mono text-xs">
-                <span className="text-muted-foreground">
-                  {m.domains_record_type()}
-                </span>
-                <span>A</span>
-                <span className="text-muted-foreground">
-                  {m.domains_record_value()}
-                </span>
-                {publicIp ? (
-                  <span className="flex items-center gap-1">
-                    {publicIp}
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={m.domains_copy_ip_label()}
-                      onClick={() =>
-                        copyText(publicIp).then(
-                          () => toast.success(m.common_copied()),
-                          () => toast.error(m.domains_copy_failed()),
-                        )
-                      }
-                    >
-                      <HugeiconsIcon icon={Copy01Icon} />
-                    </Button>
-                  </span>
-                ) : (
-                  <span>{m.domains_public_ip_placeholder()}</span>
-                )}
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                {m.domains_record_host_hint()}
-              </p>
-            </div>
+            <DnsRecordGuide
+              intro={m.domains_bind_step1()}
+              rows={[
+                { label: m.domains_record_type(), value: 'A' },
+                publicIp
+                  ? {
+                      label: m.domains_record_value(),
+                      value: publicIp,
+                      copyable: true,
+                    }
+                  : {
+                      label: m.domains_record_value(),
+                      value: m.domains_public_ip_placeholder(),
+                    },
+              ]}
+              footnote={m.domains_record_host_hint()}
+            />
             <Field data-invalid={duplicate || undefined}>
               <FieldLabel htmlFor="bind-domain">
                 {m.domains_field_domain()}

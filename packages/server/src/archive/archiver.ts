@@ -27,7 +27,13 @@ export interface ArchiverDeps {
   db: Db;
   executor: Executor;
   locks: KeyedQueue;
-  store: ArchiveStore;
+  /**
+   * Where the store comes from, asked per transfer — the ledger settings
+   * can swap the S3 target at runtime (archive/ledger-store.ts), and a
+   * transfer must run start to finish against the store it began with.
+   * null = archiving is off right now.
+   */
+  store: ArchiveStoreProvider;
   /**
    * Where transfer temp files stage. No default on purpose: every
    * construction site chooses, so a unit test can never land in
@@ -40,6 +46,10 @@ export interface ArchiverDeps {
   watchers?: WatcherTable;
 }
 
+export interface ArchiveStoreProvider {
+  current(): ArchiveStore | null;
+}
+
 function clampPercent(fraction: number): number {
   return Math.max(0, Math.min(100, Math.round(fraction * 100)));
 }
@@ -50,9 +60,14 @@ function clampPercent(fraction: number): number {
  * tracker is daemon memory, like the process table — a restart empties it,
  * and the startup reconcile repairs any restoring zombies before listen,
  * so at runtime a restoring row always has a live entry here.
+ *
+ * Constructed unconditionally and alive for the daemon's whole life, even
+ * with archiving off: the tracker must survive an S3 settings change (a
+ * fresh instance would make the reconciler call a running restore a
+ * zombie), so it is the store that swaps, never the Archiver.
  */
 export class Archiver {
-  readonly store: ArchiveStore;
+  private readonly storeProvider: ArchiveStoreProvider;
   private readonly db: Db;
   private readonly executor: Executor;
   private readonly locks: KeyedQueue;
@@ -65,16 +80,49 @@ export class Archiver {
     this.db = deps.db;
     this.executor = deps.executor;
     this.locks = deps.locks;
-    this.store = deps.store;
+    this.storeProvider = deps.store;
     this.tmpDir = deps.tmpDir;
     this.log = deps.log ?? (() => {});
     this.watchers = deps.watchers;
   }
 
+  /** The one adjudication of "is archiving available", asked live. */
+  enabled(): boolean {
+    return this.storeProvider.current() !== null;
+  }
+
+  /**
+   * The store in force right now — for one-shot object work (destroy's
+   * cleanup). Transfers don't use this: they capture the store once at
+   * entry and keep it for the whole task.
+   */
+  currentStore(): ArchiveStore | null {
+    return this.storeProvider.current();
+  }
+
+  /**
+   * Every transfer starts here: the store it will use start to finish. The
+   * throw is a wiring guard — the scanner and every route gate on
+   * enabled() first, so reaching this with archiving off is a bug, not a
+   * user error.
+   */
+  private requireStore(): ArchiveStore {
+    const store = this.storeProvider.current();
+    if (!store) {
+      throw new Error(
+        'no archive store is configured — the caller must gate on enabled()',
+      );
+    }
+    return store;
+  }
+
   /**
    * Boot sweep: everything under tmpDir is a half of some interrupted
    * transfer — the crash-recovery story never depends on temp files, so
-   * they are plain garbage here.
+   * they are plain garbage here. Run only when archiving is on (with it
+   * off, DATA_DIR may not even be writable on a dev machine); each
+   * transfer mkdirs its own tmpDir, so archiving switched on at runtime
+   * needs no init.
    */
   async init(): Promise<void> {
     await rm(this.tmpDir, { recursive: true, force: true });
@@ -99,11 +147,13 @@ export class Archiver {
         `sandbox ${row.id} is ${row.state}, expected stopped — only a stopped sandbox can archive`,
       );
     }
+    const store = this.requireStore();
     const startedAt = Date.now();
     const tmp = path.join(this.tmpDir, `${row.id}.archive.tar.zst`);
+    await mkdir(this.tmpDir, { recursive: true });
     try {
       await this.executor.exportDisk(row.id, tmp);
-      await this.store.put(objectKey(row.id), tmp);
+      await store.put(objectKey(row.id), tmp);
       transition(this.db, row.id, 'archived');
       await this.executor.destroy(row.id);
     } finally {
@@ -139,10 +189,17 @@ export class Archiver {
       sandboxId: row.id,
       detail: 'restore from S3 began',
     });
+    // Captured here, kept for the whole task: a settings edit mid-restore
+    // must not switch clients under a running download (the moving-store
+    // guard in updateSettings means only credentials can change here, and
+    // finishing on the credentials the task began with is the honest run).
+    const store = this.requireStore();
     const progress: RestoreProgress = { phase: 'downloading', percent: 0 };
-    const done = this.runRestore(row.id, row.name, progress).finally(() => {
-      this.restores.delete(row.id);
-    });
+    const done = this.runRestore(row.id, row.name, progress, store).finally(
+      () => {
+        this.restores.delete(row.id);
+      },
+    );
     // Native acquire never awaits this — a failure with no joiner must not
     // crash the daemon as an unhandled rejection. Joiners still observe the
     // rejection through the same promise.
@@ -201,10 +258,12 @@ export class Archiver {
     sandboxId: string,
     name: string,
     progress: RestoreProgress,
+    store: ArchiveStore,
   ): Promise<void> {
     const tmp = path.join(this.tmpDir, `${sandboxId}.restore.tar.zst`);
+    await mkdir(this.tmpDir, { recursive: true });
     try {
-      await this.store.get(objectKey(sandboxId), tmp, (fraction) => {
+      await store.get(objectKey(sandboxId), tmp, (fraction) => {
         progress.percent = clampPercent(fraction);
       });
       progress.phase = 'extracting';
@@ -245,7 +304,7 @@ export class Archiver {
       // "an object exists" means "the row is archived", and destroy never
       // has to chase stale copies. Best effort: a leaked object costs
       // pennies, failing a finished restore over cleanup costs a wake.
-      await this.store.delete(objectKey(sandboxId)).catch(() => {});
+      await store.delete(objectKey(sandboxId)).catch(() => {});
     } catch (err) {
       this.log(
         `restore of ${sandboxId} failed: ${err instanceof Error ? err.message : String(err)}`,

@@ -19,7 +19,7 @@ import {
   resolveWindow,
 } from '../db/metrics';
 import type { SandboxRow } from '../db/schema';
-import { readRuntimeSettings } from '../db/settings';
+import { archiveEnabled, readRuntimeSettings } from '../db/settings';
 import { findTemplate, resolveImage } from '../db/templates';
 import {
   destroySandbox,
@@ -100,7 +100,6 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     locks,
     watchers,
     archiver,
-    archiveDefaultSeconds,
     envdSigningSecret,
     identifyCredential,
   },
@@ -116,10 +115,10 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     if (!row || (row.state !== 'archived' && row.state !== 'restoring')) {
       return;
     }
-    if (!archiver) {
+    if (!archiver?.enabled()) {
       throw apiError(
         502,
-        `sandbox "${row.id}" is archived but the daemon has no S3 configured (DORMICE_S3_*)`,
+        `sandbox "${row.id}" is archived but no S3 archive store is configured — configure one in the console settings`,
       );
     }
     try {
@@ -166,11 +165,12 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   });
 
   // getHost()'s raw material: the SDK builds <port>-<sandboxId>.<domain>
-  // from this field. Present only when the operator configured the wildcard
-  // domain — an unconfigured feature is honestly absent, never guessed at.
-  const domainField = config.DORMICE_SANDBOX_DOMAIN
-    ? { domain: config.DORMICE_SANDBOX_DOMAIN }
-    : {};
+  // from this field. Present only while a wildcard domain is in force —
+  // read from the ledger per response (the console can set and clear it
+  // live); an unconfigured feature is honestly absent, never guessed at.
+  function domainField(sandboxDomain: string | null) {
+    return sandboxDomain ? { domain: sandboxDomain } : {};
+  }
 
   // What the views report as the sandbox's template. E2B's alias is the
   // template's human name — present only when a registered template was
@@ -195,16 +195,16 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       ...templateFields(row),
       envdVersion: ENVD_VERSION,
       envdAccessToken: mintEnvdToken(envdSigningSecret, row.id),
-      ...domainField,
+      ...domainField(readRuntimeSettings(db).sandboxDomain),
     };
   }
 
   /** What getInfo and list answer with. */
   function infoView(row: SandboxRow, state: 'running' | 'paused') {
-    // The ledger's live resource knobs, not the env seeds — CPU/memory
-    // apply at each container launch, so the current values are what a
-    // sandbox actually runs (or will run) with.
-    const { sandboxDefaults } = readRuntimeSettings(db);
+    // The ledger's live knobs, not the env seeds — CPU/memory apply at
+    // each container launch, so the current values are what a sandbox
+    // actually runs (or will run) with; the domain rides the same read.
+    const { sandboxDefaults, sandboxDomain } = readRuntimeSettings(db);
     return {
       sandboxID: row.id,
       // Required by the Python SDK's models, like clientID above.
@@ -222,7 +222,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       memoryMB: Math.round(sandboxDefaults.memoryGb * 1024),
       diskSizeMB: Math.round(sandboxDefaults.diskGb * 1024),
       envdVersion: ENVD_VERSION,
-      ...domainField,
+      ...domainField(sandboxDomain),
     };
   }
 
@@ -326,7 +326,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
             db,
             executor,
             existing.id,
-            archiver?.store ?? null,
+            archiver?.currentStore() ?? null,
             {
               kind: 'destroyed',
               cause: 'protocol-dead row reaped by E2B create',
@@ -354,7 +354,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           policy: resolvePolicy(
             undefined,
             readRuntimeSettings(db).defaultPolicy,
-            archiveDefaultSeconds !== null,
+            archiveEnabled(db),
           ),
           template,
           actor: request.actor,
@@ -540,7 +540,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         db,
         executor,
         fresh.id,
-        archiver?.store ?? null,
+        archiver?.currentStore() ?? null,
         {
           kind: 'destroyed',
           cause: 'via E2B kill',

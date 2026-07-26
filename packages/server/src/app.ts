@@ -11,6 +11,7 @@ import {
 import { type Logger, pino } from 'pino';
 import { z } from 'zod';
 import type { Archiver } from './archive/archiver';
+import type { S3Settings } from './archive/s3-store';
 import { requireAdminAuth, requireApiAuth, tokensEqual } from './auth';
 import { type Config, type ConfigSources, configSources } from './config';
 import { getConsoleAccount } from './db/account';
@@ -24,7 +25,6 @@ import { WatcherTable } from './e2b/watcher-table';
 import type { Executor } from './executor/executor';
 import type { Ingress } from './ingress';
 import type { KeyedQueue } from './keyed-queue';
-import { ARCHIVE_DEFAULT_SECONDS } from './policy';
 import { activityRoutes } from './routes/activity';
 import { apiKeyRoutes } from './routes/api-keys';
 import { configRoutes } from './routes/config';
@@ -65,11 +65,12 @@ export interface AppDeps {
    */
   consoleDistDir?: string;
   /**
-   * The archive/restore engine, present exactly when S3 is configured.
-   * Absent, the daemon is byte-for-byte the archive-less daemon: the
-   * scanner never moves the archive rung and archive-asking policies are
-   * refused (the SANDBOX_DOMAIN precedent — an unconfigured feature is
-   * honestly absent, never half-present).
+   * The archive/restore engine. Whether archiving is AVAILABLE is not its
+   * presence but its enabled() — a live read of the ledger's S3 settings,
+   * so the console can switch archiving on and off without a restart.
+   * Optional purely as a test convenience: many app tests exercise no
+   * archive path, and to them an absent archiver equals a disabled one
+   * (both make archiveEnabled(db) the sole adjudicator refuse).
    */
   archiver?: Archiver;
   /**
@@ -84,6 +85,12 @@ export interface AppDeps {
    * getConfig reports { supported: false } and a swapGb patch is refused.
    */
   swap?: SwapControl;
+  /**
+   * Test seam over updateSettings' S3 round-trip probe (routes/settings.ts)
+   * — a unit test forges S3's answers instead of needing a live store.
+   * Production omits it and probes for real.
+   */
+  probeS3?: (s3: S3Settings) => Promise<void>;
   /**
    * Which knobs came from the environment versus defaults, for getConfig.
    * Defaults to reading process.env — right for the daemon; tests that
@@ -120,6 +127,7 @@ export function buildApp({
   archiver,
   ingress,
   swap,
+  probeS3,
   sources = configSources(),
   updater = new Updater({
     repoDir: null,
@@ -128,13 +136,12 @@ export function buildApp({
     executor: config.DORMICE_EXECUTOR,
   }),
 }: AppDeps) {
-  // The archive default is adjudicated once, here, by the archiver's
-  // presence: with one, new sandboxes archive after a week of idleness;
-  // without one, never — and asking is a 400.
-  const archiveDefaultSeconds = archiver ? ARCHIVE_DEFAULT_SECONDS : null;
   // Idempotent get-or-seed: main.ts already ran it (the executor reads
   // settings before buildApp), tests build the app directly and need it here.
-  ensureRuntimeSettings(db, config, archiveDefaultSeconds);
+  // "Is archiving available" is no longer adjudicated here — it lives in the
+  // ledger settings and every consumer reads it live (db/settings.ts
+  // archiveEnabled), so a console edit applies without a restart.
+  ensureRuntimeSettings(db, config);
   // Always a pino instance (booleans are normalized into one): two fastify()
   // call shapes would give the instance two different types.
   const loggerInstance =
@@ -145,29 +152,30 @@ export function buildApp({
 
   // The sandbox port proxy sits in front of routing — it triages by Host
   // header, so it must see the request before Fastify's router 404s a
-  // wildcard host's arbitrary path. Only with the domain knob set; without
-  // it the server is stock Fastify, byte for byte. app.inject() bypasses
-  // the factory, so the proxy is exercised over real sockets only.
-  let serverFactory: FastifyServerFactory | undefined;
-  if (config.DORMICE_SANDBOX_DOMAIN) {
-    const proxy = createSandboxProxy({ config, db, executor, locks, watchers });
-    serverFactory = (handler) => {
-      const server = http.createServer((req, res) => {
-        if (proxy.matches(req)) proxy.handleRequest(req, res);
-        else handler(req, res);
-      });
-      // Fastify itself never handles upgrades; sandbox WebSockets (dev
-      // servers' HMR, notebooks) are the proxy's, everything else is cut.
-      server.on('upgrade', (req, socket, head) => {
-        if (proxy.matches(req)) proxy.handleUpgrade(req, socket, head);
-        else socket.destroy();
-      });
-      return server;
-    };
-  }
+  // wildcard host's arbitrary path. Mounted unconditionally: the domain is
+  // a live ledger setting now, so the proxy must already be in the path
+  // when the operator sets one — with no domain in force, matches() is
+  // constantly false and the upgrade hook destroys non-matching sockets
+  // exactly as stock Fastify (which never handles upgrades) would.
+  // app.inject() bypasses the factory, so the proxy is exercised over real
+  // sockets only.
+  const proxy = createSandboxProxy({ db, executor, locks, watchers });
+  const serverFactory: FastifyServerFactory = (handler) => {
+    const server = http.createServer((req, res) => {
+      if (proxy.matches(req)) proxy.handleRequest(req, res);
+      else handler(req, res);
+    });
+    // Fastify itself never handles upgrades; sandbox WebSockets (dev
+    // servers' HMR, notebooks) are the proxy's, everything else is cut.
+    server.on('upgrade', (req, socket, head) => {
+      if (proxy.matches(req)) proxy.handleUpgrade(req, socket, head);
+      else socket.destroy();
+    });
+    return server;
+  };
   const app = fastify({
     loggerInstance,
-    ...(serverFactory ? { serverFactory } : {}),
+    serverFactory,
   }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -268,7 +276,6 @@ export function buildApp({
       locks,
       watchers,
       archiver,
-      archiveDefaultSeconds,
     });
     await api.register(templateRoutes, { db });
     await api.register(hostRoutes, { config, db, executor });
@@ -278,7 +285,6 @@ export function buildApp({
       config,
       db,
       sources,
-      archiveDefaultSeconds,
       swap,
     });
     await api.register(upgradeRoutes, { updater, db });
@@ -294,8 +300,8 @@ export function buildApp({
     await admin.register(apiKeyRoutes, { db });
     await admin.register(settingsRoutes, {
       db,
-      archiveEnabled: archiveDefaultSeconds !== null,
       swap,
+      ...(probeS3 ? { probeS3 } : {}),
     });
   });
 
@@ -323,7 +329,6 @@ export function buildApp({
       processes,
       watchers,
       archiver,
-      archiveDefaultSeconds,
       envdSigningSecret,
       identifyCredential,
     });

@@ -366,6 +366,33 @@ describe('idle scanner: the archive rung', () => {
     expect(await executor.listDisks()).toContain(row.id);
   });
 
+  it('never moves the archive rung while the store is off — enabled() gates, live', async () => {
+    // An archiver whose provider says "no store right now" — the console
+    // cleared the S3 settings. Same standing intent, same untouched row.
+    const { db, executor, locks } = setup();
+    let store: MemStore | null = null;
+    const archiver = new Archiver({
+      db,
+      executor,
+      locks,
+      store: { current: () => store },
+      tmpDir: mkdtempSync(path.join(tmpdir(), 'dormice-scan-')),
+    });
+    const row = await seed(db, executor, 'alice', ARCHIVING_POLICY);
+    await walkToStopped(db, executor, locks, row);
+
+    const off = await scanOnce(db, executor, locks, after(row, 180), archiver);
+    expect(off.archived).toBe(0);
+    expect(findByName(db, 'alice')?.state).toBe('stopped');
+
+    // The console configures a store: the very next sweep archives.
+    store = new MemStore();
+    const on = await scanOnce(db, executor, locks, after(row, 180), archiver);
+    expect(on.archived).toBe(1);
+    expect(findByName(db, 'alice')?.state).toBe('archived');
+    expect(store.has(objectKey(row.id))).toBe(true);
+  });
+
   it('never archives a policy that says archive: null', async () => {
     const { db, executor, locks, archiver } = setupWithArchiver();
     const row = await seed(db, executor, 'alice', {
@@ -388,12 +415,12 @@ describe('idle scanner: the archive rung', () => {
   it('an archive failure lands in failures without blocking the sweep', async () => {
     // The two-phase shape under test: the failing archive runs after —
     // and therefore cannot stall — the same sweep's cheap freeze.
-    const { db, executor, locks, archiver } = setupWithArchiver();
+    const { db, executor, locks, store, archiver } = setupWithArchiver();
     const doomed = await seed(db, executor, 'doomed', ARCHIVING_POLICY);
     await walkToStopped(db, executor, locks, doomed);
     const cooling = await seed(db, executor, 'cooling', ARCHIVING_POLICY);
     // Sabotage the upload: the store refuses everything.
-    archiver.store.put = async () => {
+    store.put = async () => {
       throw new Error('the bucket said no');
     };
 
@@ -443,7 +470,7 @@ describe('idle scanner: the archive rung', () => {
   });
 
   it('kill-deadline on a restoring row is deferred one sweep', async () => {
-    const { db, executor, locks, archiver } = setupWithArchiver();
+    const { db, executor, locks, store, archiver } = setupWithArchiver();
     const row = await seed(db, executor, 'alice', ARCHIVING_POLICY);
     await walkToStopped(db, executor, locks, row);
     await scanOnce(db, executor, locks, after(row, 180), archiver);
@@ -453,8 +480,8 @@ describe('idle scanner: the archive rung', () => {
     const gate = new Promise<void>((resolve) => {
       releaseDownload = resolve;
     });
-    const innerGet = archiver.store.get.bind(archiver.store);
-    archiver.store.get = async (key, dest, onProgress) => {
+    const innerGet = store.get.bind(store);
+    store.get = async (key, dest, onProgress) => {
       await gate;
       return innerGet(key, dest, onProgress);
     };

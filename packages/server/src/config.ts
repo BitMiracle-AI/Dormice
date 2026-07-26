@@ -1,4 +1,5 @@
 import { isAbsolute } from 'node:path';
+import { bareHostnameRegex } from '@dormice/shared';
 import { z } from 'zod';
 import type { S3Settings } from './archive/s3-store';
 
@@ -76,24 +77,24 @@ const envSchema = z.object({
     .positive()
     .default(45),
   /**
-   * The sandbox wildcard domain behind getHost(): with it set, create and
-   * connect responses carry `domain`, the SDK builds
-   * `<port>-<sandboxId>.<domain>` hosts, and requests arriving with such a
-   * Host header are proxied into that sandbox's port (frozen sandboxes wake
-   * on traffic). The operator points `*.<domain>` DNS plus a TLS-terminating
-   * reverse proxy at the daemon. Unset, responses carry no domain and the
-   * proxy never engages — the feature is honestly absent, not half-present.
-   * A bare hostname: no scheme, no port, no leading or trailing dot.
+   * The sandbox wildcard domain behind getHost() — first-boot seed only
+   * since 2026-07-26: the value in force lives in the ledger
+   * (runtime_settings.sandbox_domain, edited from the console domains
+   * page), and once that column holds a value this variable is
+   * deliberately ignored. With a domain in force, create and connect
+   * responses carry `domain`, the SDK builds `<port>-<sandboxId>.<domain>`
+   * hosts, and requests arriving with such a Host header are proxied into
+   * that sandbox's port (frozen sandboxes wake on traffic). The operator
+   * points `*.<domain>` DNS plus a TLS-terminating reverse proxy at the
+   * daemon. A bare hostname: no scheme, no port, no leading or trailing
+   * dot — the same regex the wire validates against (shared/settings.ts).
    */
   DORMICE_SANDBOX_DOMAIN: z
     .string()
-    .regex(
-      /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i,
-      {
-        error:
-          'DORMICE_SANDBOX_DOMAIN must be a bare hostname like sbx.example.com — no scheme, no port, no leading/trailing dots',
-      },
-    )
+    .regex(bareHostnameRegex, {
+      error:
+        'DORMICE_SANDBOX_DOMAIN must be a bare hostname like sbx.example.com — no scheme, no port, no leading/trailing dots',
+    })
     .optional(),
   /**
    * The Caddy config file the daemon owns — the switch for web-based domain
@@ -120,11 +121,14 @@ const envSchema = z.object({
   DORMICE_INGRESS_RELOAD_CMD: z.string().min(1).optional(),
   /**
    * The S3-compatible object store behind the archiver (AWS, R2, MinIO,
-   * OSS in S3-compat mode). The four core variables come as a set: with
-   * none of them, archiving is honestly absent — sandboxes park at stopped
-   * forever, and policies asking to archive are refused (the
-   * SANDBOX_DOMAIN precedent). Endpoint is a full URL including scheme
-   * (MinIO speaks http, the clouds https).
+   * OSS in S3-compat mode) — first-boot seeds only since 2026-07-26: the
+   * store in force lives in the ledger (runtime_settings.s3_*, edited from
+   * the console settings page), and once those columns hold a value these
+   * variables are deliberately ignored. The four core variables still come
+   * as a set (a half-configured seed refuses to boot, same as ever); with
+   * none of them, the seed is "archiving off" — the console can turn it on
+   * at any time. Endpoint is a full URL including scheme (MinIO speaks
+   * http, the clouds https).
    */
   DORMICE_S3_ENDPOINT: z
     .url({
@@ -252,11 +256,14 @@ export function configSources(
 }
 
 /**
- * The single adjudicator of "is the archiver configured": null unless the
- * whole S3 set is present (a partial set never gets past the schema). What
- * hangs off this one answer: whether an Archiver is built at boot, whether
- * new sandboxes default to archiving, and whether archive-asking policy
- * overrides are accepted at all.
+ * The one adjudicator of the S3 first-boot seed: null unless the whole
+ * DORMICE_S3_* set is present (a partial set never gets past the schema).
+ * Since 2026-07-26 this decides only what ensureRuntimeSettings seeds a
+ * virgin ledger with — the store in force is the ledger's
+ * (db/settings.ts readS3Settings), and everything that used to hang off
+ * this answer (whether the Archiver has a store, whether new sandboxes
+ * default to archiving, whether archive-asking policies are accepted)
+ * reads the ledger live.
  */
 export function s3Settings(config: Config): S3Settings | null {
   if (

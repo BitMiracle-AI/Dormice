@@ -107,13 +107,13 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
   });
 
   it("surfaces the server's refusal of archiving without S3", async () => {
-    // This test server has no archiver; the union's `restoring` arm is
-    // exercised end-to-end by the e2e archive suite instead.
+    // This test server has no archive store; the union's `restoring` arm
+    // is exercised end-to-end by the e2e archive suite instead.
     await expect(
       client.acquireSandbox('carol', { policy: { archiveAfterSeconds: 1 } }),
     ).rejects.toMatchObject({
       status: 400,
-      message: expect.stringMatching(/archiving requires S3/),
+      message: expect.stringMatching(/archiving requires an S3 archive store/),
     });
   });
 

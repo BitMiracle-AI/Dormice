@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { pino } from 'pino';
 import { buildApp } from './app';
 import { Archiver } from './archive/archiver';
-import { S3Store } from './archive/s3-store';
-import { type Config, loadConfig, s3Settings } from './config';
+import { LedgerArchiveStore } from './archive/ledger-store';
+import { type Config, loadConfig } from './config';
 import { recordActivity } from './db/activity';
 import { migrateDb, openDb } from './db/db';
 import { listSandboxes } from './db/ledger';
@@ -19,7 +19,6 @@ import { CpuSampler } from './host-metrics';
 import { Ingress } from './ingress';
 import { KeyedQueue } from './keyed-queue';
 import { sampleOnce } from './metrics-sampler';
-import { ARCHIVE_DEFAULT_SECONDS } from './policy';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
 import { locallyClaimedCount, startupGuard } from './startup-guard';
@@ -56,13 +55,10 @@ const db = openDb(config.DORMICE_DB_PATH);
 migrateDb(db, fileURLToPath(new URL('../drizzle', import.meta.url)));
 
 // Seed the runtime settings before anything can read a knob (the executor
-// reads them at every disk/container birth). The archive adjudication here
-// is the same one buildApp makes: archiver exists iff S3 is configured.
-ensureRuntimeSettings(
-  db,
-  config,
-  s3Settings(config) !== null ? ARCHIVE_DEFAULT_SECONDS : null,
-);
+// reads them at every disk/container birth). The archive adjudication —
+// "env S3 seed present means new sandboxes archive after a week" — lives
+// inside ensure now, next to the seeding it belongs to.
+ensureRuntimeSettings(db, config);
 
 function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
   if (cfg.DORMICE_EXECUTOR === 'fake') return new FakeExecutor();
@@ -96,25 +92,28 @@ const executor = buildExecutor(config, (msg) => log.info(msg));
 const locks = new KeyedQueue();
 const watchers = new WatcherTable();
 
-// The archiver exists exactly when S3 is configured; without it the daemon
-// is byte-for-byte the archive-less daemon. Temp transfers stage next to
-// the disks (same filesystem — they are disk-sized, and /tmp may be RAM).
-const s3 = s3Settings(config);
-let archiver: Archiver | undefined;
-if (s3 !== null) {
-  archiver = new Archiver({
-    db,
-    executor,
-    locks,
-    store: new S3Store(s3),
-    tmpDir: path.join(config.DORMICE_DATA_DIR, 'tmp'),
-    log: (msg) => log.info(msg),
-    watchers,
-  });
+// One Archiver for the daemon's whole life — its restore tracker is daemon
+// memory and must survive settings edits; whether archiving is available
+// is the store provider's live answer from the ledger, not a boot fact.
+// Temp transfers stage next to the disks (same filesystem — they are
+// disk-sized, and /tmp may be RAM).
+const archiver = new Archiver({
+  db,
+  executor,
+  locks,
+  store: new LedgerArchiveStore(db),
+  tmpDir: path.join(config.DORMICE_DATA_DIR, 'tmp'),
+  log: (msg) => log.info(msg),
+  watchers,
+});
+if (archiver.enabled()) {
   await archiver.init();
-  log.info(`archiver enabled: bucket ${s3.bucket} at ${s3.endpoint}`);
+  const s3View = readRuntimeSettings(db).s3;
+  log.info(`archiver enabled: bucket ${s3View?.bucket} at ${s3View?.endpoint}`);
 } else {
-  log.info('archiver disabled: DORMICE_S3_* not configured');
+  log.info(
+    'archiver disabled: no S3 store in the ledger settings (configure one in the console)',
+  );
 }
 
 // The managed front door exists exactly when its file knob is set (the

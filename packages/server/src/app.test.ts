@@ -156,7 +156,7 @@ describe('POST /acquireSandbox', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().message).toMatch(
-      /archiving requires S3 \(DORMICE_S3_\*\)/,
+      /archiving requires an S3 archive store/,
     );
   });
 
@@ -961,7 +961,9 @@ describe('POST /updatePolicy', () => {
       policy: { archiveAfterSeconds: 30 * 24 * 60 * 60 },
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().message).toMatch(/DORMICE_S3_/);
+    expect(res.json().message).toMatch(
+      /archiving requires an S3 archive store/,
+    );
   });
 
   it('answers 404 for an unknown key — updatePolicy is not a creator', async () => {
@@ -1125,7 +1127,12 @@ describe('POST /destroySandbox', () => {
 });
 
 describe('the archiver through the app', () => {
-  /** testApp plus a MemStore-backed archiver — the S3-configured daemon. */
+  /**
+   * testApp plus a MemStore-backed archiver — the S3-configured daemon.
+   * The env S3 seed is what flips the ledger's live adjudication
+   * (archiveEnabled); the MemStore stands in for the S3 those settings
+   * describe, so the routes' answer and the archiver's plumbing agree.
+   */
   function archiverTestApp(executor: FakeExecutor = new FakeExecutor()) {
     const db = openDb(':memory:');
     migrateDb(db, MIGRATIONS);
@@ -1133,6 +1140,10 @@ describe('the archiver through the app', () => {
       DORMICE_DB_PATH: ':memory:',
       DORMICE_NODE_ID: 'node-test',
       DORMICE_API_TOKEN: TOKEN,
+      DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
+      DORMICE_S3_BUCKET: 'exam',
+      DORMICE_S3_ACCESS_KEY_ID: 'exam-key',
+      DORMICE_S3_SECRET_ACCESS_KEY: 'exam-secret',
     });
     const locks = new KeyedQueue();
     const store = new MemStore();
@@ -1245,7 +1256,7 @@ describe('the archiver through the app', () => {
 
     const res = await acquire(app, { name: 'alice' });
     expect(res.statusCode).toBe(503);
-    expect(res.json().message).toMatch(/no S3 configured \(DORMICE_S3_\*\)/);
+    expect(res.json().message).toMatch(/no S3 archive store is configured/);
   });
 
   it('release of an archived sandbox deletes the S3 object and the row', async () => {

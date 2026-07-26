@@ -39,7 +39,7 @@ describe('resolvePolicy without an archiver (archiveEnabled = false)', () => {
   it('refuses an explicit archive threshold — no archiver, no promise', () => {
     expect(() =>
       resolvePolicy({ archiveAfterSeconds: 60 }, NO_ARCHIVER_DEFAULTS, false),
-    ).toThrow(/archiving requires S3 \(DORMICE_S3_\*\) to be configured/);
+    ).toThrow(/archiving requires an S3 archive store/);
   });
 
   it('rejects a merged result that violates freeze <= stop', () => {

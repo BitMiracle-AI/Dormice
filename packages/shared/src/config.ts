@@ -29,10 +29,11 @@ export type ConfigEntry = z.infer<typeof configEntrySchema>;
 export const getConfigResponseSchema = z.object({
   entries: z.array(configEntrySchema),
   /**
-   * The daemon's one adjudication of "is archiving available" (the whole
-   * DORMICE_S3_* set configured), plus the default distance from stopped
-   * to archived that new sandboxes get. Clients gate archive knobs on
-   * this instead of re-deriving it from the S3 entries.
+   * The daemon's one adjudication of "is archiving available" (an S3 store
+   * present in the ledger settings — see settings.ts `s3`), plus the
+   * default distance from stopped to archived that new sandboxes get.
+   * Clients gate archive knobs on this instead of re-deriving it from the
+   * S3 entries.
    */
   archive: z.object({
     enabled: z.boolean(),
