@@ -57,6 +57,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { destroySandbox } from '@/lib/api';
+import { formatDateTime } from '@/lib/datetime';
 import { formatBytes, pctOf } from '@/lib/format';
 import { queryClient } from '@/lib/queryClient';
 import { cn } from '@/lib/utils';
@@ -271,7 +272,7 @@ function BulkDestroyButton({
       toast.error(
         m.sandboxes_destroy_failed_count({
           n: failures.length,
-          names: failures.join(m.sandboxes_name_separator()),
+          names: failures.join(m.common_name_separator()),
         }),
       );
     }
@@ -631,7 +632,7 @@ export function SandboxesPage() {
                 <TableCell
                   className="tabular-nums text-muted-foreground"
                   title={m.sandboxes_created_at_title({
-                    time: new Date(sandbox.createdAt).toLocaleString(),
+                    time: formatDateTime(sandbox.createdAt),
                   })}
                 >
                   {ago(sandbox.createdAt)}
@@ -639,7 +640,7 @@ export function SandboxesPage() {
                 <TableCell
                   className="tabular-nums text-muted-foreground"
                   title={m.sandboxes_last_active_title({
-                    time: new Date(sandbox.lastActiveAt).toLocaleString(),
+                    time: formatDateTime(sandbox.lastActiveAt),
                   })}
                 >
                   {ago(sandbox.lastActiveAt)}

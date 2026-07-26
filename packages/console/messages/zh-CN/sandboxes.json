@@ -30,7 +30,6 @@
   "sandboxes_destroy": "销毁",
   "sandboxes_destroyed_count": "已销毁 {n} 个沙箱",
   "sandboxes_destroy_failed_count": "{n} 个销毁失败:{names}",
-  "sandboxes_name_separator": "、",
   "sandboxes_destroy_selected": "销毁选中({n})",
   "sandboxes_bulk_destroy_title": "销毁 {n} 个沙箱?",
   "sandboxes_bulk_destroy_desc": "沙箱连同磁盘一起销毁,不可恢复。名字依然可用 — 下次用同名 acquire 会得到一个全新的空白沙箱。",

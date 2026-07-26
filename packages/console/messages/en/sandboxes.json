@@ -30,7 +30,6 @@
   "sandboxes_destroy": "Destroy",
   "sandboxes_destroyed_count": "Destroyed {n} sandboxes",
   "sandboxes_destroy_failed_count": "{n} failed to destroy: {names}",
-  "sandboxes_name_separator": ", ",
   "sandboxes_destroy_selected": "Destroy selected ({n})",
   "sandboxes_bulk_destroy_title": "Destroy {n} sandboxes?",
   "sandboxes_bulk_destroy_desc": "The sandboxes are destroyed along with their disks and cannot be recovered. The names stay available — the next acquire with the same name gets a brand-new empty sandbox.",

@@ -311,7 +311,7 @@ export function FileTreePane({
       toast.error(
         m.workbench_upload_failures({
           count: failures.length,
-          names: failures.join('、'),
+          names: failures.join(m.common_name_separator()),
         }),
       );
     }

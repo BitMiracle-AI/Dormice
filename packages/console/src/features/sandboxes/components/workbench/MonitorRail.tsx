@@ -37,6 +37,7 @@ import {
 import { useApiKeys } from '@/features/api-keys/hooks/useApiKeys';
 import { Sparkline } from '@/features/overview/components/Sparkline';
 import { copyText } from '@/lib/copy';
+import { formatDateTime } from '@/lib/datetime';
 import { formatBytes, pctOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { m } from '@/paraglide/messages';
@@ -347,7 +348,7 @@ function ActivityCard({ sandbox }: { sandbox: Sandbox }) {
             <div
               key={event.id}
               className="flex items-center gap-2 border-b py-1.5 text-xs last:border-b-0"
-              title={`${new Date(event.at).toLocaleString()}${event.detail ? ` · ${event.detail}` : ''}`}
+              title={`${formatDateTime(event.at)}${event.detail ? ` · ${event.detail}` : ''}`}
             >
               <Badge
                 variant="outline"
@@ -462,7 +463,7 @@ function InfoCard({ sandbox }: { sandbox: Sandbox }) {
           <span title={sandbox.endpoint}>{sandbox.endpoint}</span>
         </InfoRow>
         <InfoRow label={m.workbench_created_at()}>
-          <span title={new Date(sandbox.createdAt).toLocaleString()}>
+          <span title={formatDateTime(sandbox.createdAt)}>
             {ago(sandbox.createdAt)}
           </span>
         </InfoRow>

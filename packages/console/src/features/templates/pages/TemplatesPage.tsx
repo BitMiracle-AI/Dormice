@@ -64,6 +64,7 @@ import {
 } from '@/components/ui/table';
 import { ago } from '@/features/sandboxes/format';
 import { useSandboxes } from '@/features/sandboxes/hooks/useSandboxes';
+import { formatDateTime } from '@/lib/datetime';
 import { m } from '@/paraglide/messages';
 import {
   useRegisterTemplate,
@@ -395,7 +396,7 @@ export function TemplatesPage() {
                       = 从没升级过,直说比重复注册时间更诚实。 */}
                   <TableCell
                     className="tabular-nums text-muted-foreground"
-                    title={new Date(template.updatedAt).toLocaleString()}
+                    title={formatDateTime(template.updatedAt)}
                   >
                     {template.updatedAt === template.createdAt
                       ? m.templates_never_upgraded()

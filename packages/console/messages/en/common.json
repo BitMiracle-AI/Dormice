@@ -33,6 +33,7 @@
   "common_back": "Back",
   "common_none": "None",
   "common_unknown": "Unknown",
+  "common_name_separator": ", ",
   "common_copy_failed": "Copy failed",
   "common_sample_data": "Sample data"
 }

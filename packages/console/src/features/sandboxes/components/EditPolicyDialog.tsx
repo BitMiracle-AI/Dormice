@@ -128,7 +128,7 @@ export function EditPolicyDialog({ sandboxes }: { sandboxes: Sandbox[] }) {
       setError(
         m.sandboxes_policy_update_failed({
           n: failures.length,
-          names: failures.map((f) => f.name).join(m.sandboxes_name_separator()),
+          names: failures.map((f) => f.name).join(m.common_name_separator()),
           message: firstFailure.message,
         }),
       );

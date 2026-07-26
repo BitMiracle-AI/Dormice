@@ -29,6 +29,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { durationHint, policyLine } from '@/features/sandboxes/format';
 import { updateSettings } from '@/lib/api';
+import { formatDateTime } from '@/lib/datetime';
 import { queryClient } from '@/lib/queryClient';
 import { m } from '@/paraglide/messages';
 
@@ -516,7 +517,7 @@ export function RuntimeSettingsCard({ data }: { data: GetConfigResponse }) {
           {m.settings_knobs_desc()}
           {settings.updatedAt
             ? m.settings_knobs_last_modified({
-                time: new Date(settings.updatedAt).toLocaleString(),
+                time: formatDateTime(settings.updatedAt),
               })
             : m.settings_knobs_never_modified()}
         </p>

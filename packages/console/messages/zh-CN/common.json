@@ -33,6 +33,7 @@
   "common_back": "返回",
   "common_none": "无",
   "common_unknown": "未知",
+  "common_name_separator": "、",
   "common_copy_failed": "复制失败",
   "common_sample_data": "示例数据"
 }

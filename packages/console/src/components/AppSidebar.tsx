@@ -82,10 +82,9 @@ export function AppSidebar() {
             (item) => !item.mock || MOCK_PAGES_ENABLED,
           );
           if (items.length === 0) return null;
-          const groupLabel = group.label();
           return (
-            <SidebarGroup key={groupLabel}>
-              <SidebarGroupLabel>{groupLabel}</SidebarGroupLabel>
+            <SidebarGroup key={group.id}>
+              <SidebarGroupLabel>{group.label()}</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
                   {items.map((item) => (

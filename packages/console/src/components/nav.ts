@@ -26,8 +26,14 @@ export interface NavItem {
 // 平台 = 管的对象(沙箱/模板),运维 = 管这台机器;连接页是给要接 SDK 的人。
 // 独立成文件:侧栏与命令面板(⌘K)都要这份清单,留在任何一边都会让
 // 两个组件互相 import。页面清单只有这一份,两处永远一致。
-export const NAV_GROUPS: Array<{ label: () => string; items: NavItem[] }> = [
+// id 是组的稳定标识(React key 用):翻译串不做标识符。
+export const NAV_GROUPS: Array<{
+  id: string;
+  label: () => string;
+  items: NavItem[];
+}> = [
   {
+    id: 'platform',
     label: m.shell_nav_group_platform,
     items: [
       { to: '/', label: m.shell_nav_dashboard, icon: DashboardSquare01Icon },
@@ -36,6 +42,7 @@ export const NAV_GROUPS: Array<{ label: () => string; items: NavItem[] }> = [
     ],
   },
   {
+    id: 'ops',
     label: m.shell_nav_group_ops,
     items: [
       { to: '/activity', label: m.shell_nav_activity, icon: Activity01Icon },
@@ -52,6 +59,7 @@ export const NAV_GROUPS: Array<{ label: () => string; items: NavItem[] }> = [
     ],
   },
   {
+    id: 'access',
     label: m.shell_nav_group_access,
     items: [
       { to: '/connect', label: m.shell_nav_connect, icon: PlugSocketIcon },

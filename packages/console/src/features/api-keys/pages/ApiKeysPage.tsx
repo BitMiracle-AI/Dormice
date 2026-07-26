@@ -66,6 +66,7 @@ import {
 } from '@/components/ui/table';
 import { ago, until } from '@/features/sandboxes/format';
 import { copyText } from '@/lib/copy';
+import { formatDate, formatDateTime } from '@/lib/datetime';
 import { m } from '@/paraglide/messages';
 import {
   useApiKeys,
@@ -113,7 +114,7 @@ function ExpiryPicker({
               className="justify-start font-normal"
             >
               <HugeiconsIcon icon={Calendar03Icon} />
-              {value ? value.toLocaleDateString() : m.apikeys_never_expires()}
+              {value ? formatDate(value) : m.apikeys_never_expires()}
             </Button>
           }
         />
@@ -530,7 +531,11 @@ function BulkRevokeButton({
     setConfirmOpen(false);
     onDone();
     if (failures.length > 0) {
-      toast.error(m.apikeys_bulk_revoke_failed({ names: failures.join('、') }));
+      toast.error(
+        m.apikeys_bulk_revoke_failed({
+          names: failures.join(m.common_name_separator()),
+        }),
+      );
     } else {
       toast.success(m.apikeys_bulk_revoked({ count: keys.length }));
     }
@@ -554,7 +559,7 @@ function BulkRevokeButton({
             </AlertDialogTitle>
             <AlertDialogDescription>
               {m.apikeys_bulk_revoke_description({
-                names: keys.map((k) => k.name).join('、'),
+                names: keys.map((k) => k.name).join(m.common_name_separator()),
               })}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -784,7 +789,7 @@ export function ApiKeysPage() {
                 </TableCell>
                 <TableCell
                   className="tabular-nums text-muted-foreground"
-                  title={new Date(apiKey.createdAt).toLocaleString()}
+                  title={formatDateTime(apiKey.createdAt)}
                 >
                   {ago(apiKey.createdAt)}
                 </TableCell>
@@ -792,7 +797,7 @@ export function ApiKeysPage() {
                   className="tabular-nums text-muted-foreground"
                   title={
                     apiKey.lastUsedAt
-                      ? new Date(apiKey.lastUsedAt).toLocaleString()
+                      ? formatDateTime(apiKey.lastUsedAt)
                       : undefined
                   }
                 >
@@ -808,14 +813,14 @@ export function ApiKeysPage() {
                   }`}
                   title={
                     apiKey.expiresAt
-                      ? new Date(apiKey.expiresAt).toLocaleString()
+                      ? formatDateTime(apiKey.expiresAt)
                       : undefined
                   }
                 >
                   {apiKey.expiresAt === null
                     ? m.apikeys_never_expires()
                     : status === 'expired' || status === 'revoked'
-                      ? new Date(apiKey.expiresAt).toLocaleDateString()
+                      ? formatDate(apiKey.expiresAt)
                       : m.apikeys_expires_in({
                           duration: until(apiKey.expiresAt),
                         })}

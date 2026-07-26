@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/table';
 import { useApiKeys } from '@/features/api-keys/hooks/useApiKeys';
 import { ago } from '@/features/sandboxes/format';
+import { formatDateTime } from '@/lib/datetime';
 import { cn } from '@/lib/utils';
 import { m } from '@/paraglide/messages';
 import { actorLabel } from '../actors';
@@ -189,7 +190,7 @@ export function ActivityPage() {
                 <TableCell
                   className="tabular-nums text-muted-foreground"
                   // 相对时间好扫读,绝对时间才对得上日志 — hover 给后者。
-                  title={new Date(event.at).toLocaleString()}
+                  title={formatDateTime(event.at)}
                 >
                   {ago(event.at)}
                 </TableCell>

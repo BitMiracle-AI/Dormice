@@ -14,6 +14,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
+import { formatDateTime } from '@/lib/datetime';
 import { m } from '@/paraglide/messages';
 import {
   useCheckUpgrade,
@@ -95,7 +96,7 @@ export function VersionCard() {
                 : m.settings_last_upgrade_failed()}
               {last.finishedAt !== null &&
                 m.settings_time_paren({
-                  time: new Date(last.finishedAt).toLocaleString(),
+                  time: formatDateTime(last.finishedAt),
                 })}
               {last.error !== null &&
                 m.settings_error_suffix({ error: last.error })}
@@ -163,7 +164,7 @@ function VersionBody({
             <code className="font-mono font-medium">{current.commit}</code>
             <span
               className="min-w-0 truncate text-muted-foreground"
-              title={new Date(current.committedAt).toLocaleString()}
+              title={formatDateTime(current.committedAt)}
             >
               {current.title}
             </span>
@@ -191,7 +192,7 @@ function VersionBody({
         ) : (
           <p
             className="text-sm text-muted-foreground"
-            title={new Date(check.checkedAt).toLocaleString()}
+            title={formatDateTime(check.checkedAt)}
           >
             {m.settings_up_to_date()}
             {check.cached ? m.settings_up_to_date_cached() : ''}
