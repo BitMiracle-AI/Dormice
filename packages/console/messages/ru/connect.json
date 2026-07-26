@@ -1,0 +1,13 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "connect_title": "Подключение",
+  "connect_intro_1": "Адрес этого daemon — ",
+  "connect_intro_2": " — тот же адрес, по которому вы открыли эту страницу. Каждому фрагменту кода нужен API-токен daemon; консоль его не хранит, прочитайте его на хосте daemon: ",
+  "connect_e2b_desc_1": "Официальный пакет ",
+  "connect_e2b_desc_2": " работает без изменений — направьте оба URL сюда, добавьте к токену префикс ",
+  "connect_e2b_desc_3": " и больше ничего не меняйте.",
+  "connect_sdk_title": "Нативный SDK",
+  "connect_sdk_desc": " говорит на нативном RPC daemon — acquire идемпотентен по замыслу. Пакет ещё не опубликован в npm; соберите его из workspace репозитория.",
+  "connect_cli_desc": " (устанавливается вместе с daemon скриптом install.sh) читает эти две переменные окружения.",
+  "connect_snippet_e2b_comment": "Расширение Dormice: одно и то же имя всегда возвращает одну и ту же песочницу."
+}

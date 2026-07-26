@@ -1,5 +1,6 @@
 import type { Sandbox, SandboxState } from '@dormice/shared';
 import { m } from '@/paraglide/messages';
+import { getLocale } from '@/paraglide/runtime';
 
 /** 状态名 — 徽章、筛选器、总览统计共用一份,不各自翻译。 */
 export function stateLabel(state: SandboxState): string {
@@ -82,17 +83,24 @@ export function durationHint(raw: string): string | null {
 }
 
 /**
- * 相对时刻,粗粒度:"刚刚" / "5 分钟前" / "3 小时前" / "2 天前"。
+ * 相对时刻,粗粒度:"刚刚" / "5分钟前" / "3小时前" / "2天前"。
  * 刻意只留一段 — "3小时20分前"的后一段是噪音,读者要的是数量级;
  * 精确到秒的场合(策略倒计时)用 formatDuration,精确时刻在 title。
- * "前"字在消息里自带:"刚刚"没有"前",由调用方拼会拼出"刚刚前"。
+ *
+ * "N 单位前"不写成翻译消息而交给 Intl.RelativeTimeFormat:数词的复数
+ * 变格是语言事实,不是文案品味 — 德语 1 天是 "vor 1 Tag"、2 天是
+ * "vor 2 Tagen",俄语更有三套变格,靠一条带 {n} 的模板必然写错一半。
+ * 平台的 CLDR 数据每种语言都对,翻译者反而写不对。style 取 short:
+ * narrow 在法俄退化成 "-5 min" 这种减号式,读不出"前"。
+ * "刚刚"没有数词也没有"前",Intl 给不出,留在消息里。
  */
 export function ago(iso: string): string {
   const s = (Date.now() - Date.parse(iso)) / 1000;
   if (s < 60) return m.common_just_now();
-  if (s < 3600) return m.common_minutes_ago({ n: Math.floor(s / 60) });
-  if (s < 86400) return m.common_hours_ago({ n: Math.floor(s / 3600) });
-  return m.common_days_ago({ n: Math.floor(s / 86400) });
+  const rtf = new Intl.RelativeTimeFormat(getLocale(), { style: 'short' });
+  if (s < 3600) return rtf.format(-Math.floor(s / 60), 'minute');
+  if (s < 86400) return rtf.format(-Math.floor(s / 3600), 'hour');
+  return rtf.format(-Math.floor(s / 86400), 'day');
 }
 
 /** 距离某时刻还有多久:"6天3小时"(调用方自己加"后");已过去则为"0秒"。 */

@@ -1,7 +1,18 @@
 {
   "$schema": "https://inlang.com/schema/project-settings",
   "baseLocale": "zh-CN",
-  "locales": ["zh-CN", "en"],
+  "locales": [
+    "zh-CN",
+    "zh-TW",
+    "en",
+    "ja",
+    "ko",
+    "de",
+    "es",
+    "fr",
+    "pt-BR",
+    "ru"
+  ],
   "modules": ["./node_modules/@inlang/plugin-message-format/dist/index.js"],
   "plugin.inlang.messageFormat": {
     "pathPattern": [

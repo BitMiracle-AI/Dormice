@@ -1,0 +1,13 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "connect_title": "Connexion",
+  "connect_intro_1": "L'adresse de ce daemon est ",
+  "connect_intro_2": " — la même adresse que celle avec laquelle vous avez ouvert cette page. Chaque extrait de code a besoin du token API du daemon ; la console ne le stocke jamais, lisez-le sur l'hôte du daemon : ",
+  "connect_e2b_desc_1": "Le package officiel ",
+  "connect_e2b_desc_2": " fonctionne tel quel — pointez les deux URL ici, préfixez votre token par ",
+  "connect_e2b_desc_3": " et ne changez rien d'autre.",
+  "connect_sdk_title": "SDK natif",
+  "connect_sdk_desc": " parle le RPC natif du daemon — acquire est idempotent par conception. Pas encore publié sur npm ; construisez-le depuis le workspace du dépôt.",
+  "connect_cli_desc": " (installé avec le daemon par install.sh) lit ces deux variables d'environnement.",
+  "connect_snippet_e2b_comment": "Extension Dormice : le même name renvoie toujours à la même sandbox."
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "connect_title": "연결",
+  "connect_intro_1": "이 daemon의 주소는 ",
+  "connect_intro_2": "입니다 — 지금 이 페이지를 여는 데 쓴 바로 그 주소입니다. 모든 코드 조각에는 daemon의 API 토큰이 필요합니다. 콘솔은 토큰을 절대 저장하지 않으니 daemon 호스트에서 읽으세요: ",
+  "connect_e2b_desc_1": "공식 ",
+  "connect_e2b_desc_2": " 패키지를 그대로 사용할 수 있습니다 — URL 두 개를 여기로 향하게 하고 토큰에 ",
+  "connect_e2b_desc_3": " 접두사를 붙이면, 나머지 코드는 한 줄도 바꿀 필요가 없습니다.",
+  "connect_sdk_title": "네이티브 SDK",
+  "connect_sdk_desc": "은(는) daemon의 네이티브 RPC로 통신합니다 — acquire는 설계부터 멱등합니다. 아직 npm에 게시되지 않았으므로 저장소 workspace에서 빌드해 사용하세요.",
+  "connect_cli_desc": "(install.sh가 daemon과 함께 설치)는 이 두 환경 변수를 읽습니다.",
+  "connect_snippet_e2b_comment": "Dormice 확장: 같은 name은 언제나 같은 샌드박스로 돌아갑니다."
+}

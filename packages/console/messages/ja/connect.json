@@ -1,0 +1,13 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "connect_title": "接続",
+  "connect_intro_1": "この daemon のアドレスは ",
+  "connect_intro_2": " です — いまこのページを開いているアドレスそのものです。どのコード片にも daemon の API トークンが必要です。コンソールはトークンを保存しないので、daemon ホスト上で読み取ってください:",
+  "connect_e2b_desc_1": "公式の ",
+  "connect_e2b_desc_2": " パッケージがそのまま使えます — 2 つの URL をここに向け、トークンに ",
+  "connect_e2b_desc_3": " を前置するだけで、ほかのコードは 1 行も変えません。",
+  "connect_sdk_title": "ネイティブ SDK",
+  "connect_sdk_desc": " は daemon のネイティブ RPC を話します — acquire は設計上べき等です。まだ npm には公開していないため、リポジトリの workspace からビルドして使います。",
+  "connect_cli_desc": "(install.sh が daemon と一緒にインストール)はこの 2 つの環境変数を読みます。",
+  "connect_snippet_e2b_comment": "Dormice 拡張:同じ name はいつでも同じサンドボックスに戻ります。"
+}

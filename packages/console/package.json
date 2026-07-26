@@ -8,9 +8,10 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
+    "check:messages": "node scripts/check-messages.mjs",
     "seed": "node scripts/seed.mjs",
     "test": "vitest run",
-    "typecheck": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide && tsc --noEmit"
+    "typecheck": "node scripts/check-messages.mjs && paraglide-js compile --project ./project.inlang --outdir ./src/paraglide && tsc --noEmit"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

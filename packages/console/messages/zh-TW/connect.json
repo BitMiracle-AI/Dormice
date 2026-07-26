@@ -1,0 +1,13 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "connect_title": "連線",
+  "connect_intro_1": "這個 daemon 的位址是 ",
+  "connect_intro_2": " — 就是你此刻開啟本頁用的位址。每段程式碼都需要 daemon 的 API token;主控台從不儲存它,請到 daemon 主機上讀取:",
+  "connect_e2b_desc_1": "官方 ",
+  "connect_e2b_desc_2": " 套件原樣可用 — 把兩個 URL 指到這裡,token 加 ",
+  "connect_e2b_desc_3": " 前綴,其他程式碼一行不改。",
+  "connect_sdk_title": "原生 SDK",
+  "connect_sdk_desc": " 說 daemon 的 原生 RPC — acquire 天生冪等。尚未發布到 npm,請從儲存庫 workspace 建置使用。",
+  "connect_cli_desc": "(install.sh 隨 daemon 一起裝的)讀這兩個環境變數。",
+  "connect_snippet_e2b_comment": "Dormice 擴充:同一個 name 永遠回到同一個沙箱。"
+}
