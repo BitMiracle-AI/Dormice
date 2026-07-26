@@ -2,6 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useSearch } from '@tanstack/react-router';
 import { useState } from 'react';
 import Grainient from '@/components/Grainient';
+import { currentLocaleLabel, LocaleMenu } from '@/components/LocaleMenu';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -15,6 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { ApiError, authStatus, login, setup } from '@/lib/api';
 import { setSessionMarker } from '@/lib/session';
+import { m } from '@/paraglide/messages';
 
 /**
  * One page, two forms, forked by whether the account exists. First run
@@ -44,7 +46,17 @@ export function LoginPage() {
   };
 
   return (
-    <main className="flex min-h-svh items-center justify-center p-6">
+    <main className="relative flex min-h-svh items-center justify-center p-6">
+      {/* 语言切换:登录卡片外右上角,低调的 ghost 按钮,不抢版式。 */}
+      <div className="absolute top-4 right-4">
+        <LocaleMenu
+          trigger={
+            <Button variant="ghost" size="sm" className="text-muted-foreground">
+              {currentLocaleLabel()}
+            </Button>
+          }
+        />
+      </div>
       <Card className="w-full max-w-4xl overflow-hidden p-0">
         {/* min-h keeps the login form roomy; the setup form is taller and
             simply stretches the card — no fixed height, no inner scroll. */}
@@ -83,7 +95,7 @@ export function LoginPage() {
                 Dormice
               </p>
               <p className="mt-1.5 text-sm text-white/90">
-                自托管 Agent 沙箱平台
+                {m.auth_brand_tagline()}
               </p>
             </div>
             {/* 底部主张：大字主张 + 细横线 + 副文案 */}
@@ -95,7 +107,7 @@ export function LoginPage() {
               </h2>
               <div className="mt-6 h-px w-12 bg-white/40" />
               <p className="mt-5 text-sm leading-relaxed text-white/75">
-                单机部署，沙箱永生，空闲即免费——一台机器，就是你的沙箱舰队。
+                {m.auth_brand_subtitle()}
               </p>
             </div>
           </div>
@@ -107,7 +119,7 @@ export function LoginPage() {
               </CardContent>
             ) : status.isError ? (
               <CardContent className="py-10 text-center text-sm text-muted-foreground">
-                无法连接 daemon：{status.error.message}
+                {m.auth_daemon_unreachable({ message: status.error.message })}
               </CardContent>
             ) : status.data.accountExists && !resetting ? (
               <LoginForm
@@ -132,12 +144,12 @@ export function LoginPage() {
 function errorText(error: unknown, invalidCredential: string): string {
   if (error instanceof ApiError) {
     if (error.status === 401) return invalidCredential;
-    if (error.status === 409) return '账号尚未初始化，请刷新页面完成初始化。';
+    if (error.status === 409) return m.auth_error_not_initialized();
     if (error.status === 429) {
       const seconds = /retry in (\d+)s/.exec(error.message)?.[1];
       return seconds
-        ? `失败次数过多，请 ${seconds} 秒后再试。`
-        : '失败次数过多，请稍后再试。';
+        ? m.auth_error_too_many_retry_in({ seconds })
+        : m.auth_error_too_many();
     }
   }
   return error instanceof Error ? error.message : String(error);
@@ -148,10 +160,7 @@ function InsecureContextHint() {
   return (
     // 明文 HTTP 下凭证在链路上裸奔 — 引导期(IP 访问)的已知取舍,
     // 提醒但不拦:绑定域名后这行自然消失。
-    <p className="text-xs text-muted-foreground">
-      当前连接是明文 HTTP,凭证在网络上不加密。建议登录后在域名页绑定域名启用
-      HTTPS。
-    </p>
+    <p className="text-xs text-muted-foreground">{m.auth_insecure_hint()}</p>
   );
 }
 
@@ -169,8 +178,8 @@ function LoginForm({
   return (
     <>
       <CardHeader>
-        <CardTitle className="text-xl">欢迎回来</CardTitle>
-        <CardDescription>登录以管理你的沙箱。</CardDescription>
+        <CardTitle className="text-xl">{m.auth_login_title()}</CardTitle>
+        <CardDescription>{m.auth_login_description()}</CardDescription>
       </CardHeader>
       <CardContent>
         <form
@@ -181,7 +190,7 @@ function LoginForm({
           className="flex flex-col gap-6"
         >
           <Field>
-            <FieldLabel htmlFor="username">用户名</FieldLabel>
+            <FieldLabel htmlFor="username">{m.auth_username()}</FieldLabel>
             <Input
               id="username"
               className="h-8.5"
@@ -192,7 +201,7 @@ function LoginForm({
             />
           </Field>
           <Field data-invalid={mutation.isError || undefined}>
-            <FieldLabel htmlFor="password">密码</FieldLabel>
+            <FieldLabel htmlFor="password">{m.auth_password()}</FieldLabel>
             <Input
               id="password"
               className="h-8.5"
@@ -204,7 +213,7 @@ function LoginForm({
             />
             {mutation.isError && (
               <FieldError>
-                {errorText(mutation.error, '用户名或密码不对。')}
+                {errorText(mutation.error, m.auth_error_wrong_credentials())}
               </FieldError>
             )}
           </Field>
@@ -218,14 +227,14 @@ function LoginForm({
             className="mt-4 h-8.5 w-full"
           >
             {mutation.isPending && <Spinner />}
-            登录
+            {m.auth_login_button()}
           </Button>
           <button
             type="button"
             onClick={onForgot}
             className="text-xs text-muted-foreground underline-offset-4 hover:underline"
           >
-            忘记密码?用 API token 重置账号
+            {m.auth_forgot_password()}
           </button>
           <InsecureContextHint />
         </form>
@@ -260,12 +269,12 @@ function SetupForm({
     <>
       <CardHeader>
         <CardTitle className="text-xl">
-          {onBack ? '重置控制台账号' : '初始化 Dormice 控制台'}
+          {onBack ? m.auth_setup_title_reset() : m.auth_setup_title_init()}
         </CardTitle>
         <CardDescription>
           {onBack
-            ? '粘贴 daemon 的 API token 证明这台机器是你的,重新设置账号密码。原账号会被覆盖,所有已登录会话立即失效。'
-            : '还没有账号。粘贴 daemon 的 API token 证明这台机器是你的,并设置之后日常登录用的账号密码。'}
+            ? m.auth_setup_description_reset()
+            : m.auth_setup_description_init()}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -290,12 +299,12 @@ function SetupForm({
             />
             {mutation.isError && (
               <FieldError>
-                {errorText(mutation.error, 'API token 不对。')}
+                {errorText(mutation.error, m.auth_error_wrong_token())}
               </FieldError>
             )}
           </Field>
           <Field>
-            <FieldLabel htmlFor="new-username">用户名</FieldLabel>
+            <FieldLabel htmlFor="new-username">{m.auth_username()}</FieldLabel>
             <Input
               id="new-username"
               className="h-8.5"
@@ -305,7 +314,7 @@ function SetupForm({
             />
           </Field>
           <Field data-invalid={tooShort || undefined}>
-            <FieldLabel htmlFor="new-password">密码</FieldLabel>
+            <FieldLabel htmlFor="new-password">{m.auth_password()}</FieldLabel>
             <Input
               id="new-password"
               className="h-8.5"
@@ -315,10 +324,12 @@ function SetupForm({
               onChange={(event) => setPassword(event.target.value)}
               aria-invalid={tooShort || undefined}
             />
-            {tooShort && <FieldError>密码至少 8 位。</FieldError>}
+            {tooShort && <FieldError>{m.auth_password_too_short()}</FieldError>}
           </Field>
           <Field data-invalid={mismatch || undefined}>
-            <FieldLabel htmlFor="confirm-password">确认密码</FieldLabel>
+            <FieldLabel htmlFor="confirm-password">
+              {m.auth_confirm_password()}
+            </FieldLabel>
             <Input
               id="confirm-password"
               className="h-8.5"
@@ -328,7 +339,7 @@ function SetupForm({
               onChange={(event) => setConfirm(event.target.value)}
               aria-invalid={mismatch || undefined}
             />
-            {mismatch && <FieldError>两次输入的密码不一致。</FieldError>}
+            {mismatch && <FieldError>{m.auth_password_mismatch()}</FieldError>}
           </Field>
           <Button
             type="submit"
@@ -336,7 +347,7 @@ function SetupForm({
             className="mt-4 h-8.5 w-full"
           >
             {mutation.isPending && <Spinner />}
-            {onBack ? '重置并登录' : '初始化并登录'}
+            {onBack ? m.auth_setup_button_reset() : m.auth_setup_button_init()}
           </Button>
           {onBack && (
             <button
@@ -344,7 +355,7 @@ function SetupForm({
               onClick={onBack}
               className="text-xs text-muted-foreground underline-offset-4 hover:underline"
             >
-              返回登录
+              {m.auth_back_to_login()}
             </button>
           )}
           <InsecureContextHint />

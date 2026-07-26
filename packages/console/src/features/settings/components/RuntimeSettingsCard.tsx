@@ -30,6 +30,7 @@ import { Switch } from '@/components/ui/switch';
 import { durationHint, policyLine } from '@/features/sandboxes/format';
 import { updateSettings } from '@/lib/api';
 import { queryClient } from '@/lib/queryClient';
+import { m } from '@/paraglide/messages';
 
 /**
  * 运营旋钮的编辑区:值住在账本里(env 同名变量只是首次启动的种子),
@@ -94,7 +95,7 @@ function EditTrigger() {
       render={
         <Button variant="outline" size="sm">
           <HugeiconsIcon icon={PencilEdit02Icon} />
-          编辑
+          {m.common_edit()}
         </Button>
       }
     />
@@ -123,25 +124,22 @@ function MaxSandboxesDialog({ settings }: { settings: RuntimeSettings }) {
       <EditTrigger />
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>调整沙箱容量上限</DialogTitle>
-          <DialogDescription>
-            只挡新建(撞上回 429),唤醒永不受限。这是一根防失控的保险丝 —
-            拔太高之后,物理磁盘就是唯一兜底,记得盯总览页的数据盘水位。
-          </DialogDescription>
+          <DialogTitle>{m.settings_max_dialog_title()}</DialogTitle>
+          <DialogDescription>{m.settings_max_dialog_desc()}</DialogDescription>
         </DialogHeader>
         <form
           onSubmit={(event) => {
             event.preventDefault();
             void submit(
               { maxSandboxes: Number(value) },
-              `容量上限已改为 ${Number(value)}`,
+              m.settings_max_saved({ value: Number(value) }),
             );
           }}
         >
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="settings-max-sandboxes">
-                最多同时存在的沙箱数
+                {m.settings_max_label()}
               </FieldLabel>
               <Input
                 id="settings-max-sandboxes"
@@ -156,7 +154,7 @@ function MaxSandboxesDialog({ settings }: { settings: RuntimeSettings }) {
           <DialogFooter className="mt-6">
             <Button type="submit" disabled={!valid || pending}>
               {pending && <Spinner />}
-              保存
+              {m.common_save()}
             </Button>
           </DialogFooter>
         </form>
@@ -191,11 +189,9 @@ function SandboxDefaultsDialog({ settings }: { settings: RuntimeSettings }) {
       <EditTrigger />
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>调整新沙箱的默认配额</DialogTitle>
+          <DialogTitle>{m.settings_defaults_dialog_title()}</DialogTitle>
           <DialogDescription>
-            CPU/内存在下一次容器出生时生效(含停止后冷启动的存量沙箱);
-            磁盘在磁盘出生时定型(首次创建与归档恢复) —
-            磁盘是沙箱的本体,永不原地改尺寸,调小前注意别小于归档沙箱的真实内容。
+            {m.settings_defaults_dialog_desc()}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -209,13 +205,15 @@ function SandboxDefaultsDialog({ settings }: { settings: RuntimeSettings }) {
                   diskGb: Number(diskGb),
                 },
               },
-              '新沙箱默认配额已更新',
+              m.settings_defaults_saved(),
             );
           }}
         >
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="settings-cpus">CPU(核)</FieldLabel>
+              <FieldLabel htmlFor="settings-cpus">
+                {m.settings_defaults_cpu_label()}
+              </FieldLabel>
               <Input
                 id="settings-cpus"
                 type="number"
@@ -226,7 +224,9 @@ function SandboxDefaultsDialog({ settings }: { settings: RuntimeSettings }) {
               />
             </Field>
             <Field>
-              <FieldLabel htmlFor="settings-memory">内存(GiB)</FieldLabel>
+              <FieldLabel htmlFor="settings-memory">
+                {m.settings_defaults_memory_label()}
+              </FieldLabel>
               <Input
                 id="settings-memory"
                 type="number"
@@ -236,11 +236,13 @@ function SandboxDefaultsDialog({ settings }: { settings: RuntimeSettings }) {
                 onChange={(event) => setMemoryGb(event.target.value)}
               />
               <FieldDescription>
-                沙箱内超限 OOM 会让整箱退出(对账救回),给 agent 留点余量。
+                {m.settings_defaults_memory_desc()}
               </FieldDescription>
             </Field>
             <Field>
-              <FieldLabel htmlFor="settings-disk">磁盘(GiB)</FieldLabel>
+              <FieldLabel htmlFor="settings-disk">
+                {m.settings_defaults_disk_label()}
+              </FieldLabel>
               <Input
                 id="settings-disk"
                 type="number"
@@ -250,7 +252,7 @@ function SandboxDefaultsDialog({ settings }: { settings: RuntimeSettings }) {
                 onChange={(event) => setDiskGb(event.target.value)}
               />
               <FieldDescription>
-                名义配额:稀疏镜像只为真实写入付费,超卖靠数据盘水位观察。
+                {m.settings_defaults_disk_desc()}
               </FieldDescription>
             </Field>
             {error && <FieldError>{error}</FieldError>}
@@ -258,7 +260,7 @@ function SandboxDefaultsDialog({ settings }: { settings: RuntimeSettings }) {
           <DialogFooter className="mt-6">
             <Button type="submit" disabled={!valid || pending}>
               {pending && <Spinner />}
-              保存
+              {m.common_save()}
             </Button>
           </DialogFooter>
         </form>
@@ -291,26 +293,22 @@ function SwapDialog({ settings }: { settings: RuntimeSettings }) {
       <EditTrigger />
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>调整追加 swap 空间</DialogTitle>
-          <DialogDescription>
-            swap 容量 ≈ 能同时冬眠多少沙箱内存(冻结把内存挤进 swap)。
-            调大立即生效;调小要等下次重启宿主 — 正在用的 swap
-            绝不强拆,那会把冬眠沙箱的内存全拽回物理内存。
-          </DialogDescription>
+          <DialogTitle>{m.settings_swap_dialog_title()}</DialogTitle>
+          <DialogDescription>{m.settings_swap_dialog_desc()}</DialogDescription>
         </DialogHeader>
         <form
           onSubmit={(event) => {
             event.preventDefault();
             void submit(
               { swapGb: Number(value) },
-              `追加 swap 目标已改为 ${Number(value)} GiB`,
+              m.settings_swap_saved({ value: Number(value) }),
             );
           }}
         >
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="settings-swap-gb">
-                Dormice 管理的 swap 总量(GiB)
+                {m.settings_swap_label()}
               </FieldLabel>
               <Input
                 id="settings-swap-gb"
@@ -320,8 +318,7 @@ function SwapDialog({ settings }: { settings: RuntimeSettings }) {
                 onChange={(event) => setValue(event.target.value)}
               />
               <FieldDescription>
-                在系统自带 swap 之外追加,0 = 不追加。swap
-                文件真实占据数据盘空间(不是稀疏的),调大前看一眼总览页的数据盘水位。
+                {m.settings_swap_field_desc()}
               </FieldDescription>
             </Field>
             {error && <FieldError>{error}</FieldError>}
@@ -329,7 +326,7 @@ function SwapDialog({ settings }: { settings: RuntimeSettings }) {
           <DialogFooter className="mt-6">
             <Button type="submit" disabled={!valid || pending}>
               {pending && <Spinner />}
-              保存
+              {m.common_save()}
             </Button>
           </DialogFooter>
         </form>
@@ -344,12 +341,12 @@ function SwapDialog({ settings }: { settings: RuntimeSettings }) {
  */
 function swapLine(targetGb: number, activeGb: number): string {
   if (activeGb > targetGb) {
-    return `目标 ${targetGb} GiB · 当前挂载 ${activeGb} GiB — 缩容在下次重启宿主时生效`;
+    return m.settings_swap_line_shrink({ target: targetGb, active: activeGb });
   }
   if (activeGb < targetGb) {
-    return `目标 ${targetGb} GiB · 当前挂载 ${activeGb} GiB — 增容未完成,详见 daemon 日志`;
+    return m.settings_swap_line_grow({ target: targetGb, active: activeGb });
   }
-  return `${targetGb} GiB(系统自带 swap 另计)`;
+  return m.settings_swap_line_ok({ target: targetGb });
 }
 
 function DefaultPolicyDialog({
@@ -394,10 +391,9 @@ function DefaultPolicyDialog({
       <EditTrigger />
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>调整默认生命周期策略</DialogTitle>
+          <DialogTitle>{m.settings_policy_dialog_title()}</DialogTitle>
           <DialogDescription>
-            只影响之后 acquire 新建的沙箱 — 存量沙箱各有各的策略,去沙箱
-            列表批量调。
+            {m.settings_policy_dialog_desc()}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -414,14 +410,14 @@ function DefaultPolicyDialog({
                       : Number(archiveAfter),
                 },
               },
-              '默认生命周期策略已更新',
+              m.settings_policy_saved(),
             );
           }}
         >
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="settings-freeze-after">
-                空闲多久后冻结(秒)
+                {m.settings_policy_freeze_label()}
               </FieldLabel>
               <Input
                 id="settings-freeze-after"
@@ -431,7 +427,7 @@ function DefaultPolicyDialog({
                 onChange={(event) => setFreezeAfter(event.target.value)}
               />
               <FieldDescription>
-                运行中 → 已冻结:内存挤入 swap,唤醒约 50ms。
+                {m.settings_policy_freeze_desc()}
                 {durationHint(freezeAfter) && ` ${durationHint(freezeAfter)}`}
               </FieldDescription>
             </Field>
@@ -442,13 +438,13 @@ function DefaultPolicyDialog({
                 onCheckedChange={setNeverStop}
               />
               <FieldLabel htmlFor="settings-never-stop">
-                永不停止(常驻 agent)
+                {m.settings_policy_never_stop()}
               </FieldLabel>
             </Field>
             {!neverStop && (
               <Field>
                 <FieldLabel htmlFor="settings-stop-after">
-                  空闲多久后停止(秒)
+                  {m.settings_policy_stop_label()}
                 </FieldLabel>
                 <Input
                   id="settings-stop-after"
@@ -458,7 +454,7 @@ function DefaultPolicyDialog({
                   onChange={(event) => setStopAfter(event.target.value)}
                 />
                 <FieldDescription>
-                  已冻结 → 已停止:只留磁盘,唤醒是冷启动。
+                  {m.settings_policy_stop_desc()}
                   {durationHint(stopAfter) && ` ${durationHint(stopAfter)}`}
                 </FieldDescription>
               </Field>
@@ -472,13 +468,13 @@ function DefaultPolicyDialog({
                     onCheckedChange={setNeverArchive}
                   />
                   <FieldLabel htmlFor="settings-never-archive">
-                    永不归档
+                    {m.settings_policy_never_archive()}
                   </FieldLabel>
                 </Field>
                 {!neverArchive && (
                   <Field>
                     <FieldLabel htmlFor="settings-archive-after">
-                      空闲多久后归档(秒)
+                      {m.settings_policy_archive_label()}
                     </FieldLabel>
                     <Input
                       id="settings-archive-after"
@@ -488,7 +484,7 @@ function DefaultPolicyDialog({
                       onChange={(event) => setArchiveAfter(event.target.value)}
                     />
                     <FieldDescription>
-                      已停止 → 已归档:磁盘压缩上传 S3,本地零占用。
+                      {m.settings_policy_archive_desc()}
                       {durationHint(archiveAfter) &&
                         ` ${durationHint(archiveAfter)}`}
                     </FieldDescription>
@@ -501,7 +497,7 @@ function DefaultPolicyDialog({
           <DialogFooter className="mt-6">
             <Button type="submit" disabled={!valid || pending}>
               {pending && <Spinner />}
-              保存
+              {m.common_save()}
             </Button>
           </DialogFooter>
         </form>
@@ -515,28 +511,33 @@ export function RuntimeSettingsCard({ data }: { data: GetConfigResponse }) {
   return (
     <section className="shrink-0 overflow-hidden rounded-xl border bg-card">
       <div className="border-b px-4 py-3">
-        <h2 className="text-sm font-medium">运营旋钮</h2>
+        <h2 className="text-sm font-medium">{m.settings_knobs_title()}</h2>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          住在账本里,改了立即生效,不用重启 —
-          下表同名环境变量只是首次启动的种子值。
+          {m.settings_knobs_desc()}
           {settings.updatedAt
-            ? `最后修改于 ${new Date(settings.updatedAt).toLocaleString()}。`
-            : '从未改过,仍是种子值。'}
+            ? m.settings_knobs_last_modified({
+                time: new Date(settings.updatedAt).toLocaleString(),
+              })
+            : m.settings_knobs_never_modified()}
         </p>
       </div>
       <div className="divide-y">
         <EditRow
-          label="沙箱容量上限"
-          value={`${settings.maxSandboxes} 个(只挡新建,唤醒永不受限)`}
+          label={m.settings_row_max_sandboxes()}
+          value={m.settings_row_max_value({ n: settings.maxSandboxes })}
           dialog={<MaxSandboxesDialog settings={settings} />}
         />
         <EditRow
-          label="新沙箱默认配额"
-          value={`${settings.sandboxDefaults.cpus} CPU · ${settings.sandboxDefaults.memoryGb} GiB 内存 · ${settings.sandboxDefaults.diskGb} GiB 磁盘`}
+          label={m.settings_row_defaults()}
+          value={m.settings_row_defaults_value({
+            cpus: settings.sandboxDefaults.cpus,
+            memory: settings.sandboxDefaults.memoryGb,
+            disk: settings.sandboxDefaults.diskGb,
+          })}
           dialog={<SandboxDefaultsDialog settings={settings} />}
         />
         <EditRow
-          label="默认生命周期策略"
+          label={m.settings_row_policy()}
           value={policyLine(settings.defaultPolicy)}
           dialog={
             <DefaultPolicyDialog
@@ -546,11 +547,11 @@ export function RuntimeSettingsCard({ data }: { data: GetConfigResponse }) {
           }
         />
         <EditRow
-          label="追加 swap 空间"
+          label={m.settings_row_swap()}
           value={
             data.swap.supported
               ? swapLine(settings.swapGb, data.swap.activeGb)
-              : '本宿主不支持(需要 Linux 宿主 + docker 执行器)'
+              : m.settings_swap_unsupported()
           }
           dialog={
             data.swap.supported ? <SwapDialog settings={settings} /> : undefined

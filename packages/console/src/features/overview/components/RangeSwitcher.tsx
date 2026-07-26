@@ -12,11 +12,7 @@ import {
 } from '../hooks/useFleetTimeline';
 
 // base-ui Select 的已知坑:value ≠ 展示文案时必须传 items,否则触发器
-// 显示不了选中项文案(RULES/前端.md)。
-const RANGE_ITEMS = TIMELINE_RANGES.map((r) => ({
-  value: r.key,
-  label: r.label,
-}));
+// 显示不了选中项文案(RULES/前端.md)。label 在渲染时求值,跟随当下语言。
 
 /**
  * 全局时间档位切换:放页头右侧,统一驱动统计卡与走势图 — 档位是整页
@@ -29,6 +25,10 @@ export function RangeSwitcher({
   range: TimelineRangeKey;
   onChange: (range: TimelineRangeKey) => void;
 }) {
+  const rangeItems = TIMELINE_RANGES.map((r) => ({
+    value: r.key,
+    label: r.label(),
+  }));
   return (
     <>
       <ToggleGroup
@@ -50,12 +50,12 @@ export function RangeSwitcher({
             value={r.key}
             className="transition-none"
           >
-            {r.label}
+            {r.label()}
           </ToggleGroupItem>
         ))}
       </ToggleGroup>
       <Select
-        items={RANGE_ITEMS}
+        items={rangeItems}
         value={range}
         onValueChange={(value) => {
           if (typeof value === 'string') onChange(value as TimelineRangeKey);
@@ -67,7 +67,7 @@ export function RangeSwitcher({
         <SelectContent align="end">
           {TIMELINE_RANGES.map((r) => (
             <SelectItem key={r.key} value={r.key}>
-              {r.label}
+              {r.label()}
             </SelectItem>
           ))}
         </SelectContent>

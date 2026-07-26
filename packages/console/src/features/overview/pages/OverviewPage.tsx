@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { m } from '@/paraglide/messages';
 import { FleetChart } from '../components/FleetChart';
 import { FleetStatCards } from '../components/FleetStatCards';
 import { HostHealthCard } from '../components/HostHealthCard';
@@ -19,7 +20,7 @@ export function OverviewPage() {
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6 p-4 md:p-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-medium">仪表盘</h1>
+        <h1 className="text-xl font-medium">{m.overview_title()}</h1>
         <RangeSwitcher range={range} onChange={setRange} />
       </header>
       <FleetStatCards range={range} />

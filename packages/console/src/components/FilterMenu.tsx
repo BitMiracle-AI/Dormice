@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Separator } from '@/components/ui/separator';
+import { m } from '@/paraglide/messages';
 
 export interface FilterOption {
   /** '' 即「全部」(不筛)。 */
@@ -63,7 +64,9 @@ export function FilterMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-36">
         <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
-          <DropdownMenuRadioItem value="">全部</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="">
+            {m.shell_filter_all()}
+          </DropdownMenuRadioItem>
           {options.map((option) => (
             <DropdownMenuRadioItem key={option.value} value={option.value}>
               {option.label}

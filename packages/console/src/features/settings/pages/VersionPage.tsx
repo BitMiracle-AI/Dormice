@@ -1,3 +1,4 @@
+import { m } from '@/paraglide/messages';
 import { VersionCard } from '../components/VersionCard';
 
 /**
@@ -10,7 +11,7 @@ export function VersionPage() {
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 p-4 md:p-6">
       <header>
-        <h1 className="text-xl font-medium">版本</h1>
+        <h1 className="text-xl font-medium">{m.settings_version_title()}</h1>
       </header>
       <VersionCard />
     </div>

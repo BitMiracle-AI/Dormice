@@ -22,6 +22,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { copyText } from '@/lib/copy';
+import { m } from '@/paraglide/messages';
 import { useSetIngress } from '../hooks/useIngress';
 
 /**
@@ -52,7 +53,7 @@ export function BindDomainDialog({
   const submit = () => {
     mutation.mutate([...bound, domain], {
       onSuccess: () => {
-        toast.success(`已绑定 ${domain},证书自动申请中`);
+        toast.success(m.domains_bind_success({ domain }));
         setOpen(false);
         reset();
       },
@@ -71,17 +72,14 @@ export function BindDomainDialog({
         render={
           <Button size="sm">
             <HugeiconsIcon icon={Add01Icon} />
-            绑定域名
+            {m.domains_bind_domain()}
           </Button>
         }
       />
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>绑定域名</DialogTitle>
-          <DialogDescription>
-            HTTPS 证书自动申请与续期,无需手动配置;无论绑定成败,IP
-            访问始终保留,不会被锁在门外。
-          </DialogDescription>
+          <DialogTitle>{m.domains_bind_domain()}</DialogTitle>
+          <DialogDescription>{m.domains_bind_description()}</DialogDescription>
         </DialogHeader>
         <form
           onSubmit={(event) => {
@@ -92,13 +90,16 @@ export function BindDomainDialog({
           <FieldGroup>
             <div className="rounded-md border bg-muted/30 px-4 py-3">
               <p className="text-xs text-muted-foreground">
-                第一步:去域名商处给这个域名加一条解析记录(生效通常要
-                几分钟;先绑定也行,页面会等它转绿):
+                {m.domains_bind_step1()}
               </p>
               <div className="mt-2 grid grid-cols-[4.5rem_1fr] items-center gap-y-1 font-mono text-xs">
-                <span className="text-muted-foreground">类型</span>
+                <span className="text-muted-foreground">
+                  {m.domains_record_type()}
+                </span>
                 <span>A</span>
-                <span className="text-muted-foreground">记录值</span>
+                <span className="text-muted-foreground">
+                  {m.domains_record_value()}
+                </span>
                 {publicIp ? (
                   <span className="flex items-center gap-1">
                     {publicIp}
@@ -106,11 +107,11 @@ export function BindDomainDialog({
                       type="button"
                       variant="ghost"
                       size="icon-sm"
-                      aria-label="复制 IP"
+                      aria-label={m.domains_copy_ip_label()}
                       onClick={() =>
                         copyText(publicIp).then(
-                          () => toast.success('已复制'),
-                          () => toast.error('复制失败 — 请手动选中文本'),
+                          () => toast.success(m.common_copied()),
+                          () => toast.error(m.domains_copy_failed()),
                         )
                       }
                     >
@@ -118,15 +119,17 @@ export function BindDomainDialog({
                     </Button>
                   </span>
                 ) : (
-                  <span>本机公网 IP</span>
+                  <span>{m.domains_public_ip_placeholder()}</span>
                 )}
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
-                主机记录(名称)填子域前缀,绑定主域名本身则填 @。
+                {m.domains_record_host_hint()}
               </p>
             </div>
             <Field data-invalid={duplicate || undefined}>
-              <FieldLabel htmlFor="bind-domain">域名</FieldLabel>
+              <FieldLabel htmlFor="bind-domain">
+                {m.domains_field_domain()}
+              </FieldLabel>
               <Input
                 id="bind-domain"
                 autoFocus
@@ -137,10 +140,10 @@ export function BindDomainDialog({
                 aria-invalid={duplicate || undefined}
               />
               {duplicate ? (
-                <FieldError>{domain} 已经绑定</FieldError>
+                <FieldError>{m.domains_already_bound({ domain })}</FieldError>
               ) : (
                 <FieldDescription>
-                  裸主机名,不带 http:// 前缀和端口。
+                  {m.domains_field_domain_hint()}
                 </FieldDescription>
               )}
             </Field>
@@ -154,7 +157,7 @@ export function BindDomainDialog({
               disabled={domain.length === 0 || duplicate || mutation.isPending}
             >
               {mutation.isPending && <Spinner />}
-              绑定
+              {m.domains_bind_submit()}
             </Button>
           </DialogFooter>
         </form>

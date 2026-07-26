@@ -11,6 +11,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { m } from '@/paraglide/messages';
 import { useDestroySandbox } from '../hooks/useSandboxes';
 
 /**
@@ -36,7 +37,11 @@ export function DestroySandboxDialog({
   const destroy = () =>
     mutation.mutate(name, {
       onSuccess: ({ destroyed }) => {
-        toast.success(destroyed ? `已销毁 ${name}` : `${name} 本来就不存在`);
+        toast.success(
+          destroyed
+            ? m.sandboxes_destroyed_toast({ name })
+            : m.sandboxes_already_gone_toast({ name }),
+        );
         onDestroyed?.();
       },
       onError: (error) => toast.error(error.message),
@@ -46,16 +51,17 @@ export function DestroySandboxDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>销毁「{name}」?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {m.sandboxes_destroy_title({ name })}
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            沙箱连同磁盘一起销毁,不可恢复。名字依然可用 — 下次同名 acquire
-            会得到一个全新的空白沙箱。
+            {m.sandboxes_destroy_desc()}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>先留着</AlertDialogCancel>
+          <AlertDialogCancel>{m.sandboxes_keep_it()}</AlertDialogCancel>
           <AlertDialogAction variant="destructive" onClick={destroy}>
-            销毁
+            {m.sandboxes_destroy()}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -75,7 +81,7 @@ export function DestroySandboxButton({
   return (
     <>
       <Button variant="destructive" size="sm" onClick={() => setOpen(true)}>
-        销毁
+        {m.sandboxes_destroy()}
       </Button>
       <DestroySandboxDialog
         name={name}

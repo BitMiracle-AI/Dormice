@@ -22,8 +22,9 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty';
 import { Skeleton } from '@/components/ui/skeleton';
-import { STATE_COLORS, STATE_LABELS } from '@/features/sandboxes/format';
+import { STATE_COLORS, stateLabel } from '@/features/sandboxes/format';
 import { cn } from '@/lib/utils';
+import { m } from '@/paraglide/messages';
 import { fullClock, tickFormatter } from '../format';
 import {
   type TimelineRangeKey,
@@ -46,12 +47,15 @@ const STACK_ORDER: SandboxState[] = [
   'restoring',
 ];
 
-const chartConfig = Object.fromEntries(
-  STACK_ORDER.map((state) => [
-    state,
-    { label: STATE_LABELS[state], theme: STATE_COLORS[state].chart },
-  ]),
-) satisfies ChartConfig;
+// chartConfig 在渲染时现做(函数不当模块常量):label 要跟随当下语言,
+// 模块顶层求值会烙死编译期 locale。
+const makeChartConfig = () =>
+  Object.fromEntries(
+    STACK_ORDER.map((state) => [
+      state,
+      { label: stateLabel(state), theme: STATE_COLORS[state].chart },
+    ]),
+  ) satisfies ChartConfig;
 
 type ChartRow = { at: number } & Record<SandboxState, number | null>;
 
@@ -121,11 +125,8 @@ export function FleetChart({
   return (
     <Card className={cn('flex flex-col', className)}>
       <CardHeader>
-        <CardTitle>沙箱并发走势</CardTitle>
-        <CardDescription>
-          各状态沙箱数量随时间的变化 — 活跃掉下去、冻结涨上来,就是
-          「空闲即免费」在发生。
-        </CardDescription>
+        <CardTitle>{m.overview_fleet_chart_title()}</CardTitle>
+        <CardDescription>{m.overview_fleet_chart_desc()}</CardDescription>
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col">
         <FleetChartBody range={range} timeline={timeline} />
@@ -160,10 +161,9 @@ function FleetChartBody({
     return (
       <Empty className="min-h-[260px] flex-1 border border-dashed">
         <EmptyHeader>
-          <EmptyTitle>窗口内还没有走势可画</EmptyTitle>
+          <EmptyTitle>{m.overview_fleet_chart_empty_title()}</EmptyTitle>
           <EmptyDescription>
-            daemon 每 30 秒落一次采样,攒够两个点就开始画;daemon
-            停机的时段没有采样,曲线会如实断开。
+            {m.overview_fleet_chart_empty_desc()}
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -172,7 +172,7 @@ function FleetChartBody({
 
   return (
     <ChartContainer
-      config={chartConfig}
+      config={makeChartConfig()}
       className="aspect-auto h-full min-h-[260px] w-full flex-1"
     >
       <AreaChart data={rows} margin={{ left: 4, right: 12, top: 4 }}>

@@ -1,5 +1,6 @@
 import type { ListSandboxImagesResponse } from '@dormice/shared';
 import { Badge } from '@/components/ui/badge';
+import { m } from '@/paraglide/messages';
 
 type ImageLineage = ListSandboxImagesResponse['images'][number];
 
@@ -15,9 +16,13 @@ export function UpgradableBadge({ lineage }: { lineage?: ImageLineage }) {
     <Badge
       variant="outline"
       className="border-transparent bg-amber-500/10 font-medium text-amber-600 dark:text-amber-400"
-      title={`运行 ${lineage.image},模板当前 ${lineage.nextImage} — Rebuild 换新`}
+      title={m.sandboxes_upgradable_title({
+        // upgradable=true 时 daemon 必给两个镜像名,兜底只为类型收窄。
+        image: lineage.image ?? '',
+        nextImage: lineage.nextImage ?? '',
+      })}
     >
-      可升级
+      {m.sandboxes_upgradable()}
     </Badge>
   );
 }

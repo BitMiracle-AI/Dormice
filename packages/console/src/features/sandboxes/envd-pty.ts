@@ -7,6 +7,8 @@
  * WebSocket, so it works through any proxy plain HTTP works through.
  */
 
+import { m } from '@/paraglide/messages';
+
 const ENVD = '/e2b/envd';
 
 /** Connect streaming envelope flags, mirrored from the server's protocol.ts. */
@@ -95,7 +97,9 @@ export async function openPty(options: {
       const detail = (await res.json().catch(() => undefined)) as
         | { message?: string }
         | undefined;
-      throw new Error(detail?.message ?? `${rpc} 请求失败(${res.status})`);
+      throw new Error(
+        detail?.message ?? m.workbench_rpc_failed({ rpc, status: res.status }),
+      );
     }
   }
 
@@ -119,7 +123,10 @@ export async function openPty(options: {
     const detail = (await res.json().catch(() => undefined)) as
       | { message?: string }
       | undefined;
-    throw new Error(detail?.message ?? `终端连接失败(${res.status})`);
+    throw new Error(
+      detail?.message ??
+        m.workbench_term_connect_failed({ status: res.status }),
+    );
   }
 
   let closed = false;
@@ -137,14 +144,18 @@ export async function openPty(options: {
     frame: StreamFrame,
   ): number | undefined => {
     if (flags & FLAG_END_STREAM) {
-      closeOnce(frame.error?.message ?? '连接已断开');
+      closeOnce(frame.error?.message ?? m.workbench_term_disconnected());
       return;
     }
     if (frame.event?.data?.pty) {
       callbacks.onData(fromBase64(frame.event.data.pty));
     }
     if (frame.event?.end) {
-      closeOnce(`shell 已退出(码 ${frame.event.end.exitCode ?? '?'})`);
+      closeOnce(
+        m.workbench_term_shell_exited({
+          code: frame.event.end.exitCode ?? '?',
+        }),
+      );
     }
     return frame.event?.start?.pid;
   };
@@ -171,7 +182,7 @@ export async function openPty(options: {
       }
       const { done, value } = await reader.read();
       if (done) {
-        closeOnce('连接已断开');
+        closeOnce(m.workbench_term_disconnected());
         return undefined;
       }
       const grown = new Uint8Array(buffer.length + value.length);
@@ -190,7 +201,7 @@ export async function openPty(options: {
     closeOnce(error instanceof Error ? error.message : String(error));
   }
   if (pid === undefined) {
-    throw new Error('终端没有启动');
+    throw new Error(m.workbench_term_not_started());
   }
   const startedPid = pid;
 
@@ -235,7 +246,7 @@ export async function openPty(options: {
         process: { pid: startedPid },
         signal: 'SIGNAL_SIGKILL',
       }).catch(() => undefined);
-      closeOnce('终端已关闭');
+      closeOnce(m.workbench_term_closed());
     },
   };
 }

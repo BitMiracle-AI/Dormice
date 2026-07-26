@@ -3,6 +3,7 @@ import { HugeiconsIcon } from '@hugeicons/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { copyText } from '@/lib/copy';
+import { m } from '@/paraglide/messages';
 
 /**
  * A copyable code block — the connect page's and the overview's shared
@@ -15,11 +16,11 @@ export function Snippet({ code }: { code: string }) {
         variant="ghost"
         size="icon-sm"
         className="absolute top-1.5 right-1.5"
-        aria-label="复制到剪贴板"
+        aria-label={m.shell_copy_to_clipboard()}
         onClick={() =>
           copyText(code).then(
-            () => toast.success('已复制'),
-            () => toast.error('复制失败 — 请手动选中文本'),
+            () => toast.success(m.common_copied()),
+            () => toast.error(m.shell_copy_failed_select()),
           )
         }
       >

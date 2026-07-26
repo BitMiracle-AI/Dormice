@@ -10,7 +10,7 @@
     "dev": "vite",
     "seed": "node scripts/seed.mjs",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide && tsc --noEmit"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -42,6 +42,8 @@
   },
   "devDependencies": {
     "@dormice/shared": "workspace:*",
+    "@inlang/paraglide-js": "^2.19.0",
+    "@inlang/plugin-message-format": "^4.4.0",
     "@tailwindcss/vite": "^4.3.2",
     "@tanstack/router-plugin": "^1.168.19",
     "@types/react": "^19.2.17",

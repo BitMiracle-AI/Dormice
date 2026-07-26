@@ -3,6 +3,7 @@
  * 不各自手写第二份。endpoint 永远是当前页面 origin — daemon 自己
  * 托管控制台,浏览器怎么到的,SDK 就怎么到。
  */
+import { m } from '@/paraglide/messages';
 
 export const e2bSnippet = (origin: string) => `import { Sandbox } from 'e2b';
 
@@ -10,7 +11,7 @@ const sandbox = await Sandbox.create({
   apiKey: 'e2b_<your API token>',
   apiUrl: '${origin}/e2b/api',
   sandboxUrl: '${origin}/e2b/envd',
-  // Dormice 扩展:同一个 name 永远回到同一个沙箱。
+  // ${m.connect_snippet_e2b_comment()}
   metadata: { name: 'my-project' },
 });
 

@@ -18,6 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ago } from '@/features/sandboxes/format';
 import { formatBytes, pctOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { m } from '@/paraglide/messages';
 import type { TimelineRangeKey } from '../hooks/useFleetTimeline';
 import { useHostMetrics } from '../hooks/useHostMetrics';
 import { useHostTimeline } from '../hooks/useHostTimeline';
@@ -89,8 +90,8 @@ export function HostHealthCard({
   return (
     <Card size="sm" className={cn('flex flex-col', className)}>
       <CardHeader>
-        <CardTitle>宿主健康</CardTitle>
-        <CardDescription>这台机器的资源水位与走势</CardDescription>
+        <CardTitle>{m.overview_host_title()}</CardTitle>
+        <CardDescription>{m.overview_host_desc()}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col justify-between gap-5">
         <HostHealthRows query={query} history={history} />
@@ -161,17 +162,24 @@ function HostHealthRows({
         }
         hint={
           peak === null
-            ? `${host.cpuCount} 核`
-            : `${host.cpuCount} 核 · 窗口峰值 ${Math.round(peak.cpuUsedPct)}%(${ago(peak.at)})`
+            ? m.overview_host_cpu_cores({ n: host.cpuCount })
+            : m.overview_host_cpu_peak({
+                n: host.cpuCount,
+                pct: Math.round(peak.cpuUsedPct),
+                ago: ago(peak.at),
+              })
         }
         pct={host.cpuUsedPct}
         trend={cpuTrend}
       />
       <HostRow
         icon={RamMemoryIcon}
-        label="内存"
+        label={m.overview_host_mem_label()}
         value={formatBytes(memUsed)}
-        hint={`共 ${formatBytes(host.memTotalBytes)} · 可用 ${formatBytes(host.memAvailableBytes)}`}
+        hint={m.overview_host_mem_hint({
+          total: formatBytes(host.memTotalBytes),
+          available: formatBytes(host.memAvailableBytes),
+        })}
         pct={pctOf(memUsed, host.memTotalBytes)}
         trend={memTrend}
       />
@@ -180,16 +188,16 @@ function HostHealthRows({
           icon={SnowIcon}
           label="Swap"
           value="—"
-          hint="此平台读不到 swap"
+          hint={m.overview_host_swap_unreadable()}
         />
       ) : host.swap.totalBytes === 0 ? (
         <HostRow
           icon={SnowIcon}
           label="Swap"
-          value="未配置"
+          value={m.overview_host_swap_unconfigured()}
           hint={
             <span className="text-amber-600 dark:text-amber-500">
-              冻结依赖 swap — 见 dor doctor
+              {m.overview_host_swap_warning()}
             </span>
           }
         />
@@ -198,7 +206,9 @@ function HostHealthRows({
           icon={SnowIcon}
           label="Swap"
           value={formatBytes(host.swap.usedBytes)}
-          hint={`共 ${formatBytes(host.swap.totalBytes)} · 冻结的沙箱住在这里`}
+          hint={m.overview_host_swap_hint({
+            total: formatBytes(host.swap.totalBytes),
+          })}
           pct={pctOf(host.swap.usedBytes, host.swap.totalBytes)}
           trend={swapTrend}
         />
@@ -206,18 +216,21 @@ function HostHealthRows({
       {dataDisk === null ? (
         <HostRow
           icon={HardDriveIcon}
-          label="数据盘"
+          label={m.overview_host_disk_label()}
           value="—"
-          hint="这台主机没有数据目录"
+          hint={m.overview_host_disk_missing()}
         />
       ) : (
         <HostRow
           icon={HardDriveIcon}
-          label="数据盘"
+          label={m.overview_host_disk_label()}
           value={formatBytes(dataDisk.usedBytes)}
           hint={
             <span title={dataDisk.path}>
-              {`共 ${formatBytes(dataDisk.totalBytes)} · 剩 ${formatBytes(dataDisk.availableBytes)}`}
+              {m.overview_host_disk_hint({
+                total: formatBytes(dataDisk.totalBytes),
+                available: formatBytes(dataDisk.availableBytes),
+              })}
             </span>
           }
           pct={pctOf(dataDisk.usedBytes, dataDisk.totalBytes)}

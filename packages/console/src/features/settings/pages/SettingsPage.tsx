@@ -18,6 +18,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatDuration } from '@/features/sandboxes/format';
+import { m } from '@/paraglide/messages';
 import { RuntimeSettingsCard } from '../components/RuntimeSettingsCard';
 import { useConfig } from '../hooks/useConfig';
 
@@ -25,47 +26,43 @@ import { useConfig } from '../hooks/useConfig';
  * 每个旋钮管什么,一句话 — UI 文案,所以住在前端;wire 上只有键、值、
  * 来源(daemon 不说中文)。没列到的键显示为空,不编造。
  */
-const KEY_HINTS: Record<string, string> = {
-  DORMICE_PORT: 'daemon 端口;只绑 127.0.0.1,对外暴露是反向代理的活',
-  DORMICE_DB_PATH: 'SQLite 账本;docker 模式强制绝对路径',
-  DORMICE_NODE_ID: '这台机器在账本里的名字(为将来分片预留)',
-  DORMICE_API_TOKEN:
-    '唯一的 API 凭证;控制台登录时换成 httpOnly cookie,页面永远读不到它',
-  DORMICE_EXECUTOR: '执行器:docker 是真沙箱,fake 是内存假执行器(开发/测试用)',
-  DORMICE_BASE_IMAGE: '沙箱的默认镜像;docker 模式必填',
-  DORMICE_DATA_DIR: '沙箱磁盘镜像的家(disks/*.img);归档临时文件也在这里',
-  DORMICE_MAX_SANDBOXES: '容量上限的首启种子值 — 生效值在上方运营旋钮里',
-  DORMICE_SCAN_INTERVAL_SECONDS: '空闲扫描周期:每一轮把到阈值的沙箱降一格温度',
+const KEY_HINTS: Record<string, () => string> = {
+  DORMICE_PORT: m.settings_hint_port,
+  DORMICE_DB_PATH: m.settings_hint_db_path,
+  DORMICE_NODE_ID: m.settings_hint_node_id,
+  DORMICE_API_TOKEN: m.settings_hint_api_token,
+  DORMICE_EXECUTOR: m.settings_hint_executor,
+  DORMICE_BASE_IMAGE: m.settings_hint_base_image,
+  DORMICE_DATA_DIR: m.settings_hint_data_dir,
+  DORMICE_MAX_SANDBOXES: m.settings_hint_max_sandboxes,
+  DORMICE_SCAN_INTERVAL_SECONDS: m.settings_hint_scan_interval,
   DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS:
-    '指标采样周期:历史曲线的分辨率,总览走势与指标历史都按它落库',
-  DORMICE_METRICS_RETENTION_HOURS:
-    '逐沙箱指标样本的保留时长;舰队状态计数恒保 30 天,不随它走',
-  DORMICE_SANDBOX_DISK_GB: '默认磁盘配额的首启种子值 — 生效值在上方运营旋钮里',
-  DORMICE_SANDBOX_CPUS: '默认 CPU 配额的首启种子值 — 生效值在上方运营旋钮里',
-  DORMICE_SANDBOX_MEMORY_GB:
-    '默认内存上限的首启种子值 — 生效值在上方运营旋钮里',
-  DORMICE_SANDBOX_PIDS_LIMIT: '每个沙箱的进程数上限(fork 炸弹的物理闸)',
-  DORMICE_RECLAIM_TIMEOUT_SECONDS: '冻结时挤内存进 swap 的最长等待',
-  DORMICE_SANDBOX_DOMAIN:
-    '端口预览泛域名(getHost);不配则响应里诚实缺席,代理层不启用',
-  DORMICE_INGRESS_FILE:
-    'daemon 接管的 Caddy 配置文件;配了才能在「域名」页网页绑定域名',
-  DORMICE_INGRESS_RELOAD_CMD:
-    '改完代理配置后的重载命令;不配默认 caddy reload 托管文件本身',
-  DORMICE_S3_ENDPOINT: '归档对象存储的地址;四件套齐了归档才启用',
-  DORMICE_S3_BUCKET: '归档桶名',
-  DORMICE_S3_ACCESS_KEY_ID: '归档存储的 Access Key(只报已设置)',
-  DORMICE_S3_SECRET_ACCESS_KEY: '归档存储的 Secret Key(只报已设置)',
-  DORMICE_S3_REGION: 'S3 区域;多数兼容实现随意',
-  DORMICE_S3_FORCE_PATH_STYLE: '路径风格寻址:MinIO 要 true,云厂商走子域名',
+    m.settings_hint_metrics_sample_interval,
+  DORMICE_METRICS_RETENTION_HOURS: m.settings_hint_metrics_retention,
+  DORMICE_SANDBOX_DISK_GB: m.settings_hint_sandbox_disk,
+  DORMICE_SANDBOX_CPUS: m.settings_hint_sandbox_cpus,
+  DORMICE_SANDBOX_MEMORY_GB: m.settings_hint_sandbox_memory,
+  DORMICE_SANDBOX_PIDS_LIMIT: m.settings_hint_sandbox_pids_limit,
+  DORMICE_RECLAIM_TIMEOUT_SECONDS: m.settings_hint_reclaim_timeout,
+  DORMICE_SANDBOX_DOMAIN: m.settings_hint_sandbox_domain,
+  DORMICE_INGRESS_FILE: m.settings_hint_ingress_file,
+  DORMICE_INGRESS_RELOAD_CMD: m.settings_hint_ingress_reload_cmd,
+  DORMICE_S3_ENDPOINT: m.settings_hint_s3_endpoint,
+  DORMICE_S3_BUCKET: m.settings_hint_s3_bucket,
+  DORMICE_S3_ACCESS_KEY_ID: m.settings_hint_s3_access_key,
+  DORMICE_S3_SECRET_ACCESS_KEY: m.settings_hint_s3_secret_key,
+  DORMICE_S3_REGION: m.settings_hint_s3_region,
+  DORMICE_S3_FORCE_PATH_STYLE: m.settings_hint_s3_force_path_style,
 };
 
 function ValueCell({ entry }: { entry: ConfigEntry }) {
   if (entry.redacted) {
-    return <Badge variant="secondary">已设置,不显示</Badge>;
+    return <Badge variant="secondary">{m.settings_value_redacted()}</Badge>;
   }
   if (entry.value === null) {
-    return <span className="text-muted-foreground">未配置</span>;
+    return (
+      <span className="text-muted-foreground">{m.settings_value_unset()}</span>
+    );
   }
   return <>{entry.value}</>;
 }
@@ -87,7 +84,7 @@ export function SettingsPage() {
   if (isPending) {
     return (
       <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground md:p-6">
-        <Spinner /> 读取生效配置
+        <Spinner /> {m.settings_loading_config()}
       </div>
     );
   }
@@ -96,7 +93,7 @@ export function SettingsPage() {
       <div className="mx-auto flex h-full w-full max-w-6xl flex-col p-4 md:p-6">
         <Empty className="flex-1 border border-dashed">
           <EmptyHeader>
-            <EmptyTitle>读取失败</EmptyTitle>
+            <EmptyTitle>{m.settings_load_failed()}</EmptyTitle>
             <EmptyDescription>{error.message}</EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -111,16 +108,24 @@ export function SettingsPage() {
     // /version 页 — 设置是设置,版本是版本。
     <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-5 p-4 md:p-6">
       <header className="shrink-0">
-        <h1 className="text-xl font-medium">设置</h1>
+        <h1 className="text-xl font-medium">{m.settings_page_title()}</h1>
         {/* 这行不是装饰:两类旋钮的界限与 env 的改法只在这里说。 */}
         <p className="mt-1 text-sm text-muted-foreground">
-          运营旋钮在下方卡片里直接改;其余配置只读,真身在主机的{' '}
-          <code className="font-mono">/etc/dormice/env</code>,改完{' '}
-          <code className="font-mono">systemctl restart dormice</code>。归档:
+          {m.settings_env_note_1()}{' '}
+          <code className="font-mono">/etc/dormice/env</code>
+          {m.settings_env_note_2()}{' '}
+          <code className="font-mono">systemctl restart dormice</code>
+          {m.settings_env_note_archive()}
           {data.archive.enabled
-            ? `已启用(默认${data.archive.defaultSeconds === null ? '不归档' : `停止后 ${formatDuration(data.archive.defaultSeconds)} 归档`})`
-            : '未启用 — 配齐 DORMICE_S3_* 四件套后可用'}
-          。
+            ? m.settings_archive_enabled({
+                policy:
+                  data.archive.defaultSeconds === null
+                    ? m.settings_archive_default_none()
+                    : m.settings_archive_default_after({
+                        duration: formatDuration(data.archive.defaultSeconds),
+                      }),
+              })
+            : m.settings_archive_disabled()}
         </p>
       </header>
 
@@ -129,10 +134,10 @@ export function SettingsPage() {
       <DataTable fill>
         <TableHeader>
           <TableRow>
-            <TableHead>旋钮</TableHead>
-            <TableHead>生效值</TableHead>
-            <TableHead>来源</TableHead>
-            <TableHead>说明</TableHead>
+            <TableHead>{m.settings_col_key()}</TableHead>
+            <TableHead>{m.settings_col_value()}</TableHead>
+            <TableHead>{m.settings_col_source()}</TableHead>
+            <TableHead>{m.settings_col_hint()}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -148,11 +153,13 @@ export function SettingsPage() {
                 <Badge
                   variant={entry.source === 'env' ? 'outline' : 'secondary'}
                 >
-                  {entry.source === 'env' ? '环境变量' : '默认值'}
+                  {entry.source === 'env'
+                    ? m.settings_source_env()
+                    : m.settings_source_default()}
                 </Badge>
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">
-                {KEY_HINTS[entry.key] ?? ''}
+                {KEY_HINTS[entry.key]?.() ?? ''}
               </TableCell>
             </TableRow>
           ))}

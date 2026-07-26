@@ -1,6 +1,11 @@
 import type { Sandbox } from '@dormice/shared';
 import { useEffect, useState } from 'react';
-import { formatDuration, nextLifecycleStep } from '../format';
+import { m } from '@/paraglide/messages';
+import {
+  formatDuration,
+  nextLifecycleStep,
+  policyActionLabel,
+} from '../format';
 
 /**
  * 详情页头部的"下一步降温"倒计时:把生命周期引擎从一张策略表变成看得
@@ -20,10 +25,15 @@ export function LifecycleCountdown({ sandbox }: { sandbox: Sandbox }) {
   return (
     <span className="text-sm tabular-nums text-muted-foreground">
       {step.remainingSeconds === null
-        ? `永不${step.action}`
+        ? m.sandboxes_never_action({ action: policyActionLabel(step.action) })
         : step.remainingSeconds === 0
-          ? `即将${step.action}(等下一轮扫描)`
-          : `再空闲 ${formatDuration(step.remainingSeconds)} 就${step.action}`}
+          ? m.sandboxes_imminent_action({
+              action: policyActionLabel(step.action),
+            })
+          : m.sandboxes_countdown({
+              duration: formatDuration(step.remainingSeconds),
+              action: policyActionLabel(step.action),
+            })}
     </span>
   );
 }

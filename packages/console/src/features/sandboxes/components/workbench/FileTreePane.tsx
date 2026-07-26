@@ -34,8 +34,9 @@ import {
 import { Spinner } from '@/components/ui/spinner';
 import { formatBytes } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { m } from '@/paraglide/messages';
 import type { EnvdAuth, EnvdEntry } from '../../envd-client';
-import { STATE_LABELS } from '../../format';
+import { stateLabel } from '../../format';
 import {
   useDirectory,
   useDirectoryWatch,
@@ -95,7 +96,9 @@ function TreeLevel({
         style={{ paddingLeft: `${8 + depth * 14}px` }}
       >
         <Spinner />
-        {depth === 0 ? '读取目录(沉睡的沙箱会先被唤醒)' : '读取中'}
+        {depth === 0
+          ? m.workbench_tree_loading_root()
+          : m.workbench_tree_loading()}
       </div>
     );
   }
@@ -106,7 +109,7 @@ function TreeLevel({
         style={{ paddingLeft: `${8 + depth * 14}px` }}
         title={directory.error.message}
       >
-        读取失败:{directory.error.message}
+        {m.workbench_tree_load_failed({ message: directory.error.message })}
       </div>
     );
   }
@@ -115,7 +118,7 @@ function TreeLevel({
   if (depth === 0 && entries.length === 0) {
     return (
       <div className="px-3 py-2 text-xs text-muted-foreground">
-        空目录 — 上传一个文件试试,拖进这个区域也行。
+        {m.workbench_tree_empty_dir()}
       </div>
     );
   }
@@ -169,7 +172,9 @@ function TreeLevel({
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      aria-label={`${entry.name} 的操作`}
+                      aria-label={m.workbench_entry_actions({
+                        name: entry.name,
+                      })}
                       className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-popup-open:opacity-100"
                     >
                       <HugeiconsIcon icon={MoreVerticalIcon} />
@@ -180,19 +185,19 @@ function TreeLevel({
                   {!isDir && (
                     <DropdownMenuItem onClick={() => tree.onDownload(entry)}>
                       <HugeiconsIcon icon={Download01Icon} />
-                      下载
+                      {m.workbench_download()}
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuItem onClick={() => tree.onRename(entry)}>
                     <HugeiconsIcon icon={Edit02Icon} />
-                    重命名
+                    {m.workbench_rename()}
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     variant="destructive"
                     onClick={() => tree.onDelete(entry)}
                   >
                     <HugeiconsIcon icon={Delete02Icon} />
-                    删除
+                    {m.common_delete()}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -298,10 +303,17 @@ export function FileTreePane({
     if (failures.length === 0) {
       const only = files.length === 1 ? files[0] : undefined;
       toast.success(
-        only ? `已上传 ${only.name}` : `已上传 ${files.length} 个文件`,
+        only
+          ? m.workbench_uploaded({ name: only.name })
+          : m.workbench_uploaded_count({ count: files.length }),
       );
     } else {
-      toast.error(`${failures.length} 个上传失败:${failures.join('、')}`);
+      toast.error(
+        m.workbench_upload_failures({
+          count: failures.length,
+          names: failures.join('、'),
+        }),
+      );
     }
   };
 
@@ -313,14 +325,15 @@ export function FileTreePane({
             <EmptyMedia variant="icon">
               <HugeiconsIcon icon={Folder01Icon} />
             </EmptyMedia>
-            <EmptyTitle>文件浏览器</EmptyTitle>
+            <EmptyTitle>{m.workbench_file_browser()}</EmptyTitle>
             <EmptyDescription>
-              沙箱当前是「{STATE_LABELS[sandbox.state]}」— 浏览文件会唤醒它
-              (冻结约 50ms,停止需要几秒冷启动)。看这一页本身不会。
+              {m.workbench_file_browser_desc({
+                state: stateLabel(sandbox.state),
+              })}
             </EmptyDescription>
           </EmptyHeader>
           <Button size="sm" onClick={() => setUnlocked(true)}>
-            打开文件浏览器
+            {m.workbench_open_file_browser()}
           </Button>
         </Empty>
       </div>
@@ -331,7 +344,7 @@ export function FileTreePane({
     // 拖放只是「上传」按钮的增强,不是唯一入口;section 让辅助技术
     // 知道这一块是文件工作区,而不是把版面 div 假装成控件。
     <section
-      aria-label="文件树(支持拖放上传到焦点目录)"
+      aria-label={m.workbench_tree_aria()}
       className={cn(
         'flex h-full min-h-0 flex-col transition-shadow',
         dragDepth > 0 && 'ring-2 ring-inset ring-primary/60',
@@ -352,7 +365,7 @@ export function FileTreePane({
       <div className="flex shrink-0 items-center gap-1 border-b px-2 py-1.5">
         <span
           className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
-          title={`焦点目录 ${focusDir} — 上传/新建落在这里`}
+          title={m.workbench_focus_dir_title({ dir: focusDir })}
         >
           {tildify(focusDir)}
         </span>
@@ -370,7 +383,7 @@ export function FileTreePane({
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label="上传到焦点目录"
+          aria-label={m.workbench_upload_to_focus()}
           disabled={mutations.upload.isPending}
           onClick={() => fileInputRef.current?.click()}
         >
@@ -383,7 +396,7 @@ export function FileTreePane({
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label="在焦点目录新建文件夹"
+          aria-label={m.workbench_mkdir_in_focus()}
           onClick={() => setMkdirOpen(true)}
         >
           <HugeiconsIcon icon={FolderAddIcon} />
@@ -391,7 +404,7 @@ export function FileTreePane({
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label="刷新"
+          aria-label={m.workbench_refresh()}
           onClick={() =>
             // 前缀失效 = 全树重扫;比逐层 refetch 省心,也和 mutation
             // 成功后的失效走同一条路。

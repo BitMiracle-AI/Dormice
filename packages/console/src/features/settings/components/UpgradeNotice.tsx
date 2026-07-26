@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { m } from '@/paraglide/messages';
 import { useCheckUpgrade } from '../hooks/useUpgrade';
 
 /**
@@ -50,14 +51,16 @@ export function UpgradeNotice() {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>有新版本可用</DialogTitle>
+          <DialogTitle>{m.settings_notice_title()}</DialogTitle>
           <DialogDescription>
             {current !== null && (
               <>
-                当前 <code className="font-mono">{current.commit}</code>,
+                {m.settings_upgrade_current_prefix()}{' '}
+                <code className="font-mono">{current.commit}</code>
+                {m.settings_upgrade_current_sep()}
               </>
             )}
-            落后 {check.behindBy} 个提交,最新{' '}
+            {m.settings_upgrade_behind({ n: check.behindBy })}{' '}
             <code className="font-mono">{check.latest.commit}</code>
           </DialogDescription>
         </DialogHeader>
@@ -74,7 +77,9 @@ export function UpgradeNotice() {
           ))}
           {check.behindBy > check.commits.length && (
             <li className="text-muted-foreground">
-              还有 {check.behindBy - check.commits.length} 个更早的提交未列出
+              {m.settings_upgrade_more_commits({
+                n: check.behindBy - check.commits.length,
+              })}
             </li>
           )}
         </ul>
@@ -86,7 +91,7 @@ export function UpgradeNotice() {
               setOpen(false);
             }}
           >
-            忽略此版本
+            {m.settings_upgrade_ignore()}
           </Button>
           <Button
             onClick={() => {
@@ -94,7 +99,7 @@ export function UpgradeNotice() {
               navigate({ to: '/version' });
             }}
           >
-            去升级
+            {m.settings_upgrade_go()}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
 import { acquireSandbox } from '@/lib/api';
+import { m } from '@/paraglide/messages';
 
 /**
  * 归档态的工作台横幅。已归档:磁盘在 S3、本地零占用,给一个显式的
@@ -30,7 +31,8 @@ export function RestoreCard({ sandbox }: { sandbox: Sandbox }) {
   const begin = useMutation({
     mutationFn: () => acquireSandbox({ name: sandbox.name }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sandboxes'] }),
-    onError: (error) => toast.error(`恢复没能开始:${error.message}`),
+    onError: (error) =>
+      toast.error(m.sandboxes_restore_failed({ message: error.message })),
   });
 
   if (restoring) {
@@ -43,13 +45,17 @@ export function RestoreCard({ sandbox }: { sandbox: Sandbox }) {
         <CardContent className="flex flex-col gap-3">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Spinner />
-            正在从 S3 恢复 —{' '}
-            {progress?.phase === 'extracting' ? '解压到新盘' : '下载归档'}
+            {m.sandboxes_restoring_status({
+              phase:
+                progress?.phase === 'extracting'
+                  ? m.sandboxes_phase_extracting()
+                  : m.sandboxes_phase_downloading(),
+            })}
             {progress ? ` ${progress.percent}%` : ''}
           </div>
           <Progress value={progress?.percent ?? 0} />
           <p className="text-xs text-muted-foreground">
-            恢复完成后自动回到「运行中」;期间销毁会被拒绝(409),等它跑完。
+            {m.sandboxes_restoring_note()}
           </p>
         </CardContent>
       </Card>
@@ -66,11 +72,10 @@ export function RestoreCard({ sandbox }: { sandbox: Sandbox }) {
               className="size-4"
               strokeWidth={1.8}
             />
-            已归档:磁盘压缩存放在 S3,本地零占用
+            {m.sandboxes_archived_headline()}
           </div>
           <p className="text-xs text-muted-foreground">
-            恢复 = 下载归档并解压到一块新盘,再按模板当前镜像重建容器 —
-            也就是恢复即升级。终端/文件要等恢复完成后才可用。
+            {m.sandboxes_archived_desc()}
           </p>
         </div>
         <Button
@@ -79,7 +84,7 @@ export function RestoreCard({ sandbox }: { sandbox: Sandbox }) {
           disabled={begin.isPending}
         >
           {begin.isPending && <Spinner />}
-          恢复
+          {m.sandboxes_restore()}
         </Button>
       </CardContent>
     </Card>

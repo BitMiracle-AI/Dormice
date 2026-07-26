@@ -10,6 +10,8 @@
  * gate the first filesystem call behind an explicit user action.
  */
 
+import { m } from '@/paraglide/messages';
+
 const ENVD = '/e2b/envd';
 
 export interface EnvdAuth {
@@ -55,7 +57,7 @@ async function unary<T>(
       | { code?: string; message?: string }
       | undefined;
     throw new EnvdError(
-      detail?.message ?? `${rpc} 请求失败(${res.status})`,
+      detail?.message ?? m.workbench_rpc_failed({ rpc, status: res.status }),
       detail?.code,
       res.status,
     );
@@ -162,7 +164,7 @@ export async function downloadFile(
       | { message?: string }
       | undefined;
     throw new EnvdError(
-      detail?.message ?? `下载失败(${res.status})`,
+      detail?.message ?? m.workbench_download_failed({ status: res.status }),
       undefined,
       res.status,
     );
@@ -187,7 +189,7 @@ export async function uploadFile(
       | { message?: string }
       | undefined;
     throw new EnvdError(
-      detail?.message ?? `上传失败(${res.status})`,
+      detail?.message ?? m.workbench_upload_failed({ status: res.status }),
       undefined,
       res.status,
     );

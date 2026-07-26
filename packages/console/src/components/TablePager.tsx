@@ -6,6 +6,7 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from '@/components/ui/pagination';
+import { m } from '@/paraglide/messages';
 
 /** 分页窗口:最多 5 个页码,当前页居中,边界处贴边(openasi 同款)。 */
 function pageWindow(current: number, total: number): number[] {
@@ -35,13 +36,13 @@ export function TablePager({
   return (
     <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
       <p className="text-sm text-muted-foreground tabular-nums">
-        共 {total} 条,第 {page} / {pageCount} 页
+        {m.shell_pager_summary({ total, page, pageCount })}
       </p>
       <Pagination className="mx-0 w-auto justify-end">
         <PaginationContent>
           <PaginationItem>
             <PaginationPrevious
-              text="上一页"
+              text={m.shell_pager_prev()}
               aria-disabled={page <= 1}
               className={
                 page <= 1 ? 'pointer-events-none opacity-50' : undefined
@@ -61,7 +62,7 @@ export function TablePager({
           ))}
           <PaginationItem>
             <PaginationNext
-              text="下一页"
+              text={m.shell_pager_next()}
               aria-disabled={page >= pageCount}
               className={
                 page >= pageCount ? 'pointer-events-none opacity-50' : undefined

@@ -4,6 +4,8 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["vite/client"],
     "jsx": "react-jsx",
+    // Paraglide 编译产物(src/paraglide)是 JSDoc 标注的 .js,需 allowJs 才有类型
+    "allowJs": true,
     "baseUrl": ".",
     "paths": { "@/*": ["./src/*"] }
   },

@@ -1,8 +1,9 @@
+import { getLocale } from '@/paraglide/runtime';
 import type { TimelineRangeKey } from './hooks/useFleetTimeline';
 
 /** tooltip 与峰值注脚共用的完整时刻写法。 */
 export function fullClock(ms: number): string {
-  return new Date(ms).toLocaleString('zh-CN', {
+  return new Date(ms).toLocaleString(getLocale(), {
     hour12: false,
     month: 'numeric',
     day: 'numeric',
@@ -20,7 +21,7 @@ export function tickFormatter(range: TimelineRangeKey): (ms: number) => string {
     };
   }
   return (ms) =>
-    new Date(ms).toLocaleTimeString('zh-CN', {
+    new Date(ms).toLocaleTimeString(getLocale(), {
       hour12: false,
       hour: '2-digit',
       minute: '2-digit',

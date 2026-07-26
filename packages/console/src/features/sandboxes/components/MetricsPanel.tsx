@@ -26,6 +26,8 @@ import { Spinner } from '@/components/ui/spinner';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { withGapBreaks } from '@/lib/chart-gaps';
 import { formatBytes, pctOf } from '@/lib/format';
+import { m } from '@/paraglide/messages';
+import { getLocale } from '@/paraglide/runtime';
 import { ago } from '../format';
 import {
   useSandboxMetrics,
@@ -62,12 +64,23 @@ function MetricCard({
 
 /** 历史档位 — daemon 留 7 天逐沙箱样本,档位到 7 天为止。 */
 const HISTORY_RANGES = [
-  { key: '1h', label: '1 小时', spanMs: 3600_000 },
-  { key: '24h', label: '24 小时', spanMs: 24 * 3600_000 },
-  { key: '7d', label: '7 天', spanMs: 7 * 86_400_000 },
+  { key: '1h', spanMs: 3600_000 },
+  { key: '24h', spanMs: 24 * 3600_000 },
+  { key: '7d', spanMs: 7 * 86_400_000 },
 ] as const;
 
 type HistoryRangeKey = (typeof HISTORY_RANGES)[number]['key'];
+
+function rangeLabel(key: HistoryRangeKey): string {
+  switch (key) {
+    case '1h':
+      return m.sandboxes_range_1h();
+    case '24h':
+      return m.sandboxes_range_24h();
+    case '7d':
+      return m.sandboxes_range_7d();
+  }
+}
 
 /** 短窗口给钟点,7 天窗口给日期 — 刻度只说窗口内有区分度的部分。 */
 function clockFor(range: HistoryRangeKey): (ms: number) => string {
@@ -78,7 +91,7 @@ function clockFor(range: HistoryRangeKey): (ms: number) => string {
     };
   }
   return (ms) =>
-    new Date(ms).toLocaleTimeString('zh-CN', {
+    new Date(ms).toLocaleTimeString(getLocale(), {
       hour12: false,
       hour: '2-digit',
       minute: '2-digit',
@@ -87,7 +100,7 @@ function clockFor(range: HistoryRangeKey): (ms: number) => string {
 
 /** tooltip 用的完整时刻。 */
 const fullClock = (ms: number) =>
-  new Date(ms).toLocaleString('zh-CN', {
+  new Date(ms).toLocaleString(getLocale(), {
     hour12: false,
     month: 'numeric',
     day: 'numeric',
@@ -207,7 +220,7 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
   if (live.isPending) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Spinner /> 读取指标
+        <Spinner /> {m.sandboxes_loading_metrics()}
       </div>
     );
   }
@@ -215,7 +228,7 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
     return (
       <Empty className="border border-dashed">
         <EmptyHeader>
-          <EmptyTitle>读取失败</EmptyTitle>
+          <EmptyTitle>{m.sandboxes_metrics_error_title()}</EmptyTitle>
           <EmptyDescription>{live.error.message}</EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -231,10 +244,9 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
       {sample === null ? (
         <Empty className="border border-dashed">
           <EmptyHeader>
-            <EmptyTitle>没有运行中的容器可测</EmptyTitle>
+            <EmptyTitle>{m.sandboxes_no_container_title()}</EmptyTitle>
             <EmptyDescription>
-              沙箱现在没有活着的容器(已停止/已归档)。观察不唤醒 —
-              打开终端或执行命令才会把它叫醒。下方的历史走势还在。
+              {m.sandboxes_no_container_desc()}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -244,28 +256,33 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
             icon={CpuIcon}
             label="CPU"
             value={`${Math.round(sample.cpuUsedPct)}%`}
-            hint={`${sample.cpuCount} vCPU · 百分比按单 vCPU 计`}
+            hint={m.sandboxes_cpu_hint({ n: sample.cpuCount })}
             pct={sample.cpuUsedPct / sample.cpuCount}
           />
           <MetricCard
             icon={RamMemoryIcon}
-            label="内存"
+            label={m.sandboxes_metric_memory()}
             value={formatBytes(sample.memUsedBytes)}
-            hint={`共 ${formatBytes(sample.memTotalBytes)} · 缓存 ${formatBytes(sample.memCacheBytes)}`}
+            hint={m.sandboxes_mem_hint({
+              total: formatBytes(sample.memTotalBytes),
+              cache: formatBytes(sample.memCacheBytes),
+            })}
             pct={pctOf(sample.memUsedBytes, sample.memTotalBytes)}
           />
           <MetricCard
             icon={HardDriveIcon}
-            label="磁盘"
+            label={m.sandboxes_metric_disk()}
             value={formatBytes(sample.diskUsedBytes)}
-            hint={`名义 ${formatBytes(sample.diskTotalBytes)} — 稀疏镜像只为真实内容付费`}
+            hint={m.sandboxes_disk_hint({
+              total: formatBytes(sample.diskTotalBytes),
+            })}
             pct={pctOf(sample.diskUsedBytes, sample.diskTotalBytes)}
           />
         </div>
       )}
 
       <div className="flex items-center justify-between gap-3">
-        <div className="text-sm font-medium">历史走势</div>
+        <div className="text-sm font-medium">{m.sandboxes_history_title()}</div>
         <ToggleGroup
           value={[range]}
           onValueChange={(value: unknown[]) => {
@@ -278,7 +295,7 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
         >
           {HISTORY_RANGES.map((r) => (
             <ToggleGroupItem key={r.key} value={r.key}>
-              {r.label}
+              {rangeLabel(r.key)}
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
@@ -291,22 +308,19 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
       ) : history.isPending ? (
         // 历史还在路上时不许说"没有走势"— 空态是断言,loading 不是。
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner /> 读取历史走势
+          <Spinner /> {m.sandboxes_loading_history()}
         </div>
       ) : samples.length < 2 ? (
         <Empty className="border border-dashed">
           <EmptyHeader>
-            <EmptyTitle>窗口内还没有走势可画</EmptyTitle>
-            <EmptyDescription>
-              daemon 定期采样(默认每 30 秒),攒够两个点就开始画;沙箱停着 或
-              daemon 停机的时段没有样本,曲线会如实断开。
-            </EmptyDescription>
+            <EmptyTitle>{m.sandboxes_no_history_title()}</EmptyTitle>
+            <EmptyDescription>{m.sandboxes_no_history_desc()}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : (
         <div className="grid gap-4 xl:grid-cols-3">
           <HistoryChart
-            title="CPU 走势"
+            title={m.sandboxes_chart_cpu()}
             data={toSeries(
               samples,
               (s) => Math.round(s.cpuUsedPct),
@@ -314,10 +328,10 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
             )}
             xTickFormatter={clockFor(range)}
             tickFormatter={(v) => `${v}%`}
-            valueFormatter={(v) => `${v}%(按单 vCPU 计)`}
+            valueFormatter={(v) => m.sandboxes_cpu_value({ v })}
           />
           <HistoryChart
-            title="内存走势"
+            title={m.sandboxes_chart_memory()}
             data={toSeries(samples, (s) => s.memUsedBytes, bucketSeconds)}
             xTickFormatter={clockFor(range)}
             tickFormatter={(v) => formatBytes(v)}
@@ -325,7 +339,7 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
             domainMax={lastSample?.memTotalBytes}
           />
           <HistoryChart
-            title="磁盘走势"
+            title={m.sandboxes_chart_disk()}
             data={toSeries(samples, (s) => s.diskUsedBytes, bucketSeconds)}
             xTickFormatter={clockFor(range)}
             tickFormatter={(v) => formatBytes(v)}
@@ -336,11 +350,10 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
 
       <p className="text-xs text-muted-foreground">
         {sample !== null &&
-          `当前值 5 秒刷新,本次读数取自 ${ago(sample.timestamp)}。`}
-        历史由 daemon
-        后台采样落库;沙箱睡着照样测(观察不唤醒),停止后曲线如实断流。
+          m.sandboxes_footer_live({ ago: ago(sample.timestamp) })}
+        {m.sandboxes_footer_history()}
         {bucketSeconds !== null &&
-          `窗口较长,已按每 ${Math.round(bucketSeconds / 60)} 分钟一桶聚合,每点为桶内峰值。`}
+          m.sandboxes_footer_bucketed({ n: Math.round(bucketSeconds / 60) })}
       </p>
     </div>
   );

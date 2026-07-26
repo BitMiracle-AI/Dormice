@@ -1,12 +1,16 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { getFleetTimeline } from '@/lib/api';
+import { m } from '@/paraglide/messages';
 
-/** 时间档位与其毫秒宽度 — 切换器与查询共用一份。 */
+/**
+ * 时间档位与其毫秒宽度 — 切换器与查询共用一份。label 是函数:清单在
+ * 模块顶层求值,渲染时再调用才拿到当下语言(同 nav.ts 的纪律)。
+ */
 export const TIMELINE_RANGES = [
-  { key: '1h', label: '1 小时', spanMs: 3600_000 },
-  { key: '24h', label: '24 小时', spanMs: 24 * 3600_000 },
-  { key: '7d', label: '7 天', spanMs: 7 * 86_400_000 },
-  { key: '30d', label: '30 天', spanMs: 30 * 86_400_000 },
+  { key: '1h', label: m.overview_range_1h, spanMs: 3600_000 },
+  { key: '24h', label: m.overview_range_24h, spanMs: 24 * 3600_000 },
+  { key: '7d', label: m.overview_range_7d, spanMs: 7 * 86_400_000 },
+  { key: '30d', label: m.overview_range_30d, spanMs: 30 * 86_400_000 },
 ] as const;
 
 export type TimelineRangeKey = (typeof TIMELINE_RANGES)[number]['key'];

@@ -1,0 +1,3 @@
+# Paraglide 编译产物(vite 插件与 typecheck 前置步骤从 messages/ 生成)
+src/paraglide
+project.inlang/cache

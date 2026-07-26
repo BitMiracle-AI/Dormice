@@ -1,4 +1,5 @@
 import { Badge } from '@/components/ui/badge';
+import { m } from '@/paraglide/messages';
 
 /**
  * 挂在 mock 页面标题旁的诚实声明:这一页还没有服务端,数据是设计期的
@@ -11,7 +12,7 @@ export function SampleDataBadge() {
       variant="outline"
       className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
     >
-      示例数据
+      {m.common_sample_data()}
     </Badge>
   );
 }

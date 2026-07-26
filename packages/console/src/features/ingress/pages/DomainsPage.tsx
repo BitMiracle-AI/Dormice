@@ -28,6 +28,7 @@ import {
   ItemTitle,
 } from '@/components/ui/item';
 import { Spinner } from '@/components/ui/spinner';
+import { m } from '@/paraglide/messages';
 import { BindDomainDialog } from '../components/BindDomainDialog';
 import { useIngress, useSetIngress } from '../hooks/useIngress';
 
@@ -73,52 +74,54 @@ function detectPublicIp(statuses: IngressDomainStatus[]): string | null {
   return (here ?? ready)?.probe.dnsAddresses[0] ?? null;
 }
 
-const PHASE_BADGES: Record<DomainPhase, { label: string; className: string }> =
-  {
-    ready: {
-      label: 'HTTPS 已就绪',
-      className:
-        'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-    },
-    issuing: {
-      label: '证书签发中',
-      className:
-        'border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400',
-    },
-    'waiting-dns': {
-      label: '等待 DNS 解析',
-      className:
-        'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400',
-    },
-    'dns-mismatch': {
-      label: '解析指向了别处',
-      className:
-        'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400',
-    },
-    'dns-error': {
-      label: 'DNS 查询失败',
-      className:
-        'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400',
-    },
-  };
+const PHASE_BADGES: Record<
+  DomainPhase,
+  { label: () => string; className: string }
+> = {
+  ready: {
+    label: m.domains_phase_ready,
+    className:
+      'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  },
+  issuing: {
+    label: m.domains_phase_issuing,
+    className: 'border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400',
+  },
+  'waiting-dns': {
+    label: m.domains_phase_waiting_dns,
+    className:
+      'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400',
+  },
+  'dns-mismatch': {
+    label: m.domains_phase_dns_mismatch,
+    className: 'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400',
+  },
+  'dns-error': {
+    label: m.domains_phase_dns_error,
+    className: 'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400',
+  },
+};
 
 function describeProbe(
   probe: IngressProbe,
   phase: DomainPhase,
   publicIp: string | null,
 ): string {
-  const resolved = `已解析到 ${probe.dnsAddresses.join(', ')}`;
+  const addresses = probe.dnsAddresses.join(', ');
   switch (phase) {
     case 'ready':
-      return `${resolved};证书已签发,HTTPS 正常服务`;
+      return m.domains_probe_ready({ addresses });
     case 'issuing':
-      return `${resolved};Caddy 正在申请证书 — 自动重试,通常一分钟内完成`;
+      return m.domains_probe_issuing({ addresses });
     case 'waiting-dns':
-      return '还没有解析记录 — 按绑定弹窗里的指引加一条 A 记录,生效通常要几分钟';
+      return m.domains_probe_waiting_dns();
     case 'dns-mismatch':
-      return `解析到 ${probe.dnsAddresses.join(', ')},但本机是 ${publicIp} — 去域名商处把 A 记录的记录值改成本机 IP`;
+      return m.domains_probe_dns_mismatch({
+        addresses,
+        publicIp: publicIp ?? '',
+      });
     case 'dns-error':
-      return '解析器查询失败(超时或上游故障),会随下一轮探测自动重试';
+      return m.domains_probe_dns_error();
   }
 }
 
@@ -178,9 +181,11 @@ function DomainItem({
         <ItemTitle className="flex flex-wrap items-center gap-2 font-mono">
           {status.domain}
           <Badge variant="outline" className={badge.className}>
-            {badge.label}
+            {badge.label()}
           </Badge>
-          {isHere && <Badge variant="secondary">当前访问</Badge>}
+          {isHere && (
+            <Badge variant="secondary">{m.domains_badge_current()}</Badge>
+          )}
         </ItemTitle>
         <ItemDescription>
           {describeProbe(status.probe, phase, publicIp)}
@@ -206,13 +211,13 @@ function DomainItem({
               />
             }
           >
-            打开
+            {m.domains_open()}
             <HugeiconsIcon icon={ArrowUpRight01Icon} />
           </Button>
         )}
         <Button variant="ghost" size="sm" disabled={busy} onClick={onRemove}>
           {removing && <Spinner />}
-          解绑
+          {m.domains_unbind()}
         </Button>
       </ItemActions>
     </Item>
@@ -239,7 +244,7 @@ export function DomainsPage() {
     mutation.mutate(
       bound.filter((entry) => entry !== domain),
       {
-        onSuccess: () => toast.success(`已解绑 ${domain}`),
+        onSuccess: () => toast.success(m.domains_unbind_success({ domain })),
         onError: (mutationError) => toast.error(mutationError.message),
         onSettled: () => setRemoving(null),
       },
@@ -250,7 +255,7 @@ export function DomainsPage() {
     // 内容是竖排的域名条目与指引 — 不是表格页,限宽 4xl 读起来舒服。
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 p-4 md:p-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-medium">域名</h1>
+        <h1 className="text-xl font-medium">{m.domains_page_title()}</h1>
         {data?.managed && statuses.length > 0 && (
           <BindDomainDialog bound={bound} publicIp={publicIp} />
         )}
@@ -258,12 +263,12 @@ export function DomainsPage() {
 
       {isPending ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner /> 读取域名配置
+          <Spinner /> {m.domains_loading()}
         </div>
       ) : isError ? (
         <Empty className="border border-dashed">
           <EmptyHeader>
-            <EmptyTitle>读取失败</EmptyTitle>
+            <EmptyTitle>{m.domains_load_failed()}</EmptyTitle>
             <EmptyDescription>{error.message}</EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -273,10 +278,9 @@ export function DomainsPage() {
             <EmptyMedia variant="icon">
               <HugeiconsIcon icon={Globe02Icon} />
             </EmptyMedia>
-            <EmptyTitle>本 daemon 未接管反向代理</EmptyTitle>
+            <EmptyTitle>{m.domains_unmanaged_title()}</EmptyTitle>
             <EmptyDescription>
-              DORMICE_INGRESS_FILE 未配置,网页绑定不可用。重跑 install.sh
-              会自动装配 Caddy 并打开这里;或继续自行维护你的代理配置。
+              {m.domains_unmanaged_description()}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -286,11 +290,8 @@ export function DomainsPage() {
             <EmptyMedia variant="icon">
               <HugeiconsIcon icon={Globe02Icon} />
             </EmptyMedia>
-            <EmptyTitle>还没有绑定域名</EmptyTitle>
-            <EmptyDescription>
-              绑定后 HTTPS 证书自动申请与续期;无论绑定成败,IP
-              访问始终保留,不会被锁在门外。
-            </EmptyDescription>
+            <EmptyTitle>{m.domains_empty_title()}</EmptyTitle>
+            <EmptyDescription>{m.domains_empty_description()}</EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
             <BindDomainDialog bound={bound} publicIp={publicIp} />
@@ -311,9 +312,7 @@ export function DomainsPage() {
             ))}
           </ItemGroup>
           <p className="text-sm text-muted-foreground">
-            以上探测跑在服务器本机,证明不了公网可达:若浏览器打不开 HTTPS
-            地址,通常是云安全组还没放行 443 端口;中国大陆机房还需域名有 ICP
-            备案,否则云厂商会在入口拦截(与本机配置无关)。
+            {m.domains_probe_footnote()}
           </p>
         </>
       )}

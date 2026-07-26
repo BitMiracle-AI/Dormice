@@ -11,9 +11,10 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
-import { STATE_LABELS } from '@/features/sandboxes/format';
+import { stateLabel } from '@/features/sandboxes/format';
 import { useSandboxes } from '@/features/sandboxes/hooks/useSandboxes';
 import { MOCK_PAGES_ENABLED } from '@/lib/mock';
+import { m } from '@/paraglide/messages';
 
 /**
  * 沙箱条目单拆一个组件:useSandboxes 的 2 秒轮询只在面板打开时才该跑,
@@ -25,7 +26,7 @@ function SandboxItems({ onGo }: { onGo: (name: string) => void }) {
   const sandboxes = query.data?.sandboxes ?? [];
   if (sandboxes.length === 0) return null;
   return (
-    <CommandGroup heading="沙箱">
+    <CommandGroup heading={m.shell_command_group_sandboxes()}>
       {sandboxes.map((sandbox) => (
         <CommandItem
           key={sandbox.id}
@@ -35,7 +36,7 @@ function SandboxItems({ onGo }: { onGo: (name: string) => void }) {
           <HugeiconsIcon icon={PackageIcon} strokeWidth={1.8} />
           <span className="font-mono">{sandbox.name}</span>
           <span className="ml-auto text-xs text-muted-foreground">
-            {STATE_LABELS[sandbox.state]}
+            {stateLabel(sandbox.state)}
           </span>
         </CommandItem>
       ))}
@@ -80,23 +81,23 @@ export function CommandMenu() {
     <CommandDialog
       open={open}
       onOpenChange={setOpen}
-      title="命令面板"
-      description="跳转到页面或沙箱"
+      title={m.shell_command_palette_title()}
+      description={m.shell_command_palette_desc()}
     >
-      <CommandInput placeholder="搜页面、沙箱" />
+      <CommandInput placeholder={m.shell_command_placeholder()} />
       <CommandList>
-        <CommandEmpty>没有匹配的结果。</CommandEmpty>
-        <CommandGroup heading="页面">
+        <CommandEmpty>{m.shell_command_empty()}</CommandEmpty>
+        <CommandGroup heading={m.shell_command_group_pages()}>
           {NAV_GROUPS.flatMap((group) => group.items)
             .filter((item) => !item.mock || MOCK_PAGES_ENABLED)
             .map((item) => (
               <CommandItem
                 key={item.to}
-                value={`page ${item.label}`}
+                value={`page ${item.label()}`}
                 onSelect={() => goPage(item.to)}
               >
                 <HugeiconsIcon icon={item.icon} strokeWidth={1.8} />
-                {item.label}
+                {item.label()}
                 <HugeiconsIcon
                   icon={ArrowRight01Icon}
                   className="ml-auto size-3.5 text-muted-foreground"

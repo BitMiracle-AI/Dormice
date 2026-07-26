@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dialog';
 import { Spinner } from '@/components/ui/spinner';
 import { ApiError, applyUpgrade, getUpgradeStatus } from '@/lib/api';
+import { m } from '@/paraglide/messages';
 
 /**
  * 一键升级的两幕:确认(把会发生什么说全 — 包括 daemon 重启会打断
@@ -142,37 +143,35 @@ export function UpgradeDialog({
         {phase === 'confirm' ? (
           <>
             <DialogHeader>
-              <DialogTitle>升级 Dormice</DialogTitle>
+              <DialogTitle>{m.settings_upgrade_dialog_title()}</DialogTitle>
               <DialogDescription>
-                在这台服务器上重跑 install.sh(重跑即升级),全程约几分钟。
+                {m.settings_upgrade_dialog_desc()}
               </DialogDescription>
             </DialogHeader>
             <ol className="list-decimal space-y-1.5 pl-5 text-sm">
-              <li>拉取最新代码并重新构建,耗时取决于服务器网络。</li>
+              <li>{m.settings_upgrade_step1()}</li>
               <li>
-                构建成功后 daemon 重启:
+                {m.settings_upgrade_step2_pre()}
                 <span className="text-foreground font-medium">
-                  进行中的终端、命令执行、文件监听会断开
+                  {m.settings_upgrade_step2_em()}
                 </span>
-                ;沙箱与磁盘不受影响,对账器会接管现场。
+                {m.settings_upgrade_step2_post()}
               </li>
-              <li>
-                构建失败会自动回退到当前版本重新构建,daemon 不重启, 照常服务。
-              </li>
-              <li>重启期间控制台会短暂失联,这个弹窗会等它带着新版本回来。</li>
+              <li>{m.settings_upgrade_step3()}</li>
+              <li>{m.settings_upgrade_step4()}</li>
             </ol>
             {launchError !== null && (
               <p className="text-sm text-destructive">
-                无法发起升级:{launchError}
+                {m.settings_upgrade_launch_failed({ error: launchError })}
               </p>
             )}
             <DialogFooter>
               <Button variant="outline" onClick={() => onOpenChange(false)}>
-                取消
+                {m.common_cancel()}
               </Button>
               <Button disabled={launching} onClick={start}>
                 {launching && <Spinner />}
-                开始升级
+                {m.settings_upgrade_start()}
               </Button>
             </DialogFooter>
           </>
@@ -208,36 +207,35 @@ function WatchBody({
       <DialogHeader>
         <DialogTitle>
           {outcome === null
-            ? '升级进行中'
+            ? m.settings_upgrade_watch_running()
             : outcome.state === 'succeeded'
-              ? '升级完成'
+              ? m.settings_upgrade_watch_succeeded()
               : outcome.state === 'rolled-back'
-                ? '升级失败,已自动回退'
-                : '升级失败'}
+                ? m.settings_upgrade_watch_rolled_back()
+                : m.settings_upgrade_watch_failed()}
         </DialogTitle>
         <DialogDescription>
           {outcome === null ? (
             unreachable ? (
-              'daemon 正在重启,短暂失联是升级的预期环节;正在等它回来。' +
-              '如果长时间停在这里,ssh 上去看 journalctl -u dormice-upgrade。'
+              m.settings_upgrade_desc_unreachable()
             ) : (
-              '升级在服务器的 systemd unit 里执行,关掉弹窗也不会中断。'
+              m.settings_upgrade_desc_running()
             )
           ) : outcome.state === 'succeeded' ? (
             <>
-              daemon 已带着新版本回来并通过 doctor 验收
+              {m.settings_upgrade_success_1()}
               {outcome.toCommit !== null && (
                 <>
-                  ,当前运行{' '}
+                  {m.settings_upgrade_success_running()}{' '}
                   <code className="font-mono">{outcome.toCommit}</code>
                 </>
               )}
-              。当前页面还是旧版控制台,点「刷新控制台」加载新版。
+              {m.settings_upgrade_success_2()}
             </>
           ) : outcome.state === 'rolled-back' ? (
-            '构建失败,代码已回退到升级前的版本并重新构建,daemon 未重启、照常服务。修复原因后可再试。'
+            m.settings_upgrade_desc_rolled_back()
           ) : (
-            '查看下方日志与服务器上的 journalctl -u dormice-upgrade;修复原因后在服务器上重跑 install.sh 即可修复安装。'
+            m.settings_upgrade_desc_failed()
           )}
         </DialogDescription>
       </DialogHeader>
@@ -245,7 +243,9 @@ function WatchBody({
       {outcome === null && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Spinner />
-          {unreachable ? '等待 daemon 重启完成' : '实时输出'}
+          {unreachable
+            ? m.settings_upgrade_waiting_restart()
+            : m.settings_upgrade_live_output()}
         </div>
       )}
       {outcome !== null && outcome.error !== null && (
@@ -262,12 +262,16 @@ function WatchBody({
 
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>
-          {outcome === null ? '转到后台(升级继续)' : '关闭'}
+          {outcome === null
+            ? m.settings_upgrade_background()
+            : m.common_close()}
         </Button>
         {outcome?.state === 'succeeded' && (
           // 升级重建了控制台:路由块按内容哈希按需加载,旧构建的块已被
           // 清掉,不刷新的话继续导航会撞 404。
-          <Button onClick={() => window.location.reload()}>刷新控制台</Button>
+          <Button onClick={() => window.location.reload()}>
+            {m.settings_reload_console()}
+          </Button>
         )}
       </DialogFooter>
     </>

@@ -1,34 +1,61 @@
 import type { ActivityKind } from '@dormice/shared';
+import { m } from '@/paraglide/messages';
 
 /**
- * 事件的中文名与徽章配色 — 与 wire 上的 kind 一比一,这里是唯一的翻译点。
- * 活动页与沙箱详情页的历史 tab 共用,不各自翻译。
+ * 事件的显示名与徽章配色 — 与 wire 上的 kind 一比一,这里是唯一的翻译点。
+ * 活动页与沙箱工作台共用,不各自翻译。函数形式(而非常量表)是刻意的:
+ * 消息要在渲染时按当前 locale 取值。
  */
-export const ACTIVITY_KIND_LABELS: Record<ActivityKind, string> = {
-  created: '创建',
-  woken: '唤醒',
-  frozen: '冻结',
-  stopped: '停止',
-  rebuilt: '重建',
-  destroyed: '销毁',
-  'expired-killed': '到期销毁',
-  archived: '归档',
-  'restore-started': '开始恢复',
-  restored: '恢复完成',
-  'restore-failed': '恢复失败',
-  reconciled: '对账修复',
-  'policy-changed': '策略调整',
-  'metadata-changed': '标签调整',
-  'daemon-started': 'daemon 启动',
-  'ingress-updated': '域名配置',
-  'settings-updated': '设置调整',
-  'apikey-created': '密钥创建',
-  'apikey-updated': '密钥调整',
-  'apikey-disabled': '密钥停用',
-  'apikey-enabled': '密钥启用',
-  'apikey-revoked': '密钥吊销',
-  'upgrade-started': '发起升级',
-};
+export function activityKindLabel(kind: ActivityKind): string {
+  switch (kind) {
+    case 'created':
+      return m.activity_kind_created();
+    case 'woken':
+      return m.activity_kind_woken();
+    case 'frozen':
+      return m.activity_kind_frozen();
+    case 'stopped':
+      return m.activity_kind_stopped();
+    case 'rebuilt':
+      return m.activity_kind_rebuilt();
+    case 'destroyed':
+      return m.activity_kind_destroyed();
+    case 'expired-killed':
+      return m.activity_kind_expired_killed();
+    case 'archived':
+      return m.activity_kind_archived();
+    case 'restore-started':
+      return m.activity_kind_restore_started();
+    case 'restored':
+      return m.activity_kind_restored();
+    case 'restore-failed':
+      return m.activity_kind_restore_failed();
+    case 'reconciled':
+      return m.activity_kind_reconciled();
+    case 'policy-changed':
+      return m.activity_kind_policy_changed();
+    case 'metadata-changed':
+      return m.activity_kind_metadata_changed();
+    case 'daemon-started':
+      return m.activity_kind_daemon_started();
+    case 'ingress-updated':
+      return m.activity_kind_ingress_updated();
+    case 'settings-updated':
+      return m.activity_kind_settings_updated();
+    case 'apikey-created':
+      return m.activity_kind_apikey_created();
+    case 'apikey-updated':
+      return m.activity_kind_apikey_updated();
+    case 'apikey-disabled':
+      return m.activity_kind_apikey_disabled();
+    case 'apikey-enabled':
+      return m.activity_kind_apikey_enabled();
+    case 'apikey-revoked':
+      return m.activity_kind_apikey_revoked();
+    case 'upgrade-started':
+      return m.activity_kind_upgrade_started();
+  }
+}
 
 // 事件色与沙箱状态徽章同一色系:落到哪个状态就穿哪个颜色;
 // 配置类事件(策略、域名)统一紫色。

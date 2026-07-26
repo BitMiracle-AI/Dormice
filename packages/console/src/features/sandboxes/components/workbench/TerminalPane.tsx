@@ -13,6 +13,7 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty';
 import { mintEnvdToken } from '@/lib/api';
+import { m } from '@/paraglide/messages';
 import { openPty, type PtySession } from '../../envd-pty';
 import '@xterm/xterm/css/xterm.css';
 
@@ -38,7 +39,7 @@ function LiveTerminal({ sandboxId }: { sandboxId: string }) {
     fit.fit();
     // Waking a stopped sandbox is a cold start — seconds, not ms. Say so
     // in the terminal itself instead of leaving a dead black box.
-    term.writeln('\x1b[2m连接中 — 沉睡的沙箱会先被唤醒\x1b[0m');
+    term.writeln(`\x1b[2m${m.workbench_term_connecting()}\x1b[0m`);
 
     let session: PtySession | undefined;
     let cancelled = false;
@@ -97,7 +98,7 @@ function LiveTerminal({ sandboxId }: { sandboxId: string }) {
               setGeneration((n) => n + 1);
             }}
           >
-            重新连接
+            {m.workbench_reconnect()}
           </Button>
         </div>
       )}
@@ -117,10 +118,10 @@ export function TerminalPane({ sandbox }: { sandbox: Sandbox }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-1.5">
-        <span className="text-sm font-medium">终端</span>
+        <span className="text-sm font-medium">{m.workbench_terminal()}</span>
         <div className="flex items-center gap-2">
           <span className="hidden text-xs text-muted-foreground sm:inline">
-            打开会唤醒沉睡的沙箱,关掉后空闲倒计时恢复
+            {m.workbench_terminal_hint()}
           </span>
           <Button
             variant="outline"
@@ -128,7 +129,9 @@ export function TerminalPane({ sandbox }: { sandbox: Sandbox }) {
             className="h-6 px-2 text-xs"
             onClick={() => setConnected((value) => !value)}
           >
-            {connected ? '断开' : '连接终端'}
+            {connected
+              ? m.workbench_disconnect()
+              : m.workbench_connect_terminal()}
           </Button>
         </div>
       </div>
@@ -143,13 +146,13 @@ export function TerminalPane({ sandbox }: { sandbox: Sandbox }) {
               <EmptyMedia variant="icon">
                 <HugeiconsIcon icon={ComputerTerminal01Icon} />
               </EmptyMedia>
-              <EmptyTitle>沙箱里的交互式 bash</EmptyTitle>
+              <EmptyTitle>{m.workbench_terminal_empty_title()}</EmptyTitle>
               <EmptyDescription>
-                连接会唤醒沉睡的沙箱 — 看工作台本身不会解冻任何东西。
+                {m.workbench_terminal_empty_desc()}
               </EmptyDescription>
             </EmptyHeader>
             <Button size="sm" onClick={() => setConnected(true)}>
-              连接终端
+              {m.workbench_connect_terminal()}
             </Button>
           </Empty>
         </div>

@@ -66,6 +66,7 @@ import {
 } from '@/components/ui/table';
 import { ago, until } from '@/features/sandboxes/format';
 import { copyText } from '@/lib/copy';
+import { m } from '@/paraglide/messages';
 import {
   useApiKeys,
   useCreateApiKey,
@@ -112,7 +113,7 @@ function ExpiryPicker({
               className="justify-start font-normal"
             >
               <HugeiconsIcon icon={Calendar03Icon} />
-              {value ? value.toLocaleDateString() : '永不过期'}
+              {value ? value.toLocaleDateString() : m.apikeys_never_expires()}
             </Button>
           }
         />
@@ -135,7 +136,7 @@ function ExpiryPicker({
           size="sm"
           onClick={() => onChange(undefined)}
         >
-          清除
+          {m.apikeys_clear()}
         </Button>
       )}
     </div>
@@ -178,7 +179,7 @@ function CreateApiKeyDialog() {
         render={
           <Button size="sm">
             <HugeiconsIcon icon={Add01Icon} />
-            创建密钥
+            {m.apikeys_create_button()}
           </Button>
         }
       />
@@ -186,10 +187,9 @@ function CreateApiKeyDialog() {
         {minted === null ? (
           <>
             <DialogHeader>
-              <DialogTitle>创建 API 密钥</DialogTitle>
+              <DialogTitle>{m.apikeys_create_title()}</DialogTitle>
               <DialogDescription>
-                密钥与 DORMICE_API_TOKEN 等效通行(SDK、CLI、E2B 包都认),
-                区别是可以在这里随时停用或吊销,不用改服务器配置、不用重启。
+                {m.apikeys_create_description()}
               </DialogDescription>
             </DialogHeader>
             <form
@@ -209,7 +209,9 @@ function CreateApiKeyDialog() {
             >
               <FieldGroup>
                 <Field>
-                  <FieldLabel htmlFor="apikey-name">名字</FieldLabel>
+                  <FieldLabel htmlFor="apikey-name">
+                    {m.apikeys_name_label()}
+                  </FieldLabel>
                   <Input
                     id="apikey-name"
                     value={name}
@@ -218,19 +220,20 @@ function CreateApiKeyDialog() {
                     className="font-mono"
                   />
                   <FieldDescription>
-                    给人看的把手,比如 ci、laptop。
-                    同名同时只能有一把未吊销的密钥,吊销后名字可以再用。
+                    {m.apikeys_name_description()}
                   </FieldDescription>
                 </Field>
                 <Field>
-                  <FieldLabel htmlFor="apikey-expiry">过期日期</FieldLabel>
+                  <FieldLabel htmlFor="apikey-expiry">
+                    {m.apikeys_expiry_label()}
+                  </FieldLabel>
                   <ExpiryPicker
                     id="apikey-expiry"
                     value={expiry}
                     onChange={setExpiry}
                   />
                   <FieldDescription>
-                    到期当天过完即失效;之后可以在编辑里延期或清除。
+                    {m.apikeys_expiry_description()}
                   </FieldDescription>
                 </Field>
                 {mutation.isError && (
@@ -243,7 +246,7 @@ function CreateApiKeyDialog() {
                   disabled={name.trim() === '' || mutation.isPending}
                 >
                   {mutation.isPending && <Spinner />}
-                  创建
+                  {m.apikeys_create_submit()}
                 </Button>
               </DialogFooter>
             </form>
@@ -251,10 +254,11 @@ function CreateApiKeyDialog() {
         ) : (
           <>
             <DialogHeader>
-              <DialogTitle>「{minted.name}」已创建</DialogTitle>
+              <DialogTitle>
+                {m.apikeys_created_title({ name: minted.name })}
+              </DialogTitle>
               <DialogDescription>
-                这是密钥唯一一次显示 — daemon 只存哈希,关掉这个窗口就再也
-                取不回来了。现在复制并存好。
+                {m.apikeys_created_description()}
               </DialogDescription>
             </DialogHeader>
             <div className="flex items-center gap-2">
@@ -264,11 +268,11 @@ function CreateApiKeyDialog() {
               <Button
                 variant="outline"
                 size="icon-sm"
-                aria-label="复制密钥"
+                aria-label={m.apikeys_copy_key_aria()}
                 onClick={() =>
                   copyText(minted.token).then(
-                    () => toast.success('密钥已复制'),
-                    () => toast.error('复制失败 — 请手动选中复制'),
+                    () => toast.success(m.apikeys_key_copied()),
+                    () => toast.error(m.apikeys_copy_failed_manual()),
                   )
                 }
               >
@@ -280,14 +284,16 @@ function CreateApiKeyDialog() {
                 variant="outline"
                 onClick={() =>
                   copyText(connectSnippet(minted.token)).then(
-                    () => toast.success('接入配置已复制 — 端点与凭证两行'),
-                    () => toast.error('复制失败 — 请手动选中复制'),
+                    () => toast.success(m.apikeys_connect_copied()),
+                    () => toast.error(m.apikeys_copy_failed_manual()),
                   )
                 }
               >
-                复制接入配置
+                {m.apikeys_copy_connect()}
               </Button>
-              <Button onClick={() => onOpenChange(false)}>我已存好</Button>
+              <Button onClick={() => onOpenChange(false)}>
+                {m.apikeys_saved_it()}
+              </Button>
             </DialogFooter>
           </>
         )}
@@ -339,7 +345,9 @@ function EditApiKeyDialog({
       { id: apiKey.id, ...patch },
       {
         onSuccess: () => {
-          toast.success(`已更新「${patch.name ?? apiKey.name}」`);
+          toast.success(
+            m.apikeys_updated_toast({ name: patch.name ?? apiKey.name }),
+          );
           onOpenChange(false);
         },
         onError: (error) => toast.error(error.message),
@@ -351,10 +359,10 @@ function EditApiKeyDialog({
     <Dialog open={open} onOpenChange={reset}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>编辑「{apiKey.name}」</DialogTitle>
-          <DialogDescription>
-            改名或调整过期日期。密钥本体不可见也不可换 — 要换材质就吊销重铸。
-          </DialogDescription>
+          <DialogTitle>
+            {m.apikeys_edit_title({ name: apiKey.name })}
+          </DialogTitle>
+          <DialogDescription>{m.apikeys_edit_description()}</DialogDescription>
         </DialogHeader>
         <form
           onSubmit={(event) => {
@@ -364,7 +372,9 @@ function EditApiKeyDialog({
         >
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="apikey-edit-name">名字</FieldLabel>
+              <FieldLabel htmlFor="apikey-edit-name">
+                {m.apikeys_name_label()}
+              </FieldLabel>
               <Input
                 id="apikey-edit-name"
                 value={name}
@@ -373,7 +383,9 @@ function EditApiKeyDialog({
               />
             </Field>
             <Field>
-              <FieldLabel htmlFor="apikey-edit-expiry">过期日期</FieldLabel>
+              <FieldLabel htmlFor="apikey-edit-expiry">
+                {m.apikeys_expiry_label()}
+              </FieldLabel>
               <ExpiryPicker
                 id="apikey-edit-expiry"
                 value={expiry}
@@ -393,7 +405,7 @@ function EditApiKeyDialog({
               disabled={name.trim() === '' || mutation.isPending}
             >
               {mutation.isPending && <Spinner />}
-              保存
+              {m.common_save()}
             </Button>
           </DialogFooter>
         </form>
@@ -418,8 +430,8 @@ function RevokeApiKeyDialog({
       // false 要说响亮:漏杀一把泄露的密钥比报错更糟。
       onSuccess: ({ revoked }) =>
         revoked
-          ? toast.success(`已吊销「${apiKey.name}」— 下一个请求就失效`)
-          : toast.error(`「${apiKey.name}」已不在 — 没有吊销任何东西`),
+          ? toast.success(m.apikeys_revoked_toast({ name: apiKey.name }))
+          : toast.error(m.apikeys_revoke_gone_toast({ name: apiKey.name })),
       onError: (error) => toast.error(error.message),
     });
 
@@ -427,17 +439,17 @@ function RevokeApiKeyDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>吊销密钥「{apiKey.name}」?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {m.apikeys_revoke_title({ name: apiKey.name })}
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            立即生效,不可恢复 — 还在用它的客户端下一个请求就会 401。
-            只是暂时不用的话,停用开关是可逆的。记录会留在列表里作
-            轮换历史,名字可以再用。
+            {m.apikeys_revoke_description()}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>先留着</AlertDialogCancel>
+          <AlertDialogCancel>{m.apikeys_keep_it()}</AlertDialogCancel>
           <AlertDialogAction variant="destructive" onClick={revoke}>
-            吊销
+            {m.apikeys_revoke()}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -458,7 +470,7 @@ function ApiKeyRowMenu({ apiKey }: { apiKey: ApiKey }) {
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label={`${apiKey.name} 的操作`}
+              aria-label={m.apikeys_row_actions_aria({ name: apiKey.name })}
             >
               <HugeiconsIcon icon={MoreVerticalIcon} />
             </Button>
@@ -467,14 +479,14 @@ function ApiKeyRowMenu({ apiKey }: { apiKey: ApiKey }) {
         <DropdownMenuContent align="end">
           <DropdownMenuItem onClick={() => setEditOpen(true)}>
             <HugeiconsIcon icon={Edit02Icon} />
-            编辑
+            {m.common_edit()}
           </DropdownMenuItem>
           <DropdownMenuItem
             variant="destructive"
             onClick={() => setRevokeOpen(true)}
           >
             <HugeiconsIcon icon={Delete02Icon} />
-            吊销
+            {m.apikeys_revoke()}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -518,9 +530,9 @@ function BulkRevokeButton({
     setConfirmOpen(false);
     onDone();
     if (failures.length > 0) {
-      toast.error(`吊销失败:${failures.join('、')}`);
+      toast.error(m.apikeys_bulk_revoke_failed({ names: failures.join('、') }));
     } else {
-      toast.success(`已吊销 ${keys.length} 把密钥`);
+      toast.success(m.apikeys_bulk_revoked({ count: keys.length }));
     }
   };
 
@@ -532,21 +544,24 @@ function BulkRevokeButton({
         onClick={() => setConfirmOpen(true)}
       >
         <HugeiconsIcon icon={Delete02Icon} />
-        吊销所选({keys.length})
+        {m.apikeys_bulk_revoke_button({ count: keys.length })}
       </Button>
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              吊销选中的 {keys.length} 把密钥?
+              {m.apikeys_bulk_revoke_title({ count: keys.length })}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {keys.map((k) => k.name).join('、')}—
-              立即生效,不可恢复,还在用它们的客户端下一个请求就会 401。
+              {m.apikeys_bulk_revoke_description({
+                names: keys.map((k) => k.name).join('、'),
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={running}>先留着</AlertDialogCancel>
+            <AlertDialogCancel disabled={running}>
+              {m.apikeys_keep_it()}
+            </AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               disabled={running}
@@ -557,7 +572,7 @@ function BulkRevokeButton({
               }}
             >
               {running && <Spinner />}
-              吊销全部
+              {m.apikeys_revoke_all()}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -571,23 +586,35 @@ const SOON_MS = 7 * 24 * 3600_000;
 
 const STATUS_BADGE: Record<
   ReturnType<typeof apiKeyStatus>,
-  { label: string; className?: string; variant: 'outline' | 'secondary' }
+  { className?: string; variant: 'outline' | 'secondary' }
 > = {
-  active: { label: '活跃', variant: 'outline' },
+  active: { variant: 'outline' },
   disabled: {
-    label: '已停用',
     variant: 'outline',
     className:
       'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400',
   },
   expired: {
-    label: '已过期',
     variant: 'outline',
     className:
       'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400',
   },
-  revoked: { label: '已吊销', variant: 'secondary' },
+  revoked: { variant: 'secondary' },
 };
+
+/** 状态徽章文案按当前 locale 渲染时取值,不进模块级常量表。 */
+function statusLabel(status: ReturnType<typeof apiKeyStatus>): string {
+  switch (status) {
+    case 'active':
+      return m.apikeys_status_active();
+    case 'disabled':
+      return m.apikeys_status_disabled();
+    case 'expired':
+      return m.apikeys_status_expired();
+    case 'revoked':
+      return m.apikeys_status_revoked();
+  }
+}
 
 /**
  * API 密钥账本:铸造、编辑、启停、吊销,批量与分页齐备。密钥本体永不
@@ -637,10 +664,10 @@ export function ApiKeysPage() {
     <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-5 p-4 md:p-6">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-medium">API 密钥</h1>
+          <h1 className="text-xl font-medium">{m.apikeys_page_title()}</h1>
           {selectedLive.length > 0 && (
             <span className="text-sm text-muted-foreground">
-              已选 {selectedLive.length} 把
+              {m.apikeys_selected_count({ count: selectedLive.length })}
             </span>
           )}
         </div>
@@ -669,17 +696,19 @@ export function ApiKeysPage() {
                 checked={allSelected}
                 onCheckedChange={toggleAll}
                 disabled={selectable.length === 0}
-                aria-label="全选本页"
+                aria-label={m.apikeys_select_all_aria()}
               />
             </TableHead>
-            <TableHead>名字</TableHead>
-            <TableHead>前缀</TableHead>
-            <TableHead>创建</TableHead>
-            <TableHead>最后使用</TableHead>
-            <TableHead>过期</TableHead>
-            <TableHead>启用</TableHead>
-            <TableHead>状态</TableHead>
-            <TableHead className="text-right">操作</TableHead>
+            <TableHead>{m.apikeys_col_name()}</TableHead>
+            <TableHead>{m.apikeys_col_prefix()}</TableHead>
+            <TableHead>{m.apikeys_col_created()}</TableHead>
+            <TableHead>{m.apikeys_col_last_used()}</TableHead>
+            <TableHead>{m.apikeys_col_expiry()}</TableHead>
+            <TableHead>{m.apikeys_col_enabled()}</TableHead>
+            <TableHead>{m.apikeys_col_status()}</TableHead>
+            <TableHead className="text-right">
+              {m.apikeys_col_actions()}
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -689,20 +718,24 @@ export function ApiKeysPage() {
             <TableCell />
             <TableCell
               className="font-mono font-medium"
-              title="引导/恢复凭证,来自服务器环境变量 — 轮换它 = 改服务器配置并重启 daemon,console 无法吊销"
+              title={m.apikeys_env_row_title()}
             >
               <span className="flex items-center gap-2">
                 DORMICE_API_TOKEN
-                <Badge variant="secondary">默认</Badge>
+                <Badge variant="secondary">{m.apikeys_badge_default()}</Badge>
               </span>
             </TableCell>
-            <TableCell className="text-muted-foreground">环境变量</TableCell>
+            <TableCell className="text-muted-foreground">
+              {m.apikeys_env_var()}
+            </TableCell>
             <TableCell className="text-muted-foreground">—</TableCell>
             <TableCell className="text-muted-foreground">—</TableCell>
-            <TableCell className="text-muted-foreground">永不过期</TableCell>
+            <TableCell className="text-muted-foreground">
+              {m.apikeys_never_expires()}
+            </TableCell>
             <TableCell />
             <TableCell>
-              <Badge variant="outline">常驻</Badge>
+              <Badge variant="outline">{m.apikeys_badge_resident()}</Badge>
             </TableCell>
             <TableCell />
           </TableRow>
@@ -713,8 +746,7 @@ export function ApiKeysPage() {
                 colSpan={9}
                 className="py-8 text-center text-sm text-muted-foreground"
               >
-                还没有账本密钥 — 现在全靠上面那一枚环境变量凭证。
-                给每个客户端创建一把密钥,泄露时吊销那一把就够,不用全局换钥匙。
+                {m.apikeys_empty()}
               </TableCell>
             </TableRow>
           )}
@@ -738,7 +770,9 @@ export function ApiKeysPage() {
                     checked={selected.has(apiKey.id)}
                     onCheckedChange={() => toggleOne(apiKey.id)}
                     disabled={revoked}
-                    aria-label={`选择 ${apiKey.name}`}
+                    aria-label={m.apikeys_select_one_aria({
+                      name: apiKey.name,
+                    })}
                   />
                 </TableCell>
                 <TableCell className="font-mono font-medium">
@@ -762,7 +796,9 @@ export function ApiKeysPage() {
                       : undefined
                   }
                 >
-                  {apiKey.lastUsedAt ? ago(apiKey.lastUsedAt) : '从未'}
+                  {apiKey.lastUsedAt
+                    ? ago(apiKey.lastUsedAt)
+                    : m.apikeys_never_used()}
                 </TableCell>
                 <TableCell
                   className={`tabular-nums ${
@@ -777,17 +813,21 @@ export function ApiKeysPage() {
                   }
                 >
                   {apiKey.expiresAt === null
-                    ? '永不过期'
+                    ? m.apikeys_never_expires()
                     : status === 'expired' || status === 'revoked'
                       ? new Date(apiKey.expiresAt).toLocaleDateString()
-                      : `${until(apiKey.expiresAt)}后`}
+                      : m.apikeys_expires_in({
+                          duration: until(apiKey.expiresAt),
+                        })}
                 </TableCell>
                 <TableCell>
                   {!revoked && (
                     <Switch
                       checked={apiKey.disabledAt === null}
                       disabled={update.isPending}
-                      aria-label={`${apiKey.name} 启用开关`}
+                      aria-label={m.apikeys_enable_switch_aria({
+                        name: apiKey.name,
+                      })}
                       onCheckedChange={(enabled) =>
                         update.mutate(
                           { id: apiKey.id, disabled: !enabled },
@@ -795,8 +835,12 @@ export function ApiKeysPage() {
                             onSuccess: () =>
                               toast.success(
                                 enabled
-                                  ? `已启用「${apiKey.name}」`
-                                  : `已停用「${apiKey.name}」— 可随时重新启用`,
+                                  ? m.apikeys_enabled_toast({
+                                      name: apiKey.name,
+                                    })
+                                  : m.apikeys_disabled_toast({
+                                      name: apiKey.name,
+                                    }),
                               ),
                             onError: (error) => toast.error(error.message),
                           },
@@ -807,7 +851,7 @@ export function ApiKeysPage() {
                 </TableCell>
                 <TableCell>
                   <Badge variant={badge.variant} className={badge.className}>
-                    {badge.label}
+                    {statusLabel(status)}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-right">

@@ -14,6 +14,7 @@ import {
   ResizablePanelGroup,
 } from '@/components/ui/resizable';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { m } from '@/paraglide/messages';
 import { DestroySandboxButton } from '../components/DestroySandboxButton';
 import { EditPolicyDialog } from '../components/EditPolicyDialog';
 import { LifecycleCountdown } from '../components/LifecycleCountdown';
@@ -53,11 +54,8 @@ export function SandboxDetailPage() {
     return isSuccess ? (
       <Empty className="m-4 border border-dashed md:m-6">
         <EmptyHeader>
-          <EmptyTitle>没有叫「{name}」的沙箱</EmptyTitle>
-          <EmptyDescription>
-            可能已被销毁 — 这个名字依然可用,下次同名 acquire 会得到一个
-            全新的沙箱。
-          </EmptyDescription>
+          <EmptyTitle>{m.workbench_not_found_title({ name })}</EmptyTitle>
+          <EmptyDescription>{m.workbench_not_found_desc()}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
           <Button
@@ -66,7 +64,7 @@ export function SandboxDetailPage() {
             nativeButton={false}
             render={<Link to="/sandboxes" />}
           >
-            回到沙箱列表
+            {m.workbench_back_to_list()}
           </Button>
         </EmptyContent>
       </Empty>

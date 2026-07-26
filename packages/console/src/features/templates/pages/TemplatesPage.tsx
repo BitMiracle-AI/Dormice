@@ -64,6 +64,7 @@ import {
 } from '@/components/ui/table';
 import { ago } from '@/features/sandboxes/format';
 import { useSandboxes } from '@/features/sandboxes/hooks/useSandboxes';
+import { m } from '@/paraglide/messages';
 import {
   useRegisterTemplate,
   useRemoveTemplate,
@@ -109,11 +110,12 @@ function RegisterTemplateDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {initial ? `更新「${initial.name}」指向的镜像` : '注册模板'}
+            {initial
+              ? m.templates_dialog_title_update({ name: initial.name })
+              : m.templates_dialog_title_register()}
           </DialogTitle>
           <DialogDescription>
-            模板 = 一个名字 + 宿主机上已有的 Docker 镜像。注册是配置,
-            镜像可以晚点再 build — 缺席时创建沙箱会得到点名的报错。
+            {m.templates_dialog_description()}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -124,10 +126,15 @@ function RegisterTemplateDialog({
               {
                 onSuccess: ({ template }) => {
                   toast.success(
-                    `模板「${template.name}」→ ${template.image}` +
-                      (initial
-                        ? ' — 还在旧镜像上的沙箱在列表里带「可升级」标记,逐个 Rebuild'
-                        : ''),
+                    initial
+                      ? m.templates_update_success({
+                          name: template.name,
+                          image: template.image,
+                        })
+                      : m.templates_register_success({
+                          name: template.name,
+                          image: template.image,
+                        }),
                   );
                   setOpen(false);
                 },
@@ -137,7 +144,9 @@ function RegisterTemplateDialog({
         >
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="template-name">名字</FieldLabel>
+              <FieldLabel htmlFor="template-name">
+                {m.templates_field_name()}
+              </FieldLabel>
               <Input
                 id="template-name"
                 value={name}
@@ -147,11 +156,13 @@ function RegisterTemplateDialog({
                 disabled={initial !== undefined}
               />
               <FieldDescription>
-                同时也是 E2B 的 templateID;「base」保留,恒指基础镜像。
+                {m.templates_field_name_hint()}
               </FieldDescription>
             </Field>
             <Field>
-              <FieldLabel htmlFor="template-image">镜像</FieldLabel>
+              <FieldLabel htmlFor="template-image">
+                {m.templates_field_image()}
+              </FieldLabel>
               <Input
                 id="template-image"
                 value={image}
@@ -160,8 +171,7 @@ function RegisterTemplateDialog({
                 className="font-mono"
               />
               <FieldDescription>
-                宿主机 Docker 里的镜像引用。重新注册同名模板 = 指向新镜像 =
-                模板升级。
+                {m.templates_field_image_hint()}
               </FieldDescription>
             </Field>
             {mutation.isError && (
@@ -174,7 +184,9 @@ function RegisterTemplateDialog({
               disabled={name === '' || image === '' || mutation.isPending}
             >
               {mutation.isPending && <Spinner />}
-              {initial ? '更新' : '注册'}
+              {initial
+                ? m.templates_button_update()
+                : m.templates_button_register()}
             </Button>
           </DialogFooter>
         </form>
@@ -198,7 +210,9 @@ function RemoveTemplateDialog({
     mutation.mutate(name, {
       onSuccess: ({ removed }) =>
         toast.success(
-          removed ? `已删除「${name}」` : `「${name}」本来就不存在`,
+          removed
+            ? m.templates_remove_success({ name })
+            : m.templates_remove_absent({ name }),
         ),
       // 还有沙箱引用时 daemon 回 409 并点名 name — 原文转达。
       onError: (error) => toast.error(error.message),
@@ -208,15 +222,17 @@ function RemoveTemplateDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>删除模板「{name}」?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {m.templates_remove_title({ name })}
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            只删注册项,不动镜像本身。还有沙箱引用时 daemon 会拒绝并点名。
+            {m.templates_remove_description()}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>先留着</AlertDialogCancel>
+          <AlertDialogCancel>{m.templates_remove_cancel()}</AlertDialogCancel>
           <AlertDialogAction variant="destructive" onClick={remove}>
-            删除
+            {m.common_delete()}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -240,7 +256,9 @@ function TemplateRowMenu({ template }: { template: Template }) {
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label={`${template.name} 的操作`}
+              aria-label={m.templates_row_actions_label({
+                name: template.name,
+              })}
             >
               <HugeiconsIcon icon={MoreVerticalIcon} />
             </Button>
@@ -249,14 +267,14 @@ function TemplateRowMenu({ template }: { template: Template }) {
         <DropdownMenuContent align="end">
           <DropdownMenuItem onClick={() => setEditOpen(true)}>
             <HugeiconsIcon icon={Edit02Icon} />
-            更新镜像
+            {m.templates_menu_update_image()}
           </DropdownMenuItem>
           <DropdownMenuItem
             variant="destructive"
             onClick={() => setRemoveOpen(true)}
           >
             <HugeiconsIcon icon={Delete02Icon} />
-            删除
+            {m.common_delete()}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -295,12 +313,12 @@ export function TemplatesPage() {
     // 高度框内滚、分页条钉底。
     <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-5 p-4 md:p-6">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-medium">模板</h1>
+        <h1 className="text-xl font-medium">{m.templates_page_title()}</h1>
         <RegisterTemplateDialog
           trigger={
             <Button size="sm">
               <HugeiconsIcon icon={Add01Icon} />
-              注册模板
+              {m.templates_register_cta()}
             </Button>
           }
         />
@@ -318,10 +336,9 @@ export function TemplatesPage() {
             <EmptyMedia variant="icon">
               <HugeiconsIcon icon={Layers01Icon} />
             </EmptyMedia>
-            <EmptyTitle>还没有注册模板</EmptyTitle>
+            <EmptyTitle>{m.templates_empty_title()}</EmptyTitle>
             <EmptyDescription>
-              没有模板时沙箱一律用 daemon 的基础镜像。在宿主机 build 一个
-              镜像,再到这里给它起个名字。
+              {m.templates_empty_description()}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -331,12 +348,19 @@ export function TemplatesPage() {
         <DataTable fill>
           <TableHeader>
             <TableRow>
-              <TableHead>名字</TableHead>
-              <TableHead>镜像</TableHead>
-              <TableHead className="text-right">引用沙箱</TableHead>
-              <TableHead>注册于</TableHead>
-              <TableHead>更新于</TableHead>
-              <TableHead className="text-right">操作</TableHead>
+              <TableHead>{m.templates_field_name()}</TableHead>
+              <TableHead>{m.templates_field_image()}</TableHead>
+              <TableHead
+                className="text-right"
+                title={m.templates_col_references_full()}
+              >
+                {m.templates_col_references()}
+              </TableHead>
+              <TableHead>{m.templates_col_registered()}</TableHead>
+              <TableHead>{m.templates_col_updated()}</TableHead>
+              <TableHead className="text-right">
+                {m.templates_col_actions()}
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -356,10 +380,12 @@ export function TemplatesPage() {
                         to="/sandboxes"
                         className="text-foreground hover:underline"
                       >
-                        {references} 个
+                        {m.templates_reference_count({ n: references })}
                       </Link>
                     ) : (
-                      <span className="text-muted-foreground">0 个</span>
+                      <span className="text-muted-foreground">
+                        {m.templates_reference_count({ n: 0 })}
+                      </span>
                     )}
                   </TableCell>
                   <TableCell className="tabular-nums text-muted-foreground">
@@ -372,7 +398,7 @@ export function TemplatesPage() {
                     title={new Date(template.updatedAt).toLocaleString()}
                   >
                     {template.updatedAt === template.createdAt
-                      ? '还没升级'
+                      ? m.templates_never_upgraded()
                       : ago(template.updatedAt)}
                   </TableCell>
                   <TableCell className="text-right">

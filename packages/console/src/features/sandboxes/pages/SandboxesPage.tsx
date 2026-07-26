@@ -60,12 +60,13 @@ import { destroySandbox } from '@/lib/api';
 import { formatBytes, pctOf } from '@/lib/format';
 import { queryClient } from '@/lib/queryClient';
 import { cn } from '@/lib/utils';
+import { m } from '@/paraglide/messages';
 import { CreateSandboxDialog } from '../components/CreateSandboxDialog';
 import { DestroySandboxDialog } from '../components/DestroySandboxButton';
 import { EditPolicyDialog } from '../components/EditPolicyDialog';
 import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { UpgradableBadge } from '../components/UpgradableBadge';
-import { ago, STATE_LABELS } from '../format';
+import { ago, stateLabel } from '../format';
 import {
   useFleetMetrics,
   useSandboxes,
@@ -200,7 +201,11 @@ function SandboxRowMenu({ name }: { name: string }) {
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
-            <Button variant="ghost" size="icon" aria-label={`${name} 的操作`}>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={m.sandboxes_row_actions_aria({ name })}
+            >
               <HugeiconsIcon icon={MoreHorizontalIcon} className="size-5" />
             </Button>
           }
@@ -210,11 +215,11 @@ function SandboxRowMenu({ name }: { name: string }) {
             className="font-medium"
             onClick={async () => {
               await navigator.clipboard.writeText(name);
-              toast.success('名称已复制');
+              toast.success(m.sandboxes_name_copied());
             }}
           >
             <HugeiconsIcon icon={Copy01Icon} strokeWidth={2} />
-            复制名称
+            {m.sandboxes_copy_name()}
           </DropdownMenuItem>
           <DropdownMenuItem
             variant="destructive"
@@ -222,7 +227,7 @@ function SandboxRowMenu({ name }: { name: string }) {
             onClick={() => setConfirmOpen(true)}
           >
             <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-            销毁
+            {m.sandboxes_destroy()}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -261,9 +266,14 @@ function BulkDestroyButton({
     setPending(false);
     void queryClient.invalidateQueries({ queryKey: ['sandboxes'] });
     if (failures.length === 0) {
-      toast.success(`已销毁 ${names.length} 个沙箱`);
+      toast.success(m.sandboxes_destroyed_count({ n: names.length }));
     } else {
-      toast.error(`${failures.length} 个销毁失败:${failures.join('、')}`);
+      toast.error(
+        m.sandboxes_destroy_failed_count({
+          n: failures.length,
+          names: failures.join(m.sandboxes_name_separator()),
+        }),
+      );
     }
     onDone();
   };
@@ -274,22 +284,23 @@ function BulkDestroyButton({
         render={
           <Button variant="destructive" size="sm" disabled={pending}>
             {pending && <Spinner />}
-            销毁选中({names.length})
+            {m.sandboxes_destroy_selected({ n: names.length })}
           </Button>
         }
       />
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>销毁 {names.length} 个沙箱?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {m.sandboxes_bulk_destroy_title({ n: names.length })}
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            沙箱连同磁盘一起销毁,不可恢复。名字依然可用 — 下次用同名 acquire
-            会得到一个全新的空白沙箱。
+            {m.sandboxes_bulk_destroy_desc()}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>先留着</AlertDialogCancel>
+          <AlertDialogCancel>{m.sandboxes_keep_it()}</AlertDialogCancel>
           <AlertDialogAction variant="destructive" onClick={destroyAll}>
-            销毁
+            {m.sandboxes_destroy()}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -379,7 +390,7 @@ export function SandboxesPage() {
     // 表格吃掉剩余高度框内滚、分页条钉底。h-full 接住外壳锁定的视口高。
     <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-5 p-4 md:p-6">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-medium">沙箱</h1>
+        <h1 className="text-xl font-medium">{m.sandboxes_page_title()}</h1>
         <CreateSandboxDialog />
       </header>
 
@@ -397,15 +408,15 @@ export function SandboxesPage() {
               setSearch(event.target.value);
               setPage(1);
             }}
-            placeholder="按 name 搜索"
+            placeholder={m.sandboxes_search_placeholder()}
           />
         </InputGroup>
         <FilterMenu
-          label="状态"
+          label={m.sandboxes_filter_state()}
           value={stateFilter === 'all' ? '' : stateFilter}
           options={STATE_FILTERS.map((state) => ({
             value: state,
-            label: STATE_LABELS[state],
+            label: stateLabel(state),
           }))}
           onChange={(value) => {
             setStateFilter(value === '' ? 'all' : (value as SandboxState));
@@ -414,7 +425,7 @@ export function SandboxesPage() {
         />
         {metadataOptions.length > 0 && (
           <FilterMenu
-            label="标签"
+            label={m.sandboxes_filter_labels()}
             value={metadataFilter}
             options={metadataOptions}
             onChange={(value) => {
@@ -424,7 +435,10 @@ export function SandboxesPage() {
           />
         )}
         <span className="text-sm text-muted-foreground">
-          {filtered.length} / {sandboxes.length} 个
+          {m.sandboxes_count_of_total({
+            filtered: filtered.length,
+            total: sandboxes.length,
+          })}
         </span>
         {selectedVisible.length > 0 && (
           <div className="ml-auto flex items-center gap-2">
@@ -452,10 +466,8 @@ export function SandboxesPage() {
             <EmptyMedia variant="icon">
               <HugeiconsIcon icon={PackageIcon} />
             </EmptyMedia>
-            <EmptyTitle>还没有沙箱</EmptyTitle>
-            <EmptyDescription>
-              在这里创建一个,或者用 SDK acquire — 两秒内都会出现在这张表里。
-            </EmptyDescription>
+            <EmptyTitle>{m.sandboxes_empty_title()}</EmptyTitle>
+            <EmptyDescription>{m.sandboxes_empty_desc()}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       )}
@@ -463,8 +475,8 @@ export function SandboxesPage() {
       {query.isSuccess && sandboxes.length > 0 && filtered.length === 0 && (
         <Empty className="flex-1 border border-dashed">
           <EmptyHeader>
-            <EmptyTitle>没有匹配的沙箱</EmptyTitle>
-            <EmptyDescription>换个关键词或状态试试。</EmptyDescription>
+            <EmptyTitle>{m.sandboxes_no_match_title()}</EmptyTitle>
+            <EmptyDescription>{m.sandboxes_no_match_desc()}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       )}
@@ -481,27 +493,33 @@ export function SandboxesPage() {
             <TableRow>
               <TableHead className="w-14">
                 <Checkbox
-                  aria-label="全选"
+                  aria-label={m.sandboxes_select_all_aria()}
                   checked={allVisibleSelected}
                   onCheckedChange={toggleAll}
                 />
               </TableHead>
               <TableHead>
                 <SortableHead
-                  label="名称"
+                  label={m.sandboxes_col_name()}
                   sortKey="name"
                   sort={sort}
                   onSort={toggleSort}
                 />
               </TableHead>
-              <TableHead className="w-24">状态</TableHead>
-              <TableHead className="w-32">模板</TableHead>
+              <TableHead className="w-24">{m.sandboxes_col_state()}</TableHead>
+              <TableHead className="w-32">
+                {m.sandboxes_col_template()}
+              </TableHead>
               <TableHead className="w-32 text-right">CPU</TableHead>
-              <TableHead className="w-32 text-right">内存</TableHead>
-              <TableHead className="w-32 text-right">磁盘</TableHead>
+              <TableHead className="w-32 text-right">
+                {m.sandboxes_col_memory()}
+              </TableHead>
+              <TableHead className="w-32 text-right">
+                {m.sandboxes_col_disk()}
+              </TableHead>
               <TableHead className="w-26">
                 <SortableHead
-                  label="创建"
+                  label={m.sandboxes_col_created()}
                   sortKey="createdAt"
                   sort={sort}
                   onSort={toggleSort}
@@ -513,13 +531,15 @@ export function SandboxesPage() {
                     「策略」列刻意不设(2026-07-17 版式取舍):低频配置、
                     还是唯一会折行撑高行的列,归详情页。全表单行,不横滚。 */}
                 <SortableHead
-                  label="空闲"
+                  label={m.sandboxes_col_idle()}
                   sortKey="lastActiveAt"
                   sort={sort}
                   onSort={toggleSort}
                 />
               </TableHead>
-              <TableHead className="w-18 text-right">操作</TableHead>
+              <TableHead className="w-18 text-right">
+                {m.sandboxes_col_actions()}
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -530,7 +550,9 @@ export function SandboxesPage() {
               >
                 <TableCell>
                   <Checkbox
-                    aria-label={`选中 ${sandbox.name}`}
+                    aria-label={m.sandboxes_select_one_aria({
+                      name: sandbox.name,
+                    })}
                     checked={selected.has(sandbox.name)}
                     onCheckedChange={() => toggleOne(sandbox.name)}
                   />
@@ -563,14 +585,14 @@ export function SandboxesPage() {
                         {sandbox.template}
                       </Link>
                     ) : (
-                      '基础镜像'
+                      m.sandboxes_base_image()
                     )}
                     <UpgradableBadge lineage={lineageOf.get(sandbox.name)} />
                   </span>
                 </TableCell>
                 {(() => {
-                  const m = metricsOf.get(sandbox.name);
-                  if (!m) {
+                  const metrics = metricsOf.get(sandbox.name);
+                  if (!metrics) {
                     return (
                       <>
                         <UsageCell value={null} pct={0} />
@@ -582,21 +604,24 @@ export function SandboxesPage() {
                   return (
                     <>
                       <UsageCell
-                        value={`${Math.round(m.cpuUsedPct)}%`}
-                        cap={`${m.cpuCount} vCPU`}
-                        pct={m.cpuUsedPct / m.cpuCount}
-                        title="百分比按单 vCPU 计,多 vCPU 可超 100%"
+                        value={`${Math.round(metrics.cpuUsedPct)}%`}
+                        cap={`${metrics.cpuCount} vCPU`}
+                        pct={metrics.cpuUsedPct / metrics.cpuCount}
+                        title={m.sandboxes_cpu_col_title()}
                       />
                       <UsageCell
-                        value={formatBytes(m.memUsedBytes)}
-                        cap={formatCap(m.memTotalBytes)}
-                        pct={pctOf(m.memUsedBytes, m.memTotalBytes)}
+                        value={formatBytes(metrics.memUsedBytes)}
+                        cap={formatCap(metrics.memTotalBytes)}
+                        pct={pctOf(metrics.memUsedBytes, metrics.memTotalBytes)}
                       />
                       <UsageCell
-                        value={formatBytes(m.diskUsedBytes)}
-                        cap={formatCap(m.diskTotalBytes)}
-                        pct={pctOf(m.diskUsedBytes, m.diskTotalBytes)}
-                        title="上限是名义配额:稀疏镜像,未写入不占宿主盘"
+                        value={formatBytes(metrics.diskUsedBytes)}
+                        cap={formatCap(metrics.diskTotalBytes)}
+                        pct={pctOf(
+                          metrics.diskUsedBytes,
+                          metrics.diskTotalBytes,
+                        )}
+                        title={m.sandboxes_disk_col_title()}
                       />
                     </>
                   );
@@ -605,13 +630,17 @@ export function SandboxesPage() {
                     扫表要的是数量级,查证才要精确到秒。 */}
                 <TableCell
                   className="tabular-nums text-muted-foreground"
-                  title={`创建于:${new Date(sandbox.createdAt).toLocaleString()}`}
+                  title={m.sandboxes_created_at_title({
+                    time: new Date(sandbox.createdAt).toLocaleString(),
+                  })}
                 >
                   {ago(sandbox.createdAt)}
                 </TableCell>
                 <TableCell
                   className="tabular-nums text-muted-foreground"
-                  title={`最近活动:${new Date(sandbox.lastActiveAt).toLocaleString()}`}
+                  title={m.sandboxes_last_active_title({
+                    time: new Date(sandbox.lastActiveAt).toLocaleString(),
+                  })}
                 >
                   {ago(sandbox.lastActiveAt)}
                 </TableCell>

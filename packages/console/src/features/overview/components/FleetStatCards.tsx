@@ -1,6 +1,7 @@
 import { Meter } from '@/components/Meter';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { pctOf } from '@/lib/format';
+import { m } from '@/paraglide/messages';
 import { fullClock } from '../format';
 import {
   TIMELINE_RANGES,
@@ -23,7 +24,7 @@ export function FleetStatCards({ range }: { range: TimelineRangeKey }) {
   const host = useHostMetrics();
   const timeline = useFleetTimeline(range);
   const rangeLabel =
-    TIMELINE_RANGES.find((r) => r.key === range)?.label ?? range;
+    TIMELINE_RANGES.find((r) => r.key === range)?.label() ?? range;
 
   if (host.isError || timeline.isError) {
     const message = host.isError
@@ -56,11 +57,11 @@ export function FleetStatCards({ range }: { range: TimelineRangeKey }) {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <StatCard
-        label="当前活跃"
+        label={m.overview_stat_active_label()}
         // 四列布局下 footer 左栏只有 8 个汉字宽,文案按这个上限写。
         value={String(sandboxes.byState.active)}
-        hint="正在运行的沙箱"
-        sub="其余状态不占 CPU"
+        hint={m.overview_stat_active_hint()}
+        sub={m.overview_stat_active_sub()}
         corner={
           <Sparkline
             data={activeSeries}
@@ -69,20 +70,20 @@ export function FleetStatCards({ range }: { range: TimelineRangeKey }) {
         }
       />
       <StatCard
-        label={`${rangeLabel}内峰值`}
+        label={m.overview_stat_peak_label({ range: rangeLabel })}
         value={peak === null ? '—' : String(peak.active)}
-        hint="活跃并发最高点"
+        hint={m.overview_stat_peak_hint()}
         sub={
           peak === null
-            ? '窗口内还没有采样'
-            : `出现于 ${fullClock(Date.parse(peak.at))}`
+            ? m.overview_stat_peak_none()
+            : m.overview_stat_peak_at({ time: fullClock(Date.parse(peak.at)) })
         }
       />
       <StatCard
-        label="沙箱总数"
+        label={m.overview_stat_total_label()}
         value={`${sandboxes.total} / ${sandboxes.maxSandboxes}`}
-        hint={`容量上限 ${sandboxes.maxSandboxes}`}
-        sub={`已用 ${capacityPct}%`}
+        hint={m.overview_stat_total_hint({ max: sandboxes.maxSandboxes })}
+        sub={m.overview_stat_total_sub({ pct: capacityPct })}
         corner={
           <div className="w-20 shrink-0 pb-1.5 @[250px]/card:w-24">
             <Meter pct={capacityPct} />

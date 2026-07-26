@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { m } from '@/paraglide/messages';
 import { useRebuildSandbox } from '../hooks/useSandboxes';
 
 /**
@@ -24,10 +25,7 @@ export function RebuildSandboxButton({ name }: { name: string }) {
 
   const rebuild = () =>
     mutation.mutate(name, {
-      onSuccess: () =>
-        toast.success(
-          `已重建 ${name} — /home/user 保留,下次使用跑在当前镜像上`,
-        ),
+      onSuccess: () => toast.success(m.sandboxes_rebuilt_toast({ name })),
       onError: (error) => toast.error(error.message),
     });
 
@@ -37,21 +35,24 @@ export function RebuildSandboxButton({ name }: { name: string }) {
         render={
           <Button variant="outline" size="sm" disabled={mutation.isPending}>
             {mutation.isPending && <Spinner />}
-            重建
+            {m.sandboxes_rebuild()}
           </Button>
         }
       />
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>重建「{name}」?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {m.sandboxes_rebuild_title({ name })}
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            换壳保盘:下次使用跑在 daemon 当前的镜像上。/home/user 一字节
-            不丢;正在跑的进程和家目录之外的改动随旧壳蒸发。
+            {m.sandboxes_rebuild_desc()}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>先留着</AlertDialogCancel>
-          <AlertDialogAction onClick={rebuild}>重建</AlertDialogAction>
+          <AlertDialogCancel>{m.sandboxes_keep_it()}</AlertDialogCancel>
+          <AlertDialogAction onClick={rebuild}>
+            {m.sandboxes_rebuild()}
+          </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

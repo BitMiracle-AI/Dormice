@@ -1,13 +1,21 @@
 import type { Sandbox, SandboxState } from '@dormice/shared';
+import { m } from '@/paraglide/messages';
 
-/** 中文状态名 — 徽章、筛选器、总览统计共用一份,不各自翻译。 */
-export const STATE_LABELS: Record<SandboxState, string> = {
-  active: '运行中',
-  frozen: '已冻结',
-  stopped: '已停止',
-  archived: '已归档',
-  restoring: '恢复中',
-};
+/** 状态名 — 徽章、筛选器、总览统计共用一份,不各自翻译。 */
+export function stateLabel(state: SandboxState): string {
+  switch (state) {
+    case 'active':
+      return m.common_state_active();
+    case 'frozen':
+      return m.common_state_frozen();
+    case 'stopped':
+      return m.common_state_stopped();
+    case 'archived':
+      return m.common_state_archived();
+    case 'restoring':
+      return m.common_state_restoring();
+  }
+}
 
 /**
  * 五态的颜色,单一来源:dot 是文字旁小圆点的 tailwind 类,chart 是
@@ -39,26 +47,26 @@ export const STATE_COLORS: Record<
   },
 };
 
-/** 时长的中文写法:45秒 / 5分12秒 / 3小时20分 / 2天4小时,最多两段。 */
+/** 时长写法:45秒 / 5分12秒 / 3小时20分 / 2天4小时(en: 45s / 5m 12s),最多两段。 */
 export function formatDuration(totalSeconds: number): string {
   const s = Math.max(0, Math.floor(totalSeconds));
-  if (s < 60) return `${s}秒`;
+  if (s < 60) return m.common_duration_seconds({ n: s });
   if (s < 3600) {
     const rest = s % 60;
     return rest === 0
-      ? `${Math.floor(s / 60)}分钟`
-      : `${Math.floor(s / 60)}分${rest}秒`;
+      ? m.common_duration_minutes({ n: Math.floor(s / 60) })
+      : m.common_duration_minutes_seconds({ m: Math.floor(s / 60), s: rest });
   }
   if (s < 86400) {
     const rest = Math.floor((s % 3600) / 60);
     return rest === 0
-      ? `${Math.floor(s / 3600)}小时`
-      : `${Math.floor(s / 3600)}小时${rest}分`;
+      ? m.common_duration_hours({ n: Math.floor(s / 3600) })
+      : m.common_duration_hours_minutes({ h: Math.floor(s / 3600), m: rest });
   }
   const rest = Math.floor((s % 86400) / 3600);
   return rest === 0
-    ? `${Math.floor(s / 86400)}天`
-    : `${Math.floor(s / 86400)}天${rest}小时`;
+    ? m.common_duration_days({ n: Math.floor(s / 86400) })
+    : m.common_duration_days_hours({ d: Math.floor(s / 86400), h: rest });
 }
 
 /**
@@ -77,19 +85,34 @@ export function durationHint(raw: string): string | null {
  * 相对时刻,粗粒度:"刚刚" / "5 分钟前" / "3 小时前" / "2 天前"。
  * 刻意只留一段 — "3小时20分前"的后一段是噪音,读者要的是数量级;
  * 精确到秒的场合(策略倒计时)用 formatDuration,精确时刻在 title。
- * "前"字自带:"刚刚"没有"前",由调用方拼会拼出"刚刚前"。
+ * "前"字在消息里自带:"刚刚"没有"前",由调用方拼会拼出"刚刚前"。
  */
 export function ago(iso: string): string {
   const s = (Date.now() - Date.parse(iso)) / 1000;
-  if (s < 60) return '刚刚';
-  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
-  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
-  return `${Math.floor(s / 86400)} 天前`;
+  if (s < 60) return m.common_just_now();
+  if (s < 3600) return m.common_minutes_ago({ n: Math.floor(s / 60) });
+  if (s < 86400) return m.common_hours_ago({ n: Math.floor(s / 3600) });
+  return m.common_days_ago({ n: Math.floor(s / 86400) });
 }
 
 /** 距离某时刻还有多久:"6天3小时"(调用方自己加"后");已过去则为"0秒"。 */
 export function until(iso: string): string {
   return formatDuration((Date.parse(iso) - Date.now()) / 1000);
+}
+
+/** 三旋钮的降温动作,wire 语义键 — 展示时经 policyActionLabel 翻译。 */
+export type PolicyAction = 'freeze' | 'stop' | 'archive';
+
+/** 降温动作名的唯一翻译点:徽章、倒计时、策略行共用。 */
+export function policyActionLabel(action: PolicyAction): string {
+  switch (action) {
+    case 'freeze':
+      return m.common_policy_freeze();
+    case 'stop':
+      return m.common_policy_stop();
+    case 'archive':
+      return m.common_policy_archive();
+  }
 }
 
 /**
@@ -103,7 +126,7 @@ export function nextLifecycleStep(
   sandbox: Pick<Sandbox, 'state' | 'lastActiveAt' | 'policy'>,
   nowMs: number,
 ): {
-  action: '冻结' | '停止' | '归档';
+  action: PolicyAction;
   remainingSeconds: number | null;
 } | null {
   const idle = (nowMs - Date.parse(sandbox.lastActiveAt)) / 1000;
@@ -111,21 +134,21 @@ export function nextLifecycleStep(
   switch (sandbox.state) {
     case 'active':
       return {
-        action: '冻结',
+        action: 'freeze',
         remainingSeconds: remaining(sandbox.policy.freezeAfterSeconds),
       };
     case 'frozen':
       return sandbox.policy.stopAfterSeconds === null
-        ? { action: '停止', remainingSeconds: null }
+        ? { action: 'stop', remainingSeconds: null }
         : {
-            action: '停止',
+            action: 'stop',
             remainingSeconds: remaining(sandbox.policy.stopAfterSeconds),
           };
     case 'stopped':
       return sandbox.policy.archiveAfterSeconds === null
-        ? { action: '归档', remainingSeconds: null }
+        ? { action: 'archive', remainingSeconds: null }
         : {
-            action: '归档',
+            action: 'archive',
             remainingSeconds: remaining(sandbox.policy.archiveAfterSeconds),
           };
     default:
@@ -134,17 +157,21 @@ export function nextLifecycleStep(
 }
 
 /** 一个旋钮的文字形:"冻结 5分钟" / "停止 永不"。 */
-export function policyStep(label: string, seconds: number | null): string {
+export function policyStep(
+  action: PolicyAction,
+  seconds: number | null,
+): string {
+  const label = policyActionLabel(action);
   return seconds === null
-    ? `${label} 永不`
+    ? `${label} ${m.common_policy_never()}`
     : `${label} ${formatDuration(seconds)}`;
 }
 
 /** 三个旋钮一行:这个沙箱闲下来之后怎么降温。 */
 export function policyLine(policy: Sandbox['policy']): string {
   return [
-    policyStep('冻结', policy.freezeAfterSeconds),
-    policyStep('停止', policy.stopAfterSeconds),
-    policyStep('归档', policy.archiveAfterSeconds),
+    policyStep('freeze', policy.freezeAfterSeconds),
+    policyStep('stop', policy.stopAfterSeconds),
+    policyStep('archive', policy.archiveAfterSeconds),
   ].join(' · ');
 }

@@ -1,4 +1,4 @@
-import type { ActivityKind } from '@dormice/shared';
+import { ACTIVITY_KINDS, type ActivityKind } from '@dormice/shared';
 import { Search01Icon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Link, useSearch } from '@tanstack/react-router';
@@ -29,9 +29,10 @@ import {
 import { useApiKeys } from '@/features/api-keys/hooks/useApiKeys';
 import { ago } from '@/features/sandboxes/format';
 import { cn } from '@/lib/utils';
+import { m } from '@/paraglide/messages';
 import { actorLabel } from '../actors';
 import { useActivity } from '../hooks/useActivity';
-import { ACTIVITY_KIND_LABELS, ACTIVITY_KIND_STYLES } from '../kinds';
+import { ACTIVITY_KIND_STYLES, activityKindLabel } from '../kinds';
 
 const PAGE_SIZE = 50;
 
@@ -92,7 +93,7 @@ export function ActivityPage() {
     // 高度框内滚、分页条钉底。
     <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-5 p-4 md:p-6">
       <header className="shrink-0">
-        <h1 className="text-xl font-medium">活动</h1>
+        <h1 className="text-xl font-medium">{m.activity_page_title()}</h1>
       </header>
 
       <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -109,24 +110,23 @@ export function ActivityPage() {
               setSearch(event.target.value);
               setPage(1);
             }}
-            placeholder="按名称搜索"
+            placeholder={m.activity_search_placeholder()}
           />
         </InputGroup>
         <FilterMenu
-          label="事件"
+          label={m.activity_filter_kind()}
           value={kindFilter === 'all' ? '' : kindFilter}
-          options={(
-            Object.entries(ACTIVITY_KIND_LABELS) as Array<
-              [ActivityKind, string]
-            >
-          ).map(([kind, label]) => ({ value: kind, label }))}
+          options={ACTIVITY_KINDS.map((kind) => ({
+            value: kind,
+            label: activityKindLabel(kind),
+          }))}
           onChange={(value) => {
             setKindFilter(value === '' ? 'all' : (value as ActivityKind));
             setPage(1);
           }}
         />
         <FilterMenu
-          label="操作者"
+          label={m.activity_filter_actor()}
           value={actorFilter}
           options={actorOptions}
           onChange={(value) => {
@@ -135,35 +135,40 @@ export function ActivityPage() {
           }}
         />
         <span className="text-sm text-muted-foreground">
-          {filtered.length} / {events.length} 条
+          {m.activity_count({
+            filtered: filtered.length,
+            total: events.length,
+          })}
         </span>
       </div>
 
       {isPending ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner /> 读取活动
+          <Spinner /> {m.activity_loading()}
         </div>
       ) : isError ? (
         <Empty className="flex-1 border border-dashed">
           <EmptyHeader>
-            <EmptyTitle>读取失败</EmptyTitle>
+            <EmptyTitle>{m.activity_load_failed()}</EmptyTitle>
             <EmptyDescription>{error.message}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : events.length === 0 ? (
         <Empty className="flex-1 border border-dashed">
           <EmptyHeader>
-            <EmptyTitle>还没有活动</EmptyTitle>
+            <EmptyTitle>{m.activity_empty_title()}</EmptyTitle>
             <EmptyDescription>
-              创建一个沙箱,它的整个生命周期就会出现在这里。
+              {m.activity_empty_description()}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : filtered.length === 0 ? (
         <Empty className="flex-1 border border-dashed">
           <EmptyHeader>
-            <EmptyTitle>没有匹配的事件</EmptyTitle>
-            <EmptyDescription>换个关键词或事件类型试试。</EmptyDescription>
+            <EmptyTitle>{m.activity_no_match_title()}</EmptyTitle>
+            <EmptyDescription>
+              {m.activity_no_match_description()}
+            </EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : (
@@ -171,11 +176,11 @@ export function ActivityPage() {
         <DataTable fill>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-28">时间</TableHead>
-              <TableHead className="w-28">事件</TableHead>
-              <TableHead className="w-40">名称</TableHead>
-              <TableHead className="w-32">操作者</TableHead>
-              <TableHead>详情</TableHead>
+              <TableHead className="w-28">{m.activity_col_time()}</TableHead>
+              <TableHead className="w-28">{m.activity_col_kind()}</TableHead>
+              <TableHead className="w-40">{m.activity_col_name()}</TableHead>
+              <TableHead className="w-32">{m.activity_col_actor()}</TableHead>
+              <TableHead>{m.activity_col_detail()}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -196,7 +201,7 @@ export function ActivityPage() {
                       ACTIVITY_KIND_STYLES[event.kind],
                     )}
                   >
-                    {ACTIVITY_KIND_LABELS[event.kind]}
+                    {activityKindLabel(event.kind)}
                   </Badge>
                 </TableCell>
                 <TableCell>

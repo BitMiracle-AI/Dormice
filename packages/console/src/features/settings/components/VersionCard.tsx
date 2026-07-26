@@ -14,6 +14,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
+import { m } from '@/paraglide/messages';
 import {
   useCheckUpgrade,
   useForceCheckUpgrade,
@@ -51,10 +52,8 @@ export function VersionCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>版本</CardTitle>
-        <CardDescription>
-          daemon 当前运行的构建,以及远端 main 上有没有更新的版本
-        </CardDescription>
+        <CardTitle>{m.settings_version_title()}</CardTitle>
+        <CardDescription>{m.settings_version_card_desc()}</CardDescription>
         <CardAction>
           <Button
             variant="outline"
@@ -67,7 +66,7 @@ export function VersionCard() {
             ) : (
               <HugeiconsIcon icon={RefreshIcon} />
             )}
-            检查更新
+            {m.settings_check_updates()}
           </Button>
         </CardAction>
       </CardHeader>
@@ -75,14 +74,14 @@ export function VersionCard() {
         {running && (
           <div className="flex items-center justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
             <span className="flex items-center gap-2">
-              <Spinner /> 升级正在进行
+              <Spinner /> {m.settings_upgrade_running_banner()}
             </span>
             <Button
               variant="outline"
               size="sm"
               onClick={() => setDialogOpen(true)}
             >
-              查看进度
+              {m.settings_view_progress()}
             </Button>
           </div>
         )}
@@ -91,24 +90,30 @@ export function VersionCard() {
           last !== null &&
           (last.state === 'failed' || last.state === 'rolled-back') && (
             <p className="text-sm text-destructive">
-              上次一键升级
-              {last.state === 'rolled-back' ? '构建失败,已自动回退' : '失败'}
+              {last.state === 'rolled-back'
+                ? m.settings_last_upgrade_rolled_back()
+                : m.settings_last_upgrade_failed()}
               {last.finishedAt !== null &&
-                `(${new Date(last.finishedAt).toLocaleString()})`}
-              {last.error !== null && <>:{last.error}</>}
+                m.settings_time_paren({
+                  time: new Date(last.finishedAt).toLocaleString(),
+                })}
+              {last.error !== null &&
+                m.settings_error_suffix({ error: last.error })}
             </p>
           )}
         {force.isError && (
           <p className="text-sm text-destructive">
-            检查失败:{force.error.message}
+            {m.settings_check_failed({ error: force.error.message })}
           </p>
         )}
         {isPending ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner /> 检查版本
+            <Spinner /> {m.settings_checking_version()}
           </div>
         ) : isError ? (
-          <p className="text-sm text-destructive">检查失败:{error.message}</p>
+          <p className="text-sm text-destructive">
+            {m.settings_check_failed({ error: error.message })}
+          </p>
         ) : (
           <VersionBody
             data={data}
@@ -150,7 +155,9 @@ function VersionBody({
   return (
     <>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
-        <span className="text-muted-foreground">当前版本</span>
+        <span className="text-muted-foreground">
+          {m.settings_current_version()}
+        </span>
         {current ? (
           <>
             <code className="font-mono font-medium">{current.commit}</code>
@@ -163,13 +170,15 @@ function VersionBody({
           </>
         ) : (
           <span className="text-muted-foreground">
-            未知 — 此构建不在 git 检出里完成,没有版本身份
+            {m.settings_version_unknown()}
           </span>
         )}
       </div>
 
       {checkError !== null && (
-        <p className="text-sm text-destructive">无法检查更新:{checkError}</p>
+        <p className="text-sm text-destructive">
+          {m.settings_check_update_failed({ error: checkError })}
+        </p>
       )}
 
       {check &&
@@ -177,15 +186,15 @@ function VersionBody({
           <UpgradePreview check={check} oneClick={oneClick} />
         ) : check.aheadBy > 0 ? (
           <p className="text-sm text-amber-600 dark:text-amber-400">
-            本地比远端 main 多 {check.aheadBy} 个提交(代码有分叉)
-            ,升级前先处理本地改动 — install.sh 只接受快进更新。
+            {m.settings_ahead_warning({ n: check.aheadBy })}
           </p>
         ) : (
           <p
             className="text-sm text-muted-foreground"
             title={new Date(check.checkedAt).toLocaleString()}
           >
-            已是最新{check.cached ? '(缓存结果,点「检查更新」重测)' : ''}
+            {m.settings_up_to_date()}
+            {check.cached ? m.settings_up_to_date_cached() : ''}
           </p>
         ))}
     </>
@@ -207,10 +216,10 @@ function UpgradePreview({
             variant="outline"
             className="border-amber-500/40 bg-amber-500/10 font-medium text-amber-600 dark:text-amber-400"
           >
-            可升级
+            {m.settings_upgradable_badge()}
           </Badge>
           <span>
-            落后 {check.behindBy} 个提交,最新{' '}
+            {m.settings_upgrade_behind({ n: check.behindBy })}{' '}
             <code className="font-mono">{check.latest.commit}</code>
           </span>
         </div>
@@ -220,7 +229,7 @@ function UpgradePreview({
             disabled={oneClick.running}
             onClick={oneClick.onUpgrade}
           >
-            升级到最新
+            {m.settings_upgrade_to_latest()}
           </Button>
         )}
       </div>
@@ -237,19 +246,23 @@ function UpgradePreview({
         ))}
         {check.behindBy > check.commits.length && (
           <li className="text-muted-foreground">
-            还有 {check.behindBy - check.commits.length} 个更早的提交未列出
+            {m.settings_upgrade_more_commits({
+              n: check.behindBy - check.commits.length,
+            })}
           </li>
         )}
       </ul>
       {oneClick !== null && 'reason' in oneClick && (
         <p className="text-sm text-muted-foreground">
-          一键升级在这台 daemon 上不可用
+          {m.settings_oneclick_unavailable()}
           {oneClick.reason !== null && (
             <>
-              (<span className="font-mono text-xs">{oneClick.reason}</span>)
+              {m.settings_paren_open()}
+              <span className="font-mono text-xs">{oneClick.reason}</span>
+              {m.settings_paren_close()}
             </>
           )}
-          ;在服务器上重跑 install.sh 即可升级(重跑即升级,不轮换 API token)。
+          {m.settings_oneclick_manual()}
         </p>
       )}
     </div>

@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
+import { m } from '@/paraglide/messages';
 import type { EnvdEntry } from '../../envd-client';
 import type { useFileMutations } from '../../hooks/useEnvd';
 
@@ -56,7 +57,7 @@ export function MkdirDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>新建文件夹</DialogTitle>
+          <DialogTitle>{m.workbench_mkdir_title()}</DialogTitle>
         </DialogHeader>
         <form
           onSubmit={(event) => {
@@ -71,13 +72,13 @@ export function MkdirDialog({
             autoFocus
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="文件夹名"
+            placeholder={m.workbench_folder_name()}
             className="font-mono"
           />
           <DialogFooter className="mt-4">
             <Button type="submit" disabled={name === '' || mkdir.isPending}>
               {mkdir.isPending && <Spinner />}
-              创建
+              {m.workbench_create()}
             </Button>
           </DialogFooter>
         </form>
@@ -112,7 +113,9 @@ export function RenameDialog({
     >
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>重命名「{entry?.name}」</DialogTitle>
+          <DialogTitle>
+            {m.workbench_rename_title({ name: entry?.name ?? '' })}
+          </DialogTitle>
         </DialogHeader>
         <form
           onSubmit={(event) => {
@@ -145,7 +148,7 @@ export function RenameDialog({
               }
             >
               {move.isPending && <Spinner />}
-              重命名
+              {m.workbench_rename()}
             </Button>
           </DialogFooter>
         </form>
@@ -175,16 +178,17 @@ export function DeleteDialog({
     >
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>删除「{entry?.name}」?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {m.workbench_delete_title({ name: entry?.name ?? '' })}
+          </AlertDialogTitle>
           <AlertDialogDescription>
             {entry?.type === 'FILE_TYPE_DIRECTORY'
-              ? '整个目录连同里面的一切一起删除,'
-              : ''}
-            删了就没有了 — 沙箱里没有回收站。
+              ? m.workbench_delete_desc_dir()
+              : m.workbench_delete_desc()}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>先留着</AlertDialogCancel>
+          <AlertDialogCancel>{m.workbench_keep_it()}</AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
             onClick={() => {
@@ -198,7 +202,7 @@ export function DeleteDialog({
               });
             }}
           >
-            删除
+            {m.common_delete()}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -29,7 +29,8 @@ import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { useConfig } from '@/features/settings/hooks/useConfig';
 import { useTemplates } from '@/features/templates/hooks/useTemplates';
-import { durationHint, STATE_LABELS } from '../format';
+import { m } from '@/paraglide/messages';
+import { durationHint, stateLabel } from '../format';
 import { useAcquireSandbox, useSandboxes } from '../hooks/useSandboxes';
 
 /**
@@ -92,8 +93,8 @@ export function CreateSandboxDialog() {
           // created 让幂等可见:拿回旧沙箱时不许谎报"已创建"。
           toast.success(
             created
-              ? `「${sandbox.name}」的沙箱已创建`
-              : `拿回了已有的沙箱「${sandbox.name}」`,
+              ? m.sandboxes_created_toast({ name: sandbox.name })
+              : m.sandboxes_reacquired_toast({ name: sandbox.name }),
           );
           setOpen(false);
           reset();
@@ -114,17 +115,14 @@ export function CreateSandboxDialog() {
         render={
           <Button>
             <HugeiconsIcon icon={Add01Icon} />
-            创建沙箱
+            {m.sandboxes_create()}
           </Button>
         }
       />
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>创建沙箱</DialogTitle>
-          <DialogDescription>
-            acquire 是幂等的:名字已经有沙箱时,拿回的是原来那个,
-            下面的模板和策略不会应用。
-          </DialogDescription>
+          <DialogTitle>{m.sandboxes_create()}</DialogTitle>
+          <DialogDescription>{m.sandboxes_create_desc()}</DialogDescription>
         </DialogHeader>
         <form
           onSubmit={(event) => {
@@ -134,7 +132,9 @@ export function CreateSandboxDialog() {
         >
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="create-sandbox-name">名称</FieldLabel>
+              <FieldLabel htmlFor="create-sandbox-name">
+                {m.sandboxes_field_name()}
+              </FieldLabel>
               <Input
                 id="create-sandbox-name"
                 value={name}
@@ -145,20 +145,26 @@ export function CreateSandboxDialog() {
               />
               <FieldDescription>
                 {existing
-                  ? `这个名字已有沙箱(${STATE_LABELS[existing.state]})— 提交会直接拿回它,下面的模板和策略不会应用。`
-                  : '你起的唯一名字,acquire 对它幂等 — 同一个名字永远回到同一个沙箱。'}
+                  ? m.sandboxes_name_exists_desc({
+                      state: stateLabel(existing.state),
+                    })
+                  : m.sandboxes_name_desc()}
               </FieldDescription>
             </Field>
             {templates.length > 0 && (
               <Field>
-                <FieldLabel htmlFor="create-template">模板</FieldLabel>
+                <FieldLabel htmlFor="create-template">
+                  {m.sandboxes_field_template()}
+                </FieldLabel>
                 <NativeSelect
                   id="create-template"
                   className="w-full"
                   value={template}
                   onChange={(event) => setTemplate(event.target.value)}
                 >
-                  <NativeSelectOption value="">基础镜像</NativeSelectOption>
+                  <NativeSelectOption value="">
+                    {m.sandboxes_base_image()}
+                  </NativeSelectOption>
                   {templates.map((t) => (
                     <NativeSelectOption key={t.name} value={t.name}>
                       {t.name} ({t.image})
@@ -166,13 +172,13 @@ export function CreateSandboxDialog() {
                   ))}
                 </NativeSelect>
                 <FieldDescription>
-                  只在这个 key 真正新建沙箱时生效;对已有沙箱静默不应用。
+                  {m.sandboxes_template_desc()}
                 </FieldDescription>
               </Field>
             )}
             <Field>
               <FieldLabel htmlFor="create-freeze-after">
-                空闲多久后冻结(秒)
+                {m.sandboxes_freeze_after_label()}
               </FieldLabel>
               <Input
                 id="create-freeze-after"
@@ -180,10 +186,10 @@ export function CreateSandboxDialog() {
                 min={1}
                 value={freezeAfter}
                 onChange={(event) => setFreezeAfter(event.target.value)}
-                placeholder="600(daemon 默认)"
+                placeholder={m.sandboxes_freeze_after_placeholder()}
               />
               <FieldDescription>
-                运行中 → 已冻结的空闲阈值:内存挤入 swap,唤醒约 50ms。
+                {m.sandboxes_freeze_desc_create()}
                 {durationHint(freezeAfter) && ` ${durationHint(freezeAfter)}`}
               </FieldDescription>
             </Field>
@@ -194,13 +200,13 @@ export function CreateSandboxDialog() {
                 onCheckedChange={setNeverStop}
               />
               <FieldLabel htmlFor="create-never-stop">
-                永不停止(常驻 agent)
+                {m.sandboxes_never_stop_label()}
               </FieldLabel>
             </Field>
             {!neverStop && (
               <Field>
                 <FieldLabel htmlFor="create-stop-after">
-                  空闲多久后停止(秒)
+                  {m.sandboxes_stop_after_label()}
                 </FieldLabel>
                 <Input
                   id="create-stop-after"
@@ -208,10 +214,10 @@ export function CreateSandboxDialog() {
                   min={1}
                   value={stopAfter}
                   onChange={(event) => setStopAfter(event.target.value)}
-                  placeholder="259200(daemon 默认)"
+                  placeholder={m.sandboxes_stop_after_placeholder()}
                 />
                 <FieldDescription>
-                  已冻结 → 已停止的空闲阈值:只留磁盘,唤醒是冷启动。
+                  {m.sandboxes_stop_desc_create()}
                   {durationHint(stopAfter) && ` ${durationHint(stopAfter)}`}
                 </FieldDescription>
               </Field>
@@ -225,13 +231,13 @@ export function CreateSandboxDialog() {
                     onCheckedChange={setNeverArchive}
                   />
                   <FieldLabel htmlFor="create-never-archive">
-                    永不归档
+                    {m.sandboxes_never_archive_label()}
                   </FieldLabel>
                 </Field>
                 {!neverArchive && (
                   <Field>
                     <FieldLabel htmlFor="create-archive-after">
-                      空闲多久后归档(秒)
+                      {m.sandboxes_archive_after_label()}
                     </FieldLabel>
                     <Input
                       id="create-archive-after"
@@ -239,11 +245,12 @@ export function CreateSandboxDialog() {
                       min={1}
                       value={archiveAfter}
                       onChange={(event) => setArchiveAfter(event.target.value)}
-                      placeholder={`${archive.defaultSeconds ?? ''}(daemon 默认)`}
+                      placeholder={m.sandboxes_archive_after_placeholder({
+                        n: archive.defaultSeconds ?? '',
+                      })}
                     />
                     <FieldDescription>
-                      已停止 → 已归档:磁盘压缩上传 S3,本地零占用;
-                      唤醒要下载解压,慢但有真进度。
+                      {m.sandboxes_archive_desc_create()}
                       {durationHint(archiveAfter) &&
                         ` ${durationHint(archiveAfter)}`}
                     </FieldDescription>
@@ -261,7 +268,9 @@ export function CreateSandboxDialog() {
               disabled={name.length === 0 || mutation.isPending}
             >
               {mutation.isPending && <Spinner />}
-              {existing ? '拿回已有沙箱' : '创建'}
+              {existing
+                ? m.sandboxes_reacquire_submit()
+                : m.sandboxes_create_submit()}
             </Button>
           </DialogFooter>
         </form>

@@ -1,6 +1,7 @@
 import { Meter } from '@/components/Meter';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { formatBytes, pctOf } from '@/lib/format';
+import { m } from '@/paraglide/messages';
 import { useHostMetrics } from '../hooks/useHostMetrics';
 import { StatCard, StatCardSkeleton } from './StatCard';
 
@@ -29,12 +30,14 @@ export function SandboxDisksCard() {
 
   return (
     <StatCard
-      label="沙箱磁盘"
+      label={m.overview_disks_label()}
       // 稀疏镜像只为真实内容付费:大数字是实占,hint 是许诺 — 差值即超卖。
       // 四列布局下 footer 左栏只有 8 个汉字宽,文案按这个上限写。
       value={formatBytes(sandboxDisks.actualBytes)}
-      hint={`共许诺 ${formatBytes(sandboxDisks.nominalBytes)}`}
-      sub={`${sandboxDisks.count} 块盘 · 实占 ${usedPct}%`}
+      hint={m.overview_disks_hint({
+        size: formatBytes(sandboxDisks.nominalBytes),
+      })}
+      sub={m.overview_disks_sub({ count: sandboxDisks.count, pct: usedPct })}
       corner={
         <div className="w-20 shrink-0 pb-1.5 @[250px]/card:w-24">
           <Meter pct={usedPct} />

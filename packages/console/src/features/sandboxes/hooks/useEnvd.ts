@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { mintEnvdToken } from '@/lib/api';
+import { m } from '@/paraglide/messages';
 import {
   createWatcher,
   downloadFile,
@@ -60,7 +61,7 @@ export function useDirectory(
   return useQuery({
     queryKey: ['envdDir', auth?.sandboxId, path],
     queryFn: () => {
-      if (!auth) throw new Error('缺少 envd 凭证');
+      if (!auth) throw new Error(m.workbench_missing_envd_auth());
       return listDir(auth, path);
     },
     enabled: enabled && auth !== undefined,
@@ -79,7 +80,7 @@ export function useFileMutations(auth: EnvdAuth | undefined) {
     }
   };
   const requireAuth = (): EnvdAuth => {
-    if (!auth) throw new Error('缺少 envd 凭证');
+    if (!auth) throw new Error(m.workbench_missing_envd_auth());
     return auth;
   };
 
@@ -183,7 +184,7 @@ export function useProcesses(auth: EnvdAuth | undefined, enabled: boolean) {
   return useQuery({
     queryKey: ['envdProcesses', auth?.sandboxId],
     queryFn: () => {
-      if (!auth) throw new Error('缺少 envd 凭证');
+      if (!auth) throw new Error(m.workbench_missing_envd_auth());
       return listProcesses(auth);
     },
     enabled: enabled && auth !== undefined,
@@ -199,7 +200,7 @@ export function useKillProcess(auth: EnvdAuth | undefined) {
       pid: number;
       signal: 'SIGNAL_SIGTERM' | 'SIGNAL_SIGKILL';
     }) => {
-      if (!auth) throw new Error('缺少 envd 凭证');
+      if (!auth) throw new Error(m.workbench_missing_envd_auth());
       return killProcess(auth, args.pid, args.signal);
     },
     onSettled: () => {

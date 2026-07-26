@@ -6,6 +6,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { m } from '@/paraglide/messages';
 import { cliSnippet, e2bSnippet, sdkSnippet } from '../snippets';
 
 /**
@@ -21,12 +22,12 @@ export function ConnectPage() {
   return (
     <div className="mx-auto w-full max-w-3xl p-4 md:p-6">
       <div className="mb-1">
-        <h1 className="text-xl font-medium">连接</h1>
+        <h1 className="text-xl font-medium">{m.connect_title()}</h1>
       </div>
       <p className="mb-6 text-sm text-muted-foreground">
-        这个 daemon 的地址是 <code className="font-mono">{origin}</code> —
-        就是你此刻打开本页用的地址。每段代码都需要 daemon 的 API token;
-        控制台从不保存它,去 daemon 主机上读:{' '}
+        {m.connect_intro_1()}
+        <code className="font-mono">{origin}</code>
+        {m.connect_intro_2()}{' '}
         <code className="font-mono">
           grep ^DORMICE_API_TOKEN /etc/dormice/env
         </code>
@@ -37,9 +38,11 @@ export function ConnectPage() {
           <CardHeader>
             <CardTitle>E2B SDK</CardTitle>
             <CardDescription>
-              官方 <code className="font-mono">e2b</code> 包原样可用 — 把两个
-              URL 指到这里,token 加 <code className="font-mono">e2b_</code>{' '}
-              前缀,别的代码一行不改。
+              {m.connect_e2b_desc_1()}
+              <code className="font-mono">e2b</code>
+              {m.connect_e2b_desc_2()}
+              <code className="font-mono">e2b_</code>
+              {m.connect_e2b_desc_3()}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -49,10 +52,10 @@ export function ConnectPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>原生 SDK</CardTitle>
+            <CardTitle>{m.connect_sdk_title()}</CardTitle>
             <CardDescription>
-              <code className="font-mono">@dormice/sdk</code> 说 daemon 的 原生
-              RPC — acquire 天生幂等。尚未发布到 npm,从仓库 workspace 构建使用。
+              <code className="font-mono">@dormice/sdk</code>
+              {m.connect_sdk_desc()}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -64,8 +67,8 @@ export function ConnectPage() {
           <CardHeader>
             <CardTitle>CLI</CardTitle>
             <CardDescription>
-              <code className="font-mono">dor</code>(install.sh 随 daemon
-              一起装的)读这两个环境变量。
+              <code className="font-mono">dor</code>
+              {m.connect_cli_desc()}
             </CardDescription>
           </CardHeader>
           <CardContent>

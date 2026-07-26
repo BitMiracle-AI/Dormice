@@ -4,9 +4,10 @@ import {
   CONSOLE_ACTOR,
   ENV_TOKEN_ACTOR,
 } from '@dormice/shared';
+import { m } from '@/paraglide/messages';
 
 /**
- * 操作者的中文翻译 — kinds.ts 是 kind 的唯一翻译点,这里是 actor 的。
+ * 操作者的显示翻译 — kinds.ts 是 kind 的唯一翻译点,这里是 actor 的。
  * 词表在 shared/activity.ts:'env-token' / 'console' / 'apikey:<id>' /
  * null(=daemon 自动作业:闲置扫描、对账、归档,或不带账本凭证的数据面
  * 唤醒)。key 按 id 归因(名字可改、id 才稳定),显示时经密钥列表翻译回
@@ -17,13 +18,15 @@ export function actorLabel(
   actor: string | null,
   apiKeys: Pick<ApiKey, 'id' | 'name'>[] | undefined,
 ): string {
-  if (actor === null) return '系统';
-  if (actor === ENV_TOKEN_ACTOR) return '引导凭证';
-  if (actor === CONSOLE_ACTOR) return '控制台';
+  if (actor === null) return m.activity_actor_system();
+  if (actor === ENV_TOKEN_ACTOR) return m.activity_actor_env_token();
+  if (actor === CONSOLE_ACTOR) return m.activity_actor_console();
   const keyId = apiKeyActorId(actor);
   if (keyId !== null) {
     const key = apiKeys?.find((k) => k.id === keyId);
-    return `密钥 ${key ? key.name : keyId.slice(0, 8)}`;
+    return m.activity_actor_apikey({
+      name: key ? key.name : keyId.slice(0, 8),
+    });
   }
   return actor;
 }

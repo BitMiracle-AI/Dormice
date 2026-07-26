@@ -2,12 +2,14 @@ import {
   ArrowUpRight01Icon,
   Book02Icon,
   GithubIcon,
+  Globe02Icon,
   Logout01Icon,
 } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Link, useRouterState } from '@tanstack/react-router';
 import { useState } from 'react';
 import { CommandMenu } from '@/components/CommandMenu';
+import { currentLocaleLabel, LocaleMenu } from '@/components/LocaleMenu';
 import { menuButtonClass, NAV_GROUPS } from '@/components/nav';
 import {
   AlertDialog,
@@ -36,6 +38,7 @@ import { useCachedUpgradable } from '@/features/settings/hooks/useUpgrade';
 import { logout } from '@/lib/api';
 import { MOCK_PAGES_ENABLED } from '@/lib/mock';
 import { clearSessionMarker } from '@/lib/session';
+import { m } from '@/paraglide/messages';
 
 async function signOut() {
   // 尽力而为:cookie 可能已经死了,无所谓 — 清掉标记回登录页才是正事。
@@ -79,9 +82,10 @@ export function AppSidebar() {
             (item) => !item.mock || MOCK_PAGES_ENABLED,
           );
           if (items.length === 0) return null;
+          const groupLabel = group.label();
           return (
-            <SidebarGroup key={group.label}>
-              <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+            <SidebarGroup key={groupLabel}>
+              <SidebarGroupLabel>{groupLabel}</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
                   {items.map((item) => (
@@ -92,14 +96,18 @@ export function AppSidebar() {
                         render={<Link to={item.to} />}
                       >
                         <HugeiconsIcon icon={item.icon} strokeWidth={2} />
-                        <span>{item.label}</span>
+                        <span>{item.label()}</span>
                       </SidebarMenuButton>
-                      {item.mock && <SidebarMenuBadge>预览</SidebarMenuBadge>}
+                      {item.mock && (
+                        <SidebarMenuBadge>
+                          {m.shell_preview_badge()}
+                        </SidebarMenuBadge>
+                      )}
                       {item.to === '/version' && upgradable && (
                         <SidebarMenuBadge>
                           <span
                             className="size-2 rounded-full bg-amber-500"
-                            title="有新版本可升级"
+                            title={m.shell_upgradable_title()}
                           />
                         </SidebarMenuBadge>
                       )}
@@ -148,7 +156,7 @@ export function AppSidebar() {
               }
             >
               <HugeiconsIcon icon={Book02Icon} strokeWidth={2} />
-              <span>文档</span>
+              <span>{m.shell_docs()}</span>
               <HugeiconsIcon
                 icon={ArrowUpRight01Icon}
                 strokeWidth={2}
@@ -157,12 +165,23 @@ export function AppSidebar() {
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
+            {/* 语言切换:菜单项文案 = 当前语言的本族语名,认出母语即入口。 */}
+            <LocaleMenu
+              trigger={
+                <SidebarMenuButton className={menuButtonClass}>
+                  <HugeiconsIcon icon={Globe02Icon} strokeWidth={2} />
+                  <span>{currentLocaleLabel()}</span>
+                </SidebarMenuButton>
+              }
+            />
+          </SidebarMenuItem>
+          <SidebarMenuItem>
             <SidebarMenuButton
               className={menuButtonClass}
               onClick={() => setLogoutConfirmOpen(true)}
             >
               <HugeiconsIcon icon={Logout01Icon} strokeWidth={2} />
-              <span>退出登录</span>
+              <span>{m.shell_logout()}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -172,14 +191,18 @@ export function AppSidebar() {
       <AlertDialog open={logoutConfirmOpen} onOpenChange={setLogoutConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>退出登录?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {m.shell_logout_confirm_title()}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              退出后需要重新输入密码才能进入控制台。
+              {m.shell_logout_confirm_desc()}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>再待会儿</AlertDialogCancel>
-            <AlertDialogAction onClick={signOut}>退出</AlertDialogAction>
+            <AlertDialogCancel>{m.shell_logout_cancel()}</AlertDialogCancel>
+            <AlertDialogAction onClick={signOut}>
+              {m.shell_logout_action()}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

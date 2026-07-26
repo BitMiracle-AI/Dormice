@@ -19,6 +19,7 @@ import {
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { formatBytes } from '@/lib/format';
+import { m } from '@/paraglide/messages';
 import {
   downloadFile,
   type EnvdEntry,
@@ -96,7 +97,8 @@ export function FilePreviewPane({
   const content = useQuery({
     queryKey: ['envdFileContent', sandbox.id, selected?.path],
     queryFn: async ({ signal }): Promise<PreviewData> => {
-      if (!auth.data || !selected) throw new Error('缺少 envd 凭证');
+      if (!auth.data || !selected)
+        throw new Error(m.workbench_missing_envd_auth());
       // signal 让换文件时真取消上一个下载 — media 档 50 MiB 级别,不取消
       // 就是白流量压着新请求。
       const blob = await downloadFile(auth.data, selected.path, signal);
@@ -176,10 +178,9 @@ export function FilePreviewPane({
       <div className="flex h-full items-center justify-center p-4">
         <Empty>
           <EmptyHeader>
-            <EmptyTitle>在左侧选择一个文件</EmptyTitle>
+            <EmptyTitle>{m.workbench_select_a_file()}</EmptyTitle>
             <EmptyDescription>
-              文本在这里预览和编辑,图片、PDF、Office 文档也能看;终端就在
-              下面,改完顺手跑。
+              {m.workbench_select_a_file_desc()}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -198,7 +199,7 @@ export function FilePreviewPane({
       { path: selected.path, file: new File([draft], selected.name) },
       {
         onSuccess: () => {
-          toast.success(`已保存 ${selected.name}`);
+          toast.success(m.workbench_saved({ name: selected.name }));
           // 窗格常驻(弹窗是关了了事),重读一次把保存结果立为新基线,
           // dirty 自然归零。
           void content.refetch();
@@ -215,7 +216,7 @@ export function FilePreviewPane({
       onClick={download}
     >
       <HugeiconsIcon icon={Download01Icon} />
-      下载
+      {m.workbench_download()}
     </Button>
   );
 
@@ -228,8 +229,8 @@ export function FilePreviewPane({
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label="重新生成直链并刷新预览"
-          title="重新生成直链并刷新预览"
+          aria-label={m.workbench_remint_refresh()}
+          title={m.workbench_remint_refresh()}
           disabled={minting}
           onClick={() => void mintOffice()}
         >
@@ -240,11 +241,9 @@ export function FilePreviewPane({
       <Button
         variant="ghost"
         size="icon-sm"
-        aria-label="重新读取"
+        aria-label={m.workbench_reread()}
         disabled={content.isFetching || dirty}
-        title={
-          dirty ? '有未保存的修改 — 先保存或撤销,刷新会覆盖草稿' : '重新读取'
-        }
+        title={dirty ? m.workbench_dirty_refresh_hint() : m.workbench_reread()}
         onClick={() => void content.refetch()}
       >
         <HugeiconsIcon icon={RefreshIcon} />
@@ -267,7 +266,7 @@ export function FilePreviewPane({
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label="下载"
+            aria-label={m.workbench_download()}
             disabled={mutations.download.isPending}
             onClick={download}
           >
@@ -283,7 +282,7 @@ export function FilePreviewPane({
               onClick={save}
             >
               {mutations.upload.isPending && <Spinner />}
-              保存
+              {m.common_save()}
             </Button>
           )}
         </div>
@@ -307,25 +306,18 @@ export function FilePreviewPane({
               <EmptyHeader>
                 {window.isSecureContext ? (
                   <>
-                    <EmptyTitle>
-                      Office 文档 — 可用 Microsoft 在线预览
-                    </EmptyTitle>
+                    <EmptyTitle>{m.workbench_office_title()}</EmptyTitle>
                     <EmptyDescription>
-                      预览会为此文件生成 {SIGNED_URL_TTL_SECONDS / 60}{' '}
-                      分钟有效的签名直链,交给
-                      Microsoft(view.officeapps.live.com)的服务器抓取并渲染 —
-                      文件内容会离开本机。含敏感内容请下载后本地打开。
+                      {m.workbench_office_desc({
+                        minutes: SIGNED_URL_TTL_SECONDS / 60,
+                      })}
                     </EmptyDescription>
                   </>
                 ) : (
                   <>
-                    <EmptyTitle>
-                      明文 HTTP 下无法在线预览 Office 文档
-                    </EmptyTitle>
+                    <EmptyTitle>{m.workbench_office_http_title()}</EmptyTitle>
                     <EmptyDescription>
-                      生成签名直链要用浏览器的加密接口(仅 HTTPS 可用),且
-                      Microsoft 的预览服务只能抓取公网 HTTPS 地址 — 请改用绑定的
-                      HTTPS 域名访问控制台,或下载后本地打开。
+                      {m.workbench_office_http_desc()}
                     </EmptyDescription>
                   </>
                 )}
@@ -343,7 +335,7 @@ export function FilePreviewPane({
                       ) : (
                         <HugeiconsIcon icon={GlobeIcon} />
                       )}
-                      用 Microsoft 在线预览
+                      {m.workbench_office_open()}
                     </Button>
                   )}
                   {downloadButton}
@@ -357,12 +349,19 @@ export function FilePreviewPane({
           <Empty>
             <EmptyHeader>
               <EmptyTitle>
-                {tooLarge ? '文件太大,不在线预览' : '二进制文件,没法当文本看'}
+                {tooLarge
+                  ? m.workbench_too_large_title()
+                  : m.workbench_binary_title()}
               </EmptyTitle>
               <EmptyDescription>
                 {tooLarge
-                  ? `${isMedia ? '图片/PDF' : '文本'}在线预览上限 ${formatBytes(capBytes)} — 下载后用本地工具打开。`
-                  : '内容里有 NUL 字节 — 下载后用对应的工具打开。'}
+                  ? m.workbench_too_large_desc({
+                      kind: isMedia
+                        ? m.workbench_kind_media()
+                        : m.workbench_kind_text(),
+                      cap: formatBytes(capBytes),
+                    })
+                  : m.workbench_binary_desc()}
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>{downloadButton}</EmptyContent>
@@ -372,7 +371,7 @@ export function FilePreviewPane({
         <div className="flex min-h-0 flex-1 items-center justify-center p-4">
           <Empty>
             <EmptyHeader>
-              <EmptyTitle>读取失败 — 文件可能已被删除或改名</EmptyTitle>
+              <EmptyTitle>{m.workbench_read_failed_title()}</EmptyTitle>
               <EmptyDescription>{content.error.message}</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
@@ -382,10 +381,10 @@ export function FilePreviewPane({
                   size="sm"
                   onClick={() => void content.refetch()}
                 >
-                  重试
+                  {m.common_retry()}
                 </Button>
                 <Button variant="ghost" size="sm" onClick={onClear}>
-                  清除选择
+                  {m.workbench_clear_selection()}
                 </Button>
               </div>
             </EmptyContent>
@@ -393,7 +392,7 @@ export function FilePreviewPane({
         </div>
       ) : content.isPending || (content.data.kind === 'media' && !objectUrl) ? (
         <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-          <Spinner /> 读取文件
+          <Spinner /> {m.workbench_reading_file()}
         </div>
       ) : content.data.kind === 'media' && objectUrl ? (
         previewKind === 'pdf' ? (

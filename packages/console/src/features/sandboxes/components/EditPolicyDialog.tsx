@@ -26,6 +26,7 @@ import { Switch } from '@/components/ui/switch';
 import { useConfig } from '@/features/settings/hooks/useConfig';
 import { updatePolicy } from '@/lib/api';
 import { queryClient } from '@/lib/queryClient';
+import { m } from '@/paraglide/messages';
 import { durationHint } from '../format';
 
 /** 三旋钮逐项比:批量编辑要判断"全体现值是否一致"。 */
@@ -116,8 +117,8 @@ export function EditPolicyDialog({ sandboxes }: { sandboxes: Sandbox[] }) {
     if (!firstFailure) {
       toast.success(
         single
-          ? `「${single.name}」的策略已更新`
-          : `已更新 ${sandboxes.length} 个沙箱的策略`,
+          ? m.sandboxes_policy_updated({ name: single.name })
+          : m.sandboxes_policy_updated_bulk({ n: sandboxes.length }),
       );
       setOpen(false);
     } else if (single) {
@@ -125,7 +126,11 @@ export function EditPolicyDialog({ sandboxes }: { sandboxes: Sandbox[] }) {
     } else {
       // 批量失败几乎总是同一个原因,点名全部+报第一条错误就够诊断。
       setError(
-        `${failures.length} 个更新失败:${failures.map((f) => f.name).join('、')} — ${firstFailure.message}`,
+        m.sandboxes_policy_update_failed({
+          n: failures.length,
+          names: failures.map((f) => f.name).join(m.sandboxes_name_separator()),
+          message: firstFailure.message,
+        }),
       );
     }
   };
@@ -148,8 +153,8 @@ export function EditPolicyDialog({ sandboxes }: { sandboxes: Sandbox[] }) {
         render={
           <Button variant="outline" size="sm">
             <HugeiconsIcon icon={Settings02Icon} />
-            调整策略
-            {!single && `(${sandboxes.length})`}
+            {m.sandboxes_edit_policy()}
+            {!single && m.sandboxes_edit_policy_count({ n: sandboxes.length })}
           </Button>
         }
       />
@@ -157,15 +162,12 @@ export function EditPolicyDialog({ sandboxes }: { sandboxes: Sandbox[] }) {
         <DialogHeader>
           <DialogTitle>
             {single
-              ? `调整「${single.name}」的生命周期策略`
-              : `批量调整 ${sandboxes.length} 个沙箱的策略`}
+              ? m.sandboxes_edit_policy_title({ name: single.name })
+              : m.sandboxes_edit_policy_title_bulk({ n: sandboxes.length })}
           </DialogTitle>
           <DialogDescription>
-            立即生效,只改账本 — 沉睡的沙箱不会被吵醒,空闲计时也不重置
-            (新阈值按已累积的空闲时间判定)。
-            {!single &&
-              shared === null &&
-              '选中沙箱的当前策略不一致,提交后统一为下面填的值。'}
+            {m.sandboxes_edit_policy_desc()}
+            {!single && shared === null && m.sandboxes_policy_mixed_note()}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -177,7 +179,7 @@ export function EditPolicyDialog({ sandboxes }: { sandboxes: Sandbox[] }) {
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="policy-freeze-after">
-                空闲多久后冻结(秒)
+                {m.sandboxes_freeze_after_label()}
               </FieldLabel>
               <Input
                 id="policy-freeze-after"
@@ -187,7 +189,7 @@ export function EditPolicyDialog({ sandboxes }: { sandboxes: Sandbox[] }) {
                 onChange={(event) => setFreezeAfter(event.target.value)}
               />
               <FieldDescription>
-                运行中 → 已冻结:内存挤入 swap,唤醒约 50ms。
+                {m.sandboxes_freeze_desc()}
                 {durationHint(freezeAfter) && ` ${durationHint(freezeAfter)}`}
               </FieldDescription>
             </Field>
@@ -198,13 +200,13 @@ export function EditPolicyDialog({ sandboxes }: { sandboxes: Sandbox[] }) {
                 onCheckedChange={setNeverStop}
               />
               <FieldLabel htmlFor="policy-never-stop">
-                永不停止(常驻 agent)
+                {m.sandboxes_never_stop_label()}
               </FieldLabel>
             </Field>
             {!neverStop && (
               <Field>
                 <FieldLabel htmlFor="policy-stop-after">
-                  空闲多久后停止(秒)
+                  {m.sandboxes_stop_after_label()}
                 </FieldLabel>
                 <Input
                   id="policy-stop-after"
@@ -214,7 +216,7 @@ export function EditPolicyDialog({ sandboxes }: { sandboxes: Sandbox[] }) {
                   onChange={(event) => setStopAfter(event.target.value)}
                 />
                 <FieldDescription>
-                  已冻结 → 已停止:只留磁盘,唤醒是冷启动。
+                  {m.sandboxes_stop_desc()}
                   {durationHint(stopAfter) && ` ${durationHint(stopAfter)}`}
                 </FieldDescription>
               </Field>
@@ -228,13 +230,13 @@ export function EditPolicyDialog({ sandboxes }: { sandboxes: Sandbox[] }) {
                     onCheckedChange={setNeverArchive}
                   />
                   <FieldLabel htmlFor="policy-never-archive">
-                    永不归档
+                    {m.sandboxes_never_archive_label()}
                   </FieldLabel>
                 </Field>
                 {!neverArchive && (
                   <Field>
                     <FieldLabel htmlFor="policy-archive-after">
-                      空闲多久后归档(秒)
+                      {m.sandboxes_archive_after_label()}
                     </FieldLabel>
                     <Input
                       id="policy-archive-after"
@@ -244,7 +246,7 @@ export function EditPolicyDialog({ sandboxes }: { sandboxes: Sandbox[] }) {
                       onChange={(event) => setArchiveAfter(event.target.value)}
                     />
                     <FieldDescription>
-                      已停止 → 已归档:磁盘压缩上传 S3,本地零占用。
+                      {m.sandboxes_archive_desc()}
                       {durationHint(archiveAfter) &&
                         ` ${durationHint(archiveAfter)}`}
                     </FieldDescription>
@@ -257,7 +259,7 @@ export function EditPolicyDialog({ sandboxes }: { sandboxes: Sandbox[] }) {
           <DialogFooter className="mt-6">
             <Button type="submit" disabled={!valid || pending}>
               {pending && <Spinner />}
-              保存
+              {m.common_save()}
             </Button>
           </DialogFooter>
         </form>
