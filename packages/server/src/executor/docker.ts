@@ -174,19 +174,22 @@ export class DockerExecutor implements Executor {
   }
 
   async freeze(sandboxId: string): Promise<void> {
-    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.expectState(sandboxId, 'running');
+    const containerId = info.Id;
     await this.docker.getContainer(containerId).pause();
     await this.reclaimMemory(containerId);
   }
 
   async unfreeze(sandboxId: string): Promise<void> {
-    const containerId = await this.expectState(sandboxId, 'paused');
+    const info = await this.expectState(sandboxId, 'paused');
+    const containerId = info.Id;
     // Milliseconds; memory swaps back in lazily, on demand.
     await this.docker.getContainer(containerId).unpause();
   }
 
   async stop(sandboxId: string): Promise<void> {
-    const containerId = await this.expectState(sandboxId, 'paused');
+    const info = await this.expectState(sandboxId, 'paused');
+    const containerId = info.Id;
     const container = this.docker.getContainer(containerId);
     // Unpause first: a signal cannot be delivered into a paused gVisor
     // sandbox — its guest kernel is stopped along with everything else
@@ -426,8 +429,7 @@ export class DockerExecutor implements Executor {
     sandboxId: string,
     port: number,
   ): Promise<{ host: string; port: number }> {
-    const containerId = await this.expectState(sandboxId, 'running');
-    const info = await this.docker.getContainer(containerId).inspect();
+    const info = await this.expectState(sandboxId, 'running');
     // The bridge address: icc:false only blocks container-to-container
     // traffic, host-to-container stays open (measured on the test machine).
     const networks = info.NetworkSettings?.Networks ?? {};
@@ -498,7 +500,8 @@ export class DockerExecutor implements Executor {
   }
 
   async exec(sandboxId: string, opts: ExecOptions): Promise<ExecResult> {
-    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.expectState(sandboxId, 'running');
+    const containerId = info.Id;
     const container = this.docker.getContainer(containerId);
     // The deadline lives in-container, via GNU timeout: closing the
     // host-side stream cannot kill the in-container process (measured in
@@ -530,7 +533,8 @@ export class DockerExecutor implements Executor {
     sandboxId: string,
     opts: ExecStreamOptions,
   ): Promise<ExecStreamHandle> {
-    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.expectState(sandboxId, 'running');
+    const containerId = info.Id;
     const container = this.docker.getContainer(containerId);
     // The pidfile is the handle's way back to the process: /tmp is the
     // sandbox's own, so a leftover file is the sandbox's own garbage — it
@@ -737,7 +741,8 @@ export class DockerExecutor implements Executor {
     files: FileToWrite[],
     user?: string,
   ): Promise<void> {
-    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.expectState(sandboxId, 'running');
+    const containerId = info.Id;
     const container = this.docker.getContainer(containerId);
     // In array order, failing fast — the batch saves round-trips, it is not
     // a transaction; earlier files stay written, as the protocol documents.
@@ -775,7 +780,8 @@ export class DockerExecutor implements Executor {
     user?: string,
   ): Promise<Buffer> {
     const resolved = resolveSandboxPath(path);
-    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.expectState(sandboxId, 'running');
+    const containerId = info.Id;
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
       cmd: [
@@ -827,7 +833,8 @@ export class DockerExecutor implements Executor {
     range?: ByteRange,
   ): Promise<void> {
     const resolved = resolveSandboxPath(path);
-    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.expectState(sandboxId, 'running');
+    const containerId = info.Id;
     const container = this.docker.getContainer(containerId);
     const stderr = new CappedBuffer(EXEC_OUTPUT_LIMIT_BYTES);
     const started = await this.startInContainer(container, sandboxId, {
@@ -867,7 +874,8 @@ export class DockerExecutor implements Executor {
     user?: string,
   ): Promise<void> {
     const resolved = resolveSandboxPath(path);
-    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.expectState(sandboxId, 'running');
+    const containerId = info.Id;
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
       cmd: [
@@ -905,7 +913,8 @@ export class DockerExecutor implements Executor {
     user?: string,
   ): Promise<SandboxEntry[]> {
     const resolved = resolveSandboxPath(path);
-    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.expectState(sandboxId, 'running');
+    const containerId = info.Id;
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
       cmd: [
@@ -954,7 +963,8 @@ export class DockerExecutor implements Executor {
     user?: string,
   ): Promise<SandboxEntry> {
     const resolved = resolveSandboxPath(path);
-    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.expectState(sandboxId, 'running');
+    const containerId = info.Id;
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
       cmd: [
@@ -987,7 +997,8 @@ export class DockerExecutor implements Executor {
     user?: string,
   ): Promise<boolean> {
     const resolved = resolveSandboxPath(path);
-    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.expectState(sandboxId, 'running');
+    const containerId = info.Id;
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
       cmd: [
@@ -1022,7 +1033,8 @@ export class DockerExecutor implements Executor {
   ): Promise<SandboxEntry> {
     const source = resolveSandboxPath(from);
     const destination = resolveSandboxPath(to);
-    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.expectState(sandboxId, 'running');
+    const containerId = info.Id;
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
       cmd: [
@@ -1052,7 +1064,8 @@ export class DockerExecutor implements Executor {
 
   async remove(sandboxId: string, path: string, user?: string): Promise<void> {
     const resolved = resolveSandboxPath(path);
-    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.expectState(sandboxId, 'running');
+    const containerId = info.Id;
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
       cmd: [
@@ -1083,7 +1096,8 @@ export class DockerExecutor implements Executor {
     opts: WatchDirOptions,
   ): Promise<WatchDirHandle> {
     const resolved = resolveSandboxPath(opts.path);
-    const containerId = await this.expectState(sandboxId, 'running');
+    const info = await this.expectState(sandboxId, 'running');
+    const containerId = info.Id;
     const container = this.docker.getContainer(containerId);
     const pidfile = `/tmp/.dormice-exec-${randomUUID()}.pid`;
 
@@ -1429,24 +1443,23 @@ export class DockerExecutor implements Executor {
   private async expectState(
     sandboxId: string,
     wanted: ContainerState,
-  ): Promise<string> {
+  ): Promise<Docker.ContainerInspectInfo> {
     let actual: ContainerState | undefined;
-    let containerId: string | null = null;
+    let info: Docker.ContainerInspectInfo | null = null;
     try {
-      const info = await this.docker
+      info = await this.docker
         .getContainer(containerName(sandboxId))
         .inspect();
-      containerId = info.Id;
       actual = containerStateFromDocker(info.State.Status);
     } catch (err) {
       if (!isDockerApiError(err) || err.statusCode !== 404) throw err;
     }
-    if (containerId === null || actual !== wanted) {
+    if (info === null || actual !== wanted) {
       throw new Error(
         `container ${sandboxId} is ${actual ?? 'absent'}, expected ${wanted}`,
       );
     }
-    return containerId;
+    return info;
   }
 
   /**
