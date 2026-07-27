@@ -209,6 +209,12 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
     },
 
     handleUpgrade(req, socket, head) {
+      // The http server drops its own socket error handler before emitting
+      // 'upgrade', so until this line the socket is one reset away from
+      // throwing a listener-less 'error' and taking the daemon with it —
+      // and resolveTarget below can wait seconds on a cold wake. This is
+      // what handleRequest gets for free from its ServerResponse.
+      socket.on('error', () => socket.destroy());
       void (async () => {
         let resolved: Awaited<ReturnType<typeof resolveTarget>>;
         try {
@@ -256,10 +262,8 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
           settle();
           socket.destroy();
         });
-        socket.on('error', () => {
-          settle();
-          upstream.destroy();
-        });
+        // No 'error' twin here: the listener above already destroys the
+        // socket, and a destroyed socket always reaches 'close'.
         socket.on('close', () => {
           settle();
           upstream.destroy();
