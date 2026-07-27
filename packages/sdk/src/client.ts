@@ -580,11 +580,7 @@ export class Dormice {
       name,
       files: files.map((file) => ({
         path: file.path,
-        contentBase64: Buffer.from(
-          typeof file.content === 'string'
-            ? new TextEncoder().encode(file.content)
-            : file.content,
-        ).toString('base64'),
+        contentBase64: Buffer.from(file.content).toString('base64'),
       })),
     });
     return writeFilesResponseSchema.parse(data);
@@ -602,11 +598,7 @@ export class Dormice {
     const data = await this.rpc('writeFile', {
       name,
       path,
-      contentBase64: Buffer.from(
-        typeof content === 'string'
-          ? new TextEncoder().encode(content)
-          : content,
-      ).toString('base64'),
+      contentBase64: Buffer.from(content).toString('base64'),
     });
     return writeFileResponseSchema.parse(data);
   }
