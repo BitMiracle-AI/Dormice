@@ -260,6 +260,111 @@ describe('sandbox port proxy', () => {
     expect(JSON.parse(other.body)).toMatchObject({ sandboxId });
   });
 
+  it('survives a client reset while the upgrade is still waking the sandbox', async () => {
+    const t = await listeningApp();
+    const sandboxId = await createSandbox(t.port);
+    const name = findById(t.db, sandboxId)?.name;
+    if (name === undefined) throw new Error('no sandbox row');
+
+    // Hold the sandbox's lock slot so resolveTarget's own locks.run queues
+    // behind it: the seconds-long window a cold wake really has, made
+    // deterministic. A reset — not a graceful close — is what raises
+    // 'error'; with no listener yet attached it throws out of the
+    // EventEmitter, and the daemon has no uncaughtException handler.
+    let release!: () => void;
+    const occupied = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slot = t.locks.run(name, () => occupied);
+
+    const crashes: unknown[] = [];
+    const onUncaught = (err: unknown) => crashes.push(err);
+    process.on('uncaughtException', onUncaught);
+    try {
+      const socket = net.connect(t.port, '127.0.0.1', () => {
+        socket.write(
+          [
+            'GET /ws HTTP/1.1',
+            `Host: 5173-${sandboxId}.${DOMAIN}`,
+            'Connection: Upgrade',
+            'Upgrade: websocket',
+            '',
+            '',
+          ].join('\r\n'),
+        );
+      });
+      socket.on('error', () => {
+        // The client end of the reset we are about to send.
+      });
+      // Let the request arrive and park inside handleUpgrade, then reset.
+      await new Promise((r) => setTimeout(r, 100));
+      socket.resetAndDestroy();
+      await new Promise((r) => setTimeout(r, 100));
+      release();
+      await slot;
+      await new Promise((r) => setTimeout(r, 100));
+      expect(crashes).toEqual([]);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+      release();
+    }
+
+    // Still serving: the reset took its own connection down, nothing else.
+    const after = await rawGet(t.port, '/healthz', 'localhost');
+    expect(after.status).toBe(200);
+  });
+
+  it('survives a client reset after the upgrade is established', async () => {
+    const t = await listeningApp();
+    const sandboxId = await createSandbox(t.port);
+
+    // The other half of the window: once the handshake lands, both the
+    // proxy's socket and the upstream's are piped. A reset here reaches
+    // the upstream end too — for the fake that end lives in this process,
+    // so it must be as unkillable as a real container's would be.
+    // Staggered across the handshake rather than one clean case: the reset
+    // has to land while bytes are still moving for the upstream end to see
+    // it as an error, and a single well-timed close does not reproduce it.
+    const crashes: unknown[] = [];
+    const onUncaught = (err: unknown) => crashes.push(err);
+    process.on('uncaughtException', onUncaught);
+    try {
+      await Promise.all(
+        Array.from(
+          { length: 60 },
+          (_, i) =>
+            new Promise<void>((resolve) => {
+              const socket = net.connect(t.port, '127.0.0.1', () => {
+                socket.write(
+                  [
+                    'GET /ws HTTP/1.1',
+                    `Host: 5173-${sandboxId}.${DOMAIN}`,
+                    'Connection: Upgrade',
+                    'Upgrade: websocket',
+                    '',
+                    '',
+                  ].join('\r\n'),
+                );
+                setTimeout(() => {
+                  socket.resetAndDestroy();
+                  resolve();
+                }, i % 10);
+              });
+              socket.on('error', () => resolve());
+              setTimeout(resolve, 3000);
+            }),
+        ),
+      );
+      await new Promise((r) => setTimeout(r, 300));
+      expect(crashes).toEqual([]);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+    }
+
+    const after = await rawGet(t.port, '/healthz', 'localhost');
+    expect(after.status).toBe(200);
+  });
+
   it('passes WebSocket upgrades through, both directions', async () => {
     const t = await listeningApp();
     const sandboxId = await createSandbox(t.port);

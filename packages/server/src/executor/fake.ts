@@ -442,6 +442,12 @@ export class FakeExecutor implements Executor {
         );
       });
       upstream.on('upgrade', (_req, socket) => {
+        // The echo pipe's destination is this socket, so a reset reaching
+        // it would re-emit 'error' with no listener and take the daemon
+        // down — the real executor's upstream is another process and
+        // cannot do that, so without this the fake is deadlier than what
+        // it stands in for.
+        socket.on('error', () => socket.destroy());
         socket.write(
           'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n',
         );
