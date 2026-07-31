@@ -647,7 +647,13 @@ note 'enabled and (re)started'
 
 # ---- verification: the install has not succeeded until doctor says so --------
 log 'verification'
-for _ in $(seq 1 20); do
+# 120s, not the 10s this probe once was: startup does migrations, the
+# startup guard, and a fleet-sized reconciliation before it listens, so a
+# busy production ledger takes well past 10s (2026-07-31, ~21s measured on
+# a live fleet — the 10s probe declared a SUCCEEDED upgrade failed, and a
+# false "failed" verdict is the one thing this step must never produce).
+# Breaking on the first answer keeps the fresh-install case as fast as ever.
+for _ in $(seq 1 240); do
   curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 && break
   sleep 0.5
 done
