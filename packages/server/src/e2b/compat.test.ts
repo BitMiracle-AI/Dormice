@@ -2081,6 +2081,73 @@ describe('signed file URLs at the daemon root', () => {
     expect(weird.headers['content-type']).toBe('application/octet-stream');
   });
 
+  it('download=1 flips the disposition to attachment — outside the signature, so appending it never breaks one', async () => {
+    // clawsgo's browser-download path (2026-07-31): navigating to a signed
+    // URL must SAVE renderable types (mp4/pdf/csv…), not open them. The
+    // param stays out of the signing material — the material is pinned to
+    // the SDK's getSignature, so the SDK-minted URL plus `&download=1`
+    // must verify unchanged.
+    const t = testApp();
+    const { sandboxID, envdAccessToken } = await createSandbox(t);
+    await putFile(t, sandboxID, '视频 demo.mp4', '0123456789abcdefghij');
+
+    const path = '视频 demo.mp4';
+    const sig = sdkSignature({ path, operation: 'read', envdAccessToken });
+    const signedUrl = (extra: string) =>
+      `/files?path=${encodeURIComponent(path)}&signature=${encodeURIComponent(sig)}${extra}`;
+    const fetchSigned = (extra: string, range?: string) =>
+      t.app.inject({
+        method: 'GET',
+        url: signedUrl(extra),
+        ...(range ? { headers: { range } } : {}),
+      });
+
+    // The SDK-minted URL with &download=1 appended: same signature, 200,
+    // attachment with the RFC 5987 name a browser saves under.
+    const attach = await fetchSigned('&download=1');
+    expect(attach.statusCode).toBe(200);
+    expect(attach.headers['content-disposition']).toBe(
+      "attachment; filename*=utf-8''%E8%A7%86%E9%A2%91%20demo.mp4",
+    );
+    expect(attach.body).toBe('0123456789abcdefghij');
+
+    // The other accepted spelling.
+    const attachTrue = await fetchSigned('&download=true');
+    expect(attachTrue.headers['content-disposition']).toMatch(/^attachment;/);
+
+    // No param: byte-for-byte today's inline default — media previews and
+    // Office viewers depend on it, so the default must not tip.
+    const plain = await fetchSigned('');
+    expect(plain.statusCode).toBe(200);
+    expect(plain.headers['content-disposition']).toBe(
+      "inline; filename*=utf-8''%E8%A7%86%E9%A2%91%20demo.mp4",
+    );
+
+    // Garbage values keep inline (strict allowlist, not truthiness).
+    for (const junk of ['0', 'false', 'yes', '']) {
+      const kept = await fetchSigned(`&download=${junk}`);
+      expect(kept.headers['content-disposition']).toMatch(/^inline;/);
+    }
+
+    // Ranges and attachment coexist — the download manager's resume relies
+    // on exactly this pairing.
+    const resumed = await fetchSigned('&download=1', 'bytes=10-');
+    expect(resumed.statusCode).toBe(206);
+    expect(resumed.body).toBe('abcdefghij');
+    expect(resumed.headers['content-range']).toBe('bytes 10-19/20');
+    expect(resumed.headers['accept-ranges']).toBe('bytes');
+    expect(resumed.headers['content-disposition']).toMatch(/^attachment;/);
+
+    // Same core, same behavior on the token door (/e2b/envd/files).
+    const viaEnvd = await t.app.inject({
+      method: 'GET',
+      url: `/e2b/envd/files?path=${encodeURIComponent(path)}&username=user&download=1`,
+      headers: envdHeaders(t, sandboxID),
+    });
+    expect(viaEnvd.statusCode).toBe(200);
+    expect(viaEnvd.headers['content-disposition']).toMatch(/^attachment;/);
+  });
+
   it('signed uploads: multipart carries the path in the filename, octet-stream in the query', async () => {
     const t = testApp();
     const { sandboxID, envdAccessToken } = await createSandbox(t);

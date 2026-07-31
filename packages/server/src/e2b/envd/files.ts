@@ -149,10 +149,30 @@ export async function serveFileDownload(
   reply: FastifyReply,
 ): Promise<unknown> {
   const { db, executor } = ctx;
-  const query = request.query as { path?: string; username?: string };
+  const query = request.query as {
+    path?: string;
+    username?: string;
+    download?: string;
+  };
   if (!query.path) {
     throw new E2bError(400, 'invalid_argument', 'missing path query');
   }
+  // download=1/true flips the disposition to attachment: a browser
+  // NAVIGATING to the URL then saves instead of renders — the download
+  // manager streams to disk with progress and (via Range) resume, which a
+  // fetch-into-memory consumer can never offer for GB-sized files
+  // (clawsgo's ask, 2026-07-31). Deliberately OUTSIDE the signature: the
+  // signing material is pinned to real envd's getSignature, so admitting a
+  // param would force SDK consumers to hand-roll signatures. Safe anyway —
+  // the URL holder already has full read; attachment is strictly MORE
+  // inert than inline (nothing renders on the sandbox origin), and
+  // stripping the param merely restores today's default. Anything but the
+  // two literal spellings keeps inline: the default must be untippable by
+  // garbage, because media previews and Office viewers depend on it.
+  const disposition =
+    query.download === '1' || query.download === 'true'
+      ? 'attachment'
+      : 'inline';
   // Identity rides the username query on this face (the SDK's user option);
   // vetted before anything wakes.
   const user = vetUsername(query.username);
@@ -195,7 +215,7 @@ export async function serveFileDownload(
     reply.hijack();
     reply.raw.writeHead(slice ? 206 : 200, {
       'content-type': contentTypeOf(entry.name),
-      'content-disposition': `inline; filename*=utf-8''${rfc5987(entry.name)}`,
+      'content-disposition': `${disposition}; filename*=utf-8''${rfc5987(entry.name)}`,
       'content-length': String(slice ? slice.length : size),
       'last-modified': new Date(entry.modifiedTime).toUTCString(),
       // Real envd's promise, now kept: ranges are honored (video playback
