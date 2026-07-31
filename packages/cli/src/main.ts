@@ -5,7 +5,7 @@
 // everything testable lives there.
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import {
   apikeyCreate,
   apikeyDisable,
@@ -68,7 +68,15 @@ sandbox
   .option(
     '-t, --timeout <seconds>',
     'kill the command after this many seconds',
-    (value: string) => Number(value),
+    (value: string) => {
+      const timeout = Number(value);
+      if (!Number.isInteger(timeout) || timeout <= 0) {
+        throw new InvalidArgumentError(
+          '--timeout must be a positive integer of seconds',
+        );
+      }
+      return timeout;
+    },
   )
   .action(async (name: string, command: string, opts: { timeout?: number }) => {
     const result = await sandboxExec(
