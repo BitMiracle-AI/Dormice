@@ -28,6 +28,10 @@ export const ACTIVITY_KINDS = [
   'policy-changed',
   /** updateMetadata replaced a sandbox's label set (ledger-only). */
   'metadata-changed',
+  /** updateSpec rewrote a sandbox's CPU/memory spec (ledger-only; the next cold wake converges the shell). */
+  'spec-changed',
+  /** expandDisk grew a sandbox's disk — the one sanctioned resize, grow-only. */
+  'disk-expanded',
   'daemon-started',
   /** An operator bound or cleared the console domain through setIngress. */
   'ingress-updated',

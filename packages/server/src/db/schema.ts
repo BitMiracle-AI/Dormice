@@ -36,6 +36,18 @@ export const sandboxes = sqliteTable('sandboxes', {
    * that already governs the base image.
    */
   template: text('template'),
+  /**
+   * Per-sandbox resource spec, the policy columns' sibling: flat columns,
+   * NULL = follow the global default (runtime_settings.sandbox_*) — so a
+   * console edit of the fleet-wide knob keeps reaching every sandbox that
+   * never asked for its own number. cpus/memoryGb are realized at shell
+   * birth (the cold-wake convergence swaps a shell whose limits drifted);
+   * diskGb at disk birth (restore) and by expandDisk, the one sanctioned
+   * grow-only resize.
+   */
+  cpus: real('cpus'),
+  memoryGb: real('memory_gb'),
+  diskGb: real('disk_gb'),
   createdAt: text('created_at').notNull(),
   lastActiveAt: text('last_active_at').notNull(),
   /**

@@ -127,6 +127,13 @@
       "when": 1785071294047,
       "tag": "0017_s3-domain-settings",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1785495881243,
+      "tag": "0018_per-sandbox-spec",
+      "breakpoints": true
     }
   ]
 }

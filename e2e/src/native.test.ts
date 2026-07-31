@@ -180,6 +180,45 @@ describe('native API over a real daemon', () => {
     await client().destroySandbox('update-policy-key');
   });
 
+  it('carries a per-sandbox spec: acquire pins it, updateSpec and expandDisk move it', async () => {
+    // Creation-time knobs, reported back resolved.
+    const created = await client().acquireSandbox('spec-key', {
+      spec: { cpus: 2, memoryGb: 4 },
+    });
+    expect(created.sandbox.spec.cpus).toBe(2);
+    expect(created.sandbox.spec.memoryGb).toBe(4);
+    // diskGb was not pinned: it follows the daemon's default, whatever
+    // that is here — but it is always a positive number in force.
+    expect(created.sandbox.spec.diskGb).toBeGreaterThan(0);
+
+    // An existing sandbox ignores a new acquire-time spec.
+    const again = await client().acquireSandbox('spec-key', {
+      spec: { cpus: 8 },
+    });
+    expect(again.created).toBe(false);
+    expect(again.sandbox.spec.cpus).toBe(2);
+
+    // updateSpec is a ledger write (state untouched); null re-follows the
+    // fleet default.
+    const updated = await client().updateSpec('spec-key', { cpus: 3 });
+    expect(updated.sandbox.spec.cpus).toBe(3);
+    expect(updated.sandbox.state).toBe(created.sandbox.state);
+
+    // expandDisk grows and pins; shrinking refuses with a 400.
+    const grownTo = Math.ceil(created.sandbox.spec.diskGb) + 1;
+    const grown = await client().expandDisk('spec-key', grownTo);
+    expect(grown.sandbox.spec.diskGb).toBe(grownTo);
+    await expect(client().expandDisk('spec-key', 1)).rejects.toMatchObject({
+      name: 'DormiceApiError',
+      status: 400,
+    });
+
+    await expect(
+      client().updateSpec('spec-nobody', { cpus: 1 }),
+    ).rejects.toMatchObject({ name: 'DormiceApiError', status: 404 });
+    await client().destroySandbox('spec-key');
+  });
+
   // The fake's files hang off the disk, so only a real container can show
   // the other half of rebuild's promise: the container layer resets.
   it.runIf(process.env.DORMICE_EXECUTOR === 'docker')(

@@ -28,6 +28,30 @@ export const sandboxMetadataSchema = z.record(z.string(), z.string());
 export type SandboxMetadata = z.infer<typeof sandboxMetadataSchema>;
 
 /**
+ * Per-sandbox resource spec — the per-sandbox layer over the global
+ * sandboxDefaults (settings.ts). The ledger stores each knob as NULL =
+ * "follow the global default" or a pinned number; the wire always reports
+ * the RESOLVED values (NULL already collapsed onto the defaults), because
+ * a consumer sizing a plan or a bill needs the number in force, not a
+ * two-source riddle.
+ *
+ * The resolved value is the ledger's ruling, not a physical measurement:
+ * CPU/memory are realized at the next shell birth (a cold wake converges a
+ * stale shell — lifecycle.ts), disk at the next disk birth (restore) or
+ * expandDisk. metrics stays the reader of physical truth.
+ */
+export const sandboxSpecSchema = z.object({
+  /** CPU allowance in force for this sandbox. */
+  cpus: z.number().positive(),
+  /** Memory cap in force, GiB. */
+  memoryGb: z.number().positive(),
+  /** Nominal disk size in force, GiB. */
+  diskGb: z.number().positive(),
+});
+
+export type SandboxSpec = z.infer<typeof sandboxSpecSchema>;
+
+/**
  * A sandbox as reported by the daemon — the wire shape shared by the HTTP
  * API, the SDK, and the web console.
  *
@@ -53,6 +77,8 @@ export const sandboxSchema = z.object({
    */
   endpoint: z.string(),
   policy: lifecyclePolicySchema,
+  /** The resolved per-sandbox resource spec (see sandboxSpecSchema). */
+  spec: sandboxSpecSchema,
   /**
    * Template the sandbox was created from; null means the daemon's base
    * image. The name is recorded, not the image it pointed at: a rebuilt

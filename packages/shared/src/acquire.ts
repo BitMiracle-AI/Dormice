@@ -5,6 +5,7 @@ import {
   sandboxNameSchema,
   sandboxSchema,
 } from './sandbox';
+import { sandboxSpecOverrideSchema } from './spec';
 import { templateNameSchema } from './templates';
 
 /**
@@ -35,6 +36,14 @@ export const acquireRequestSchema = z.object({
    * malformed value is still answered with a 400, never silently ignored.
    */
   metadata: sandboxMetadataSchema.optional(),
+  /**
+   * Per-sandbox resource spec applied when this acquire creates the
+   * sandbox; omitted knobs follow the global sandboxDefaults. Same rules
+   * as policy: an existing sandbox keeps its stored spec — updateSpec and
+   * expandDisk are the update verbs — but an invalid value is still
+   * answered with a 400, never silently ignored.
+   */
+  spec: sandboxSpecOverrideSchema.optional(),
 });
 
 export type AcquireRequest = z.infer<typeof acquireRequestSchema>;

@@ -14,6 +14,8 @@
   "activity_kind_reconciled": "Reconciled",
   "activity_kind_policy_changed": "Policy changed",
   "activity_kind_metadata_changed": "Labels changed",
+  "activity_kind_spec_changed": "Spec changed",
+  "activity_kind_disk_expanded": "Disk expanded",
   "activity_kind_daemon_started": "Daemon started",
   "activity_kind_ingress_updated": "Domain updated",
   "activity_kind_settings_updated": "Settings changed",

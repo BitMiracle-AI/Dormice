@@ -8,6 +8,7 @@ import { resolveImage } from '../db/templates';
 import type { WatcherTable } from '../e2b/watcher-table';
 import type { Executor } from '../executor/executor';
 import type { KeyedQueue } from '../keyed-queue';
+import { shellSpecOf } from '../spec';
 import { type ArchiveStore, objectKey } from './store';
 
 /** What acquire reports while a sandbox is coming back from the archive. */
@@ -195,11 +196,9 @@ export class Archiver {
     // finishing on the credentials the task began with is the honest run).
     const store = this.requireStore();
     const progress: RestoreProgress = { phase: 'downloading', percent: 0 };
-    const done = this.runRestore(row.id, row.name, progress, store).finally(
-      () => {
-        this.restores.delete(row.id);
-      },
-    );
+    const done = this.runRestore(row, progress, store).finally(() => {
+      this.restores.delete(row.id);
+    });
     // Native acquire never awaits this — a failure with no joiner must not
     // crash the daemon as an unhandled rejection. Joiners still observe the
     // rejection through the same promise.
@@ -255,11 +254,11 @@ export class Archiver {
    * acquire is a clean retry.
    */
   private async runRestore(
-    sandboxId: string,
-    name: string,
+    row: SandboxRow,
     progress: RestoreProgress,
     store: ArchiveStore,
   ): Promise<void> {
+    const { id: sandboxId, name } = row;
     const tmp = path.join(this.tmpDir, `${sandboxId}.restore.tar.zst`);
     await mkdir(this.tmpDir, { recursive: true });
     try {
@@ -268,8 +267,16 @@ export class Archiver {
       });
       progress.phase = 'extracting';
       progress.percent = 0;
-      await this.executor.importDisk(sandboxId, tmp, (fraction) => {
-        progress.percent = clampPercent(fraction);
+      await this.executor.importDisk(sandboxId, tmp, {
+        // The sandbox's own recorded size, so a grown disk comes back at
+        // the size it was promised — the row's diskGb is stable for the
+        // whole task (expandDisk answers 409 on a restoring sandbox);
+        // NULL keeps the old behavior: the executor's live default, which
+        // is how an unpinned sandbox picks up a raised global quota.
+        ...(row.diskGb !== null ? { diskGb: row.diskGb } : {}),
+        onProgress: (fraction) => {
+          progress.percent = clampPercent(fraction);
+        },
       });
       await this.locks.run(name, async () => {
         const fresh = findById(this.db, sandboxId);
@@ -283,6 +290,7 @@ export class Archiver {
         }
         await this.executor.start(sandboxId, {
           image: resolveImage(this.db, fresh.template),
+          ...shellSpecOf(fresh),
         });
         await this.watchers?.reapDeferred(sandboxId);
         // Awaken semantics, like every wake: an awake sandbox is by

@@ -23,14 +23,20 @@ import { lifecyclePolicySchema } from './policy';
  * daemon's one writable truth.
  */
 export const sandboxResourceDefaultsSchema = z.object({
-  /** CPU allowance per sandbox. Applies to every container launched after the change. */
+  /**
+   * CPU allowance per sandbox. The fleet-wide layer under the per-sandbox
+   * spec (spec.ts): a sandbox with no pinned value follows this knob.
+   * Applies to every container launched after the change — and, since the
+   * cold-wake convergence compares limits (2026-07-31), to every unpinned
+   * sandbox at its next cold wake.
+   */
   cpus: z.number().positive(),
-  /** Memory cap per sandbox, GiB. Same launch-time application as cpus. */
+  /** Memory cap per sandbox, GiB. Same application as cpus. */
   memoryGb: z.number().positive(),
   /**
    * Nominal disk size per sandbox, GiB. Consulted only when a disk is born
    * (first create, restore-from-archive) — an existing sandbox's disk never
-   * resizes, because the disk is the sandbox's body.
+   * resizes, with exactly one sanctioned exception: expandDisk, grow-only.
    */
   diskGb: z.number().positive(),
 });

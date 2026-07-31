@@ -28,6 +28,7 @@ import {
   wakeSandbox,
 } from '../lifecycle';
 import { resolvePolicy } from '../policy';
+import { resolveSpec } from '../spec';
 import type { E2bDeps } from './deps';
 import {
   apiError,
@@ -204,7 +205,9 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     // The ledger's live knobs, not the env seeds — CPU/memory apply at
     // each container launch, so the current values are what a sandbox
     // actually runs (or will run) with; the domain rides the same read.
+    // Resolved per sandbox: a pinned spec wins, NULL follows the defaults.
     const { sandboxDefaults, sandboxDomain } = readRuntimeSettings(db);
+    const spec = resolveSpec(row, sandboxDefaults);
     return {
       sandboxID: row.id,
       // Required by the Python SDK's models, like clientID above.
@@ -218,9 +221,9 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       endAt:
         row.deadlineAt ??
         new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-      cpuCount: sandboxDefaults.cpus,
-      memoryMB: Math.round(sandboxDefaults.memoryGb * 1024),
-      diskSizeMB: Math.round(sandboxDefaults.diskGb * 1024),
+      cpuCount: spec.cpus,
+      memoryMB: Math.round(spec.memoryGb * 1024),
+      diskSizeMB: Math.round(spec.diskGb * 1024),
       envdVersion: ENVD_VERSION,
       ...domainField(sandboxDomain),
     };

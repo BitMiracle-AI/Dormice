@@ -231,11 +231,48 @@ export class DiskFullError extends Error {}
 /**
  * What a sandbox's shell is built from. Consulted only at the shell's birth
  * — create(), and start()'s rebuild-from-surviving-disk path; an existing
- * container keeps the image it was born with.
+ * container keeps the image AND the limits it was born with (changing
+ * either goes through removeContainer + start, the rebuild path).
  */
 export interface ShellOptions {
   /** Image reference on this host; absent means the executor's configured base image. */
   image?: string;
+  /** CPU allowance of this shell; absent means the executor's live default (resources()). */
+  cpus?: number;
+  /** Memory cap of this shell, GiB; absent means the executor's live default. */
+  memoryGb?: number;
+}
+
+/**
+ * create() births a disk along with the shell, so it takes one extra knob
+ * the shell options never carry: the disk's nominal size.
+ */
+export interface CreateOptions extends ShellOptions {
+  /** Nominal disk size, GiB; absent means the executor's live default. */
+  diskGb?: number;
+}
+
+/**
+ * The resource limits a shell was born with, in the runtime's own physical
+ * units (what Docker's HostConfig records) — integers, so equality checks
+ * carry no float drift. The wake convergence compares these against the
+ * ledger's expectation to decide whether the shell must be swapped.
+ */
+export interface ShellLimits {
+  nanoCpus: number;
+  memoryBytes: number;
+}
+
+export interface ImportDiskOptions {
+  /**
+   * Nominal size of the fresh disk, GiB; absent means the executor's live
+   * default — which keeps the old behavior where a restore picks up a
+   * raised global quota. The archiver passes the sandbox's own recorded
+   * size so a grown disk comes back at the size it was promised.
+   */
+  diskGb?: number;
+  /** Monotonic fraction 0..1, best-effort, ending at 1. */
+  onProgress?: (fraction: number) => void;
 }
 
 /**
@@ -257,9 +294,10 @@ export interface Executor {
   /**
    * Brings a brand-new sandbox up to running. `image` picks what the shell
    * boots from (a template's current image); absent means the executor's
-   * configured base image.
+   * configured base image. The spec knobs size the shell (cpus/memoryGb)
+   * and the disk (diskGb); absent knobs use the executor's live defaults.
    */
-  create(sandboxId: string, opts?: ShellOptions): Promise<void>;
+  create(sandboxId: string, opts?: CreateOptions): Promise<void>;
   /** Running -> paused: stops consuming CPU, memory becomes reclaimable. */
   freeze(sandboxId: string): Promise<void>;
   /** Paused -> running. */
@@ -322,19 +360,29 @@ export interface Executor {
    */
   exportDisk(sandboxId: string, destPath: string): Promise<void>;
   /**
-   * Provisions a fresh disk — at the executor's *current* configured size,
-   * which is how a restored sandbox picks up a raised disk quota — and
-   * unpacks an exportDisk archive into it. The disk must not exist yet
-   * ("disk ... already exists, cannot import"); a failed unpack tears the
-   * fresh disk down again rather than leaving a half-disk behind the verb's
-   * own failure. onProgress reports a monotonic fraction 0..1, best-effort,
-   * ending at 1.
+   * Provisions a fresh disk — at opts.diskGb, or the executor's *current*
+   * configured size when absent — and unpacks an exportDisk archive into
+   * it. The disk must not exist yet ("disk ... already exists, cannot
+   * import"); a failed unpack tears the fresh disk down again rather than
+   * leaving a half-disk behind the verb's own failure.
    */
   importDisk(
     sandboxId: string,
     srcPath: string,
-    onProgress?: (fraction: number) => void,
+    opts?: ImportDiskOptions,
   ): Promise<void>;
+  /**
+   * Grows the sandbox's disk to diskGb GiB — image file and filesystem
+   * both, expandDisk's physical half. Grow-only at the physical layer: a
+   * target at or below the disk's current size is a no-op success (the
+   * goal state — enough room — already holds; shrinking is refused
+   * upstream, and a disk born larger than the ledger thinks must never be
+   * truncated down to the ledger's number). Works in any container state:
+   * a mounted filesystem grows online (ext4's own contract), an unmounted
+   * one offline. The disk must exist ("disk ... is absent, cannot grow")
+   * — an archived sandbox's growth is a ledger-only affair upstream.
+   */
+  growDisk(sandboxId: string, diskGb: number): Promise<void>;
   /**
    * Where the host can reach a TCP port of this sandbox — what the sandbox
    * proxy dials to serve `<port>-<sandboxId>.<domain>` traffic. Requires
@@ -363,6 +411,14 @@ export interface Executor {
    * container is in; never wakes anything — observation is not activity.
    */
   imageOf(sandboxId: string): Promise<string | null>;
+  /**
+   * The resource limits the sandbox's current shell was born with —
+   * imageOf's sibling, same rules: a property of the shell, gone with it
+   * (null when no container object exists), read from reality on demand
+   * and never a wake. The wake convergence compares this against the
+   * ledger to swap shells whose limits drifted from the spec in force.
+   */
+  limitsOf(sandboxId: string): Promise<ShellLimits | null>;
   /**
    * Every sandbox disk on this host, summed: how many, what they were
    * promised, what they actually occupy. A snapshot like listDisks —

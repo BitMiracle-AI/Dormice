@@ -36,6 +36,10 @@ export function activityKindLabel(kind: ActivityKind): string {
       return m.activity_kind_policy_changed();
     case 'metadata-changed':
       return m.activity_kind_metadata_changed();
+    case 'spec-changed':
+      return m.activity_kind_spec_changed();
+    case 'disk-expanded':
+      return m.activity_kind_disk_expanded();
     case 'daemon-started':
       return m.activity_kind_daemon_started();
     case 'ingress-updated':
@@ -84,6 +88,10 @@ export const ACTIVITY_KIND_STYLES: Record<ActivityKind, string> = {
   'policy-changed':
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
   'metadata-changed':
+    'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
+  'spec-changed':
+    'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
+  'disk-expanded':
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
   'daemon-started': 'border-border bg-muted text-muted-foreground',
   'ingress-updated':

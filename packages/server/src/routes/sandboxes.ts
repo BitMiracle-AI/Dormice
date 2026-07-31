@@ -6,6 +6,8 @@ import {
   destroySandboxResponseSchema,
   execCommandRequestSchema,
   execCommandResponseSchema,
+  expandDiskRequestSchema,
+  expandDiskResponseSchema,
   getSandboxMetricsHistoryRequestSchema,
   getSandboxMetricsHistoryResponseSchema,
   getSandboxMetricsRequestSchema,
@@ -27,10 +29,14 @@ import {
   resolveSandboxPath,
   type Sandbox,
   type SandboxMetadata,
+  type SandboxResourceDefaults,
+  type SandboxSpecOverride,
   updateMetadataRequestSchema,
   updateMetadataResponseSchema,
   updatePolicyRequestSchema,
   updatePolicyResponseSchema,
+  updateSpecRequestSchema,
+  updateSpecResponseSchema,
   WRITE_FILES_BODY_LIMIT_BYTES,
   writeFileRequestSchema,
   writeFileResponseSchema,
@@ -48,9 +54,11 @@ import {
   createSandbox,
   findByName,
   listSandboxes,
+  setDiskGb,
   touch,
   updateMetadata,
   updatePolicy,
+  updateSpec,
 } from '../db/ledger';
 import {
   bucketSamples,
@@ -73,6 +81,7 @@ import { httpError } from '../http-error';
 import type { KeyedQueue } from '../keyed-queue';
 import { destroySandbox, rebuildSandbox, wakeSandbox } from '../lifecycle';
 import { ArchiveDisabledError, resolvePolicy } from '../policy';
+import { resolveSpec } from '../spec';
 
 export interface SandboxRoutesOptions {
   config: Config;
@@ -90,8 +99,16 @@ type AcquireOutcome =
   | { status: 'ready'; created: boolean; row: SandboxRow }
   | { status: 'restoring'; row: SandboxRow; progress: RestoreProgress };
 
-/** Ledger row -> wire shape: nest the flat policy columns, attach the endpoint. */
-function toSandbox(row: SandboxRow, endpoint: string): Sandbox {
+/**
+ * Ledger row -> wire shape: nest the flat policy columns, attach the
+ * endpoint, resolve the spec (NULL knobs collapse onto the global defaults
+ * — the wire reports the values in force, never a two-source riddle).
+ */
+function toSandbox(
+  row: SandboxRow,
+  endpoint: string,
+  defaults: SandboxResourceDefaults,
+): Sandbox {
   return {
     id: row.id,
     name: row.name,
@@ -103,6 +120,7 @@ function toSandbox(row: SandboxRow, endpoint: string): Sandbox {
       stopAfterSeconds: row.stopAfterSeconds,
       archiveAfterSeconds: row.archiveAfterSeconds,
     },
+    spec: resolveSpec(row, defaults),
     template: row.template,
     metadata: row.metadata ? JSON.parse(row.metadata) : {},
     createdAt: row.createdAt,
@@ -130,6 +148,11 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   // address; with sharding it may point at another node.
   const endpoint = `http://127.0.0.1:${config.DORMICE_PORT}`;
 
+  // The single-row view: defaults read live so a console edit shows in the
+  // very next response. List responses read the defaults once instead.
+  const view = (row: SandboxRow) =>
+    toSandbox(row, endpoint, readRuntimeSettings(db).sandboxDefaults);
+
   // Both verbs run inside the key's queue slot (see KeyedQueue): each is a
   // check followed by an act with seconds of executor work in between, and
   // the scanner's cooling moves share the same slots. Serialization is also
@@ -142,6 +165,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     policy: LifecyclePolicy,
     template: string | null,
     metadata: string | null,
+    spec: SandboxSpecOverride | undefined,
     actor: string | null,
   ): Promise<AcquireOutcome> {
     const existing = findByName(db, name);
@@ -205,7 +229,10 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     // alphabet is safe everywhere an id will land — Docker names, file
     // names, DNS labels.
     const id = randomUUID();
-    await executor.create(id, { image: resolveImage(db, template) });
+    // The override's pinned knobs travel; absent knobs stay absent so the
+    // executor's live default (resources()) is the single fallback — and
+    // the row stores NULL, keeping the sandbox on the fleet-wide knob.
+    await executor.create(id, { image: resolveImage(db, template), ...spec });
     return {
       status: 'ready',
       created: true,
@@ -216,6 +243,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         policy,
         template,
         metadata,
+        spec,
         actor,
       }),
     };
@@ -262,7 +290,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request, reply) => {
-      const { name, policy: override, template, metadata } = request.body;
+      const { name, policy: override, template, metadata, spec } = request.body;
 
       // Validate the policy before taking the key's slot, so a queued
       // rejection can only come from the work itself, never from another
@@ -309,6 +337,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           policy,
           template ?? null,
           serializeMetadata(metadata),
+          spec,
           request.actor,
         ),
       );
@@ -317,14 +346,14 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           status: 'restoring' as const,
           // Only an already-archived sandbox restores — never a fresh one.
           created: false,
-          sandbox: toSandbox(outcome.row, endpoint),
+          sandbox: view(outcome.row),
           progress: outcome.progress,
         };
       }
       return {
         status: 'ready' as const,
         created: outcome.created,
-        sandbox: toSandbox(outcome.row, endpoint),
+        sandbox: view(outcome.row),
       };
     },
   );
@@ -338,9 +367,15 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         response: { 200: listSandboxesResponseSchema },
       },
     },
-    async () => ({
-      sandboxes: listSandboxes(db).map((row) => toSandbox(row, endpoint)),
-    }),
+    async () => {
+      // One defaults read for the whole listing, not one per row.
+      const defaults = readRuntimeSettings(db).sandboxDefaults;
+      return {
+        sandboxes: listSandboxes(db).map((row) =>
+          toSandbox(row, endpoint, defaults),
+        ),
+      };
+    },
   );
 
   // One sandbox's point-in-time resource reading — the native twin of the
@@ -724,7 +759,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           undefined,
           watchers,
         );
-        return { sandbox: toSandbox(row, endpoint) };
+        return { sandbox: view(row) };
       });
     },
   );
@@ -820,7 +855,146 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       if ('error' in outcome) {
         return reply.code(400).send({ message: outcome.error });
       }
-      return { sandbox: toSandbox(outcome.row, endpoint) };
+      return { sandbox: view(outcome.row) };
+    },
+  );
+
+  app.post(
+    '/updateSpec',
+    {
+      schema: {
+        body: updateSpecRequestSchema,
+        response: { 200: updateSpecResponseSchema },
+      },
+    },
+    async (request) => {
+      const { name, spec: patch } = request.body;
+      // updatePolicy's manners: merge over the STORED columns, inside the
+      // slot so a concurrent destroy cannot delete the row between check
+      // and write. A pure ledger write — no container work, no wake, no
+      // touch; the next cold wake converges the shell (lifecycle.ts).
+      const row = await locks.run(name, async () => {
+        const existing = findByName(db, name);
+        if (!existing) {
+          // Not a creator: an unknown key is a typo, same manners as rebuild.
+          throw httpError(404, `no sandbox named "${name}" — acquire it first`);
+        }
+        // Legal in every state: spec is a ledger attribute, not a container
+        // one — an archived sandbox's spec matters after restore. Omitted
+        // knobs keep their stored value; null pins back to "follow the
+        // global default". No cross-field rule, so the schema's positive
+        // check is the whole validation.
+        const merged = {
+          cpus: patch.cpus !== undefined ? patch.cpus : existing.cpus,
+          memoryGb:
+            patch.memoryGb !== undefined ? patch.memoryGb : existing.memoryGb,
+        };
+        if (
+          merged.cpus === existing.cpus &&
+          merged.memoryGb === existing.memoryGb
+        ) {
+          // The goal state already holds; a no-op writes no history.
+          return existing;
+        }
+        const updated = updateSpec(db, existing.id, merged);
+        const fmt = (value: number | null) =>
+          value === null ? 'default' : String(value);
+        const changed = [
+          ...(merged.cpus !== existing.cpus
+            ? [`cpus ${fmt(existing.cpus)} -> ${fmt(merged.cpus)}`]
+            : []),
+          ...(merged.memoryGb !== existing.memoryGb
+            ? [`memoryGb ${fmt(existing.memoryGb)} -> ${fmt(merged.memoryGb)}`]
+            : []),
+        ];
+        recordActivity(db, {
+          kind: 'spec-changed',
+          sandboxName: name,
+          sandboxId: updated.id,
+          actor: request.actor,
+          detail: `${changed.join(', ')}; applies at the next cold wake`,
+        });
+        return updated;
+      });
+      return { sandbox: view(row) };
+    },
+  );
+
+  app.post(
+    '/expandDisk',
+    {
+      schema: {
+        body: expandDiskRequestSchema,
+        response: {
+          200: expandDiskResponseSchema,
+          400: z.object({ message: z.string() }),
+        },
+      },
+    },
+    async (request, reply) => {
+      const { name, diskGb } = request.body;
+      // The whole verb holds the key's slot: the grow is bounded physical
+      // work (seconds — sparse image truncate + filesystem grow), and the
+      // slot keeps the scanner and a concurrent destroy away mid-resize.
+      const outcome = await locks.run<{ error: string } | { row: SandboxRow }>(
+        name,
+        async () => {
+          const existing = findByName(db, name);
+          if (!existing) {
+            throw httpError(
+              404,
+              `no sandbox named "${name}" — acquire it first`,
+            );
+          }
+          if (existing.state === 'restoring') {
+            // The restore task owns the half-built disk; growing under it
+            // would race the extraction — same dent as destroy's.
+            throw httpError(
+              409,
+              'sandbox is restoring; retry when it finishes',
+            );
+          }
+          const current = resolveSpec(
+            existing,
+            readRuntimeSettings(db).sandboxDefaults,
+          ).diskGb;
+          if (diskGb < current) {
+            return {
+              error: `expandDisk only grows: requested ${diskGb} GiB is below the ${current} GiB in force — a smaller filesystem cannot promise the bytes already on it survive`,
+            };
+          }
+          if (diskGb === current && existing.diskGb !== null) {
+            // The goal state already holds; a no-op writes no history.
+            // (An equal request on a NULL row still falls through: it pins
+            // the size, so a later cut to the global default cannot shrink
+            // this sandbox's entitlement on paper.)
+            return { row: existing };
+          }
+          if (existing.state !== 'archived') {
+            // Reality first, ledger second. An archived sandbox has no
+            // local disk — only the ledger moves, and the restore opens
+            // the disk at the recorded size (archiver.runRestore).
+            await executor.growDisk(existing.id, diskGb);
+          }
+          const row = setDiskGb(db, existing.id, diskGb);
+          recordActivity(db, {
+            kind: 'disk-expanded',
+            sandboxName: name,
+            sandboxId: row.id,
+            actor: request.actor,
+            detail: `disk ${current} GiB -> ${diskGb} GiB${
+              existing.state === 'archived'
+                ? ' (ledger only — the restore opens the disk at the new size)'
+                : ''
+            }`,
+          });
+          return { row };
+        },
+      );
+      if ('error' in outcome) {
+        return reply.code(400).send({ message: outcome.error });
+      }
+      return { sandbox: view(outcome.row) };
     },
   );
 
@@ -860,7 +1034,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         });
         return updated;
       });
-      return { sandbox: toSandbox(row, endpoint) };
+      return { sandbox: view(row) };
     },
   );
 

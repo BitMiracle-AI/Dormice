@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe } from 'vitest';
-import type { ContainerState, Executor, ShellOptions } from '../executor';
+import type { ContainerState, CreateOptions, Executor } from '../executor';
 import { diskTransferTests } from './disk-transfer';
 import { entryTests } from './entries';
 import { execTests } from './exec';
@@ -9,6 +9,7 @@ import { fileTests } from './files';
 import { imageTests } from './image';
 import { lifecycleTests } from './lifecycle';
 import { metricsTests } from './metrics';
+import { specTests } from './spec';
 import { watchTests } from './watch';
 
 /**
@@ -53,7 +54,7 @@ export interface ContractContext {
   readonly subject: ContractSubject;
   timeoutMs: number;
   /** A fresh running sandbox, registered for after-test destruction. */
-  fresh(opts?: ShellOptions): Promise<string>;
+  fresh(opts?: CreateOptions): Promise<string>;
   /** Walks a fresh sandbox down to stopped: exited container plus disk. */
   freshStopped(): Promise<string>;
   stateOf(sandboxId: string): Promise<ContainerState | undefined>;
@@ -144,5 +145,6 @@ export function describeExecutorContract(
     entryTests(ctx);
     watchTests(ctx);
     metricsTests(ctx);
+    specTests(ctx);
   });
 }

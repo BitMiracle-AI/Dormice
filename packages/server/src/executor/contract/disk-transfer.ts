@@ -99,7 +99,9 @@ export function diskTransferTests(ctx: ContractContext) {
         await ctx.executor.exportDisk(id, archive);
         await ctx.executor.destroy(id);
         const fractions: number[] = [];
-        await ctx.executor.importDisk(id, archive, (f) => fractions.push(f));
+        await ctx.executor.importDisk(id, archive, {
+          onProgress: (f) => fractions.push(f),
+        });
         expect(fractions.length).toBeGreaterThan(0);
         for (let i = 1; i < fractions.length; i++) {
           expect(fractions[i]).toBeGreaterThanOrEqual(fractions[i - 1] ?? 0);

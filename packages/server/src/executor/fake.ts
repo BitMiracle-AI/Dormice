@@ -9,6 +9,7 @@ import {
 import {
   type ByteRange,
   type ContainerState,
+  type CreateOptions,
   type DiskUsage,
   type ExecOptions,
   type ExecResult,
@@ -18,11 +19,13 @@ import {
   FileNotFoundError,
   FileTooLargeError,
   type FileToWrite,
+  type ImportDiskOptions,
   NotADirectoryError,
   NotAFileError,
   type PtySize,
   type SandboxEntry,
   type SandboxMetrics,
+  type ShellLimits,
   type ShellOptions,
   type WatchDirHandle,
   type WatchDirOptions,
@@ -34,6 +37,26 @@ export const FAKE_BASE_IMAGE = 'fake-base';
 
 /** The fake disk's promised size — metrics' diskTotalBytes and diskUsage's nominal, one number. */
 const FAKE_DISK_NOMINAL_BYTES = 10 * 1024 ** 3;
+
+/** The fake shell's default limits when create/start name none — the numbers metrics has always reported. */
+const FAKE_DEFAULT_LIMITS: ShellLimits = {
+  nanoCpus: 1e9,
+  memoryBytes: 2 * 1024 ** 3,
+};
+
+/** ShellOptions -> the limits a shell is born with, the docker rounding rules. */
+function bornLimits(opts?: ShellOptions): ShellLimits {
+  return {
+    nanoCpus:
+      opts?.cpus !== undefined
+        ? Math.round(opts.cpus * 1e9)
+        : FAKE_DEFAULT_LIMITS.nanoCpus,
+    memoryBytes:
+      opts?.memoryGb !== undefined
+        ? Math.round(opts.memoryGb * 1024 ** 3)
+        : FAKE_DEFAULT_LIMITS.memoryBytes,
+  };
+}
 
 /**
  * Directories every real sandbox is born with, with the owner and mode
@@ -209,6 +232,18 @@ export class FakeExecutor implements Executor {
    */
   private readonly images = new Map<string, string>();
   /**
+   * Which limits each shell was born with — keyed like images, and like
+   * them a property of the shell: gone when the container goes, so a
+   * rebuilt shell honestly gets whatever the next birth names.
+   */
+  private readonly limits = new Map<string, ShellLimits>();
+  /**
+   * Each disk's promised size in bytes — the docker executor's truncate
+   * size. Keyed like disks; born at create/importDisk, grown by growDisk,
+   * gone with the disk.
+   */
+  private readonly diskNominal = new Map<string, number>();
+  /**
    * Live processes per sandbox. stop/destroy/vanish kill them — on the real
    * executor the container's death takes every exec with it, and the fake
    * must conduct the same physics or the process table above it would leak.
@@ -250,6 +285,15 @@ export class FakeExecutor implements Executor {
   }
 
   /**
+   * The limits the shell was born with — imageOf's sibling, same rules:
+   * a property of the shell, honestly null when no shell exists.
+   */
+  async limitsOf(sandboxId: string): Promise<ShellLimits | null> {
+    const found = this.limits.get(sandboxId);
+    return found ? { ...found } : null;
+  }
+
+  /**
    * Test hook: the container disappears, the disk stays — a removal behind
    * the daemon's back, or a crash in the middle of destroy. The one-sided
    * drift the fake cannot produce by crashing for real.
@@ -259,6 +303,7 @@ export class FakeExecutor implements Executor {
       throw new Error(`container ${sandboxId} is absent, cannot vanish`);
     }
     this.images.delete(sandboxId);
+    this.limits.delete(sandboxId);
     this.killProcesses(sandboxId);
   }
 
@@ -270,14 +315,21 @@ export class FakeExecutor implements Executor {
     this.disks.add(sandboxId);
   }
 
-  async create(sandboxId: string, opts?: ShellOptions): Promise<void> {
+  async create(sandboxId: string, opts?: CreateOptions): Promise<void> {
     if (this.containers.has(sandboxId)) {
       throw new Error(`container ${sandboxId} already exists`);
     }
     this.disks.add(sandboxId);
+    this.diskNominal.set(
+      sandboxId,
+      opts?.diskGb !== undefined
+        ? Math.round(opts.diskGb * 1024 ** 3)
+        : FAKE_DISK_NOMINAL_BYTES,
+    );
     this.fs.set(sandboxId, seededDisk());
     this.containers.set(sandboxId, 'running');
     this.images.set(sandboxId, opts?.image ?? FAKE_BASE_IMAGE);
+    this.limits.set(sandboxId, bornLimits(opts));
   }
 
   async freeze(sandboxId: string): Promise<void> {
@@ -307,11 +359,12 @@ export class FakeExecutor implements Executor {
       }
       this.containers.set(sandboxId, 'running');
       this.images.set(sandboxId, opts?.image ?? FAKE_BASE_IMAGE);
+      this.limits.set(sandboxId, bornLimits(opts));
       return;
     }
     this.expect(sandboxId, 'stopped');
-    // The existing shell keeps the image it was born with — start only
-    // starts; opts.image applies to the rebuild path above.
+    // The existing shell keeps the image and limits it was born with —
+    // start only starts; opts applies to the rebuild path above.
     this.containers.set(sandboxId, 'running');
   }
 
@@ -324,6 +377,8 @@ export class FakeExecutor implements Executor {
     const hadContainer = this.containers.delete(sandboxId);
     const hadDisk = this.disks.delete(sandboxId);
     this.images.delete(sandboxId);
+    this.limits.delete(sandboxId);
+    this.diskNominal.delete(sandboxId);
     this.fs.delete(sandboxId);
     this.killProcesses(sandboxId);
     this.closeUpstream(sandboxId);
@@ -342,6 +397,7 @@ export class FakeExecutor implements Executor {
       throw new Error(`container ${sandboxId} is absent, cannot remove`);
     }
     this.images.delete(sandboxId);
+    this.limits.delete(sandboxId);
     // The container's death takes every process and watcher with it, same
     // physics as stop and vanish.
     this.killProcesses(sandboxId);
@@ -359,6 +415,7 @@ export class FakeExecutor implements Executor {
   async removeDisk(sandboxId: string): Promise<void> {
     // Idempotent by contract: an absent disk already is the goal state.
     this.disks.delete(sandboxId);
+    this.diskNominal.delete(sandboxId);
     this.fs.delete(sandboxId);
     this.closeUpstream(sandboxId);
   }
@@ -392,8 +449,9 @@ export class FakeExecutor implements Executor {
   async importDisk(
     sandboxId: string,
     srcPath: string,
-    onProgress?: (fraction: number) => void,
+    opts?: ImportDiskOptions,
   ): Promise<void> {
+    const onProgress = opts?.onProgress;
     if (this.disks.has(sandboxId)) {
       throw new Error(`disk ${sandboxId} already exists, cannot import`);
     }
@@ -419,8 +477,26 @@ export class FakeExecutor implements Executor {
       );
     }
     this.disks.add(sandboxId);
+    this.diskNominal.set(
+      sandboxId,
+      opts?.diskGb !== undefined
+        ? Math.round(opts.diskGb * 1024 ** 3)
+        : FAKE_DISK_NOMINAL_BYTES,
+    );
     this.fs.set(sandboxId, disk);
     onProgress?.(1);
+  }
+
+  async growDisk(sandboxId: string, diskGb: number): Promise<void> {
+    if (!this.disks.has(sandboxId)) {
+      throw new Error(`disk ${sandboxId} is absent, cannot grow`);
+    }
+    const targetBytes = Math.round(diskGb * 1024 ** 3);
+    // Physical grow-only, same rule as the real executor: at-or-above
+    // target is the goal state already.
+    const current = this.diskNominal.get(sandboxId) ?? FAKE_DISK_NOMINAL_BYTES;
+    if (current >= targetBytes) return;
+    this.diskNominal.set(sandboxId, targetBytes);
   }
 
   async resolvePortTarget(
@@ -477,14 +553,17 @@ export class FakeExecutor implements Executor {
         `container ${sandboxId} is ${actual ?? 'absent'}, expected running or paused`,
       );
     }
+    // Per-shell truth, like the real executor's inspect-backed reading.
+    const limits = this.limits.get(sandboxId) ?? FAKE_DEFAULT_LIMITS;
     return {
-      cpuCount: 1,
+      cpuCount: limits.nanoCpus / 1e9,
       cpuUsedPct: 0,
       memUsedBytes: 64 * 1024 ** 2,
-      memTotalBytes: 2 * 1024 ** 3,
+      memTotalBytes: limits.memoryBytes,
       memCacheBytes: 0,
       diskUsedBytes: diskUsedBytes(this.disk(sandboxId)),
-      diskTotalBytes: FAKE_DISK_NOMINAL_BYTES,
+      diskTotalBytes:
+        this.diskNominal.get(sandboxId) ?? FAKE_DISK_NOMINAL_BYTES,
     };
   }
 
@@ -492,13 +571,16 @@ export class FakeExecutor implements Executor {
     // Keyed off the disks set, not containers: a stopped or vanished shell
     // still has a disk, and the disk is what costs the host.
     let actualBytes = 0;
+    let nominalBytes = 0;
     for (const sandboxId of this.disks) {
       const files = this.fs.get(sandboxId);
       if (files) actualBytes += diskUsedBytes(files);
+      nominalBytes +=
+        this.diskNominal.get(sandboxId) ?? FAKE_DISK_NOMINAL_BYTES;
     }
     return {
       count: this.disks.size,
-      nominalBytes: this.disks.size * FAKE_DISK_NOMINAL_BYTES,
+      nominalBytes,
       actualBytes,
     };
   }

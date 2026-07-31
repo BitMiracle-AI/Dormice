@@ -50,6 +50,7 @@ import { CallbackSink, CappedBuffer } from './docker-streams';
 import {
   type ByteRange,
   type ContainerState,
+  type CreateOptions,
   DiskFullError,
   type DiskUsage,
   type ExecOptions,
@@ -60,11 +61,13 @@ import {
   FileNotFoundError,
   FileTooLargeError,
   type FileToWrite,
+  type ImportDiskOptions,
   NotADirectoryError,
   NotAFileError,
   type PtySize,
   type SandboxEntry,
   type SandboxMetrics,
+  type ShellLimits,
   type ShellOptions,
   type WatchDirHandle,
   type WatchDirOptions,
@@ -165,12 +168,12 @@ export class DockerExecutor implements Executor {
     return this.opts.baseImage;
   }
 
-  async create(sandboxId: string, opts?: ShellOptions): Promise<void> {
+  async create(sandboxId: string, opts?: CreateOptions): Promise<void> {
     if ((await this.inspect(sandboxId)) !== null) {
       throw new Error(`container ${sandboxId} already exists`);
     }
-    await this.provisionDisk(sandboxId);
-    await this.launchContainer(sandboxId, opts?.image);
+    await this.provisionDisk(sandboxId, opts?.diskGb);
+    await this.launchContainer(sandboxId, opts);
   }
 
   async freeze(sandboxId: string): Promise<void> {
@@ -213,7 +216,7 @@ export class DockerExecutor implements Executor {
         throw new Error(`disk ${sandboxId} is absent, cannot start`);
       }
       await this.ensureMounted(sandboxId);
-      await this.launchContainer(sandboxId, opts?.image);
+      await this.launchContainer(sandboxId, opts);
       return;
     }
     const actual = containerStateFromDocker(found.status);
@@ -355,12 +358,13 @@ export class DockerExecutor implements Executor {
   async importDisk(
     sandboxId: string,
     srcPath: string,
-    onProgress?: (fraction: number) => void,
+    opts?: ImportDiskOptions,
   ): Promise<void> {
+    const onProgress = opts?.onProgress;
     if (await this.diskExists(sandboxId)) {
       throw new Error(`disk ${sandboxId} already exists, cannot import`);
     }
-    await this.provisionDisk(sandboxId);
+    await this.provisionDisk(sandboxId, opts?.diskGb);
     try {
       const { size } = await stat(srcPath);
       let consumed = 0;
@@ -386,6 +390,56 @@ export class DockerExecutor implements Executor {
       // Leave no half-disk behind the verb's own failure.
       await this.teardownDisk(sandboxId);
       throw err;
+    }
+  }
+
+  async growDisk(sandboxId: string, diskGb: number): Promise<void> {
+    if (!(await this.diskExists(sandboxId))) {
+      throw new Error(`disk ${sandboxId} is absent, cannot grow`);
+    }
+    const img = this.imagePath(sandboxId);
+    const targetBytes = Math.round(diskGb * 1024 ** 3);
+    // Physical grow-only: at-or-above target means enough room already —
+    // and a truncate downward would destroy the filesystem's tail.
+    if ((await stat(img)).size >= targetBytes) return;
+    const mnt = this.mountDir(sandboxId);
+    const mounted =
+      (await execa('mountpoint', ['-q', mnt], { reject: false })).exitCode ===
+      0;
+    // 'r+', never 'w': open(…, 'w') truncates the image to zero on open.
+    const file = await open(img, 'r+');
+    try {
+      await file.truncate(targetBytes);
+    } finally {
+      await file.close();
+    }
+    if (mounted) {
+      // Online: the loop device's capacity was fixed at losetup time, so
+      // -c re-reads the grown backing file; ext4 then grows under the live
+      // mount (its own supported path — no unmount, no container restart,
+      // processes keep running).
+      const { stdout } = await execa('losetup', ['-j', img]);
+      const device = stdout.split('\n')[0]?.split(':')[0];
+      if (!device) {
+        throw new Error(
+          `disk ${sandboxId} is mounted but owns no loop device — losetup -j found nothing`,
+        );
+      }
+      await execa('losetup', ['-c', device]);
+      await execa('resize2fs', [device]);
+    } else {
+      // Offline: resize2fs insists on a clean filesystem first. -f forces
+      // the check e2fsck would skip on a journal-clean image, -p repairs
+      // without questions; exit 1 = errors corrected, still a pass.
+      const fsck = await execa('e2fsck', ['-fp', img], { reject: false });
+      if ((fsck.exitCode ?? 2) > 1) {
+        throw new Error(
+          `e2fsck on disk ${sandboxId} failed (exit ${fsck.exitCode}): ${
+            fsck.stderr || fsck.stdout
+          }`,
+        );
+      }
+      await execa('resize2fs', [img]);
     }
   }
 
@@ -454,6 +508,23 @@ export class DockerExecutor implements Executor {
     }
   }
 
+  async limitsOf(sandboxId: string): Promise<ShellLimits | null> {
+    try {
+      const info = await this.docker
+        .getContainer(containerName(sandboxId))
+        .inspect();
+      // HostConfig echoes exactly what launchContainer wrote — integer
+      // physical units, so the ledger comparison is drift-free.
+      return {
+        nanoCpus: info.HostConfig?.NanoCpus ?? 0,
+        memoryBytes: info.HostConfig?.Memory ?? 0,
+      };
+    } catch (err) {
+      if (isDockerApiError(err) && err.statusCode === 404) return null;
+      throw err;
+    }
+  }
+
   async metrics(sandboxId: string): Promise<SandboxMetrics> {
     const found = await this.inspect(sandboxId);
     const actual =
@@ -475,7 +546,11 @@ export class DockerExecutor implements Executor {
       (stats.cpu_stats?.system_cpu_usage ?? 0) -
       (stats.precpu_stats?.system_cpu_usage ?? 0);
     const resources = this.opts.resources();
-    const onlineCpus = stats.cpu_stats?.online_cpus || resources.cpus;
+    // The shell's own allowance, read from what launchContainer wrote —
+    // per-sandbox truth; the global default only covers a shell born
+    // before limits existed.
+    const cpuCount = found.nanoCpus > 0 ? found.nanoCpus / 1e9 : resources.cpus;
+    const onlineCpus = stats.cpu_stats?.online_cpus || cpuCount;
     // cgroup v2 calls the page cache inactive_file; v1 calls it cache.
     const memStats = (stats.memory_stats?.stats ?? {}) as Record<
       string,
@@ -483,7 +558,7 @@ export class DockerExecutor implements Executor {
     >;
     const disk = await statfs(this.mountDir(sandboxId));
     return {
-      cpuCount: resources.cpus,
+      cpuCount,
       cpuUsedPct:
         systemDelta > 0 && cpuDelta > 0
           ? (cpuDelta / systemDelta) * onlineCpus * 100
@@ -1301,8 +1376,9 @@ export class DockerExecutor implements Executor {
    */
   private async launchContainer(
     sandboxId: string,
-    image?: string,
+    opts?: ShellOptions,
   ): Promise<void> {
+    const image = opts?.image;
     let container: Docker.Container;
     try {
       container = await this.docker.createContainer({
@@ -1318,8 +1394,12 @@ export class DockerExecutor implements Executor {
           Runtime: 'runsc',
           Init: true,
           SecurityOpt: ['no-new-privileges'],
-          NanoCpus: Math.round(this.opts.resources().cpus * 1e9),
-          Memory: Math.round(this.opts.resources().memoryGb * 1024 ** 3),
+          NanoCpus: Math.round(
+            (opts?.cpus ?? this.opts.resources().cpus) * 1e9,
+          ),
+          Memory: Math.round(
+            (opts?.memoryGb ?? this.opts.resources().memoryGb) * 1024 ** 3,
+          ),
           PidsLimit: this.opts.pidsLimit,
           Binds: [`${this.mountDir(sandboxId)}:/home/user`],
           // Life and death belong to the daemon's state machine; Docker
@@ -1351,14 +1431,19 @@ export class DockerExecutor implements Executor {
    * actually written — the physical basis of overselling) formatted as ext4
    * and loop-mounted. Benchmarked 2026-07-08: worst-case tax ≈ 0.
    */
-  private async provisionDisk(sandboxId: string): Promise<void> {
+  private async provisionDisk(
+    sandboxId: string,
+    diskGb?: number,
+  ): Promise<void> {
     const img = this.imagePath(sandboxId);
     const mnt = this.mountDir(sandboxId);
     await mkdir(path.dirname(img), { recursive: true });
     await mkdir(mnt, { recursive: true });
     const file = await open(img, 'w');
     try {
-      await file.truncate(this.opts.resources().diskSizeGb * 1024 ** 3);
+      await file.truncate(
+        Math.round((diskGb ?? this.opts.resources().diskSizeGb) * 1024 ** 3),
+      );
     } finally {
       await file.close();
     }
@@ -1404,17 +1489,22 @@ export class DockerExecutor implements Executor {
 
   /**
    * Looks the sandbox's container up by name. Returns the container id
-   * (needed for cgroup paths, which want the full id, not the name) and
-   * Docker's raw status, or null if no such container exists.
+   * (needed for cgroup paths, which want the full id, not the name),
+   * Docker's raw status and the shell's CPU allowance (metrics reports it
+   * per sandbox), or null if no such container exists.
    */
   private async inspect(
     sandboxId: string,
-  ): Promise<{ id: string; status: string } | null> {
+  ): Promise<{ id: string; status: string; nanoCpus: number } | null> {
     try {
       const info = await this.docker
         .getContainer(containerName(sandboxId))
         .inspect();
-      return { id: info.Id, status: info.State.Status };
+      return {
+        id: info.Id,
+        status: info.State.Status,
+        nanoCpus: info.HostConfig?.NanoCpus ?? 0,
+      };
     } catch (err) {
       if (isDockerApiError(err) && err.statusCode === 404) return null;
       throw err;

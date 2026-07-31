@@ -14,6 +14,8 @@
   "activity_kind_reconciled": "Reconciliado",
   "activity_kind_policy_changed": "Política alterada",
   "activity_kind_metadata_changed": "Rótulos alterados",
+  "activity_kind_spec_changed": "Especificação alterada",
+  "activity_kind_disk_expanded": "Disco expandido",
   "activity_kind_daemon_started": "Daemon iniciado",
   "activity_kind_ingress_updated": "Domínio atualizado",
   "activity_kind_settings_updated": "Configurações alteradas",

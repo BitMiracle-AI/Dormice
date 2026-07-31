@@ -41,6 +41,12 @@ export interface CreateSandboxInput {
   /** Template the sandbox is created from; absent/null means the base image. */
   template?: string | null;
   /**
+   * Per-sandbox resource knobs; absent knobs stay NULL = follow the global
+   * default. Only the native acquire sets this — the E2B create has no
+   * spec vocabulary.
+   */
+  spec?: { cpus?: number; memoryGb?: number; diskGb?: number };
+  /**
    * Caller labels, JSON-serialized, stored verbatim. Both faces write it:
    * native acquire and E2B create carry the same string→string map into the
    * same column.
@@ -72,6 +78,9 @@ export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
     stopAfterSeconds: input.policy.stopAfterSeconds,
     archiveAfterSeconds: input.policy.archiveAfterSeconds,
     template: input.template ?? null,
+    cpus: input.spec?.cpus ?? null,
+    memoryGb: input.spec?.memoryGb ?? null,
+    diskGb: input.spec?.diskGb ?? null,
     createdAt: now,
     lastActiveAt: now,
     metadata: input.metadata ?? null,
@@ -210,6 +219,43 @@ export function updateMetadata(
   metadata: string | null,
 ): SandboxRow {
   db.update(sandboxes).set({ metadata }).where(eq(sandboxes.id, id)).run();
+  const row = findById(db, id);
+  if (!row) {
+    throw new Error(`sandbox ${id} not found`);
+  }
+  return row;
+}
+
+/**
+ * Rewrites the CPU/memory spec columns. Ledger-only, same manners as
+ * updatePolicy: no container work, no state change, no touch. null pins
+ * back to NULL — the sandbox re-follows the global default. The physical
+ * shell converges at the next cold wake (lifecycle.ts).
+ */
+export function updateSpec(
+  db: Db,
+  id: string,
+  spec: { cpus: number | null; memoryGb: number | null },
+): SandboxRow {
+  db.update(sandboxes)
+    .set({ cpus: spec.cpus, memoryGb: spec.memoryGb })
+    .where(eq(sandboxes.id, id))
+    .run();
+  const row = findById(db, id);
+  if (!row) {
+    throw new Error(`sandbox ${id} not found`);
+  }
+  return row;
+}
+
+/**
+ * Records a grown disk's new nominal size. expandDisk's ledger half — the
+ * physical grow already happened (reality first, ledger second). Always a
+ * number, never back to NULL: a grown disk has a size of its own and must
+ * not shrink-on-paper when the global default later moves down.
+ */
+export function setDiskGb(db: Db, id: string, diskGb: number): SandboxRow {
+  db.update(sandboxes).set({ diskGb }).where(eq(sandboxes.id, id)).run();
   const row = findById(db, id);
   if (!row) {
     throw new Error(`sandbox ${id} not found`);

@@ -13,7 +13,9 @@ import {
   type DestroySandboxResponse,
   destroySandboxResponseSchema,
   type ExecCommandResponse,
+  type ExpandDiskResponse,
   execCommandResponseSchema,
+  expandDiskResponseSchema,
   type GetConfigResponse,
   type GetFleetTimelineResponse,
   type GetHostMetricsHistoryResponse,
@@ -51,6 +53,7 @@ import {
   type Sandbox,
   type SandboxMetadata,
   type SandboxMetricsSample,
+  type SandboxSpecOverride,
   type SetIngressResponse,
   setIngressResponseSchema,
   type Template,
@@ -59,10 +62,12 @@ import {
   type UpdatePolicyResponse,
   type UpdateSettingsRequest,
   type UpdateSettingsResponse,
+  type UpdateSpecResponse,
   updateApiKeyResponseSchema,
   updateMetadataResponseSchema,
   updatePolicyResponseSchema,
   updateSettingsResponseSchema,
+  updateSpecResponseSchema,
   type WriteFileResponse,
   type WriteFilesResponse,
   writeFileResponseSchema,
@@ -131,6 +136,13 @@ export interface AcquireSandboxOptions {
    * updateMetadata.
    */
   metadata?: SandboxMetadata;
+  /**
+   * Per-sandbox resource spec applied when this acquire creates the
+   * sandbox; omitted knobs follow the daemon's global defaults. Same rules
+   * as policy: creation-time only — resize an existing sandbox through
+   * updateSpec (CPU/memory) or expandDisk (disk).
+   */
+  spec?: SandboxSpecOverride;
 }
 
 /** A non-2xx answer from the daemon, carrying the HTTP status and the server's message. */
@@ -172,6 +184,7 @@ export class Dormice {
       policy: options?.policy,
       template: options?.template,
       metadata: options?.metadata,
+      spec: options?.spec,
     });
     // Never trust the wire blindly: parsing against the shared schema makes
     // a version-skewed or misbehaving server fail loudly right here.
@@ -427,6 +440,37 @@ export class Dormice {
   ): Promise<UpdatePolicyResponse> {
     const data = await this.rpc('updatePolicy', { name, policy });
     return updatePolicyResponseSchema.parse(data);
+  }
+
+  /**
+   * Updates the sandbox's CPU/memory spec in place — updatePolicy's
+   * sibling. Patch semantics over the stored spec: omitted knobs keep
+   * their current values, `null` pins a knob back to "follow the daemon's
+   * global default". A pure ledger write: nothing is woken, and the idle
+   * clock is not refreshed — the new limits are realized at the sandbox's
+   * next cold wake, which swaps the shell (one cold start, disk
+   * untouched). Disk is deliberately absent here: growing it is
+   * synchronous physical work, expandDisk's job. Unknown key: 404.
+   */
+  async updateSpec(
+    name: string,
+    spec: { cpus?: number | null; memoryGb?: number | null },
+  ): Promise<UpdateSpecResponse> {
+    const data = await this.rpc('updateSpec', { name, spec });
+    return updateSpecResponseSchema.parse(data);
+  }
+
+  /**
+   * Grows the sandbox's disk to diskGb — the one sanctioned resize,
+   * grow-only, synchronous: when the response returns the space exists
+   * (online for a mounted disk, so running sandboxes keep running). A
+   * request below the size in force is a 400; asking for the size already
+   * in force is a no-op success. An archived sandbox moves ledger-only —
+   * the restore opens its disk at the new size. Unknown key: 404.
+   */
+  async expandDisk(name: string, diskGb: number): Promise<ExpandDiskResponse> {
+    const data = await this.rpc('expandDisk', { name, diskGb });
+    return expandDiskResponseSchema.parse(data);
   }
 
   /**

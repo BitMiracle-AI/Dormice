@@ -9,9 +9,11 @@ import {
 } from './db/ledger';
 import { deleteSandboxMetricsSamples } from './db/metrics';
 import type { SandboxRow } from './db/schema';
+import { readRuntimeSettings } from './db/settings';
 import { resolveImage } from './db/templates';
 import type { WatcherTable } from './e2b/watcher-table';
 import type { Executor } from './executor/executor';
+import { resolveSpec, shellSpecOf } from './spec';
 
 /**
  * Every physical lifecycle change goes through this module, so the container
@@ -178,21 +180,27 @@ export async function rebuildSandbox(
  * active.
  *
  * Every cold wake first converges the shell onto the template's *current*
- * image — the same verdict listSandboxImages calls `upgradable` (imageOf
- * against resolveImage ?? baseImage; a null imageOf is not stale: a shell
- * that does not exist boots the current image by itself). A stale shell is
- * swapped through rebuildSandbox — removed, ledger to stopped — and the
- * stopped arm builds the new one; a fresh shell keeps its millisecond
- * unpause / restart path untouched. This is what makes `dor template add`
- * reach existing sandboxes: without it a frozen or stopped shell revives
- * as-is and the fleet never upgrades short of a manual rebuildSandbox
- * (which stays the front door for "swap now, don't wait for a wake").
+ * image AND the CPU/memory spec in force — one verdict over the (image,
+ * limits) tuple, because both are properties of the shell, fixed at its
+ * birth. Image: imageOf against resolveImage ?? baseImage — the same
+ * verdict listSandboxImages calls `upgradable` (a null imageOf is not
+ * stale: a shell that does not exist boots the current image and spec by
+ * itself). Limits: limitsOf against the ledger's resolved spec, compared
+ * in the runtime's own integer units so no float drift can fake a
+ * mismatch. A stale shell is swapped through rebuildSandbox — removed,
+ * ledger to stopped — and the stopped arm builds the new one; a matching
+ * shell keeps its millisecond unpause / restart path untouched. This is
+ * what makes `dor template add` — and now updateSpec, and a console edit
+ * of the global defaults — reach existing sandboxes: without it a frozen
+ * shell revives as-is (unpause rebuilds nothing) and a spec change would
+ * never take effect short of a manual rebuildSandbox (which stays the
+ * front door for "swap now, don't wait for a wake").
  *
  * The honest cost: a frozen sandbox is a paused container — its processes
  * and memory are alive — and the swap kills them for a cold start. That is
  * within the crash-only contract (code must survive the container
  * vanishing anyway) and only ever triggered by an operator deliberately
- * re-registering the template.
+ * re-registering the template or resizing the spec.
  */
 export async function wakeSandbox(
   db: Db,
@@ -209,16 +217,23 @@ export async function wakeSandbox(
     case 'stopped': {
       const next = resolveImage(db, row.template) ?? executor.baseImage;
       const born = await executor.imageOf(row.id);
-      const fresh =
+      // The spec in force, in the runtime's integer units — what a shell
+      // built right now would be born with.
+      const spec = resolveSpec(row, readRuntimeSettings(db).sandboxDefaults);
+      const wantNanoCpus = Math.round(spec.cpus * 1e9);
+      const wantMemoryBytes = Math.round(spec.memoryGb * 1024 ** 3);
+      const limits = born !== null ? await executor.limitsOf(row.id) : null;
+      const staleCause =
         born !== null && born !== next
-          ? await rebuildSandbox(
-              db,
-              executor,
-              row,
-              actor,
-              `stale shell swapped at wake: ${born} -> ${next}`,
-              watchers,
-            )
+          ? `stale shell swapped at wake: ${born} -> ${next}`
+          : limits !== null &&
+              (limits.nanoCpus !== wantNanoCpus ||
+                limits.memoryBytes !== wantMemoryBytes)
+            ? `stale shell swapped at wake: limits ${limits.nanoCpus / 1e9} cpus / ${limits.memoryBytes / 1024 ** 3} GiB -> ${spec.cpus} cpus / ${spec.memoryGb} GiB`
+            : null;
+      const fresh =
+        staleCause !== null
+          ? await rebuildSandbox(db, executor, row, actor, staleCause, watchers)
           : row;
       if (fresh.state === 'frozen') {
         await executor.unfreeze(fresh.id);
@@ -231,9 +246,11 @@ export async function wakeSandbox(
         );
       }
       // If no container object exists (pruned away, or the stale shell was
-      // just removed), start rebuilds it from the current image.
+      // just removed), start rebuilds it from the current image and the
+      // row's own spec (absent knobs fall to the executor's live default).
       await executor.start(fresh.id, {
         image: resolveImage(db, fresh.template),
+        ...shellSpecOf(fresh),
       });
       await watchers?.reapDeferred(fresh.id);
       return awaken(db, fresh, 'cold start from the surviving disk', actor);
