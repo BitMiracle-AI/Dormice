@@ -9,6 +9,7 @@ import { MemStore } from '../archive/mem-store';
 import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
 import { findByName } from '../db/ledger';
+import { readRuntimeSettings } from '../db/settings';
 import { FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
 import { scanOnce } from '../scanner';
@@ -236,6 +237,73 @@ describe('POST /updateSpec', () => {
 
     // Freeze again with the spec unchanged: the wake must NOT rebuild —
     // the millisecond unpause path stays untouched.
+    const again = (await rpc(app, '/listSandboxes')).json().sandboxes[0];
+    await scanOnce(db, executor, locks, after(again.lastActiveAt, 1));
+    await acquire(app, { name: 'alice' });
+    const rebuilds = (await activityKinds(app)).filter(
+      (kind) => kind === 'rebuilt',
+    );
+    expect(rebuilds).toHaveLength(1);
+  });
+});
+
+describe('a global default edit through the cold-wake convergence', () => {
+  /**
+   * testApp with the executor wired to the ledger the way main.ts wires it
+   * — the fake's live resources view. Order matters: the db must exist
+   * before the executor's closure can read it.
+   */
+  function liveApp() {
+    const db = openDb(':memory:');
+    migrateDb(db, MIGRATIONS);
+    const executor = new FakeExecutor(() => {
+      const { sandboxDefaults } = readRuntimeSettings(db);
+      return {
+        diskSizeGb: sandboxDefaults.diskGb,
+        cpus: sandboxDefaults.cpus,
+        memoryGb: sandboxDefaults.memoryGb,
+      };
+    });
+    const config = loadConfig({
+      DORMICE_DB_PATH: ':memory:',
+      DORMICE_NODE_ID: 'node-test',
+      DORMICE_API_TOKEN: TOKEN,
+    });
+    const locks = new KeyedQueue();
+    const app = buildApp({ config, db, executor, locks, logger: false });
+    return { app, db, executor, locks };
+  }
+
+  it('converges an unpinned sandbox exactly once, then keeps the fast path', async () => {
+    const { app, db, executor, locks } = liveApp();
+    const created = (
+      await acquire(app, { name: 'alice', policy: { freezeAfterSeconds: 1 } })
+    ).json();
+    const id = created.sandbox.id;
+    expect(await executor.limitsOf(id)).toEqual({
+      nanoCpus: 1e9,
+      memoryBytes: 2 * 1024 ** 3,
+    });
+
+    // The fleet-wide knob moves; alice is unpinned (all columns NULL), so
+    // her next cold wake owes a rebuild onto the new limits.
+    await rpc(app, '/updateSettings', {
+      sandboxDefaults: { cpus: 2, memoryGb: 4, diskGb: 10 },
+    });
+    const { lastActiveAt } = (await rpc(app, '/listSandboxes')).json()
+      .sandboxes[0];
+    await scanOnce(db, executor, locks, after(lastActiveAt, 1));
+    await acquire(app, { name: 'alice' });
+    expect(await executor.limitsOf(id)).toEqual({
+      nanoCpus: 2e9,
+      memoryBytes: 4 * 1024 ** 3,
+    });
+    expect(await activityKinds(app)).toContain('rebuilt');
+
+    // The regression this test exists for: the fresh shell was born from
+    // the LIVE defaults, so the second wake must not rebuild again — an
+    // executor defaulting to constants here would rebuild on every wake,
+    // forever, and the millisecond unpause path would never run.
     const again = (await rpc(app, '/listSandboxes')).json().sandboxes[0];
     await scanOnce(db, executor, locks, after(again.lastActiveAt, 1));
     await acquire(app, { name: 'alice' });

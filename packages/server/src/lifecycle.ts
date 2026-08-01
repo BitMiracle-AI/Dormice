@@ -222,7 +222,10 @@ export async function wakeSandbox(
       const spec = resolveSpec(row, readRuntimeSettings(db).sandboxDefaults);
       const wantNanoCpus = Math.round(spec.cpus * 1e9);
       const wantMemoryBytes = Math.round(spec.memoryGb * 1024 ** 3);
-      const limits = born !== null ? await executor.limitsOf(row.id) : null;
+      // Consulted only when the image already matches: a shell stale by
+      // image is swapped regardless of what limits it was born with.
+      const limits =
+        born !== null && born === next ? await executor.limitsOf(row.id) : null;
       const staleCause =
         born !== null && born !== next
           ? `stale shell swapped at wake: ${born} -> ${next}`

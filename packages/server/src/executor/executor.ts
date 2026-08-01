@@ -229,6 +229,22 @@ export class FileTooLargeError extends Error {}
 export class DiskFullError extends Error {}
 
 /**
+ * The per-sandbox resource knobs — runtime settings, so a live view: read
+ * at each birth (a disk's at provisioning, a container's at launch) so a
+ * console edit applies to the next birth without a restart. Both executors
+ * take one; an executor holding three captured numbers would be a second
+ * truth beside the ledger, and the fake holding constants instead made
+ * every cold wake of an unpinned sandbox rebuild forever once the global
+ * default moved (born at the constant, compared against the ledger).
+ */
+export interface SandboxResources {
+  /** Size cap of each sandbox disk. The limit is physical: the image file simply ends. */
+  diskSizeGb: number;
+  cpus: number;
+  memoryGb: number;
+}
+
+/**
  * What a sandbox's shell is built from. Consulted only at the shell's birth
  * — create(), and start()'s rebuild-from-surviving-disk path; an existing
  * container keeps the image AND the limits it was born with (changing

@@ -25,6 +25,7 @@ import {
   type PtySize,
   type SandboxEntry,
   type SandboxMetrics,
+  type SandboxResources,
   type ShellLimits,
   type ShellOptions,
   type WatchDirHandle,
@@ -35,28 +36,12 @@ import {
 /** The image the fake's shells boot from when no other image is asked for. */
 export const FAKE_BASE_IMAGE = 'fake-base';
 
-/** The fake disk's promised size — metrics' diskTotalBytes and diskUsage's nominal, one number. */
-const FAKE_DISK_NOMINAL_BYTES = 10 * 1024 ** 3;
-
-/** The fake shell's default limits when create/start name none — the numbers metrics has always reported. */
-const FAKE_DEFAULT_LIMITS: ShellLimits = {
-  nanoCpus: 1e9,
-  memoryBytes: 2 * 1024 ** 3,
+/** The fake's own resource defaults — the numbers metrics has always reported — for daemons and tests that wire no live view. */
+const FAKE_RESOURCES: SandboxResources = {
+  cpus: 1,
+  memoryGb: 2,
+  diskSizeGb: 10,
 };
-
-/** ShellOptions -> the limits a shell is born with, the docker rounding rules. */
-function bornLimits(opts?: ShellOptions): ShellLimits {
-  return {
-    nanoCpus:
-      opts?.cpus !== undefined
-        ? Math.round(opts.cpus * 1e9)
-        : FAKE_DEFAULT_LIMITS.nanoCpus,
-    memoryBytes:
-      opts?.memoryGb !== undefined
-        ? Math.round(opts.memoryGb * 1024 ** 3)
-        : FAKE_DEFAULT_LIMITS.memoryBytes,
-  };
-}
 
 /**
  * Directories every real sandbox is born with, with the owner and mode
@@ -222,6 +207,33 @@ class FakeProcessIO {
  */
 export class FakeExecutor implements Executor {
   readonly baseImage = FAKE_BASE_IMAGE;
+
+  /**
+   * Live view of the resource knobs, the docker executor's own contract:
+   * read at each birth, so a ledger edit reaches the next shell and disk.
+   * Without it (constants), a moved global default made every cold wake of
+   * an unpinned sandbox rebuild forever — born at the constant, compared
+   * against the ledger — where the real executor converges in one rebuild.
+   * The default serves the daemons and tests that never move the knobs.
+   */
+  constructor(
+    private readonly resources: () => SandboxResources = () => FAKE_RESOURCES,
+  ) {}
+
+  /** ShellOptions -> the limits a shell is born with, the docker rounding rules. */
+  private bornLimits(opts?: ShellOptions): ShellLimits {
+    return {
+      nanoCpus: Math.round((opts?.cpus ?? this.resources().cpus) * 1e9),
+      memoryBytes: Math.round(
+        (opts?.memoryGb ?? this.resources().memoryGb) * 1024 ** 3,
+      ),
+    };
+  }
+
+  /** The disk's promised size at birth, the docker truncate size. */
+  private bornDiskBytes(diskGb?: number): number {
+    return Math.round((diskGb ?? this.resources().diskSizeGb) * 1024 ** 3);
+  }
   private readonly containers = new Map<string, ContainerState>();
   private readonly disks = new Set<string>();
   /**
@@ -320,16 +332,11 @@ export class FakeExecutor implements Executor {
       throw new Error(`container ${sandboxId} already exists`);
     }
     this.disks.add(sandboxId);
-    this.diskNominal.set(
-      sandboxId,
-      opts?.diskGb !== undefined
-        ? Math.round(opts.diskGb * 1024 ** 3)
-        : FAKE_DISK_NOMINAL_BYTES,
-    );
+    this.diskNominal.set(sandboxId, this.bornDiskBytes(opts?.diskGb));
     this.fs.set(sandboxId, seededDisk());
     this.containers.set(sandboxId, 'running');
     this.images.set(sandboxId, opts?.image ?? FAKE_BASE_IMAGE);
-    this.limits.set(sandboxId, bornLimits(opts));
+    this.limits.set(sandboxId, this.bornLimits(opts));
   }
 
   async freeze(sandboxId: string): Promise<void> {
@@ -359,7 +366,7 @@ export class FakeExecutor implements Executor {
       }
       this.containers.set(sandboxId, 'running');
       this.images.set(sandboxId, opts?.image ?? FAKE_BASE_IMAGE);
-      this.limits.set(sandboxId, bornLimits(opts));
+      this.limits.set(sandboxId, this.bornLimits(opts));
       return;
     }
     this.expect(sandboxId, 'stopped');
@@ -477,12 +484,7 @@ export class FakeExecutor implements Executor {
       );
     }
     this.disks.add(sandboxId);
-    this.diskNominal.set(
-      sandboxId,
-      opts?.diskGb !== undefined
-        ? Math.round(opts.diskGb * 1024 ** 3)
-        : FAKE_DISK_NOMINAL_BYTES,
-    );
+    this.diskNominal.set(sandboxId, this.bornDiskBytes(opts?.diskGb));
     this.fs.set(sandboxId, disk);
     onProgress?.(1);
   }
@@ -494,7 +496,7 @@ export class FakeExecutor implements Executor {
     const targetBytes = Math.round(diskGb * 1024 ** 3);
     // Physical grow-only, same rule as the real executor: at-or-above
     // target is the goal state already.
-    const current = this.diskNominal.get(sandboxId) ?? FAKE_DISK_NOMINAL_BYTES;
+    const current = this.diskNominal.get(sandboxId) ?? this.bornDiskBytes();
     if (current >= targetBytes) return;
     this.diskNominal.set(sandboxId, targetBytes);
   }
@@ -554,7 +556,7 @@ export class FakeExecutor implements Executor {
       );
     }
     // Per-shell truth, like the real executor's inspect-backed reading.
-    const limits = this.limits.get(sandboxId) ?? FAKE_DEFAULT_LIMITS;
+    const limits = this.limits.get(sandboxId) ?? this.bornLimits();
     return {
       cpuCount: limits.nanoCpus / 1e9,
       cpuUsedPct: 0,
@@ -562,8 +564,7 @@ export class FakeExecutor implements Executor {
       memTotalBytes: limits.memoryBytes,
       memCacheBytes: 0,
       diskUsedBytes: diskUsedBytes(this.disk(sandboxId)),
-      diskTotalBytes:
-        this.diskNominal.get(sandboxId) ?? FAKE_DISK_NOMINAL_BYTES,
+      diskTotalBytes: this.diskNominal.get(sandboxId) ?? this.bornDiskBytes(),
     };
   }
 
@@ -575,8 +576,7 @@ export class FakeExecutor implements Executor {
     for (const sandboxId of this.disks) {
       const files = this.fs.get(sandboxId);
       if (files) actualBytes += diskUsedBytes(files);
-      nominalBytes +=
-        this.diskNominal.get(sandboxId) ?? FAKE_DISK_NOMINAL_BYTES;
+      nominalBytes += this.diskNominal.get(sandboxId) ?? this.bornDiskBytes();
     }
     return {
       count: this.disks.size,

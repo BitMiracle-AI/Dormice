@@ -61,7 +61,19 @@ migrateDb(db, fileURLToPath(new URL('../drizzle', import.meta.url)));
 ensureRuntimeSettings(db, config);
 
 function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
-  if (cfg.DORMICE_EXECUTOR === 'fake') return new FakeExecutor();
+  // Live from the ledger: a console edit reaches the next birth directly.
+  // Both executors get the same view — the fake on constants would diverge
+  // from the wake convergence the moment the defaults move (executor.ts's
+  // SandboxResources tells the story).
+  const resources = () => {
+    const { sandboxDefaults } = readRuntimeSettings(db);
+    return {
+      diskSizeGb: sandboxDefaults.diskGb,
+      cpus: sandboxDefaults.cpus,
+      memoryGb: sandboxDefaults.memoryGb,
+    };
+  };
+  if (cfg.DORMICE_EXECUTOR === 'fake') return new FakeExecutor(resources);
   if (!cfg.DORMICE_BASE_IMAGE) {
     // loadConfig already rejected this combination; the check only narrows
     // the type here.
@@ -70,15 +82,7 @@ function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
   return new DockerExecutor({
     baseImage: cfg.DORMICE_BASE_IMAGE,
     dataDir: cfg.DORMICE_DATA_DIR,
-    // Live from the ledger: a console edit reaches the next birth directly.
-    resources: () => {
-      const { sandboxDefaults } = readRuntimeSettings(db);
-      return {
-        diskSizeGb: sandboxDefaults.diskGb,
-        cpus: sandboxDefaults.cpus,
-        memoryGb: sandboxDefaults.memoryGb,
-      };
-    },
+    resources,
     pidsLimit: cfg.DORMICE_SANDBOX_PIDS_LIMIT,
     reclaimTimeoutSeconds: cfg.DORMICE_RECLAIM_TIMEOUT_SECONDS,
     log,

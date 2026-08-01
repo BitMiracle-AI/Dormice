@@ -982,9 +982,16 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
             sandboxName: name,
             sandboxId: row.id,
             actor: request.actor,
-            detail: `disk ${current} GiB -> ${diskGb} GiB${
+            // The equal-size pin deserves its own words: "10 GiB -> 10 GiB"
+            // reads like nothing happened, but something did — the sandbox
+            // left the fleet-wide knob for a size of its own.
+            detail: `${
+              diskGb === current
+                ? `disk pinned at ${diskGb} GiB (was following the global default)`
+                : `disk ${current} GiB -> ${diskGb} GiB`
+            }${
               existing.state === 'archived'
-                ? ' (ledger only — the restore opens the disk at the new size)'
+                ? ' (ledger only — the restore opens the disk at the recorded size)'
                 : ''
             }`,
           });

@@ -744,19 +744,28 @@ describe('the observability verbs over a real daemon', () => {
     await client().updateSettings({ maxSandboxes: before.maxSandboxes });
   });
 
-  it('refuses the swap knob on a host that cannot manage swap', async () => {
-    // The exam daemon runs the fake executor, so managed swap is
-    // deterministically unavailable — getConfig says so up front, and
-    // setting a target is a 400, not a silently stored dead value.
-    expect((await client().getConfig()).swap).toEqual({
-      supported: false,
-      activeGb: 0,
-    });
-    await expect(client().updateSettings({ swapGb: 8 })).rejects.toMatchObject({
-      name: 'DormiceApiError',
-      status: 400,
-      message: expect.stringMatching(/Linux host with the docker executor/),
-    });
+  it('the swap knob follows getConfig: refused where unmanageable, accepted where real', async () => {
+    // The suite runs in two worlds — fake mode (CI, dev Macs), where
+    // managed swap is deterministically unavailable, and docker mode on a
+    // real Linux host, where it is real. Either way getConfig's
+    // `supported` is the adjudication and updateSettings must agree.
+    const { swap } = await client().getConfig();
+    if (!swap.supported) {
+      // Unmanageable host: setting a target is a 400, not a silently
+      // stored dead value.
+      await expect(
+        client().updateSettings({ swapGb: 8 }),
+      ).rejects.toMatchObject({
+        name: 'DormiceApiError',
+        status: 400,
+        message: expect.stringMatching(/Linux host with the docker executor/),
+      });
+      return;
+    }
+    // Capable host: the knob is accepted. Target 0 = "manage none" — a
+    // recorded no-op, so the shared exam machine gains no swapfile.
+    const { settings } = await client().updateSettings({ swapGb: 0 });
+    expect(settings.swapGb).toBe(0);
   });
 
   it('getSandboxMetrics samples a live sandbox and 404s after destroy', async () => {

@@ -67,6 +67,7 @@ import {
   type PtySize,
   type SandboxEntry,
   type SandboxMetrics,
+  type SandboxResources,
   type ShellLimits,
   type ShellOptions,
   type WatchDirHandle,
@@ -80,14 +81,6 @@ import { WatchProcessLifecycle } from './watch-lifecycle';
  * whatever else runs on the machine.
  */
 export const SANDBOX_LABEL = 'dormice.sandbox';
-
-/** The per-sandbox resource knobs — runtime settings, so a live view. */
-export interface SandboxResources {
-  /** Size cap of each sandbox disk. The limit is physical: the image file simply ends. */
-  diskSizeGb: number;
-  cpus: number;
-  memoryGb: number;
-}
 
 export interface DockerExecutorOptions {
   /** Image every sandbox boots from, e.g. dormice-base:20260708. */
@@ -399,19 +392,26 @@ export class DockerExecutor implements Executor {
     }
     const img = this.imagePath(sandboxId);
     const targetBytes = Math.round(diskGb * 1024 ** 3);
-    // Physical grow-only: at-or-above target means enough room already —
-    // and a truncate downward would destroy the filesystem's tail.
-    if ((await stat(img)).size >= targetBytes) return;
     const mnt = this.mountDir(sandboxId);
     const mounted =
       (await execa('mountpoint', ['-q', mnt], { reject: false })).exitCode ===
       0;
-    // 'r+', never 'w': open(…, 'w') truncates the image to zero on open.
-    const file = await open(img, 'r+');
-    try {
-      await file.truncate(targetBytes);
-    } finally {
-      await file.close();
+    // The file layer is grow-only: at-or-above target skips the truncate
+    // (a truncate downward would destroy the filesystem's tail; a disk may
+    // also have been born bigger than the ledger believes). It does NOT
+    // skip the resize below: "grown" means the filesystem caught up with
+    // the file, and judging by file size alone left a trap — a resize
+    // failure after a successful truncate made the retry a silent no-op
+    // that pinned the ledger over a still-small filesystem. The resize is
+    // idempotent, so every call converges the filesystem to the file.
+    if ((await stat(img)).size < targetBytes) {
+      // 'r+', never 'w': open(…, 'w') truncates the image to zero on open.
+      const file = await open(img, 'r+');
+      try {
+        await file.truncate(targetBytes);
+      } finally {
+        await file.close();
+      }
     }
     if (mounted) {
       // Online: the loop device's capacity was fixed at losetup time, so

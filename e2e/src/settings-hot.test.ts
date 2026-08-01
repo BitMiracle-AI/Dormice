@@ -164,10 +164,15 @@ describe('the sandbox domain as a live ledger setting', () => {
       // daemon is shared, and other suites build hosts on the seed domain.
       const altHost = `8000-${sandbox.id}.alt.dormice.test`;
       const seededHost = `8000-${sandbox.id}.${seeded}`;
+      // "Engaged" must hold in both worlds: the fake auto-answers behind
+      // resolvePortTarget (200), a real sandbox has nothing on port 8000
+      // and the proxy honestly answers 502 — either way the PROXY spoke.
+      // Disengaged is Fastify's own router speaking: 404, in both worlds.
+      const proxied = (status: number) => [200, 502].includes(status);
       await dormice.updateSettings({ sandboxDomain: 'alt.dormice.test' });
       try {
         const viaAlt = await throughProxy(altHost, '/hot?x=1');
-        expect(viaAlt.status).toBe(200);
+        expect(viaAlt.status).toSatisfy(proxied);
         // The seed domain is out of force: its hosts are plain Fastify
         // traffic now, and the router answers 404, not the proxy.
         expect((await throughProxy(seededHost, '/hot')).status).toBe(404);
@@ -175,7 +180,9 @@ describe('the sandbox domain as a live ledger setting', () => {
         await dormice.updateSettings({ sandboxDomain: seeded });
       }
       // Restored: the seed domain proxies again, the alt one is gone.
-      expect((await throughProxy(seededHost, '/hot')).status).toBe(200);
+      expect((await throughProxy(seededHost, '/hot')).status).toSatisfy(
+        proxied,
+      );
       expect((await throughProxy(altHost, '/hot')).status).toBe(404);
     } finally {
       await client().destroySandbox('settings-hot-domain');
