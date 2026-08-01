@@ -15,6 +15,7 @@
   "activity_kind_policy_changed": "정책 변경",
   "activity_kind_metadata_changed": "레이블 변경",
   "activity_kind_spec_changed": "사양 변경",
+  "activity_kind_template_changed": "템플릿 변경",
   "activity_kind_disk_expanded": "디스크 확장",
   "activity_kind_daemon_started": "daemon 시작",
   "activity_kind_ingress_updated": "도메인 변경",

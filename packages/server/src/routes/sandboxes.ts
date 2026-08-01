@@ -37,6 +37,8 @@ import {
   updatePolicyResponseSchema,
   updateSpecRequestSchema,
   updateSpecResponseSchema,
+  updateTemplateRequestSchema,
+  updateTemplateResponseSchema,
   WRITE_FILES_BODY_LIMIT_BYTES,
   writeFileRequestSchema,
   writeFileResponseSchema,
@@ -59,6 +61,7 @@ import {
   updateMetadata,
   updatePolicy,
   updateSpec,
+  updateTemplate,
 } from '../db/ledger';
 import {
   bucketSamples,
@@ -913,6 +916,60 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           sandboxId: updated.id,
           actor: request.actor,
           detail: `${changed.join(', ')}; applies at the next cold wake`,
+        });
+        return updated;
+      });
+      return { sandbox: view(row) };
+    },
+  );
+
+  app.post(
+    '/updateTemplate',
+    {
+      schema: {
+        body: updateTemplateRequestSchema,
+        response: {
+          200: updateTemplateResponseSchema,
+          400: z.object({ message: z.string() }),
+        },
+      },
+    },
+    async (request, reply) => {
+      const { name, template } = request.body;
+      // Same placement as acquire's template check — needs no row, so it
+      // answers 400 before the slot; an unknown template is the caller's
+      // mistake, never silently ignored. null needs no check: detaching to
+      // the base image is always legal.
+      if (template !== null && !findTemplate(db, template)) {
+        return reply.code(400).send({
+          message: `unknown template '${template}' — register it first`,
+        });
+      }
+      // updateSpec's manners: inside the slot so a concurrent destroy
+      // cannot delete the row between check and write. A pure ledger write
+      // — no container work, no wake, no touch; the next cold wake
+      // converges the shell (lifecycle.ts).
+      const row = await locks.run(name, async () => {
+        const existing = findByName(db, name);
+        if (!existing) {
+          // Not a creator: an unknown key is a typo, same manners as rebuild.
+          throw httpError(404, `no sandbox named "${name}" — acquire it first`);
+        }
+        // Legal in every state: template is a ledger attribute, not a
+        // container one — an archived sandbox's template matters after
+        // restore, when its next wake resolves the boot image.
+        if (existing.template === template) {
+          // The goal state already holds; a no-op writes no history.
+          return existing;
+        }
+        const updated = updateTemplate(db, existing.id, template);
+        const fmt = (t: string | null) => (t === null ? 'base image' : t);
+        recordActivity(db, {
+          kind: 'template-changed',
+          sandboxName: name,
+          sandboxId: updated.id,
+          actor: request.actor,
+          detail: `template ${fmt(existing.template)} -> ${fmt(template)}; applies at the next cold wake`,
         });
         return updated;
       });

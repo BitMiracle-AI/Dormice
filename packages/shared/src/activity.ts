@@ -30,6 +30,8 @@ export const ACTIVITY_KINDS = [
   'metadata-changed',
   /** updateSpec rewrote a sandbox's CPU/memory spec (ledger-only; the next cold wake converges the shell). */
   'spec-changed',
+  /** updateTemplate re-homed a sandbox onto another template (ledger-only; the next cold wake converges the shell). */
+  'template-changed',
   /** expandDisk grew a sandbox's disk — the one sanctioned resize, grow-only. */
   'disk-expanded',
   'daemon-started',

@@ -430,7 +430,7 @@ describe('native API over a real daemon', () => {
     });
   });
 
-  it('templates: register, create from, removal guarded while in use', async () => {
+  it('templates: register, create from, removal guarded while in use, updateTemplate migrates off', async () => {
     // In docker mode the image must actually exist — registration is only
     // config; the fake plays any name. The daemon's own base image serves
     // both: a real boot there, an arbitrary string here.
@@ -450,8 +450,22 @@ describe('native API over a real daemon', () => {
       status: 409,
       message: expect.stringMatching(/tpl-key/),
     });
-    await client().destroySandbox('tpl-key');
+
+    // The migration story: re-home the sandbox onto a successor template,
+    // and the old name — no longer referenced — becomes removable without
+    // destroying anything. An unknown target is refused, never stored.
+    await client().registerTemplate('native-tpl-v2', image);
+    await expect(
+      client().updateTemplate('tpl-key', 'ghost-tpl'),
+    ).rejects.toMatchObject({ status: 400 });
+    const moved = await client().updateTemplate('tpl-key', 'native-tpl-v2');
+    expect(moved.sandbox.template).toBe('native-tpl-v2');
     expect(await client().removeTemplate('native-tpl')).toEqual({
+      removed: true,
+    });
+
+    await client().destroySandbox('tpl-key');
+    expect(await client().removeTemplate('native-tpl-v2')).toEqual({
       removed: true,
     });
   });

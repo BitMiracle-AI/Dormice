@@ -38,6 +38,8 @@ export function activityKindLabel(kind: ActivityKind): string {
       return m.activity_kind_metadata_changed();
     case 'spec-changed':
       return m.activity_kind_spec_changed();
+    case 'template-changed':
+      return m.activity_kind_template_changed();
     case 'disk-expanded':
       return m.activity_kind_disk_expanded();
     case 'daemon-started':
@@ -90,6 +92,8 @@ export const ACTIVITY_KIND_STYLES: Record<ActivityKind, string> = {
   'metadata-changed':
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
   'spec-changed':
+    'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
+  'template-changed':
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
   'disk-expanded':
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',

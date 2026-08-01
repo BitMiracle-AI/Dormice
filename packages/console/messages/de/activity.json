@@ -15,6 +15,7 @@
   "activity_kind_policy_changed": "Richtlinie geändert",
   "activity_kind_metadata_changed": "Labels geändert",
   "activity_kind_spec_changed": "Spezifikation geändert",
+  "activity_kind_template_changed": "Template geändert",
   "activity_kind_disk_expanded": "Datenträger erweitert",
   "activity_kind_daemon_started": "Daemon gestartet",
   "activity_kind_ingress_updated": "Domain aktualisiert",

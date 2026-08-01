@@ -249,6 +249,26 @@ export function updateSpec(
 }
 
 /**
+ * Re-homes a sandbox onto another template (NULL = the daemon's base
+ * image). Ledger-only, same manners as updateSpec: no container work, no
+ * state change, no touch. The physical shell converges at the next cold
+ * wake (lifecycle.ts) — the same image-mismatch swap that realizes a
+ * template's re-registered image.
+ */
+export function updateTemplate(
+  db: Db,
+  id: string,
+  template: string | null,
+): SandboxRow {
+  db.update(sandboxes).set({ template }).where(eq(sandboxes.id, id)).run();
+  const row = findById(db, id);
+  if (!row) {
+    throw new Error(`sandbox ${id} not found`);
+  }
+  return row;
+}
+
+/**
  * Records a grown disk's new nominal size. expandDisk's ledger half — the
  * physical grow already happened (reality first, ledger second). Always a
  * number, never back to NULL: a grown disk has a size of its own and must

@@ -15,6 +15,7 @@
   "activity_kind_policy_changed": "ポリシー変更",
   "activity_kind_metadata_changed": "ラベル変更",
   "activity_kind_spec_changed": "スペック変更",
+  "activity_kind_template_changed": "テンプレート変更",
   "activity_kind_disk_expanded": "ディスク拡張",
   "activity_kind_daemon_started": "daemon 起動",
   "activity_kind_ingress_updated": "ドメイン更新",

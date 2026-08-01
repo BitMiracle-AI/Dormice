@@ -1083,6 +1083,139 @@ describe('POST /updateMetadata', () => {
   });
 });
 
+describe('POST /updateTemplate', () => {
+  it('re-homes the sandbox, does not refresh the idle clock, and records the move', async () => {
+    const { app } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py-a', image: 'img-a' });
+    await rpc(app, '/registerTemplate', { name: 'py-b', image: 'img-b' });
+    const created = (
+      await acquire(app, { name: 'alice', template: 'py-a' })
+    ).json();
+
+    const res = await rpc(app, '/updateTemplate', {
+      name: 'alice',
+      template: 'py-b',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sandbox.template).toBe('py-b');
+    // Re-homing is not activity: the idle countdown keeps running.
+    expect(res.json().sandbox.lastActiveAt).toBe(created.sandbox.lastActiveAt);
+
+    const events = (await rpc(app, '/listActivity')).json().events;
+    expect(events[0]).toMatchObject({
+      kind: 'template-changed',
+      sandboxName: 'alice',
+      detail: 'template py-a -> py-b; applies at the next cold wake',
+    });
+  });
+
+  it('a frozen sandbox stays frozen; the next wake swaps the shell onto the new template, data intact', async () => {
+    const { app, db, executor, locks } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py-a', image: 'img-a' });
+    await rpc(app, '/registerTemplate', { name: 'py-b', image: 'img-b' });
+    const created = (
+      await acquire(app, { name: 'alice', template: 'py-a' })
+    ).json().sandbox;
+    await rpc(app, '/writeFiles', {
+      name: 'alice',
+      files: [
+        {
+          path: 'keep.txt',
+          contentBase64: Buffer.from('survives').toString('base64'),
+        },
+      ],
+    });
+    const current = findById(db, created.id);
+    if (!current) throw new Error('sandbox disappeared after write');
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(current.lastActiveAt, DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds),
+    );
+    expect(executor.stateOf(created.id)).toBe('paused');
+
+    // A pure ledger write: the paused shell is not touched.
+    const res = await rpc(app, '/updateTemplate', {
+      name: 'alice',
+      template: 'py-b',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sandbox.state).toBe('frozen');
+    expect(executor.stateOf(created.id)).toBe('paused');
+    expect(await executor.imageOf(created.id)).toBe('img-a');
+
+    // The wake realizes the move: new shell from the new template, old body.
+    const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
+    expect(woken.id).toBe(created.id);
+    expect(await executor.imageOf(created.id)).toBe('img-b');
+    const read = await rpc(app, '/readFile', {
+      name: 'alice',
+      path: 'keep.txt',
+    });
+    expect(Buffer.from(read.json().contentBase64, 'base64').toString()).toBe(
+      'survives',
+    );
+  });
+
+  it('null detaches back to the base image', async () => {
+    const { app } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py-a', image: 'img-a' });
+    await acquire(app, { name: 'alice', template: 'py-a' });
+
+    const res = await rpc(app, '/updateTemplate', {
+      name: 'alice',
+      template: null,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sandbox.template).toBeNull();
+    const events = (await rpc(app, '/listActivity')).json().events;
+    expect(events[0]).toMatchObject({
+      kind: 'template-changed',
+      detail: 'template py-a -> base image; applies at the next cold wake',
+    });
+    // With no rows referencing it, the old template can now be removed —
+    // the migration story this verb exists for.
+    expect(
+      (await rpc(app, '/removeTemplate', { name: 'py-a' })).json(),
+    ).toEqual({ removed: true });
+  });
+
+  it('rejects an unknown template with 400 and an unknown key with 404', async () => {
+    const { app } = testApp();
+    await acquire(app, { name: 'alice' });
+    const unknown = await rpc(app, '/updateTemplate', {
+      name: 'alice',
+      template: 'ghost',
+    });
+    expect(unknown.statusCode).toBe(400);
+    expect(unknown.json().message).toBe(
+      "unknown template 'ghost' — register it first",
+    );
+    const nobody = await rpc(app, '/updateTemplate', {
+      name: 'nobody',
+      template: null,
+    });
+    expect(nobody.statusCode).toBe(404);
+    expect(nobody.json().message).toMatch(/acquire it first/);
+  });
+
+  it('treats a same-template update as the goal state and writes no history', async () => {
+    const { app } = testApp();
+    await rpc(app, '/registerTemplate', { name: 'py-a', image: 'img-a' });
+    await acquire(app, { name: 'alice', template: 'py-a' });
+    const res = await rpc(app, '/updateTemplate', {
+      name: 'alice',
+      template: 'py-a',
+    });
+    expect(res.statusCode).toBe(200);
+    const events = (await rpc(app, '/listActivity')).json().events;
+    expect(
+      events.some((e: { kind: string }) => e.kind === 'template-changed'),
+    ).toBe(false);
+  });
+});
+
 describe('POST /destroySandbox', () => {
   it('destroys the container and forgets the key', async () => {
     const { app, executor } = testApp();

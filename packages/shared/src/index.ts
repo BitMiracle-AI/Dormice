@@ -19,4 +19,5 @@ export * from './states';
 export * from './templates';
 export * from './update-metadata';
 export * from './update-policy';
+export * from './update-template';
 export * from './upgrade';

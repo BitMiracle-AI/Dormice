@@ -63,11 +63,13 @@ import {
   type UpdateSettingsRequest,
   type UpdateSettingsResponse,
   type UpdateSpecResponse,
+  type UpdateTemplateResponse,
   updateApiKeyResponseSchema,
   updateMetadataResponseSchema,
   updatePolicyResponseSchema,
   updateSettingsResponseSchema,
   updateSpecResponseSchema,
+  updateTemplateResponseSchema,
   type WriteFileResponse,
   type WriteFilesResponse,
   writeFileResponseSchema,
@@ -458,6 +460,23 @@ export class Dormice {
   ): Promise<UpdateSpecResponse> {
     const data = await this.rpc('updateSpec', { name, spec });
     return updateSpecResponseSchema.parse(data);
+  }
+
+  /**
+   * Re-homes the sandbox onto another template — how a fleet created
+   * before a template rename follows it (acquire deliberately ignores the
+   * template field for existing sandboxes). `null` detaches back to the
+   * daemon's base image. A pure ledger write: nothing is woken, and the
+   * idle clock is not refreshed — the new template's image is realized at
+   * the sandbox's next cold wake, which swaps the shell (one cold start,
+   * disk untouched). Unknown template: 400. Unknown key: 404.
+   */
+  async updateTemplate(
+    name: string,
+    template: string | null,
+  ): Promise<UpdateTemplateResponse> {
+    const data = await this.rpc('updateTemplate', { name, template });
+    return updateTemplateResponseSchema.parse(data);
   }
 
   /**
