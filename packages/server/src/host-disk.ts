@@ -74,7 +74,9 @@ export function findMount(
       dirRealPath === mountPoint ||
       dirRealPath.startsWith(`${mountPoint}/`);
     if (!covers) continue;
-    if (best === null || mountPoint.length > best.mountPoint.length) {
+    // >= so an overmount (same mount point listed twice) resolves to the
+    // later entry — mountinfo is in mount order, the last one is visible.
+    if (best === null || mountPoint.length >= best.mountPoint.length) {
       best = { mountPoint, fsType, source };
     }
   }

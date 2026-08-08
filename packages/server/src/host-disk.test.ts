@@ -38,6 +38,16 @@ describe('findMount', () => {
     });
   });
 
+  it('an overmount resolves to the later entry — the visible one', () => {
+    const overmounted = [
+      '96 25 259:1 / /var/lib/dormice rw shared:50 - ext4 /dev/nvme1n1 rw',
+      '97 25 259:9 / /var/lib/dormice rw shared:51 - xfs /dev/nvme2n1 rw',
+    ].join('\n');
+    expect(findMount(overmounted, '/var/lib/dormice/x')?.source).toBe(
+      '/dev/nvme2n1',
+    );
+  });
+
   it('answers null for an empty or garbage table', () => {
     expect(findMount('', '/anywhere')).toBeNull();
     expect(findMount('not a mountinfo line', '/anywhere')).toBeNull();
