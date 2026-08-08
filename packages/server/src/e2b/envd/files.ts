@@ -106,6 +106,24 @@ function rfc5987(name: string): string {
   );
 }
 
+/**
+ * The client hung up mid-transfer — a canceled download, a closed tab.
+ * Thrown into the executor's pump to stop the read; distinguished in the
+ * catch because it is the client's own choice, not a daemon failure:
+ * logging it as an error would bury the real mid-stream breaks (the
+ * signal the 2026-08-08 truncation hunt ran on) under routine noise.
+ */
+class ClientGoneError extends Error {}
+
+/**
+ * How long a finished download's socket may keep draining the kernel
+ * buffer toward a slow client before the idle reaper takes it (see the
+ * end-of-stream comment in serveFileDownload). Ten minutes covers even a
+ * dial-up-grade client emptying the largest plausible kernel backlog
+ * (~10 MB at 20 KB/s ≈ 500 s); a healthy client closes long before.
+ */
+const DOWNLOAD_DRAIN_GRACE_MS = 10 * 60 * 1000;
+
 type ParsedRange =
   | { kind: 'full' }
   | { kind: 'unsatisfiable' }
@@ -235,23 +253,73 @@ export async function serveFileDownload(
       row.id,
       query.path,
       (chunk) => {
+        // With delivery-gated exec completion (docker.ts), a wait that can
+        // never end would hold the transfer and its exec forever — and a
+        // closed socket's 'drain' never fires. So a gone client aborts the
+        // stream instead: the throw travels up through the executor's pump,
+        // which destroys the exec stream, and lands in the catch below.
+        if (reply.raw.destroyed) {
+          throw new ClientGoneError('client disconnected mid-download');
+        }
         if (!reply.raw.write(chunk)) {
           // Backpressure: the promise pauses the pipe all the way into the
-          // container until the client drains.
-          return new Promise<void>((resolve) =>
-            reply.raw.once('drain', resolve),
-          );
+          // container until the client drains — or is gone.
+          return new Promise<void>((resolve, reject) => {
+            const settle = (err?: Error) => {
+              reply.raw.off('drain', onDrain);
+              reply.raw.off('close', onClose);
+              if (err) reject(err);
+              else resolve();
+            };
+            const onDrain = () => settle();
+            const onClose = () =>
+              settle(new ClientGoneError('client disconnected mid-download'));
+            // destroy() flips .destroyed before 'close' is emitted — a
+            // listener attached after the fact would wait forever.
+            if (reply.raw.destroyed) return onClose();
+            reply.raw.once('drain', onDrain);
+            reply.raw.once('close', onClose);
+          });
         }
       },
       user,
       slice ? { offset: slice.offset, length: slice.length } : undefined,
     );
+    // 'finish' (end's callback) means handed to the KERNEL, not received:
+    // the kernel socket buffer absorbs megabytes past our 'drain'-paced
+    // writes (loopback especially), and a slow client is still catching up
+    // when we get here. Whoever destroys the socket now orphans that tail
+    // — and Linux deliberately kills orphaned sockets facing a zero-window
+    // reader in ~30s, RST-ing the last bytes away (measured 2026-08-08 on
+    // the test host: 8 MB at 200 KB/s arrived 32-96 KB short; announcing
+    // `connection: close` only moved the destroy earlier via destroySoon).
+    // So: no close announcement (keep-alive keeps the fd open), and the
+    // idle timer the server arms at 'finish' (keepAliveTimeout, single-
+    // digit seconds) is re-armed to a drain grace long enough for any
+    // realistic client to finish reading. The client's own close is what
+    // ends the connection; the grace only reaps clients that stopped
+    // reading forever. Our listener runs after the server's own 'finish'
+    // handling (attach order), so the override sticks.
+    // Listen, then end — not end(callback): inject()'s mock end() treats a
+    // function first-arg as body data. The server's own 'finish' listener
+    // predates ours (attached at request start), so ours re-arms last.
+    const flushed = new Promise<void>((resolve) => {
+      reply.raw.once('finish', resolve);
+    });
     reply.raw.end();
+    await flushed;
+    // Optional call: app.inject()'s mock response has no real socket.
+    reply.raw.socket?.setTimeout?.(DOWNLOAD_DRAIN_GRACE_MS);
   } catch (error) {
     if (reply.raw.headersSent) {
       // Mid-stream failure: the body length will not match the announced
       // content-length — the client sees a broken transfer, honestly.
-      request.log.error(error, 'file download broke mid-stream');
+      // A client that hung up on its own is routine, not an error.
+      if (error instanceof ClientGoneError) {
+        request.log.info('file download canceled by the client');
+      } else {
+        request.log.error(error, 'file download broke mid-stream');
+      }
       reply.raw.destroy();
       return;
     }

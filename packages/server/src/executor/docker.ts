@@ -46,7 +46,12 @@ import {
   WATCH_SCRIPT,
   WRITE_FILE_SCRIPT,
 } from './docker-scripts';
-import { CallbackSink, CappedBuffer } from './docker-streams';
+import {
+  CallbackSink,
+  CappedBuffer,
+  pumpMultiplexedStream,
+  pumpRawStream,
+} from './docker-streams';
 import {
   type ByteRange,
   type ContainerState,
@@ -736,11 +741,11 @@ export class DockerExecutor implements Executor {
       User: opts.user ?? 'user',
     });
     const stream = await exec.start({ hijack: true, stdin: true, Tty: true });
-    stream.pipe(new CallbackSink(opts.onStdout));
+    const delivered = pumpRawStream(stream, new CallbackSink(opts.onStdout));
     // The engine takes the size only after start — the terminal is born
     // 0x0 otherwise, and a shell that stats it misbehaves.
     await exec.resize({ h: size.rows, w: size.cols });
-    const finished = this.awaitExitCode(exec, stream, sandboxId);
+    const finished = this.awaitExitCode(exec, delivered, sandboxId);
     let finishedFlag = false;
     const done = finished.then((exitCode) => {
       finishedFlag = true;
@@ -780,20 +785,23 @@ export class DockerExecutor implements Executor {
   }
 
   /**
-   * Stream over, exit code out: the engine records the code a beat after
-   * the stream ends — the same measured lag as kill vs exited in stop().
-   * Never rejects into the void: callers hold the promise through wait().
+   * Output delivered, exit code out: the completion signal is the pump's
+   * promise — every byte handed to its sink — NOT the raw stream's 'end'.
+   * The distinction is the whole bug it closes: 'end' fires when the
+   * in-container process finishes writing, which for a fast cat against a
+   * slow consumer is megabytes before the sink has passed them on; callers
+   * acting on wait() then finished responses under the undelivered tail
+   * (the silent large-download truncation, Beijing face, 2026-08-08).
+   * The engine records the code a beat after the stream ends — the same
+   * measured lag as kill vs exited in stop(). Never rejects into the void:
+   * callers hold the promise through wait().
    */
   private async awaitExitCode(
     exec: Docker.Exec,
-    stream: NodeJS.ReadableStream,
+    delivered: Promise<void>,
     sandboxId: string,
   ): Promise<number> {
-    await new Promise<void>((resolve, reject) => {
-      stream.on('end', resolve);
-      stream.on('close', resolve);
-      stream.on('error', reject);
-    });
+    await delivered;
     let info = await exec.inspect();
     for (let i = 0; info.Running || info.ExitCode === null; i++) {
       if (i >= 20) {
@@ -1283,12 +1291,13 @@ export class DockerExecutor implements Executor {
   }
 
   /**
-   * The one exec pipeline: start, demux into the caller's sinks, optionally
-   * feed stdin (ending the stream is what delivers EOF to the in-container
-   * reader), then — inside the returned wait — wait for the stream and poll
-   * for the exit code: the engine records it a beat after the stream ends,
-   * the same measured lag as kill vs exited in stop(). Tty stays off: the
-   * multiplexed stream is what demuxStream can split back into distinct
+   * The one exec pipeline: start, pump into the caller's sinks (delivery-
+   * gated, backpressured — see pumpMultiplexedStream), optionally feed
+   * stdin (ending the stream is what delivers EOF to the in-container
+   * reader), then — inside the returned wait — wait for full delivery and
+   * poll for the exit code: the engine records it a beat after the stream
+   * ends, the same measured lag as kill vs exited in stop(). Tty stays off:
+   * the multiplexed stream is what the pump can split back into distinct
    * stdout and stderr. Resolving means the command has started; everything
    * after start is the wait's business.
    *
@@ -1328,7 +1337,9 @@ export class DockerExecutor implements Executor {
     const stream = await exec.start(
       spec.stdin !== undefined ? { hijack: true, stdin: true } : {},
     );
-    this.docker.modem.demuxStream(stream, spec.stdout, spec.stderr);
+    // Not modem.demuxStream: stock demux has no backpressure, and completion
+    // must mean "delivered", not "read" — see pumpMultiplexedStream.
+    const delivered = pumpMultiplexedStream(stream, spec.stdout, spec.stderr);
     if (spec.stdin !== undefined && spec.stdin !== 'open') {
       if (Buffer.isBuffer(spec.stdin)) {
         stream.end(spec.stdin);
@@ -1341,7 +1352,7 @@ export class DockerExecutor implements Executor {
         spec.stdin.pipe(stream);
       }
     }
-    const finished = this.awaitExitCode(exec, stream, sandboxId);
+    const finished = this.awaitExitCode(exec, delivered, sandboxId);
     // A failure before anyone calls wait must not crash the daemon as an
     // unhandled rejection; wait() still observes it through the same promise.
     finished.catch(() => {});

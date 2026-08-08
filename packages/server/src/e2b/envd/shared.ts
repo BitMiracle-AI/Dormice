@@ -86,12 +86,27 @@ export function wireDeadlineMs(request: FastifyRequest): number {
     : MAX_EXEC_SECONDS * 1000;
 }
 
-/** The backpressured raw write every process stream shares. */
+/**
+ * The backpressured raw write every process stream shares. A gone client
+ * resolves immediately and the frame is dropped — that is what a closed
+ * connection means, and with delivery-gated exec completion (docker.ts
+ * pump) a 'drain' that can never fire would otherwise wedge the process's
+ * output pipeline and hold its exit broadcast forever. The process itself
+ * deliberately keeps running: E2B semantics, a watcher's disconnect is not
+ * a kill (the SDK reconnects to the same pid).
+ */
 export function rawWriter(reply: FastifyReply): (buf: Buffer) => Promise<void> {
   return (buf) =>
     new Promise<void>((resolve) => {
-      if (!reply.raw.write(buf)) reply.raw.once('drain', resolve);
-      else resolve();
+      if (reply.raw.destroyed) return resolve();
+      if (reply.raw.write(buf)) return resolve();
+      const settle = () => {
+        reply.raw.off('drain', settle);
+        reply.raw.off('close', settle);
+        resolve();
+      };
+      reply.raw.once('drain', settle);
+      reply.raw.once('close', settle);
     });
 }
 

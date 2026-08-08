@@ -69,6 +69,32 @@ export function execStreamTests(ctx: ContractContext) {
     );
 
     it(
+      'wait() resolving means every output chunk was already delivered',
+      async () => {
+        // The exec twin of the file-download truncation exam: a command
+        // whose output outruns a slow consumer. wait() must not resolve off
+        // the raw stream's end while chunks still sit undelivered — the
+        // text is appended before the consumer's own await, so a premature
+        // wait() reads a missing tail here.
+        const id = await ctx.fresh();
+        let text = '';
+        const handle = await ctx.executor.execStream(id, {
+          command: 'seq 1 100000',
+          timeoutSeconds: 60,
+          onStdout: async (c) => {
+            text += c.toString('utf8');
+            await new Promise((r) => setTimeout(r, 2));
+          },
+          onStderr: () => {},
+        });
+        const { exitCode } = await handle.wait();
+        expect(exitCode).toBe(0);
+        expect(text.endsWith('100000\n')).toBe(true);
+      },
+      timeoutMs * 2,
+    );
+
+    it(
       'execStream stdin round-trips: sendStdin chunks echo back, closeStdin is EOF',
       async () => {
         const id = await ctx.fresh();

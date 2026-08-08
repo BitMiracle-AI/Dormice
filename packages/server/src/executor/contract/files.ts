@@ -247,6 +247,41 @@ export function fileTests(ctx: ContractContext) {
     );
 
     it(
+      'a slow consumer receives every byte before the streaming read resolves',
+      async () => {
+        // The 2026-08-08 production truncation, as an exam: the in-container
+        // cat finishes in an instant while the consumer (a slow download
+        // client) is megabytes behind. readFileStream resolving must mean
+        // every chunk was DELIVERED — the old raw-stream-'end' completion
+        // signal resolved early and the response was finished under the
+        // undelivered tail, silently. The count is taken after the
+        // consumer's own await, so an early resolve reads short here.
+        const id = await ctx.fresh();
+        const size = 6 * 1024 * 1024;
+        const big = Buffer.alloc(size);
+        for (let i = 0; i < size; i += 4096) big[i] = i % 251;
+        await ctx.executor.writeFileStream(
+          id,
+          '/home/user/slow-client.bin',
+          Readable.from([big]),
+        );
+        const received: Buffer[] = [];
+        await ctx.executor.readFileStream(
+          id,
+          '/home/user/slow-client.bin',
+          async (c) => {
+            await new Promise((r) => setTimeout(r, 2));
+            received.push(Buffer.from(c));
+          },
+        );
+        const got = Buffer.concat(received);
+        expect(got.length).toBe(size);
+        expect(got.equals(big)).toBe(true);
+      },
+      timeoutMs * 4,
+    );
+
+    it(
       'a byte range slices the stream exactly — offset and length, byte math',
       async () => {
         // The HTTP Range request's muscle: a video player's tail-of-file
