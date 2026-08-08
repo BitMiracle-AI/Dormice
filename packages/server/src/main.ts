@@ -15,6 +15,7 @@ import { WatcherTable } from './e2b/watcher-table';
 import { DockerExecutor } from './executor/docker';
 import type { Executor } from './executor/executor';
 import { FakeExecutor } from './executor/fake';
+import { gib, HostDiskGrower } from './host-disk';
 import { CpuSampler } from './host-metrics';
 import { Ingress } from './ingress';
 import { KeyedQueue } from './keyed-queue';
@@ -159,6 +160,19 @@ if (config.DORMICE_EXECUTOR === 'docker' && process.platform === 'linux') {
 } else {
   log.info('managed swap unavailable: requires Linux + the docker executor');
 }
+
+// Same eligibility as managed swap, same reasoning: the data-disk auto-grow
+// touches the host, so only a real deployment (Linux + docker executor)
+// gets one — e2e daemons on the fake executor must never run resize2fs on
+// a developer's machine. Within that gate host-disk.ts judges the layout
+// itself and declines anything it cannot fully reason about.
+const diskGrower =
+  config.DORMICE_EXECUTOR === 'docker' && process.platform === 'linux'
+    ? new HostDiskGrower({
+        dataDir: config.DORMICE_DATA_DIR,
+        log: (msg) => log.info(msg),
+      })
+    : undefined;
 
 // The web console ships beside the server in the monorepo; this file sits
 // one level under packages/server both as src/main.ts and as dist/main.js,
@@ -352,6 +366,21 @@ async function metricsTick() {
       hostCpu,
       dataDir: config.DORMICE_DATA_DIR,
     });
+    // The data-disk auto-grow rides this ticker, deliberately AFTER the
+    // sample: the pre-grow reading lands in history, so the curves show
+    // the step instead of hiding it. check() spawns resize2fs only when
+    // the device's size actually changed (host-disk.ts), so a tick is
+    // normally a few /proc + /sys reads. It never throws; the sampler
+    // itself stays pure observation.
+    const growth = await diskGrower?.check();
+    if (growth?.outcome === 'grown') {
+      recordActivity(db, {
+        kind: 'host-disk-grown',
+        detail:
+          `data disk device grew; filesystem resized ` +
+          `${gib(growth.fromBytes)} GiB -> ${gib(growth.toBytes)} GiB`,
+      });
+    }
   } catch (error) {
     app.log.error(error, 'metrics sampler tick failed');
   } finally {

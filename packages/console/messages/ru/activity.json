@@ -17,6 +17,7 @@
   "activity_kind_spec_changed": "Изменение спецификации",
   "activity_kind_template_changed": "Изменение шаблона",
   "activity_kind_disk_expanded": "Расширение диска",
+  "activity_kind_host_disk_grown": "Авторасширение диска данных",
   "activity_kind_daemon_started": "Запуск daemon",
   "activity_kind_ingress_updated": "Настройка домена",
   "activity_kind_settings_updated": "Изменение настроек",

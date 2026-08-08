@@ -17,6 +17,7 @@
   "activity_kind_spec_changed": "Especificación modificada",
   "activity_kind_template_changed": "Plantilla cambiada",
   "activity_kind_disk_expanded": "Disco ampliado",
+  "activity_kind_host_disk_grown": "Disco de datos ampliado automáticamente",
   "activity_kind_daemon_started": "Daemon iniciado",
   "activity_kind_ingress_updated": "Dominio actualizado",
   "activity_kind_settings_updated": "Ajustes modificados",

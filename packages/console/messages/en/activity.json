@@ -17,6 +17,7 @@
   "activity_kind_spec_changed": "Spec changed",
   "activity_kind_template_changed": "Template changed",
   "activity_kind_disk_expanded": "Disk expanded",
+  "activity_kind_host_disk_grown": "Data disk auto-grown",
   "activity_kind_daemon_started": "Daemon started",
   "activity_kind_ingress_updated": "Domain updated",
   "activity_kind_settings_updated": "Settings changed",

@@ -17,6 +17,7 @@
   "activity_kind_spec_changed": "Spécification modifiée",
   "activity_kind_template_changed": "Modèle modifié",
   "activity_kind_disk_expanded": "Disque agrandi",
+  "activity_kind_host_disk_grown": "Disque de données agrandi automatiquement",
   "activity_kind_daemon_started": "Daemon démarré",
   "activity_kind_ingress_updated": "Domaine mis à jour",
   "activity_kind_settings_updated": "Paramètres modifiés",

@@ -17,6 +17,7 @@
   "activity_kind_spec_changed": "規格調整",
   "activity_kind_template_changed": "模板切換",
   "activity_kind_disk_expanded": "磁碟擴容",
+  "activity_kind_host_disk_grown": "資料碟自動擴容",
   "activity_kind_daemon_started": "daemon 啟動",
   "activity_kind_ingress_updated": "網域設定",
   "activity_kind_settings_updated": "設定調整",

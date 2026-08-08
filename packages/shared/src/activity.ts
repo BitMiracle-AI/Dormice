@@ -34,6 +34,8 @@ export const ACTIVITY_KINDS = [
   'template-changed',
   /** expandDisk grew a sandbox's disk — the one sanctioned resize, grow-only. */
   'disk-expanded',
+  /** The daemon grew the HOST data filesystem to fill its expanded device (resize2fs, grow-only). */
+  'host-disk-grown',
   'daemon-started',
   /** An operator bound or cleared the console domain through setIngress. */
   'ingress-updated',

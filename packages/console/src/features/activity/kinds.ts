@@ -42,6 +42,8 @@ export function activityKindLabel(kind: ActivityKind): string {
       return m.activity_kind_template_changed();
     case 'disk-expanded':
       return m.activity_kind_disk_expanded();
+    case 'host-disk-grown':
+      return m.activity_kind_host_disk_grown();
     case 'daemon-started':
       return m.activity_kind_daemon_started();
     case 'ingress-updated':
@@ -97,6 +99,8 @@ export const ACTIVITY_KIND_STYLES: Record<ActivityKind, string> = {
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
   'disk-expanded':
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
+  // 系统自主动作穿 daemon 灰,不穿配置紫:没有操作者按过任何按钮。
+  'host-disk-grown': 'border-border bg-muted text-muted-foreground',
   'daemon-started': 'border-border bg-muted text-muted-foreground',
   'ingress-updated':
     'border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400',
