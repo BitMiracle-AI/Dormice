@@ -4,8 +4,14 @@
  * sandbox physicality stay on their own sides of the archiver.
  */
 export interface ArchiveStore {
-  /** Uploads the file at filePath under key, overwriting — retries are safe. */
-  put(key: string, filePath: string): Promise<void>;
+  /**
+   * Uploads the file at filePath under key, overwriting — retries are safe.
+   * onPulse fires as bytes actually land (per delivered part) — no fraction,
+   * because nothing surfaces upload percent; the caller is the heartbeat
+   * watchdog, which only asks "is this still moving?". A dead connection
+   * stops pulsing, which is exactly what it should hear.
+   */
+  put(key: string, filePath: string, onPulse?: () => void): Promise<void>;
   /**
    * Downloads key into destPath (overwriting). onProgress reports a
    * monotonic fraction 0..1, best-effort. A missing object throws

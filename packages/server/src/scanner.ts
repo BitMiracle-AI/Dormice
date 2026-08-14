@@ -113,6 +113,12 @@ export async function scanOnce(
   now: Date,
   archiver?: Archiver,
   watchers?: WatcherTable,
+  /**
+   * Called once per row considered — and by a running archive as bytes
+   * actually move — the heartbeat watchdog's evidence that a long sweep
+   * is progressing rather than stuck on one await.
+   */
+  onProgress?: () => void,
 ): Promise<ScanResult> {
   const result: ScanResult = {
     frozen: 0,
@@ -123,6 +129,7 @@ export async function scanOnce(
   };
   const archiveDue: SandboxRow[] = [];
   for (const row of listSandboxes(db)) {
+    onProgress?.();
     const due = dueTransition(row, now);
     if (due === 'archive' && archiver !== undefined && archiver.enabled()) {
       archiveDue.push(row);
@@ -192,6 +199,7 @@ export async function scanOnce(
 
   if (archiver === undefined) return result;
   for (const row of archiveDue) {
+    onProgress?.();
     try {
       await locks.tryRun(row.name, async () => {
         const fresh = findById(db, row.id);
@@ -205,7 +213,10 @@ export async function scanOnce(
         ) {
           return;
         }
-        await archiver.archive(fresh);
+        // onProgress rides along: a single archive (tar + upload) can
+        // legitimately outlast the watchdog's stall limit, and the archiver
+        // pulses it on real progress so slow is distinguishable from stuck.
+        await archiver.archive(fresh, onProgress);
         result.archived += 1;
       });
     } catch (error) {

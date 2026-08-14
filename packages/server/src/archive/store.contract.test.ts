@@ -111,6 +111,18 @@ for (const [name, make] of Object.entries(subjects)) {
       ).resolves.toBeUndefined();
     });
 
+    it('put pulses while bytes land', async () => {
+      // The pulse is the heartbeat watchdog's liveness signal during a long
+      // upload — at least one per delivered part, none required beyond that.
+      const source = path.join(dir, 'source.bin');
+      await writeFile(source, payload());
+      let pulses = 0;
+      await subject.store.put('disks/pulse.tar.zst', source, () => {
+        pulses += 1;
+      });
+      expect(pulses).toBeGreaterThan(0);
+    });
+
     it('get reports progress reaching 1', async () => {
       const source = path.join(dir, 'source.bin');
       await writeFile(source, payload());

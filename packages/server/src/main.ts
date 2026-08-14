@@ -26,6 +26,7 @@ import { locallyClaimedCount, startupGuard } from './startup-guard';
 import { SwapManager } from './swap';
 import { Updater } from './updater';
 import { readBuildInfo } from './version';
+import { Watchdog } from './watchdog';
 
 // One logger, created before everything that needs it: the executor logs
 // through it directly and Fastify adopts it as its own.
@@ -91,6 +92,33 @@ function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
 }
 
 const executor = buildExecutor(config, (msg) => log.info(msg));
+
+// The daemon's dead-man switch (see watchdog.ts for the 2026-08-13 incident
+// that earned it). Started here, before the boot sequence's own awaits, so
+// the startup reconcile is guarded the same as every later heartbeat tick —
+// the sweep is the same code either way. Sweeps beat once per row through
+// onProgress, and an archive transfer pulses on real bytes moving, so a
+// backlog sweep or one big slow upload runs as long as it needs, while an
+// await that silently never settles — the failure mode per-call deadlines
+// may have missed — is bitten within the stall limit. The bite is a
+// crash-only exit: systemd restarts the daemon, startup reconciliation
+// squares the ledger with reality, and the ledger already holds every row
+// the stuck sweep completed — nothing is lost. Only lifecycle work feeds
+// beat: the metrics ticker staying alive is exactly what masked the 08-13
+// death, so its liveness must never reassure this watchdog.
+const watchdog = new Watchdog({
+  stallAfterMs: 30 * 60 * 1000,
+  checkEveryMs: 60 * 1000,
+  onStall: (stalledForMs) => {
+    log.fatal(
+      { stalledForMs },
+      'daemon made no progress within the stall limit — crash-only exit, systemd brings us back',
+    );
+    process.exit(1);
+  },
+});
+watchdog.start();
+const beat = () => watchdog.beat();
 
 // One queue for the whole daemon: HTTP verbs and the heartbeat's actors
 // must share the same per-sandbox slots or the serialization means nothing.
@@ -245,6 +273,7 @@ const repaired = await reconcile(
   undefined,
   archiver,
   watchers,
+  beat,
 );
 app.log.info(repaired, 'startup reconcile');
 recordActivity(db, {
@@ -274,6 +303,7 @@ const close = async (signal: NodeJS.Signals) => {
   process.removeListener('SIGINT', onSigint);
   clearTimeout(heartbeatTimer);
   clearTimeout(metricsTimer);
+  watchdog.stop();
   try {
     await app.close();
   } catch (error) {
@@ -302,6 +332,7 @@ process.once('SIGINT', onSigint);
 // reality moved, so the next tick retries whatever failed.
 let suspects: ReadonlySet<string> = new Set();
 async function tick() {
+  beat();
   try {
     const drift = await reconcile(
       db,
@@ -310,6 +341,7 @@ async function tick() {
       suspects,
       archiver,
       watchers,
+      beat,
     );
     suspects = new Set(drift.suspects);
     if (
@@ -329,6 +361,7 @@ async function tick() {
       new Date(),
       archiver,
       watchers,
+      beat,
     );
     for (const failure of scan.failures) {
       app.log.error(failure, 'idle scan: sandbox transition failed');
@@ -336,6 +369,7 @@ async function tick() {
   } catch (error) {
     app.log.error(error, 'heartbeat tick failed');
   } finally {
+    beat();
     if (!closing) {
       heartbeatTimer = setTimeout(
         tick,

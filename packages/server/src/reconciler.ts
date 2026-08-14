@@ -100,6 +100,11 @@ export async function reconcile(
   priorSuspects?: ReadonlySet<string>,
   archiver?: { hasLiveRestore(sandboxId: string): boolean },
   watchers?: WatcherTable,
+  /**
+   * Called once per row/orphan/disk considered — the heartbeat watchdog's
+   * evidence that a long pass is progressing rather than stuck on one await.
+   */
+  onProgress?: () => void,
 ): Promise<ReconcileResult> {
   const rows = listSandboxes(db);
   const containers = await executor.listContainers();
@@ -143,6 +148,7 @@ export async function reconcile(
     });
 
   for (const row of rows) {
+    onProgress?.();
     const observed = containers.get(row.id);
     containers.delete(row.id);
     if (row.state === 'archived') {
@@ -229,6 +235,7 @@ export async function reconcile(
   // accounted for — destroy tears its own, a suspect keeps its — so the
   // disk pass below must not touch these ids.
   for (const sandboxId of containers.keys()) {
+    onProgress?.();
     if (priorSuspects === undefined || priorSuspects.has(sandboxId)) {
       await executor.destroy(sandboxId);
       result.destroyedOrphans += 1;
@@ -244,6 +251,7 @@ export async function reconcile(
   }
 
   for (const sandboxId of disks) {
+    onProgress?.();
     if (owners.has(sandboxId)) continue;
     if (priorSuspects === undefined || priorSuspects.has(sandboxId)) {
       await executor.removeDisk(sandboxId);

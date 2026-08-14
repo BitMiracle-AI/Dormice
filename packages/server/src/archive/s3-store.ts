@@ -49,18 +49,26 @@ export class S3Store implements ArchiveStore {
     });
   }
 
-  async put(key: string, filePath: string): Promise<void> {
+  async put(
+    key: string,
+    filePath: string,
+    onPulse?: () => void,
+  ): Promise<void> {
     // Upload instead of a bare PutObject: it buffers parts and switches to
     // multipart past the part size, so an archive over the single-request
     // 5 GiB ceiling (a well-fed disk of incompressible data) still lands.
-    await new Upload({
+    const upload = new Upload({
       client: this.client,
       params: {
         Bucket: this.bucket,
         Key: key,
         Body: createReadStream(filePath),
       },
-    }).done();
+    });
+    if (onPulse) {
+      upload.on('httpUploadProgress', () => onPulse());
+    }
+    await upload.done();
   }
 
   async get(

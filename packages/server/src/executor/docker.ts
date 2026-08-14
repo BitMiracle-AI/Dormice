@@ -21,6 +21,12 @@ import {
 import Docker from 'dockerode';
 import { execa } from 'execa';
 import {
+  deadline,
+  QUERY_DEADLINE_SECONDS,
+  VERB_DEADLINE_SECONDS,
+  WAIT_DEADLINE_SECONDS,
+} from './deadline';
+import {
   ALREADY_EXISTS_EXIT,
   entryFromFindRecord,
   entryFromStatLine,
@@ -176,14 +182,22 @@ export class DockerExecutor implements Executor {
 
   async freeze(sandboxId: string): Promise<void> {
     const containerId = await this.expectState(sandboxId, 'running');
-    await this.docker.getContainer(containerId).pause();
+    await deadline(
+      this.docker.getContainer(containerId).pause(),
+      VERB_DEADLINE_SECONDS,
+      `pause of ${sandboxId}`,
+    );
     await this.reclaimMemory(containerId);
   }
 
   async unfreeze(sandboxId: string): Promise<void> {
     const containerId = await this.expectState(sandboxId, 'paused');
     // Milliseconds; memory swaps back in lazily, on demand.
-    await this.docker.getContainer(containerId).unpause();
+    await deadline(
+      this.docker.getContainer(containerId).unpause(),
+      VERB_DEADLINE_SECONDS,
+      `unpause of ${sandboxId}`,
+    );
   }
 
   async stop(sandboxId: string): Promise<void> {
@@ -193,15 +207,27 @@ export class DockerExecutor implements Executor {
     // sandbox — its guest kernel is stopped along with everything else
     // (measured 2026-07-09; dockerd itself burns a hard-coded 10s wait on
     // exactly this before escalating).
-    await container.unpause();
+    await deadline(
+      container.unpause(),
+      VERB_DEADLINE_SECONDS,
+      `unpause of ${sandboxId}`,
+    );
     // SIGKILL, no grace period: the sandbox has nothing to shut down
     // cleanly (crash-only — code must survive the container vanishing
     // anyway), and the disk's consistency is the ext4 journal's job.
-    await container.kill();
+    await deadline(
+      container.kill(),
+      VERB_DEADLINE_SECONDS,
+      `kill of ${sandboxId}`,
+    );
     // kill only delivers the signal; Docker marks the container exited a
     // beat later. Wait for that, so the caller observes 'stopped' the
     // moment stop() resolves — the same synchronous promise the fake makes.
-    await container.wait({ condition: 'not-running' });
+    await deadline(
+      container.wait({ condition: 'not-running' }),
+      WAIT_DEADLINE_SECONDS,
+      `wait(not-running) of ${sandboxId}`,
+    );
   }
 
   async start(sandboxId: string, opts?: ShellOptions): Promise<void> {
@@ -224,7 +250,11 @@ export class DockerExecutor implements Executor {
     // Loop mounts live in kernel memory and are gone after a host reboot,
     // while the image file and the stopped container survive on disk.
     await this.ensureMounted(sandboxId);
-    await this.docker.getContainer(found.id).start();
+    await deadline(
+      this.docker.getContainer(found.id).start(),
+      VERB_DEADLINE_SECONDS,
+      `start of ${sandboxId}`,
+    );
   }
 
   async destroy(sandboxId: string): Promise<void> {
@@ -272,25 +302,45 @@ export class DockerExecutor implements Executor {
   }): Promise<void> {
     const container = this.docker.getContainer(found.id);
     if (found.status === 'paused') {
-      await container.unpause();
+      await deadline(
+        container.unpause(),
+        VERB_DEADLINE_SECONDS,
+        `unpause of ${found.id}`,
+      );
     }
     if (found.status === 'paused' || found.status === 'running') {
       try {
-        await container.kill();
+        await deadline(
+          container.kill(),
+          VERB_DEADLINE_SECONDS,
+          `kill of ${found.id}`,
+        );
       } catch (err) {
         // Died between inspect and kill — the goal state, not a failure.
         if (!isDockerApiError(err) || err.statusCode !== 409) throw err;
       }
-      await container.wait({ condition: 'not-running' });
+      await deadline(
+        container.wait({ condition: 'not-running' }),
+        WAIT_DEADLINE_SECONDS,
+        `wait(not-running) of ${found.id}`,
+      );
     }
-    await container.remove({ force: true });
+    await deadline(
+      container.remove({ force: true }),
+      VERB_DEADLINE_SECONDS,
+      `remove of ${found.id}`,
+    );
   }
 
   async listContainers(): Promise<Map<string, ContainerState>> {
-    const containers = await this.docker.listContainers({
-      all: true,
-      filters: { label: [SANDBOX_LABEL] },
-    });
+    const containers = await deadline(
+      this.docker.listContainers({
+        all: true,
+        filters: { label: [SANDBOX_LABEL] },
+      }),
+      QUERY_DEADLINE_SECONDS,
+      'listContainers',
+    );
     const observed = new Map<string, ContainerState>();
     for (const c of containers) {
       const sandboxId = c.Labels[SANDBOX_LABEL];
@@ -486,7 +536,11 @@ export class DockerExecutor implements Executor {
     port: number,
   ): Promise<{ host: string; port: number }> {
     const containerId = await this.expectState(sandboxId, 'running');
-    const info = await this.docker.getContainer(containerId).inspect();
+    const info = await deadline(
+      this.docker.getContainer(containerId).inspect(),
+      QUERY_DEADLINE_SECONDS,
+      `inspect of ${sandboxId}`,
+    );
     // The bridge address: icc:false only blocks container-to-container
     // traffic, host-to-container stays open (measured on the test machine).
     const networks = info.NetworkSettings?.Networks ?? {};
@@ -501,9 +555,11 @@ export class DockerExecutor implements Executor {
 
   async imageOf(sandboxId: string): Promise<string | null> {
     try {
-      const info = await this.docker
-        .getContainer(containerName(sandboxId))
-        .inspect();
+      const info = await deadline(
+        this.docker.getContainer(containerName(sandboxId)).inspect(),
+        QUERY_DEADLINE_SECONDS,
+        `inspect of ${sandboxId}`,
+      );
       // Config.Image is the name the shell was created with — the same
       // string launchContainer wrote, not a resolved digest.
       return info.Config.Image;
@@ -515,9 +571,11 @@ export class DockerExecutor implements Executor {
 
   async limitsOf(sandboxId: string): Promise<ShellLimits | null> {
     try {
-      const info = await this.docker
-        .getContainer(containerName(sandboxId))
-        .inspect();
+      const info = await deadline(
+        this.docker.getContainer(containerName(sandboxId)).inspect(),
+        QUERY_DEADLINE_SECONDS,
+        `inspect of ${sandboxId}`,
+      );
       // HostConfig echoes exactly what launchContainer wrote — integer
       // physical units, so the ledger comparison is drift-free.
       return {
@@ -541,9 +599,11 @@ export class DockerExecutor implements Executor {
     }
     // stream:false makes the engine take two samples a beat apart so the
     // CPU delta below has a denominator; one reading costs about a second.
-    const stats = await this.docker
-      .getContainer(found.id)
-      .stats({ stream: false });
+    const stats = await deadline(
+      this.docker.getContainer(found.id).stats({ stream: false }),
+      QUERY_DEADLINE_SECONDS,
+      `stats of ${sandboxId}`,
+    );
     const cpuDelta =
       (stats.cpu_stats?.cpu_usage?.total_usage ?? 0) -
       (stats.precpu_stats?.cpu_usage?.total_usage ?? 0);
@@ -727,24 +787,38 @@ export class DockerExecutor implements Executor {
     opts: ExecStreamOptions,
     size: PtySize,
   ): Promise<ExecStreamHandle> {
-    const exec = await container.exec({
-      Cmd: ['bash', '-c', PTY_WRAPPER, 'bash', pidfile],
-      AttachStdin: true,
-      AttachStdout: true,
-      AttachStderr: true,
-      Tty: true,
-      WorkingDir: opts.cwd,
-      Env: opts.env
-        ? Object.entries(opts.env).map(([key, value]) => `${key}=${value}`)
-        : undefined,
-      // The PTY twin of startInContainer's identity point.
-      User: opts.user ?? 'user',
-    });
-    const stream = await exec.start({ hijack: true, stdin: true, Tty: true });
+    const exec = await deadline(
+      container.exec({
+        Cmd: ['bash', '-c', PTY_WRAPPER, 'bash', pidfile],
+        AttachStdin: true,
+        AttachStdout: true,
+        AttachStderr: true,
+        Tty: true,
+        WorkingDir: opts.cwd,
+        Env: opts.env
+          ? Object.entries(opts.env).map(([key, value]) => `${key}=${value}`)
+          : undefined,
+        // The PTY twin of startInContainer's identity point.
+        User: opts.user ?? 'user',
+      }),
+      VERB_DEADLINE_SECONDS,
+      `exec create in ${sandboxId}`,
+    );
+    // Only the handshake is bounded — the stream it hands back lives as
+    // long as the terminal session.
+    const stream = await deadline(
+      exec.start({ hijack: true, stdin: true, Tty: true }),
+      VERB_DEADLINE_SECONDS,
+      `exec start in ${sandboxId}`,
+    );
     const delivered = pumpRawStream(stream, new CallbackSink(opts.onStdout));
     // The engine takes the size only after start — the terminal is born
     // 0x0 otherwise, and a shell that stats it misbehaves.
-    await exec.resize({ h: size.rows, w: size.cols });
+    await deadline(
+      exec.resize({ h: size.rows, w: size.cols }),
+      VERB_DEADLINE_SECONDS,
+      `exec resize in ${sandboxId}`,
+    );
     const finished = this.awaitExitCode(exec, delivered, sandboxId);
     let finishedFlag = false;
     const done = finished.then((exitCode) => {
@@ -779,7 +853,11 @@ export class DockerExecutor implements Executor {
         await this.signalProcess(container, sandboxId, pidfile, sig, opts.user);
       },
       resizePty: async (next) => {
-        await exec.resize({ h: next.rows, w: next.cols });
+        await deadline(
+          exec.resize({ h: next.rows, w: next.cols }),
+          VERB_DEADLINE_SECONDS,
+          `exec resize in ${sandboxId}`,
+        );
       },
     };
   }
@@ -802,7 +880,13 @@ export class DockerExecutor implements Executor {
     sandboxId: string,
   ): Promise<number> {
     await delivered;
-    let info = await exec.inspect();
+    const inspectExec = () =>
+      deadline(
+        exec.inspect(),
+        QUERY_DEADLINE_SECONDS,
+        `exec inspect in ${sandboxId}`,
+      );
+    let info = await inspectExec();
     for (let i = 0; info.Running || info.ExitCode === null; i++) {
       if (i >= 20) {
         throw new Error(
@@ -810,7 +894,7 @@ export class DockerExecutor implements Executor {
         );
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
-      info = await exec.inspect();
+      info = await inspectExec();
     }
     return info.ExitCode;
   }
@@ -1241,7 +1325,11 @@ export class DockerExecutor implements Executor {
         this.signalProcess(container, sandboxId, pidfile, 'SIGKILL'),
       classifyFailedStop: async () => {
         try {
-          const { State: state } = await container.inspect();
+          const { State: state } = await deadline(
+            container.inspect(),
+            QUERY_DEADLINE_SECONDS,
+            `inspect of ${sandboxId}`,
+          );
           // A paused watcher still exists and becomes signalable after the
           // next legitimate unfreeze. Only proved death releases ownership.
           return state.Running ? 'retry' : 'terminal';
@@ -1320,22 +1408,30 @@ export class DockerExecutor implements Executor {
       user?: string;
     },
   ): Promise<{ wait: () => Promise<number>; stdinStream?: Duplex }> {
-    const exec = await container.exec({
-      Cmd: spec.cmd,
-      AttachStdin: spec.stdin !== undefined,
-      AttachStdout: true,
-      AttachStderr: true,
-      WorkingDir: spec.workingDir,
-      Env: spec.env
-        ? Object.entries(spec.env).map(([key, value]) => `${key}=${value}`)
-        : undefined,
-      // One of the two physical points where identity is decided (the PTY
-      // exec is the other). Root here is root inside gVisor's guest kernel,
-      // nothing more.
-      User: spec.user ?? 'user',
-    });
-    const stream = await exec.start(
-      spec.stdin !== undefined ? { hijack: true, stdin: true } : {},
+    const exec = await deadline(
+      container.exec({
+        Cmd: spec.cmd,
+        AttachStdin: spec.stdin !== undefined,
+        AttachStdout: true,
+        AttachStderr: true,
+        WorkingDir: spec.workingDir,
+        Env: spec.env
+          ? Object.entries(spec.env).map(([key, value]) => `${key}=${value}`)
+          : undefined,
+        // One of the two physical points where identity is decided (the PTY
+        // exec is the other). Root here is root inside gVisor's guest kernel,
+        // nothing more.
+        User: spec.user ?? 'user',
+      }),
+      VERB_DEADLINE_SECONDS,
+      `exec create in ${sandboxId}`,
+    );
+    // Only the handshake is bounded — the stream it hands back lives as
+    // long as the command it carries (script-level timeouts own that).
+    const stream = await deadline(
+      exec.start(spec.stdin !== undefined ? { hijack: true, stdin: true } : {}),
+      VERB_DEADLINE_SECONDS,
+      `exec start in ${sandboxId}`,
     );
     // Not modem.demuxStream: stock demux has no backpressure, and completion
     // must mean "delivered", not "read" — see pumpMultiplexedStream.
@@ -1392,32 +1488,36 @@ export class DockerExecutor implements Executor {
     const image = opts?.image;
     let container: Docker.Container;
     try {
-      container = await this.docker.createContainer({
-        name: containerName(sandboxId),
-        Image: image ?? this.opts.baseImage,
-        Cmd: ['sleep', 'infinity'],
-        Labels: { [SANDBOX_LABEL]: sandboxId },
-        HostConfig: {
-          // The security set, none optional: gVisor keeps sandbox code off
-          // the real kernel, Init reaps zombies, no-new-privileges blocks
-          // setuid escalation, PidsLimit stops fork bombs. The image itself
-          // runs as uid 1000 (user), never root.
-          Runtime: 'runsc',
-          Init: true,
-          SecurityOpt: ['no-new-privileges'],
-          NanoCpus: Math.round(
-            (opts?.cpus ?? this.opts.resources().cpus) * 1e9,
-          ),
-          Memory: Math.round(
-            (opts?.memoryGb ?? this.opts.resources().memoryGb) * 1024 ** 3,
-          ),
-          PidsLimit: this.opts.pidsLimit,
-          Binds: [`${this.mountDir(sandboxId)}:/home/user`],
-          // Life and death belong to the daemon's state machine; Docker
-          // must not resurrect anything on its own.
-          RestartPolicy: { Name: 'no' },
-        },
-      });
+      container = await deadline(
+        this.docker.createContainer({
+          name: containerName(sandboxId),
+          Image: image ?? this.opts.baseImage,
+          Cmd: ['sleep', 'infinity'],
+          Labels: { [SANDBOX_LABEL]: sandboxId },
+          HostConfig: {
+            // The security set, none optional: gVisor keeps sandbox code off
+            // the real kernel, Init reaps zombies, no-new-privileges blocks
+            // setuid escalation, PidsLimit stops fork bombs. The image itself
+            // runs as uid 1000 (user), never root.
+            Runtime: 'runsc',
+            Init: true,
+            SecurityOpt: ['no-new-privileges'],
+            NanoCpus: Math.round(
+              (opts?.cpus ?? this.opts.resources().cpus) * 1e9,
+            ),
+            Memory: Math.round(
+              (opts?.memoryGb ?? this.opts.resources().memoryGb) * 1024 ** 3,
+            ),
+            PidsLimit: this.opts.pidsLimit,
+            Binds: [`${this.mountDir(sandboxId)}:/home/user`],
+            // Life and death belong to the daemon's state machine; Docker
+            // must not resurrect anything on its own.
+            RestartPolicy: { Name: 'no' },
+          },
+        }),
+        VERB_DEADLINE_SECONDS,
+        `create of ${sandboxId}`,
+      );
     } catch (err) {
       // Name collision race between our inspect and createContainer.
       if (isDockerApiError(err) && err.statusCode === 409) {
@@ -1434,7 +1534,11 @@ export class DockerExecutor implements Executor {
       }
       throw err;
     }
-    await container.start();
+    await deadline(
+      container.start(),
+      VERB_DEADLINE_SECONDS,
+      `start of ${sandboxId}`,
+    );
   }
 
   /**
@@ -1508,9 +1612,11 @@ export class DockerExecutor implements Executor {
     sandboxId: string,
   ): Promise<{ id: string; status: string; nanoCpus: number } | null> {
     try {
-      const info = await this.docker
-        .getContainer(containerName(sandboxId))
-        .inspect();
+      const info = await deadline(
+        this.docker.getContainer(containerName(sandboxId)).inspect(),
+        QUERY_DEADLINE_SECONDS,
+        `inspect of ${sandboxId}`,
+      );
       return {
         id: info.Id,
         status: info.State.Status,
@@ -1534,9 +1640,11 @@ export class DockerExecutor implements Executor {
     let actual: ContainerState | undefined;
     let containerId: string | null = null;
     try {
-      const info = await this.docker
-        .getContainer(containerName(sandboxId))
-        .inspect();
+      const info = await deadline(
+        this.docker.getContainer(containerName(sandboxId)).inspect(),
+        QUERY_DEADLINE_SECONDS,
+        `inspect of ${sandboxId}`,
+      );
       containerId = info.Id;
       actual = containerStateFromDocker(info.State.Status);
     } catch (err) {

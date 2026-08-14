@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +12,7 @@ import { WatcherTable } from '../e2b/watcher-table';
 import type { Executor } from '../executor/executor';
 import { FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
-import { Archiver } from './archiver';
+import { Archiver, pulseFileGrowth } from './archiver';
 import { MemStore } from './mem-store';
 import { objectKey } from './store';
 
@@ -73,6 +73,19 @@ describe('Archiver.archive', () => {
     expect(executor.stateOf(row.id)).toBeUndefined();
     expect(await executor.listDisks()).not.toContain(row.id);
     expect(readdirSync(tmpDir)).toEqual([]);
+  });
+
+  it('pulses the caller while the transfer moves', async () => {
+    // The scanner hands its watchdog beat down here: a transfer that moves
+    // must pulse at least once (MemStore pulses per completed put; S3
+    // pulses per delivered part — the store contract pins both).
+    const { db, executor, archiver } = setup();
+    const row = await seedStopped(db, executor, 'pulsed');
+    let pulses = 0;
+    await archiver.archive(row, () => {
+      pulses += 1;
+    });
+    expect(pulses).toBeGreaterThan(0);
   });
 
   it('uploads before recording, records before destroying', async () => {
@@ -330,5 +343,34 @@ describe('the swappable store provider', () => {
     expect(findByName(db, 'alice')?.state).toBe('active');
     expect(storeA.has(objectKey(row.id))).toBe(false);
     expect(storeB.size).toBe(0);
+  });
+});
+
+describe('pulseFileGrowth', () => {
+  it('pulses only on actual growth, and stop() ends the sampling', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'dormice-growth-'));
+    const file = path.join(dir, 'out.bin');
+    let pulses = 0;
+    const sampler = pulseFileGrowth(
+      file,
+      () => {
+        pulses += 1;
+      },
+      10,
+    );
+    // Not born yet: stat fails, no growth, no pulse.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(pulses).toBe(0);
+    writeFileSync(file, 'x');
+    await vi.waitFor(() => expect(pulses).toBe(1));
+    // Alive but not growing is NOT progress — a wedged tar must go silent.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(pulses).toBe(1);
+    writeFileSync(file, 'xy');
+    await vi.waitFor(() => expect(pulses).toBe(2));
+    sampler.stop();
+    writeFileSync(file, 'xyz');
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(pulses).toBe(2);
   });
 });

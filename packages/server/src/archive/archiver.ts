@@ -1,4 +1,4 @@
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { recordActivity } from '../db/activity';
 import type { Db } from '../db/db';
@@ -53,6 +53,35 @@ export interface ArchiveStoreProvider {
 
 function clampPercent(fraction: number): number {
   return Math.max(0, Math.min(100, Math.round(fraction * 100)));
+}
+
+/**
+ * Pulses onPulse while the file at filePath keeps growing — sampled, not
+ * evented, because the writer (tar) offers no progress hooks and a growing
+ * output file IS its progress. Only actual growth pulses: a wedged writer
+ * goes silent, and the heartbeat watchdog hears exactly that. A file not
+ * born yet is no growth either.
+ */
+export function pulseFileGrowth(
+  filePath: string,
+  onPulse: () => void,
+  everyMs = 15_000,
+): { stop(): void } {
+  let lastSize = -1;
+  const timer = setInterval(() => {
+    void stat(filePath).then(
+      ({ size }) => {
+        if (size > lastSize) {
+          lastSize = size;
+          onPulse();
+        }
+      },
+      () => {},
+    );
+  }, everyMs);
+  // Sampling must never be what keeps the process alive.
+  timer.unref();
+  return { stop: () => clearInterval(timer) };
 }
 
 /**
@@ -141,8 +170,14 @@ export class Archiver {
    * removeDisk, because a stopped row still owns its exited container
    * object, and "local copy freed" includes the shell (the next restore
    * then rebuilds from the template's current image).
+   *
+   * onPulse is the heartbeat watchdog's ear: the scanner awaits this whole
+   * transfer inside a heartbeat tick, and one big disk over a slow uplink
+   * can legitimately outlast the watchdog's stall limit. Pulses carry real
+   * progress only — tar's output growing, upload parts landing — so a
+   * genuinely stuck transfer still goes silent and gets bitten.
    */
-  async archive(row: SandboxRow): Promise<void> {
+  async archive(row: SandboxRow, onPulse?: () => void): Promise<void> {
     if (row.state !== 'stopped') {
       throw new Error(
         `sandbox ${row.id} is ${row.state}, expected stopped — only a stopped sandbox can archive`,
@@ -153,8 +188,13 @@ export class Archiver {
     const tmp = path.join(this.tmpDir, `${row.id}.archive.tar.zst`);
     await mkdir(this.tmpDir, { recursive: true });
     try {
-      await this.executor.exportDisk(row.id, tmp);
-      await store.put(objectKey(row.id), tmp);
+      const growth = onPulse ? pulseFileGrowth(tmp, onPulse) : undefined;
+      try {
+        await this.executor.exportDisk(row.id, tmp);
+      } finally {
+        growth?.stop();
+      }
+      await store.put(objectKey(row.id), tmp, onPulse);
       transition(this.db, row.id, 'archived');
       await this.executor.destroy(row.id);
     } finally {

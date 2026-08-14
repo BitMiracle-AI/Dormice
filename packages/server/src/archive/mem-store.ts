@@ -18,8 +18,13 @@ export class MemStore implements ArchiveStore, ArchiveStoreProvider {
     return this;
   }
 
-  async put(key: string, filePath: string): Promise<void> {
+  async put(
+    key: string,
+    filePath: string,
+    onPulse?: () => void,
+  ): Promise<void> {
     this.objects.set(key, await readFile(filePath));
+    onPulse?.();
   }
 
   async get(
