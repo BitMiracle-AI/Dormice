@@ -92,6 +92,11 @@ const listQuerySchema = z.object({
 const notFound = (sandboxId: string) =>
   apiError(404, `sandbox "${sandboxId}" not found`);
 
+type InfoViewSettings = Pick<
+  ReturnType<typeof readRuntimeSettings>,
+  'sandboxDefaults' | 'sandboxDomain'
+>;
+
 export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   app,
   {
@@ -201,12 +206,16 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   }
 
   /** What getInfo and list answer with. */
-  function infoView(row: SandboxRow, state: 'running' | 'paused') {
+  function infoView(
+    row: SandboxRow,
+    state: 'running' | 'paused',
+    settings: InfoViewSettings,
+  ) {
     // The ledger's live knobs, not the env seeds — CPU/memory apply at
     // each container launch, so the current values are what a sandbox
     // actually runs (or will run) with; the domain rides the same read.
     // Resolved per sandbox: a pinned spec wins, NULL follows the defaults.
-    const { sandboxDefaults, sandboxDomain } = readRuntimeSettings(db);
+    const { sandboxDefaults, sandboxDomain } = settings;
     const spec = resolveSpec(row, sandboxDefaults);
     return {
       sandboxID: row.id,
@@ -418,7 +427,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   app.get('/sandboxes/:id', async (request) => {
     const { id } = request.params as { id: string };
     const { row, state } = findLive(id);
-    return infoView(row, state);
+    return infoView(row, state, readRuntimeSettings(db));
   });
 
   // The SDK sends start/end (unix seconds) to slice a metrics history, and
@@ -649,7 +658,8 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         // absence is what means "no next page".
         reply.header('x-next-token', String(offset + limit));
       }
-      return page.map((item) => infoView(item.row, item.state));
+      const settings = readRuntimeSettings(db);
+      return page.map((item) => infoView(item.row, item.state, settings));
     },
   );
 };
