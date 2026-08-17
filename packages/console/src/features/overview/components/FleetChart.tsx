@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/empty';
 import { Skeleton } from '@/components/ui/skeleton';
 import { STATE_COLORS, stateLabel } from '@/features/sandboxes/format';
+import { withGapBreaks } from '@/lib/chart-gaps';
 import { cn } from '@/lib/utils';
 import { m } from '@/paraglide/messages';
 import { fullClock, tickFormatter } from '../format';
@@ -73,39 +74,19 @@ function toChartRows(
     at: Date.parse(p.at),
     ...p.byState,
   }));
-  const first = rows[0];
-  if (rows.length < 2 || first === undefined) return rows;
-
-  const deltas: number[] = [];
-  for (let i = 1; i < rows.length; i++) {
-    const prev = rows[i - 1];
-    const cur = rows[i];
-    if (prev !== undefined && cur !== undefined) deltas.push(cur.at - prev.at);
-  }
-  deltas.sort((a, b) => a - b);
-  const expectedMs =
-    bucketSeconds !== null
-      ? bucketSeconds * 1000
-      : (deltas[Math.floor(deltas.length / 2)] ?? 0);
-
-  const withGaps: ChartRow[] = [first];
-  for (let i = 1; i < rows.length; i++) {
-    const prev = rows[i - 1];
-    const cur = rows[i];
-    if (prev === undefined || cur === undefined) continue;
-    if (expectedMs > 0 && cur.at - prev.at > 3 * expectedMs) {
-      withGaps.push({
-        at: Math.round((prev.at + cur.at) / 2),
-        active: null,
-        frozen: null,
-        stopped: null,
-        archived: null,
-        restoring: null,
-      });
-    }
-    withGaps.push(cur);
-  }
-  return withGaps;
+  return withGapBreaks(
+    rows,
+    bucketSeconds,
+    (row) => row.at,
+    (at) => ({
+      at,
+      active: null,
+      frozen: null,
+      stopped: null,
+      archived: null,
+      restoring: null,
+    }),
+  );
 }
 
 /**
