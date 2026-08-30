@@ -7,7 +7,9 @@
 #   2. Everything installs into image paths (/opt, /usr/local), never into
 #      /home/user — the per-sandbox disk is mounted over that directory at
 #      runtime and would shadow anything baked underneath.
-#   3. The sandbox runs as a non-root user (uid 1000, named "user").
+#   3. The sandbox runs as a non-root user (uid 1000, named "user") with
+#      passwordless sudo — root inside the sandbox belongs to whoever runs
+#      code in it; the security boundary is gVisor, not the uid.
 #
 # Build: docker build -t dormice-base:<date> images/
 # Every *_MIRROR / *_DIST / *_INDEX / *_REGISTRY arg is optional and defaults
@@ -27,7 +29,7 @@ RUN if [ -n "$UBUNTU_MIRROR" ]; then \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv python3-dev \
       build-essential ca-certificates curl wget git unzip xz-utils \
-      vim-tiny less jq ripgrep inotify-tools \
+      vim-tiny less jq ripgrep inotify-tools sudo \
  && rm -rf /var/lib/apt/lists/* \
  && rm -f /usr/lib/python3.12/EXTERNALLY-MANAGED \
  && ln -sf /usr/bin/python3 /usr/local/bin/python
@@ -71,7 +73,14 @@ RUN npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" \
 # ---- Layer 5: non-root user (top layer) ----
 # ubuntu:24.04 ships an "ubuntu" user at uid 1000; replace it with "user" so
 # the uid the executor chowns sandbox disks to always maps to the same name.
-RUN userdel -r ubuntu 2>/dev/null; useradd -m -u 1000 -s /bin/bash user
+# The sudoers line is E2B's base template verbatim (their finalize step
+# appends the same entry): agents installing packages is a core scenario,
+# and container root buys nothing the gVisor boundary doesn't already deny.
+# sudo is setuid elevation, so it only works when the host side opens both
+# gates: runsc registered with --allow-suid (install.sh) and the executor
+# omitting no-new-privileges (docker.ts launchContainer).
+RUN userdel -r ubuntu 2>/dev/null; useradd -m -u 1000 -s /bin/bash -G sudo user \
+ && echo 'user ALL=(ALL:ALL) NOPASSWD: ALL' >> /etc/sudoers
 ENV LANG=C.UTF-8
 USER user
 WORKDIR /home/user

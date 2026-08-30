@@ -813,6 +813,21 @@ describe.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
       }
     });
 
+    it('passwordless sudo elevates: setuid works inside the sandbox', async () => {
+      const sbx = await Sandbox.create(connection());
+      try {
+        // Not user:'root' (that is exec-from-outside): sudo is the sandbox
+        // elevating itself, which needs the image's sudoers entry, runsc's
+        // --allow-suid and the absent no-new-privileges all at once.
+        const result = await sbx.commands.run(
+          'sudo -n whoami && sudo -n id -u',
+        );
+        expect(result.stdout).toBe('root\n0\n');
+      } finally {
+        await sbx.kill();
+      }
+    });
+
     it('metrics watch a real disk fill: dd 5 MiB and diskUsed grows', async () => {
       const sbx = await Sandbox.create(connection());
       try {

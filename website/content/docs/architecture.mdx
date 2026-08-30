@@ -43,8 +43,12 @@ Each sandbox is a Docker container running under
 **[gVisor](/docs/core-concepts#gvisor)** (`runsc`),
 with its `/home/user` on a dedicated disk image (see
 [Sandbox persistence](/docs/persistence)). Every sandbox runs with the
-same non-negotiable parameters: non-root (uid 1000), `--init`,
-`no-new-privileges`, a pids limit, CPU and memory caps.
+same non-negotiable parameters: `--init`, a pids limit, CPU and memory
+caps. Commands run as `user` (uid 1000) with passwordless `sudo` — the
+same convention as E2B. Root inside the sandbox is yours to use; the
+security boundary is gVisor, not the uid, so a sandbox elevating itself
+still cannot reach the host kernel, other sandboxes, the Docker socket,
+or the cloud metadata service.
 
 Why gVisor and not VMs: freezing requires sandboxes to be **processes**
 (suspend them, push their memory to swap), and "installs anywhere" rules

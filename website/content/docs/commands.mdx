@@ -11,7 +11,8 @@ agent wrote. This page covers the native `execCommand` verb end to end.
 
 You can run a shell command inside a sandbox with `execCommand`. It
 wakes the sandbox if needed, runs the command as `bash -c` (as the
-sandbox's non-root user), waits, and returns the whole result at once:
+sandbox's non-root user — passwordless `sudo` is available when a
+command needs root), waits, and returns the whole result at once:
 
 ```ts
 const result = await client.execCommand('my-agent', 'python3 --version');

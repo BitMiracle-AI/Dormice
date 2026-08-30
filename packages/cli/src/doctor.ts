@@ -301,6 +301,25 @@ const CHECKS: DoctorCheck[] = [
     },
   },
   {
+    id: 'gvisor-allow-suid',
+    title: 'gVisor allows setuid (sudo)',
+    needs: ['gvisor-runtime'],
+    run: async (ctx) => {
+      const config = await daemonJson(ctx);
+      const runsc = (
+        config?.runtimes as
+          | Record<string, { runtimeArgs?: string[] }>
+          | undefined
+      )?.runsc;
+      return runsc?.runtimeArgs?.includes('--allow-suid')
+        ? pass('runsc runs with --allow-suid')
+        : warn(
+            'runsc runs without --allow-suid, so SUID bits are ignored — sandboxes work, but sudo inside them fails',
+            `re-run deploy/install.sh (it verifies runsc supports the flag first), or on gVisor release-20250813+ add "--allow-suid" to runtimes.runsc.runtimeArgs in ${DAEMON_JSON} and restart docker`,
+          );
+    },
+  },
+  {
     id: 'icc-disabled',
     title: 'inter-container traffic off',
     needs: ['os-linux'],
@@ -808,6 +827,37 @@ const CHECKS: DoctorCheck[] = [
         : fail(
             `the image runs as uid ${uid} — sandboxes must run as a non-root uid-1000 user`,
             'rebuild the image with a uid-1000 user (see images/Dockerfile)',
+          );
+    },
+  },
+  {
+    id: 'probe-image-sudo',
+    title: 'probe: passwordless sudo elevates',
+    needs: ['gvisor-runtime', 'base-image'],
+    probe: true,
+    run: async (ctx) => {
+      // The live verdict over config reading: this succeeds only when both
+      // host gates are open — sudo + sudoers baked into the image, and
+      // runsc started with --allow-suid. (The executor's own containers add
+      // the third condition by omitting no-new-privileges.)
+      const res = await ctx.run(
+        'docker',
+        [
+          'run',
+          '--rm',
+          '--runtime=runsc',
+          baseImage(ctx) as string,
+          'sudo',
+          '-n',
+          'true',
+        ],
+        { timeoutMs: 60_000 },
+      );
+      return res.ok
+        ? pass('sudo -n true succeeds as uid 1000')
+        : warn(
+            `sudo failed inside the probe container: ${res.stderr.trim() || res.stdout.trim() || 'no output'} — sandboxes work, but cannot elevate`,
+            'an image built before 2026-08-31 lacks sudo (rebuild from images/Dockerfile); if gvisor-allow-suid warned above, fix that first',
           );
     },
   },

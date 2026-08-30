@@ -199,7 +199,10 @@ process does **not** keep its sandbox warm — a resident sandbox means
   does) or long commands die at exactly 300 s with an error that looks like
   the server's fault.
 - **Sandboxes run untrusted code, contained.** Everything runs as a
-  non-root user (uid 1000) inside gVisor. The stock image ships Ubuntu
+  non-root user (uid 1000) inside gVisor, with passwordless `sudo` for
+  installing system packages (E2B's convention; `sudo apt install` works,
+  but survives only until the next cold wake — persistent tooling belongs
+  in a template or under `/home/user`). The stock image ships Ubuntu
   24.04, Python 3.12, Node 24, git, ripgrep, and a pinned Claude Code.
 
 ## Learn more

@@ -47,6 +47,8 @@ know why; the Linux terms in it are covered in
 - **Docker daemon** — dockerd answers.
 - **gVisor runtime (runsc)** — registered as a Docker runtime; without
   it sandboxes would share the host kernel.
+- **gVisor allows setuid (sudo)** — *warn*: runsc must run with
+  `--allow-suid`, or `sudo` inside sandboxes fails.
 - **inter-container traffic off** — `"icc": false` in
   `/etc/docker/daemon.json`, or one sandbox can port-scan another.
 - **container log rotation** — unbounded stdout logs fill the disk over
@@ -123,6 +125,10 @@ know why; the Linux terms in it are covered in
   firewall check above reads rules; this one tests reality.
 - **image runs as uid 1000** — sandboxes must not run as root, even
   behind gVisor.
+- **passwordless sudo elevates** — *warn*: `sudo -n true` must succeed
+  inside a probe container. It fails when the image predates sudo or
+  runsc runs without `--allow-suid`; sandboxes still work, they just
+  cannot elevate.
 - **image has inotify-tools** — *warn*: without `inotifywait`, E2B
   directory watching refuses to start; everything else works.
 

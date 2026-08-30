@@ -62,7 +62,8 @@ Ubuntu 24.04 with Python 3.12 (`pip install` works out of the box),
 Node.js 24, git, ripgrep, jq, curl/wget, and a version-pinned
 [Claude Code](https://claude.com/claude-code) — so a coding agent can
 start working with zero setup. Everything runs as a non-root user inside
-gVisor.
+gVisor, with passwordless `sudo` for the moments an agent needs root —
+installing system packages, say.
 
 Need more? Bake it into a [template](/docs/templates) instead of
 reinstalling per sandbox — and remember that whatever an agent installs

@@ -255,10 +255,67 @@ else
   fi
   echo "$RUNSC_SHA512  /usr/local/bin/runsc" | sha512sum -c - >/dev/null \
     || die "/usr/local/bin/runsc does not match the pinned $GVISOR_RELEASE checksum"
-  /usr/local/bin/runsc install
+  # --allow-suid from birth: sudo inside a sandbox is setuid elevation, and
+  # the sentry ignores SUID bits without it. The merge step below is the
+  # arbiter; passing it here just means fresh installs need no second
+  # docker restart.
+  /usr/local/bin/runsc install -- --allow-suid
   systemctl restart docker
   note "installed $(runsc --version | head -1), registered with Docker"
 fi
+
+# ---- gVisor: --allow-suid ---------------------------------------------------
+# The single arbiter of the flag, idempotent: hosts installed before
+# 2026-08-31 have runsc registered without it, so sudo inside their
+# sandboxes fails — re-running this script upgrades them. The executor's
+# half of the same decision is omitting no-new-privileges (docker.ts).
+log 'gVisor --allow-suid (sudo inside sandboxes)'
+allow_suid_result=$(node - "$DAEMON_JSON" <<'EOF'
+const fs = require('fs');
+const { execFileSync } = require('child_process');
+const path = process.argv[2];
+let config = {};
+try { config = JSON.parse(fs.readFileSync(path, 'utf8')); } catch {}
+// Only the entry runsc install writes is ours to edit. A registration that
+// lives elsewhere (a dockerd --add-runtime flag or systemd drop-in) must not
+// be duplicated here: dockerd refuses to start when the same directive
+// arrives from both a flag and daemon.json.
+const runsc = config.runtimes?.runsc;
+if (!runsc) { console.log('foreign'); process.exit(0); }
+const args = runsc.runtimeArgs ?? [];
+if (args.includes('--allow-suid')) { console.log('unchanged'); process.exit(0); }
+// A pre-existing registration is honored, not upgraded (the gVisor section
+// above), so this runsc can predate the flag (gVisor < release-20250813) —
+// and dockerd would accept the config write, then refuse every container
+// create with "flag provided but not defined". Ask the actual binary first:
+// --version, the flag — runsc has no `version` subcommand (measured on
+// release-20260622.0: `runsc <anything> version` exits 128 with usage, which
+// would misread every host as unsupported). An unknown flag exits non-zero
+// before --version can answer, so exit 0 means exactly "flag accepted".
+try {
+  execFileSync(runsc.path, ['--allow-suid', '--version'], { stdio: 'ignore' });
+} catch { console.log('unsupported'); process.exit(0); }
+runsc.runtimeArgs = [...args, '--allow-suid'];
+config.runtimes = { ...config.runtimes, runsc };
+fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+console.log('changed');
+EOF
+)
+case "$allow_suid_result" in
+changed)
+  note "added --allow-suid to the runsc runtime — restarting docker (this stops running containers; frozen/active sandboxes reconcile to stopped, disks are untouched)"
+  systemctl restart docker
+  ;;
+unsupported)
+  note "this host's runsc does not support --allow-suid (needs gVisor release-20250813 or newer) — sandboxes work, but sudo inside them will fail; upgrade gVisor, then re-run"
+  ;;
+foreign)
+  note "runsc is registered outside $DAEMON_JSON (a dockerd flag or drop-in) — sandboxes work, but sudo inside them needs --allow-suid added to that registration by hand"
+  ;;
+*)
+  note '[skip] already configured'
+  ;;
+esac
 
 # ---- swap ------------------------------------------------------------------
 # Freezing squeezes sandbox memory out to swap; without swap the measured

@@ -17,6 +17,9 @@ const GOOD_DAEMON_JSON = JSON.stringify({
   'log-driver': 'json-file',
   'log-opts': { 'max-size': '10m', 'max-file': '3' },
   icc: false,
+  runtimes: {
+    runsc: { path: '/usr/local/bin/runsc', runtimeArgs: ['--allow-suid'] },
+  },
 });
 
 const IPTABLES_GOOD = [
@@ -98,6 +101,7 @@ function fakeHost(
     [`docker run --rm --runtime=runsc ${IMAGE} bash -c timeout 3 bash -c "</dev/tcp/100.100.100.200/80" && echo LEAK || echo BLOCKED`]:
       ok('BLOCKED\n'),
     [`docker run --rm --runtime=runsc ${IMAGE} id -u`]: ok('1000\n'),
+    [`docker run --rm --runtime=runsc ${IMAGE} sudo -n true`]: ok(''),
     [`docker run --rm --runtime=runsc ${IMAGE} bash -c command -v inotifywait || echo MISSING`]:
       ok('/usr/bin/inotifywait\n'),
     'zstd --version': ok('zstd command line interface v1.5.5\n'),
@@ -153,6 +157,7 @@ describe('runDoctor on a healthy host', () => {
     expect(statusOf(results, 'probe-gvisor')).toBe('skip');
     expect(statusOf(results, 'probe-metadata')).toBe('skip');
     expect(statusOf(results, 'probe-image-user')).toBe('skip');
+    expect(statusOf(results, 'probe-image-sudo')).toBe('skip');
     expect(statusOf(results, 'probe-image-inotify')).toBe('skip');
     expect(ctx.calls.filter((call) => call.includes('docker run'))).toEqual([]);
   });
@@ -265,6 +270,38 @@ describe('docker configuration', () => {
       }),
     );
     expect(statusOf(results, 'log-rotation')).toBe('pass');
+  });
+});
+
+describe('gVisor allow-suid', () => {
+  it('warns when runsc is registered without --allow-suid: sudo would fail', async () => {
+    const { results } = await runDoctor(
+      fakeHost({
+        files: {
+          '/etc/docker/daemon.json': JSON.stringify({
+            icc: false,
+            'log-driver': 'local',
+            runtimes: { runsc: { path: '/usr/local/bin/runsc' } },
+          }),
+        },
+      }),
+    );
+    expect(statusOf(results, 'gvisor-allow-suid')).toBe('warn');
+    expect(results['gvisor-allow-suid']?.fix).toContain('--allow-suid');
+  });
+
+  it('warns from the live probe when sudo fails inside the container', async () => {
+    const { results } = await runDoctor(
+      fakeHost({
+        commands: {
+          [`docker run --rm --runtime=runsc ${IMAGE} sudo -n true`]: boom(
+            'exec: "sudo": executable file not found in $PATH',
+          ),
+        },
+      }),
+    );
+    expect(statusOf(results, 'probe-image-sudo')).toBe('warn');
+    expect(results['probe-image-sudo']?.detail).toContain('sudo failed');
   });
 });
 

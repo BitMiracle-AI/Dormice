@@ -41,8 +41,9 @@ gVisor host:
 - **`destroySandbox`** — the only verb that loses data, by design.
 - **Everything outside `/home/user`**, whenever the container is
   replaced (rebuild, prune, OOM): `/tmp`, packages installed at runtime
-  outside the home directory, running processes. If it matters, keep it
-  in `/home/user`.
+  outside the home directory (`sudo apt install` included), running
+  processes. If it matters, keep it in `/home/user` — or bake it into a
+  [template](/docs/templates).
 
 ## Rebuild a sandbox
 

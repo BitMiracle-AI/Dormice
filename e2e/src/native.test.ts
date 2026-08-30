@@ -243,6 +243,23 @@ describe('native API over a real daemon', () => {
     },
   );
 
+  // Native exec has no user knob (always uid 1000) — passwordless sudo is
+  // how a native caller installs packages. Setuid elevation only exists on
+  // the real stack (image sudoers + runsc --allow-suid), no fake analog.
+  it.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
+    'passwordless sudo elevates: the native face reaches root via sudo',
+    async () => {
+      await client().acquireSandbox('sudo-key');
+      const result = await client().execCommand(
+        'sudo-key',
+        'sudo -n whoami && sudo -n id -u',
+      );
+      expect(result.stdout).toBe('root\n0\n');
+      expect(result.exitCode).toBe(0);
+      await client().destroySandbox('sudo-key');
+    },
+  );
+
   it('runs a command in the sandbox and returns the buffered result', async () => {
     await client().acquireSandbox('exec-key');
     const result = await client().execCommand('exec-key', 'echo hi');

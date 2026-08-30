@@ -1495,13 +1495,22 @@ export class DockerExecutor implements Executor {
           Cmd: ['sleep', 'infinity'],
           Labels: { [SANDBOX_LABEL]: sandboxId },
           HostConfig: {
-            // The security set, none optional: gVisor keeps sandbox code off
-            // the real kernel, Init reaps zombies, no-new-privileges blocks
-            // setuid escalation, PidsLimit stops fork bombs. The image itself
-            // runs as uid 1000 (user), never root.
+            // The security set: gVisor keeps sandbox code off the real
+            // kernel, Init reaps zombies, PidsLimit stops fork bombs. The
+            // image defaults to uid 1000 (user). Deliberately NO
+            // no-new-privileges (2026-08-31): it would veto the setuid
+            // elevation that passwordless sudo needs (the E2B convention,
+            // baked into the base image), and container root was never what
+            // that flag defended here — the host kernel (gVisor), the Docker
+            // socket (never mounted), the metadata block (host-side
+            // DOCKER-USER chain) and the resource caps (this HostConfig)
+            // are all out of a container root's reach, and the E2B face
+            // already hands root out via user:'root'. The gVisor half of
+            // the same decision is runsc's --allow-suid, registered by
+            // install.sh — without it the sentry ignores SUID bits and sudo
+            // stays dead no matter what this HostConfig says.
             Runtime: 'runsc',
             Init: true,
-            SecurityOpt: ['no-new-privileges'],
             NanoCpus: Math.round(
               (opts?.cpus ?? this.opts.resources().cpus) * 1e9,
             ),
