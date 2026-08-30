@@ -75,7 +75,7 @@ below. `DORMICE_SANDBOX_PIDS_LIMIT` stays a plain environment variable.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `DORMICE_SANDBOX_DOMAIN` | — | First-boot seed for the sandbox wildcard domain behind the E2B SDK's `getHost(port)` — see [Exposing ports](/docs/ports). The value in force lives in the daemon's database and is edited live on the console's **Domains** page; once seeded, editing this variable has no effect. A bare hostname like `sbx.example.com`; you point `*.<domain>` DNS plus a TLS-terminating reverse proxy at the daemon. |
+| `DORMICE_SANDBOX_DOMAIN` | — | First-boot seed for the **canonical** sandbox wildcard domain behind the E2B SDK's `getHost(port)` — see [Exposing ports](/docs/ports). The value in force lives in the daemon's database and is edited live on the console's **Domains** page; once seeded, editing this variable has no effect. Alias domains (inbound-only) have no environment variable at all — they are managed on the same console card. A bare hostname like `sbx.example.com`; you point `*.<domain>` DNS plus a TLS-terminating reverse proxy at the daemon. |
 
 ## Archiver (S3)
 

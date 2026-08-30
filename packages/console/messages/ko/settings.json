@@ -16,7 +16,7 @@
   "settings_hint_sandbox_memory": "기본 메모리 상한의 첫 부팅 시드 값 — 유효 값은 위의 운영 노브에 있습니다",
   "settings_hint_sandbox_pids_limit": "샌드박스별 프로세스 수 상한(fork 폭탄의 물리적 차단기)",
   "settings_hint_reclaim_timeout": "동결 시 메모리를 swap으로 밀어 넣는 최대 대기 시간",
-  "settings_hint_sandbox_domain": "샌드박스 도메인의 첫 부팅 시드 값 — 유효 설정은 '도메인' 페이지의 샌드박스 도메인 카드에 있습니다",
+  "settings_hint_sandbox_domain": "샌드박스 정식 도메인의 첫 부팅 시드 값 — 유효 설정(별칭 포함)은 '도메인' 페이지의 샌드박스 도메인 카드에 있습니다",
   "settings_hint_ingress_file": "daemon이 관리하는 Caddy 설정 파일. 설정해야 '도메인' 페이지에서 웹으로 도메인을 바인딩할 수 있습니다",
   "settings_hint_ingress_reload_cmd": "프록시 설정 변경 후 실행할 리로드 명령. 미설정 시 기본값은 관리 파일 자체에 대한 caddy reload",
   "settings_hint_s3_endpoint": "아카이브 Endpoint의 첫 부팅 시드 값 — 유효 설정은 위의 아카이브 스토리지 카드에 있습니다",

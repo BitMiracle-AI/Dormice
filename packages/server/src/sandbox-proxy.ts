@@ -2,6 +2,7 @@ import type http from 'node:http';
 import { request as httpRequest } from 'node:http';
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
+import type { RuntimeSettings } from '@dormice/shared';
 import type { Db } from './db/db';
 import { findById, touch } from './db/ledger';
 import type { SandboxRow } from './db/schema';
@@ -50,29 +51,49 @@ function isEnvdFilesRequest(req: http.IncomingMessage): boolean {
 }
 
 /**
+ * The domain group inbound matching runs against: the canonical domain
+ * first, then the inbound-only aliases; empty when the feature is off
+ * (sandboxDomain null). The one adjudication of "off = never a match" —
+ * the proxy's per-request getter and the signed-URL host pin both call
+ * this instead of deciding it themselves.
+ */
+export function sandboxDomainsInForce(settings: RuntimeSettings): string[] {
+  return settings.sandboxDomain
+    ? [settings.sandboxDomain, ...settings.sandboxDomainAliases]
+    : [];
+}
+
+/**
  * Host header -> { port, sandboxId }, or null when it is not sandbox
  * traffic (then the request belongs to Fastify). The port suffix of the
  * header itself (`:3676`) is not the sandbox port — the label carries that.
+ *
+ * Every domain gets a full parse, never first-suffix-wins: an alias may be
+ * a subdomain of another listed domain, and a host under it would suffix-
+ * match the shorter domain first with a dotted label the regex refuses.
  */
 export function parseSandboxHost(
   hostHeader: string | undefined,
-  domain: string,
+  domains: readonly string[],
 ): { port: number; sandboxId: string } | null {
-  // Empty means "no domain in force" — never a match. Explicit, not left
-  // to the suffix check: `.` + '' would make every dotted host a candidate.
-  if (!domain) return null;
   if (!hostHeader) return null;
   const host = hostHeader.replace(/:\d+$/, '').toLowerCase();
-  const suffix = `.${domain.toLowerCase()}`;
-  if (!host.endsWith(suffix)) return null;
-  const label = host.slice(0, -suffix.length);
-  const match = label.match(
-    /^(\d{1,5})-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/,
-  );
-  if (!match) return null;
-  const port = Number(match[1]);
-  if (port < 1 || port > 65535) return null;
-  return { port, sandboxId: match[2] as string };
+  for (const domain of domains) {
+    // Empty means "no domain in force" — never a match. Explicit, not left
+    // to the suffix check: `.` + '' would make every dotted host a candidate.
+    if (!domain) continue;
+    const suffix = `.${domain.toLowerCase()}`;
+    if (!host.endsWith(suffix)) continue;
+    const label = host.slice(0, -suffix.length);
+    const match = label.match(
+      /^(\d{1,5})-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/,
+    );
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (port < 1 || port > 65535) continue;
+    return { port, sandboxId: match[2] as string };
+  }
+  return null;
 }
 
 export interface SandboxProxyDeps {
@@ -93,11 +114,11 @@ class ProxyRefusal extends Error {}
 
 export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
   const { db, executor, locks, watchers } = deps;
-  // Read per request, not captured: the domain is a ledger setting now
-  // (console domains page), and the proxy instance is mounted for the
+  // Read per request, not captured: the domain group is a ledger setting
+  // now (console domains page), and the proxy instance is mounted for the
   // daemon's whole life — a getter is what makes an edit apply to the
   // very next request.
-  const domain = () => readRuntimeSettings(db).sandboxDomain ?? '';
+  const domains = () => sandboxDomainsInForce(readRuntimeSettings(db));
 
   function liveRow(sandboxId: string): SandboxRow {
     const row = findById(db, sandboxId);
@@ -121,7 +142,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
     port: number;
     target: { host: string; port: number };
   }> {
-    const parsed = parseSandboxHost(req.headers.host, domain());
+    const parsed = parseSandboxHost(req.headers.host, domains());
     if (!parsed) throw new ProxyRefusal('not sandbox traffic');
     const before = liveRow(parsed.sandboxId);
     const row = await locks.run(before.name, async () => {
@@ -148,7 +169,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
 
   return {
     matches(req) {
-      const parsed = parseSandboxHost(req.headers.host, domain());
+      const parsed = parseSandboxHost(req.headers.host, domains());
       if (!parsed) return false;
       // The envd file face on its fixed port belongs to Fastify's signed
       // door, not to a dial into the container (see ENVD_PORT).

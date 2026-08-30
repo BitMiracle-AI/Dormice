@@ -16,7 +16,7 @@
   "settings_hint_sandbox_memory": "Valor semilla del primer arranque para el límite de memoria predeterminado — el valor efectivo está en los parámetros de arriba",
   "settings_hint_sandbox_pids_limit": "Límite de procesos por sandbox (el freno físico contra las bombas fork)",
   "settings_hint_reclaim_timeout": "Espera máxima al comprimir la memoria hacia swap durante la congelación",
-  "settings_hint_sandbox_domain": "Valor semilla del primer arranque para el dominio de sandbox — la configuración en vigor está en la tarjeta de dominio de sandbox de la página Dominios",
+  "settings_hint_sandbox_domain": "Valor semilla del primer arranque para el dominio canónico de sandbox — la configuración en vigor (alias incluidos) está en la tarjeta de dominio de sandbox de la página Dominios",
   "settings_hint_ingress_file": "Archivo de configuración de Caddy gestionado por el daemon; hace falta para vincular dominios en la página Dominios",
   "settings_hint_ingress_reload_cmd": "Comando de recarga tras cambiar la configuración del proxy; por defecto es caddy reload sobre el propio archivo gestionado",
   "settings_hint_s3_endpoint": "Valor semilla del primer arranque para el Endpoint de archivado — el almacenamiento en vigor está en la tarjeta de archivado de arriba",

@@ -2,7 +2,7 @@ import multipart from '@fastify/multipart';
 import type { FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { readRuntimeSettings } from '../db/settings';
-import { parseSandboxHost } from '../sandbox-proxy';
+import { parseSandboxHost, sandboxDomainsInForce } from '../sandbox-proxy';
 import { allowCorsOrigin, sendPreflight } from './cors';
 import type { E2bDeps } from './deps';
 import { serveFileDownload, serveFileUpload } from './envd/files';
@@ -86,21 +86,22 @@ export const signedFileRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   /**
    * The signature check plus, on the subdomain form, the Host pin: which
    * sandbox the label names is which sandbox the signature must speak for.
-   * The domain is read per request — it is a live ledger setting, and a
-   * signature (HMAC over sandbox/path/operation, never the domain) minted
-   * before a domain change verifies unchanged after it. The signed
-   * username also names the execution identity; the file
-   * handler cores vet it against the image's users (a tampered username
-   * never gets that far — the signature covers it).
+   * The domain group (canonical + inbound-only aliases) is read per
+   * request — a live ledger setting, and a signature (HMAC over
+   * sandbox/path/operation, never the domain) minted before a domain
+   * change verifies unchanged after it. The signed username also names the
+   * execution identity; the file handler cores vet it against the image's
+   * users (a tampered username never gets that far — the signature covers
+   * it).
    */
   function authenticate(
     request: FastifyRequest,
     operation: SigningOperation,
   ): string {
-    const domain = readRuntimeSettings(deps.db).sandboxDomain;
-    const pinned = domain
-      ? parseSandboxHost(request.headers.host, domain)?.sandboxId
-      : undefined;
+    const pinned = parseSandboxHost(
+      request.headers.host,
+      sandboxDomainsInForce(readRuntimeSettings(deps.db)),
+    )?.sandboxId;
     return authenticateSignedQuery({
       db: deps.db,
       signingSecret: deps.envdSigningSecret,

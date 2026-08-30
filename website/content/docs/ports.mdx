@@ -31,6 +31,27 @@ first-boot seed:
 DORMICE_SANDBOX_DOMAIN=sbx.example.com
 ```
 
+### Multiple domains and switching domains
+
+The sandbox domain card manages a whole domain group: one **canonical
+domain** plus any number of **aliases**. Aliases only match inbound
+traffic — every URL the platform hands out (`getHost()`, the `domain`
+field, signed URLs opened through the subdomain form) always speaks the
+canonical domain. Each alias needs its own wildcard DNS record and
+reverse-proxy site block, exactly like the canonical one.
+
+That asymmetry is the zero-downtime domain migration story:
+
+1. **Add the new domain as an alias** — inbound routing engages
+   immediately once its wildcard DNS resolves.
+2. **Make it canonical** (one click, one atomic settings write) — new
+   URLs switch to the new domain, and the old domain drops into the
+   alias list, so every URL minted before the switch keeps working.
+3. **Remove the old alias** whenever you are ready to retire it.
+
+Signed URLs survive the switch too: the signature covers the sandbox,
+path and operation — never the domain.
+
 ## 2. Point DNS and a reverse proxy at the host
 
 The daemon itself only binds `127.0.0.1`. The internet-facing half is

@@ -16,7 +16,7 @@
   "settings_hint_sandbox_memory": "默认内存上限的首启种子值 — 生效值在上方运营旋钮里",
   "settings_hint_sandbox_pids_limit": "每个沙箱的进程数上限(fork 炸弹的物理闸)",
   "settings_hint_reclaim_timeout": "冻结时挤内存进 swap 的最长等待",
-  "settings_hint_sandbox_domain": "沙箱域名的首启种子值 — 生效配置在「域名」页的沙箱域名卡里",
+  "settings_hint_sandbox_domain": "沙箱规范域名的首启种子值 — 生效配置(含别名)在「域名」页的沙箱域名卡里",
   "settings_hint_ingress_file": "daemon 接管的 Caddy 配置文件;配了才能在「域名」页网页绑定域名",
   "settings_hint_ingress_reload_cmd": "改完代理配置后的重载命令;不配默认 caddy reload 托管文件本身",
   "settings_hint_s3_endpoint": "归档端点的首启种子值 — 生效配置在上方归档存储卡里",

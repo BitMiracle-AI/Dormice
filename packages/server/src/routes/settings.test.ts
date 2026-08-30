@@ -134,6 +134,8 @@ describe('runtime settings: seeding', () => {
       swapGb: 0,
       s3: null,
       sandboxDomain: null,
+      // Aliases have no env seed either — console-era editing only.
+      sandboxDomainAliases: [],
       updatedAt: null,
     });
   });
@@ -187,7 +189,7 @@ describe('runtime settings: seeding', () => {
     const db = freshDb();
     appOn(db);
     db.run(
-      sql`UPDATE runtime_settings SET s3_endpoint = NULL, s3_bucket = NULL, s3_access_key_id = NULL, s3_secret_access_key = NULL, s3_region = NULL, s3_force_path_style = NULL, sandbox_domain = NULL`,
+      sql`UPDATE runtime_settings SET s3_endpoint = NULL, s3_bucket = NULL, s3_access_key_id = NULL, s3_secret_access_key = NULL, s3_region = NULL, s3_force_path_style = NULL, sandbox_domain = NULL, sandbox_domain_aliases = NULL`,
     );
 
     // The upgraded daemon's first boot: virgin columns adopt the env.
@@ -198,6 +200,8 @@ describe('runtime settings: seeding', () => {
     const adopted = await settingsOf(upgraded);
     expect(adopted.s3?.bucket).toBe('seed-bucket');
     expect(adopted.sandboxDomain).toBe('sbx.example.com');
+    // The alias column adopts too — always to none, no env to consult.
+    expect(adopted.sandboxDomainAliases).toEqual([]);
     // Adoption never rewrites the standing default policy: this row
     // pre-existed with "never archive", and another group's seed must not
     // change it.
@@ -235,6 +239,7 @@ describe('runtime settings: seeding', () => {
     const settings = await settingsOf(rebooted);
     expect(settings.s3).toBeNull();
     expect(settings.sandboxDomain).toBeNull();
+    expect(settings.sandboxDomainAliases).toEqual([]);
   });
 });
 
@@ -638,6 +643,100 @@ describe('updateSettings: the sandbox domain', () => {
     ]) {
       const res = await rpc(app, '/updateSettings', { sandboxDomain: bad });
       expect(res.statusCode, bad).toBe(400);
+      const alias = await rpc(app, '/updateSettings', {
+        sandboxDomain: 'sbx.example.com',
+        sandboxDomainAliases: [bad],
+      });
+      expect(alias.statusCode, bad).toBe(400);
     }
+  });
+
+  it('sets, reports and clears aliases, with immediate effect on getConfig', async () => {
+    const app = appOn(freshDb(), {
+      DORMICE_SANDBOX_DOMAIN: 'sbx.example.com',
+    });
+    const set = await rpc(app, '/updateSettings', {
+      sandboxDomainAliases: ['a.example.com', 'b.example.com'],
+    });
+    expect(set.statusCode).toBe(200);
+    expect(
+      updateSettingsResponseSchema.parse(set.json()).settings
+        .sandboxDomainAliases,
+    ).toEqual(['a.example.com', 'b.example.com']);
+    expect((await settingsOf(app)).sandboxDomainAliases).toEqual([
+      'a.example.com',
+      'b.example.com',
+    ]);
+
+    const cleared = await rpc(app, '/updateSettings', {
+      sandboxDomainAliases: [],
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect((await settingsOf(app)).sandboxDomainAliases).toEqual([]);
+
+    const events = listActivityResponseSchema.parse(
+      (await rpc(app, '/listActivity')).json(),
+    ).events;
+    expect(events[0]?.detail).toBe('sandboxDomainAliases=cleared');
+    expect(events[1]?.detail).toBe(
+      'sandboxDomainAliases=a.example.com/b.example.com',
+    );
+  });
+
+  it('refuses alias lists that contradict the post-patch state, honestly', async () => {
+    const app = appOn(freshDb(), {
+      DORMICE_SANDBOX_DOMAIN: 'sbx.example.com',
+    });
+
+    // Duplicates within the list — hostnames compare case-insensitively.
+    const dup = await rpc(app, '/updateSettings', {
+      sandboxDomainAliases: ['a.example.com', 'A.example.com'],
+    });
+    expect(dup.statusCode).toBe(400);
+    expect(dup.json().message).toContain('more than once');
+
+    // The canonical domain listed as its own alias, in any casing.
+    const overlap = await rpc(app, '/updateSettings', {
+      sandboxDomainAliases: ['SBX.example.com'],
+    });
+    expect(overlap.statusCode).toBe(400);
+    expect(overlap.json().message).toContain('already the sandbox domain');
+
+    // Aliases with no canonical domain in force.
+    const orphanApp = appOn(freshDb());
+    const orphan = await rpc(orphanApp, '/updateSettings', {
+      sandboxDomainAliases: ['a.example.com'],
+    });
+    expect(orphan.statusCode).toBe(400);
+    expect(orphan.json().message).toContain('set sandboxDomain first');
+
+    // Clearing the canonical domain while aliases stand — the refusal
+    // names the field that must clear alongside.
+    expect(
+      (
+        await rpc(app, '/updateSettings', {
+          sandboxDomainAliases: ['a.example.com'],
+        })
+      ).statusCode,
+    ).toBe(200);
+    const dangling = await rpc(app, '/updateSettings', { sandboxDomain: null });
+    expect(dangling.statusCode).toBe(400);
+    expect(dangling.json().message).toContain('sandboxDomainAliases');
+
+    // The same intents, expressed whole, pass: the atomic swap...
+    const swap = await rpc(app, '/updateSettings', {
+      sandboxDomain: 'a.example.com',
+      sandboxDomainAliases: ['sbx.example.com'],
+    });
+    expect(swap.statusCode).toBe(200);
+    const swapped = updateSettingsResponseSchema.parse(swap.json()).settings;
+    expect(swapped.sandboxDomain).toBe('a.example.com');
+    expect(swapped.sandboxDomainAliases).toEqual(['sbx.example.com']);
+    // ...and the full clear.
+    const clear = await rpc(app, '/updateSettings', {
+      sandboxDomain: null,
+      sandboxDomainAliases: [],
+    });
+    expect(clear.statusCode).toBe(200);
   });
 });

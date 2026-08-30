@@ -16,7 +16,7 @@
   "settings_hint_sandbox_memory": "First-boot seed for the default memory limit — the effective value is in the knobs above",
   "settings_hint_sandbox_pids_limit": "Per-sandbox process limit (the physical brake on fork bombs)",
   "settings_hint_reclaim_timeout": "Maximum wait for squeezing memory into swap when freezing",
-  "settings_hint_sandbox_domain": "First-boot seed for the sandbox domain — the value in force lives on the Domains page",
+  "settings_hint_sandbox_domain": "First-boot seed for the canonical sandbox domain — the configuration in force (aliases included) lives on the Domains page",
   "settings_hint_ingress_file": "Caddy config file managed by the daemon; required for binding domains on the Domains page",
   "settings_hint_ingress_reload_cmd": "Reload command after proxy config changes; defaults to caddy reload on the managed file itself",
   "settings_hint_s3_endpoint": "First-boot seed for the archive endpoint — the store in force lives in the archive card above",

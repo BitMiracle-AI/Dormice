@@ -316,6 +316,15 @@ export const runtimeSettings = sqliteTable('runtime_settings', {
   s3Region: text('s3_region'),
   s3ForcePathStyle: integer('s3_force_path_style', { mode: 'boolean' }),
   sandboxDomain: text('sandbox_domain'),
+  /**
+   * Inbound-only alias domains (added 2026-08-31), a JSON string array.
+   * Same NULL-until-adopted three-state as above, but no '' sentinel —
+   * '[]' already says "no aliases", and the adopt step always writes '[]'
+   * without consulting the env: the alias list is console-era operations
+   * editing, not a first-boot identity, so it deliberately has no env
+   * variable.
+   */
+  sandboxDomainAliases: text('sandbox_domain_aliases'),
   /** Null until the first updateSettings: "still exactly the seed" is information. */
   updatedAt: text('updated_at'),
 });

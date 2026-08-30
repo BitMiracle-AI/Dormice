@@ -16,7 +16,7 @@
   "settings_hint_sandbox_memory": "Erststart-Saatwert für das Standard-Speicherlimit — der wirksame Wert steht oben bei den Betriebsreglern",
   "settings_hint_sandbox_pids_limit": "Prozesslimit je Sandbox (die physische Bremse gegen Fork-Bomben)",
   "settings_hint_reclaim_timeout": "Maximale Wartezeit beim Einfrieren, um Speicher in den Swap zu drücken",
-  "settings_hint_sandbox_domain": "Erststart-Saatwert für die Sandbox-Domain — die wirksame Konfiguration steht auf der Domains-Seite in der Sandbox-Domain-Karte",
+  "settings_hint_sandbox_domain": "Erststart-Saatwert für die kanonische Sandbox-Domain — die wirksame Konfiguration (inklusive Aliasse) steht auf der Domains-Seite in der Sandbox-Domain-Karte",
   "settings_hint_ingress_file": "Vom Daemon verwaltete Caddy-Konfigurationsdatei; nötig, um auf der Domains-Seite Domains zu binden",
   "settings_hint_ingress_reload_cmd": "Reload-Befehl nach Änderungen an der Proxy-Konfiguration; Standard ist caddy reload auf der verwalteten Datei selbst",
   "settings_hint_s3_endpoint": "Erststart-Saatwert für den Archiv-Endpoint — die wirksame Konfiguration steht oben in der Archivspeicher-Karte",

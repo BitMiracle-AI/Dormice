@@ -59,7 +59,8 @@ daemon:
 - **One domain, not one subdomain per sandbox.** The SDK addresses
   sandboxes through a header on a single endpoint, so no wildcard DNS is
   needed for the API itself — only `getHost()` preview URLs want a
-  wildcard domain (the console's sandbox domain setting).
+  wildcard domain (the console's sandbox domain setting: one canonical
+  domain that outbound URLs speak, plus optional inbound-only aliases).
 
 ## Not implemented
 

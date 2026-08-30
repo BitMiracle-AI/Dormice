@@ -56,6 +56,9 @@ export function ensureRuntimeSettings(db: Db, config: Config): void {
       swapGb: 0,
       ...s3Columns(s3Seed),
       sandboxDomain: config.DORMICE_SANDBOX_DOMAIN ?? OFF,
+      // Aliases are console-era operations editing with deliberately no
+      // env variable — every install starts with none.
+      sandboxDomainAliases: '[]',
       updatedAt: null,
     })
     .onConflictDoNothing()
@@ -75,6 +78,17 @@ export function ensureRuntimeSettings(db: Db, config: Config): void {
       and(
         eq(runtimeSettings.id, SETTINGS_ROW_ID),
         isNull(runtimeSettings.sandboxDomain),
+      ),
+    )
+    .run();
+  // Its own adopt, not a rider on sandboxDomain's: an upgraded row has
+  // that column decided while this one is still NULL. No env to consult.
+  db.update(runtimeSettings)
+    .set({ sandboxDomainAliases: '[]' })
+    .where(
+      and(
+        eq(runtimeSettings.id, SETTINGS_ROW_ID),
+        isNull(runtimeSettings.sandboxDomainAliases),
       ),
     )
     .run();
@@ -110,6 +124,9 @@ function virginError(column: string): Error {
 function toView(row: RuntimeSettingsRow): RuntimeSettings {
   if (row.s3Endpoint === null) throw virginError('s3_endpoint');
   if (row.sandboxDomain === null) throw virginError('sandbox_domain');
+  if (row.sandboxDomainAliases === null) {
+    throw virginError('sandbox_domain_aliases');
+  }
   return {
     maxSandboxes: row.maxSandboxes,
     sandboxDefaults: {
@@ -128,12 +145,16 @@ function toView(row: RuntimeSettingsRow): RuntimeSettings {
         ? null
         : {
             endpoint: row.s3Endpoint,
-            // biome-ignore lint/style/noNonNullAssertion: the six columns write as one unit (s3Columns)
+            // biome-ignore-start lint/style/noNonNullAssertion: the six columns write as one unit (s3Columns)
             bucket: row.s3Bucket!,
             region: row.s3Region!,
             forcePathStyle: row.s3ForcePathStyle!,
+            // biome-ignore-end lint/style/noNonNullAssertion: the six columns write as one unit (s3Columns)
           },
     sandboxDomain: row.sandboxDomain === OFF ? null : row.sandboxDomain,
+    // The one writer JSON.stringifies an array; a corrupt value should
+    // throw right here, not read as "no aliases".
+    sandboxDomainAliases: JSON.parse(row.sandboxDomainAliases) as string[],
     updatedAt: row.updatedAt,
   };
 }
@@ -161,12 +182,13 @@ export function readS3Settings(db: Db): S3Settings | null {
   if (row.s3Endpoint === OFF) return null;
   return {
     endpoint: row.s3Endpoint,
-    // biome-ignore lint/style/noNonNullAssertion: the six columns write as one unit (s3Columns)
+    // biome-ignore-start lint/style/noNonNullAssertion: the six columns write as one unit (s3Columns)
     bucket: row.s3Bucket!,
     accessKeyId: row.s3AccessKeyId!,
     secretAccessKey: row.s3SecretAccessKey!,
     region: row.s3Region!,
     forcePathStyle: row.s3ForcePathStyle!,
+    // biome-ignore-end lint/style/noNonNullAssertion: the six columns write as one unit (s3Columns)
   };
 }
 
@@ -225,6 +247,9 @@ export function writeRuntimeSettings(
       ...(patch.s3 !== undefined ? s3Columns(patch.s3) : {}),
       ...(patch.sandboxDomain !== undefined
         ? { sandboxDomain: patch.sandboxDomain ?? OFF }
+        : {}),
+      ...(patch.sandboxDomainAliases !== undefined
+        ? { sandboxDomainAliases: JSON.stringify(patch.sandboxDomainAliases) }
         : {}),
       updatedAt: now.toISOString(),
     })

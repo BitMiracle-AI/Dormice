@@ -1,0 +1,1 @@
+ALTER TABLE `runtime_settings` ADD `sandbox_domain_aliases` text;

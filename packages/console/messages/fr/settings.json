@@ -16,7 +16,7 @@
   "settings_hint_sandbox_memory": "Valeur d'amorçage de la limite mémoire par défaut — la valeur effective est dans les réglages ci-dessus",
   "settings_hint_sandbox_pids_limit": "Limite de processus par sandbox (le frein physique aux fork bombs)",
   "settings_hint_reclaim_timeout": "Attente maximale pour pousser la mémoire dans le swap lors du gel",
-  "settings_hint_sandbox_domain": "Valeur d'amorçage du domaine des sandbox — la configuration effective est dans la carte du domaine des sandbox, page Domaines",
+  "settings_hint_sandbox_domain": "Valeur d'amorçage du domaine canonique des sandbox — la configuration effective (alias compris) est dans la carte du domaine des sandbox, page Domaines",
   "settings_hint_ingress_file": "Fichier de configuration Caddy géré par le daemon ; requis pour lier des domaines depuis la page Domaines",
   "settings_hint_ingress_reload_cmd": "Commande de rechargement après modification de la configuration du proxy ; par défaut, caddy reload sur le fichier géré lui-même",
   "settings_hint_s3_endpoint": "Valeur d'amorçage de l'endpoint d'archivage — le stockage effectif est dans la carte d'archivage ci-dessus",

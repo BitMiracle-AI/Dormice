@@ -188,4 +188,51 @@ describe('the sandbox domain as a live ledger setting', () => {
       await client().destroySandbox('settings-hot-domain');
     }
   });
+
+  it('aliases route inbound alongside the canonical domain, and the swap is atomic', async () => {
+    const dormice = client();
+    const seeded = (await dormice.getConfig()).settings.sandboxDomain;
+    if (seeded === null) throw new Error('exam daemon lost its domain seed');
+    expect((await dormice.getConfig()).settings.sandboxDomainAliases).toEqual(
+      [],
+    );
+
+    const { sandbox } = await dormice.acquireSandbox('settings-hot-alias');
+    const aliasHost = `8000-${sandbox.id}.alias.dormice.test`;
+    const seededHost = `8000-${sandbox.id}.${seeded}`;
+    const proxied = (status: number) => [200, 502].includes(status);
+    try {
+      // An alias joins the group: both hosts reach the proxy, the seed
+      // domain keeps its place as the canonical one.
+      await dormice.updateSettings({
+        sandboxDomainAliases: ['alias.dormice.test'],
+      });
+      expect((await throughProxy(aliasHost, '/hot')).status).toSatisfy(proxied);
+      expect((await throughProxy(seededHost, '/hot')).status).toSatisfy(
+        proxied,
+      );
+
+      // The atomic swap: alias up, old canonical into the alias list —
+      // one patch, and both hosts keep routing through it.
+      const { settings } = await dormice.updateSettings({
+        sandboxDomain: 'alias.dormice.test',
+        sandboxDomainAliases: [seeded],
+      });
+      expect(settings.sandboxDomain).toBe('alias.dormice.test');
+      expect(settings.sandboxDomainAliases).toEqual([seeded]);
+      expect((await throughProxy(aliasHost, '/hot')).status).toSatisfy(proxied);
+      expect((await throughProxy(seededHost, '/hot')).status).toSatisfy(
+        proxied,
+      );
+    } finally {
+      // Both fields back: restoring the canonical alone would leave the
+      // alias standing (and the swap case would even trip the overlap
+      // guard), on a daemon every suite shares.
+      await dormice.updateSettings({
+        sandboxDomain: seeded,
+        sandboxDomainAliases: [],
+      });
+      await client().destroySandbox('settings-hot-alias');
+    }
+  });
 });

@@ -131,23 +131,47 @@ describe('sandbox port proxy', () => {
 
   it('parses sandbox hosts and nothing else', () => {
     const id = '01234567-89ab-cdef-0123-456789abcdef';
-    expect(parseSandboxHost(`8000-${id}.${DOMAIN}`, DOMAIN)).toEqual({
+    expect(parseSandboxHost(`8000-${id}.${DOMAIN}`, [DOMAIN])).toEqual({
       port: 8000,
       sandboxId: id,
     });
     // The header's own :port tail is the daemon's port, not the sandbox's.
-    expect(parseSandboxHost(`8000-${id}.${DOMAIN}:3676`, DOMAIN)).toEqual({
+    expect(parseSandboxHost(`8000-${id}.${DOMAIN}:3676`, [DOMAIN])).toEqual({
       port: 8000,
       sandboxId: id,
     });
-    expect(parseSandboxHost(`8000-${id}.other.test`, DOMAIN)).toBeNull();
-    expect(parseSandboxHost(`${DOMAIN}`, DOMAIN)).toBeNull();
-    expect(parseSandboxHost(`0-${id}.${DOMAIN}`, DOMAIN)).toBeNull();
-    expect(parseSandboxHost(`8000-not-a-uuid.${DOMAIN}`, DOMAIN)).toBeNull();
-    expect(parseSandboxHost(undefined, DOMAIN)).toBeNull();
+    expect(parseSandboxHost(`8000-${id}.other.test`, [DOMAIN])).toBeNull();
+    expect(parseSandboxHost(`${DOMAIN}`, [DOMAIN])).toBeNull();
+    expect(parseSandboxHost(`0-${id}.${DOMAIN}`, [DOMAIN])).toBeNull();
+    expect(parseSandboxHost(`8000-not-a-uuid.${DOMAIN}`, [DOMAIN])).toBeNull();
+    expect(parseSandboxHost(undefined, [DOMAIN])).toBeNull();
     // No domain in force: never a match, whatever the Host says.
-    expect(parseSandboxHost(`8000-${id}.${DOMAIN}`, '')).toBeNull();
-    expect(parseSandboxHost(`8000-${id}.`, '')).toBeNull();
+    expect(parseSandboxHost(`8000-${id}.${DOMAIN}`, [])).toBeNull();
+    // A blank entry must not become the '.' suffix every FQDN-dotted host
+    // would match.
+    expect(parseSandboxHost(`8000-${id}.`, [''])).toBeNull();
+  });
+
+  it('gives every listed domain a full parse — aliases may nest inside each other', () => {
+    const id = '01234567-89ab-cdef-0123-456789abcdef';
+    const nested = `foo.${DOMAIN}`;
+    // A host under the nested domain suffix-matches the shorter one first,
+    // with a dotted label the regex refuses — first-suffix-wins would stop
+    // there and miss the real match. Both orders must land the same.
+    for (const domains of [
+      [DOMAIN, nested],
+      [nested, DOMAIN],
+    ]) {
+      expect(parseSandboxHost(`8000-${id}.${nested}`, domains)).toEqual({
+        port: 8000,
+        sandboxId: id,
+      });
+      expect(parseSandboxHost(`8000-${id}.${DOMAIN}`, domains)).toEqual({
+        port: 8000,
+        sandboxId: id,
+      });
+      expect(parseSandboxHost(`8000-${id}.unrelated.test`, domains)).toBeNull();
+    }
   });
 
   it('routes a sandbox Host into the sandbox, transparently', async () => {
@@ -454,5 +478,78 @@ describe('sandbox port proxy', () => {
     });
     expect(clear.status).toBe(200);
     expect((await rawGet(t.port, '/hello', host)).status).toBe(404);
+  });
+
+  it('aliases route inbound only, and the canonical swap keeps old URLs alive', async () => {
+    const t = await listeningApp();
+    const sandboxId = await createSandbox(t.port);
+    const ALIAS = 'alias.dormice.test';
+    const aliasHost = `8000-${sandboxId}.${ALIAS}`;
+    const canonicalHost = `8000-${sandboxId}.${DOMAIN}`;
+    const setSettings = async (body: object) => {
+      const res = await rawRequest(t.port, {
+        method: 'POST',
+        path: '/updateSettings',
+        host: '127.0.0.1',
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(200);
+    };
+
+    // Not listed yet: ordinary Fastify traffic.
+    expect((await rawGet(t.port, '/hello', aliasHost)).status).toBe(404);
+
+    await setSettings({ sandboxDomainAliases: [ALIAS] });
+    expect((await rawGet(t.port, '/hello', aliasHost)).status).toBe(200);
+    expect((await rawGet(t.port, '/hello', canonicalHost)).status).toBe(200);
+    // Inbound-only: outbound create responses still speak the canonical
+    // domain (the helper asserts created.domain === DOMAIN).
+    await createSandbox(t.port);
+
+    // The envd carve-out follows the alias: /files on 49983 lands on
+    // Fastify's open CORS answer, any other path still dials the container.
+    const envdHost = `49983-${sandboxId}.${ALIAS}`;
+    const preflight = await rawRequest(t.port, {
+      method: 'OPTIONS',
+      path: '/files',
+      host: envdHost,
+      headers: {
+        origin: 'https://app.example.test',
+        'access-control-request-method': 'POST',
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers['access-control-allow-origin']).toBe('*');
+    const dialed = await rawGet(t.port, '/health', envdHost);
+    expect(dialed.status).toBe(200);
+    expect(JSON.parse(dialed.body)).toMatchObject({ sandboxId });
+
+    // The atomic swap: the alias becomes canonical, the old canonical
+    // stays listed — both hosts keep routing, new outbound URLs flip.
+    await setSettings({ sandboxDomain: ALIAS, sandboxDomainAliases: [DOMAIN] });
+    expect((await rawGet(t.port, '/hello', aliasHost)).status).toBe(200);
+    expect((await rawGet(t.port, '/hello', canonicalHost)).status).toBe(200);
+    const created = await fetch(
+      `http://127.0.0.1:${t.port}/e2b/api/sandboxes`,
+      {
+        method: 'POST',
+        headers: {
+          'x-api-key': `e2b_${TOKEN}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ timeout: 3600 }),
+      },
+    );
+    expect(created.status).toBe(201);
+    expect(((await created.json()) as { domain?: string }).domain).toBe(ALIAS);
+
+    // Clearing takes both fields; everything disengages.
+    await setSettings({ sandboxDomain: null, sandboxDomainAliases: [] });
+    expect((await rawGet(t.port, '/hello', aliasHost)).status).toBe(404);
+    expect((await rawGet(t.port, '/hello', canonicalHost)).status).toBe(404);
   });
 });

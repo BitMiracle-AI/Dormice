@@ -329,16 +329,19 @@ export class Dormice {
   /**
    * Rewrites the runtime settings — the operator knobs that live in the
    * daemon's ledger instead of its environment (capacity cap, what new
-   * sandboxes get, the S3 archive store, the sandbox domain). Every
+   * sandboxes get, the S3 archive store, the sandbox domain group). Every
    * provided group replaces that group whole; absent groups stay
    * untouched. Takes effect immediately, restarts nothing and wakes
    * nothing; existing sandboxes keep their own policy and disk size. The
    * s3 group is probed with a real write-read-delete round trip before
    * anything is saved, and clearing or moving it is refused while any
-   * sandbox is archived. Admin-only like the apiKey verbs: this client
-   * must be authenticated with DORMICE_API_TOKEN itself — a ledger key
-   * gets an honest 403. The read half rides on getConfig().settings
-   * (which never carries the S3 keys back).
+   * sandbox is archived. sandboxDomainAliases is the full alias list
+   * (inbound-only domains; [] clears) and must stay consistent with
+   * sandboxDomain in the post-patch state — swapping the canonical domain
+   * is one call carrying both fields. Admin-only like the apiKey verbs:
+   * this client must be authenticated with DORMICE_API_TOKEN itself — a
+   * ledger key gets an honest 403. The read half rides on
+   * getConfig().settings (which never carries the S3 keys back).
    */
   async updateSettings(
     patch: UpdateSettingsRequest,

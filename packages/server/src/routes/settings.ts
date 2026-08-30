@@ -83,6 +83,46 @@ export const settingsRoutes: FastifyPluginAsyncZod<
             'managing swap requires a Linux host with the docker executor',
         });
       }
+      // The alias-list guard, judged against the post-patch state — domain
+      // and aliases may arrive in one patch, which is exactly how the
+      // console swaps the canonical domain atomically. Violations are
+      // refused, never silently rewritten (the echoed settings must be
+      // what was written). Before the s3 block on purpose: pure in-memory
+      // checks don't queue behind a network probe.
+      if (
+        patch.sandboxDomain !== undefined ||
+        patch.sandboxDomainAliases !== undefined
+      ) {
+        const current = readRuntimeSettings(db);
+        const domainAfter =
+          patch.sandboxDomain !== undefined
+            ? patch.sandboxDomain
+            : current.sandboxDomain;
+        const aliasesAfter =
+          patch.sandboxDomainAliases ?? current.sandboxDomainAliases;
+        const lower = aliasesAfter.map((alias) => alias.toLowerCase());
+        const dup = aliasesAfter.find(
+          (alias, i) => lower.indexOf(alias.toLowerCase()) !== i,
+        );
+        if (dup !== undefined) {
+          return reply.code(400).send({
+            message: `sandboxDomainAliases lists ${dup} more than once — hostnames are case-insensitive, send each alias exactly once`,
+          });
+        }
+        if (domainAfter !== null && lower.includes(domainAfter.toLowerCase())) {
+          return reply.code(400).send({
+            message: `${domainAfter} is already the sandbox domain — sandboxDomainAliases only takes the extra hostnames`,
+          });
+        }
+        if (domainAfter === null && aliasesAfter.length > 0) {
+          return reply.code(400).send({
+            message:
+              patch.sandboxDomain === null
+                ? `clearing sandboxDomain would leave ${aliasesAfter.length} alias${aliasesAfter.length === 1 ? '' : 'es'} pointing at nothing — clear sandboxDomainAliases (send []) in the same request`
+                : 'sandboxDomainAliases needs a sandbox domain in force — set sandboxDomain first',
+          });
+        }
+      }
       if (patch.s3 !== undefined) {
         // The moving-store guard: archived disks live in the current
         // endpoint+bucket, and pointing elsewhere (or clearing) would
@@ -165,6 +205,14 @@ export const settingsRoutes: FastifyPluginAsyncZod<
             : []),
           ...(patch.sandboxDomain !== undefined
             ? [`sandboxDomain=${patch.sandboxDomain ?? 'cleared'}`]
+            : []),
+          // '/' inside the list — ',' is the fragment separator above.
+          ...(patch.sandboxDomainAliases !== undefined
+            ? [
+                patch.sandboxDomainAliases.length === 0
+                  ? 'sandboxDomainAliases=cleared'
+                  : `sandboxDomainAliases=${patch.sandboxDomainAliases.join('/')}`,
+              ]
             : []),
         ].join(', '),
       });

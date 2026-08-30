@@ -119,12 +119,23 @@ export const runtimeSettingsSchema = z.object({
    */
   s3: s3ArchiveViewSchema.nullable(),
   /**
-   * The sandbox wildcard domain behind getHost() and port previews
-   * (`<port>-<sandboxId>.<domain>`); null = the feature is off and
-   * responses carry no domain. Applies live: the proxy, the E2B domain
+   * The canonical sandbox wildcard domain behind getHost() and port
+   * previews (`<port>-<sandboxId>.<domain>`); null = the feature is off
+   * and responses carry no domain. Applies live: the proxy, the E2B domain
    * field and the signed-URL host pin all read this per use.
    */
   sandboxDomain: z.string().regex(bareHostnameRegex).nullable(),
+  /**
+   * Extra sandbox wildcard domains, inbound-only: the port proxy and the
+   * signed-URL host pin accept them, while everything outbound (the E2B
+   * domain field, preview URLs) always speaks the canonical sandboxDomain.
+   * That asymmetry is the domain-migration story — add the new domain as
+   * an alias, wait for DNS, then swap it into sandboxDomain in one patch;
+   * URLs minted under the old domain keep resolving for as long as it
+   * stays listed. Never null: [] = no aliases, and the route refuses a
+   * state with aliases but no canonical domain.
+   */
+  sandboxDomainAliases: z.array(z.string().regex(bareHostnameRegex)),
   /** ISO 8601 of the last updateSettings; null = still exactly the first-boot seed. */
   updatedAt: z.string().nullable(),
 });
@@ -154,6 +165,15 @@ export const updateSettingsRequestSchema = z
       })
       .nullable()
       .optional(),
+    /** The full alias list (set semantics, like setIngress); [] clears. Not nullable — "off" belongs to sandboxDomain. */
+    sandboxDomainAliases: z
+      .array(
+        z.string().regex(bareHostnameRegex, {
+          error:
+            'each sandboxDomainAliases entry must be a bare hostname like sbx2.example.com — no scheme, no port, no leading/trailing dots',
+        }),
+      )
+      .optional(),
   })
   .refine(
     (patch) =>
@@ -162,10 +182,11 @@ export const updateSettingsRequestSchema = z
       patch.defaultPolicy !== undefined ||
       patch.swapGb !== undefined ||
       patch.s3 !== undefined ||
-      patch.sandboxDomain !== undefined,
+      patch.sandboxDomain !== undefined ||
+      patch.sandboxDomainAliases !== undefined,
     {
       message:
-        'updateSettings needs at least one of maxSandboxes, sandboxDefaults, defaultPolicy, swapGb, s3, sandboxDomain',
+        'updateSettings needs at least one of maxSandboxes, sandboxDefaults, defaultPolicy, swapGb, s3, sandboxDomain, sandboxDomainAliases',
     },
   );
 

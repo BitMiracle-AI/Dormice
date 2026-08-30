@@ -16,7 +16,7 @@
   "settings_hint_sandbox_memory": "既定メモリ上限の初回起動シード値 — 有効値は上の運用設定にあります",
   "settings_hint_sandbox_pids_limit": "サンドボックスごとのプロセス数上限(fork 爆弾に対する物理的なブレーキ)",
   "settings_hint_reclaim_timeout": "凍結時にメモリを swap へ押し出す際の最大待ち時間",
-  "settings_hint_sandbox_domain": "サンドボックスドメインの初回起動シード値 — 有効な設定は「ドメイン」ページのサンドボックスドメインカードにあります",
+  "settings_hint_sandbox_domain": "サンドボックスの正規ドメインの初回起動シード値 — 有効な設定(エイリアス含む)は「ドメイン」ページのサンドボックスドメインカードにあります",
   "settings_hint_ingress_file": "daemon が管理する Caddy 設定ファイル。設定すると「ドメイン」ページからウェブでドメインをバインドできます",
   "settings_hint_ingress_reload_cmd": "プロキシ設定変更後のリロードコマンド。未設定なら既定で管理ファイル自体を caddy reload します",
   "settings_hint_s3_endpoint": "アーカイブ Endpoint の初回起動シード値 — 有効な設定は上のアーカイブストレージカードにあります",

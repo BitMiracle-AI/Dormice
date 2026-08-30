@@ -118,9 +118,11 @@ Four more pages round out the operator view:
   guide and a live per-domain probe that shows DNS and certificate
   progress until each one turns green — see
   [Installation](/docs/installation#connect-from-another-machine). The
-  sandbox domain card sets the wildcard domain behind
-  [port previews](/docs/ports) — a copyable wildcard DNS record guide,
-  applied live; it does not depend on the managed reverse proxy.
+  sandbox domain card manages the wildcard domains behind
+  [port previews](/docs/ports) — one canonical domain that every new
+  URL speaks, plus inbound-only aliases with a "make canonical" action
+  for zero-downtime domain switches; a copyable wildcard DNS record
+  guide, applied live, no dependency on the managed reverse proxy.
 - **Settings** — two halves. The operational knobs (sandbox capacity
   cap, default resources for new sandboxes, default lifecycle policy,
   extra managed [swap](/docs/core-concepts#swap-and-freezing), and the

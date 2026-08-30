@@ -80,7 +80,7 @@ function control(
 async function createSandbox(
   t: TestApp,
   payload: Record<string, unknown> = {},
-): Promise<{ sandboxID: string; envdAccessToken: string }> {
+): Promise<{ sandboxID: string; envdAccessToken: string; domain?: string }> {
   const res = await control(t, 'POST', '/sandboxes', payload);
   expect(res.statusCode).toBe(201);
   return res.json();
@@ -2435,6 +2435,50 @@ describe('browser-direct signed files: the 49983 subdomain form and CORS', () =>
     });
     expect(swapped.statusCode).toBe(401);
     expect(swapped.json().message).toBe('invalid signature');
+  });
+
+  it('an alias domain pins the sandbox at full strength, and never leaks outbound', async () => {
+    const t = subdomainApp();
+    const ALIAS = 'alias.dormice.test';
+    const set = await t.app.inject({
+      method: 'POST',
+      url: '/updateSettings',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { sandboxDomainAliases: [ALIAS] },
+    });
+    expect(set.statusCode).toBe(200);
+
+    // Aliases are inbound-only: create responses keep the canonical domain.
+    const a = await createSandbox(t);
+    const b = await createSandbox(t);
+    expect(a.domain).toBe(DOMAIN);
+
+    const exp = Math.floor(Date.now() / 1000) + 300;
+    const path = '/home/user/probe/alias.txt';
+    const read = (envdAccessToken: string) =>
+      t.app.inject({
+        method: 'GET',
+        url: `/files?path=${encodeURIComponent(path)}&signature=${encodeURIComponent(
+          sdkSignature({
+            path,
+            operation: 'read',
+            envdAccessToken,
+            expiration: exp,
+          }),
+        )}&signature_expiration=${exp}`,
+        headers: { host: `49983-${a.sandboxID}.${ALIAS}` },
+      });
+
+    // A's own signature reaches A through the alias host (404: the probe
+    // file does not exist — but the door opened and the core answered)...
+    const own = await read(a.envdAccessToken);
+    expect(own.statusCode).toBe(404);
+    // ...while B's valid signature is pinned out, exactly as on the
+    // canonical domain.
+    const crossed = await read(b.envdAccessToken);
+    expect(crossed.statusCode).toBe(401);
+    expect(crossed.json().message).toBe('invalid signature');
+    expect(crossed.headers['access-control-allow-origin']).toBe('*');
   });
 
   it('refusals through the subdomain keep the envd order and carry CORS', async () => {
