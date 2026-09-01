@@ -71,8 +71,8 @@ A running sandbox is three layers stacked, each with its own lifetime:
 └────────────────────────────────────────────┘
 ```
 
-**Image layers** hold the tools. The stock base image ships Python,
-Node.js and Claude Code; a [template](/docs/templates) replaces it with
+**Image layers** hold the tools. The stock base image ships Python and
+Node.js; a [template](/docs/templates) replaces it with
 your own image. These layers are read-only and Docker stores each one
 once per host, however many sandboxes boot from it. Composition happens
 at build time: a template image can `FROM` the base image, or another

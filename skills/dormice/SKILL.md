@@ -203,7 +203,7 @@ process does **not** keep its sandbox warm — a resident sandbox means
   installing system packages (E2B's convention; `sudo apt install` works,
   but survives only until the next cold wake — persistent tooling belongs
   in a template or under `/home/user`). The stock image ships Ubuntu
-  24.04, Python 3.12, Node 24, git, ripgrep, and a pinned Claude Code.
+  24.04, Python 3.12, Node 24, git, ripgrep, and jq.
 
 ## Learn more
 
