@@ -281,8 +281,14 @@ async function resolveApiKeyId(
   client: Dormice,
   name: string,
 ): Promise<string | null> {
+  // Creation trims the name (apiKeyNameSchema), so the stored spelling
+  // never has surrounding whitespace — match on the same trimmed spelling
+  // here so the untrimmed input an operator originally typed still resolves.
+  const trimmed = name.trim();
   const keys = await client.listApiKeys();
-  return keys.find((k) => k.name === name && k.revokedAt === null)?.id ?? null;
+  return (
+    keys.find((k) => k.name === trimmed && k.revokedAt === null)?.id ?? null
+  );
 }
 
 /**
