@@ -421,6 +421,30 @@ describe('API keys over real HTTP', () => {
     await client.revokeApiKey(apiKey.id);
   });
 
+  it('updateApiKey ignores an id smuggled inside the patch object', async () => {
+    const { apiKey: intended } = await client.createApiKey('sdk-target');
+    const { apiKey: victim } = await client.createApiKey('sdk-victim');
+
+    // A patch variable can carry an `id` field through structural typing
+    // (TypeScript excess-property checks only catch object literals, not
+    // variables). The wire request must still target the id passed as the
+    // method's own argument, not one hiding inside the patch.
+    const patch = { id: victim.id, disabled: true } as { disabled: boolean };
+    const result = await client.updateApiKey(intended.id, patch);
+
+    expect(result.apiKey.id).toBe(intended.id);
+    expect(result.apiKey.disabledAt).not.toBeNull();
+
+    const allKeys = await client.listApiKeys();
+    const refreshedIntended = allKeys.find((key) => key.id === intended.id);
+    const refreshedVictim = allKeys.find((key) => key.id === victim.id);
+    expect(refreshedIntended?.disabledAt).not.toBeNull();
+    expect(refreshedVictim?.disabledAt).toBeNull();
+
+    await client.revokeApiKey(intended.id);
+    await client.revokeApiKey(victim.id);
+  });
+
   it('a ledger key gets the honest 403 on the management verbs', async () => {
     const { apiKey, token } = await client.createApiKey('sdk-not-admin');
     const keyed = new Dormice({ endpoint, token });

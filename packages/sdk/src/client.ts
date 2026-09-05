@@ -589,7 +589,11 @@ export class Dormice {
     id: string,
     patch: { name?: string; expiresAt?: string | null; disabled?: boolean },
   ): Promise<UpdateApiKeyResponse> {
-    const data = await this.rpc('updateApiKey', { id, ...patch });
+    // Spread patch first so its fields can never clobber the id we were
+    // explicitly asked to target (a patch variable can carry an `id` of
+    // its own through structural typing, since excess-property checks
+    // only apply to object literals).
+    const data = await this.rpc('updateApiKey', { ...patch, id });
     return updateApiKeyResponseSchema.parse(data);
   }
 
