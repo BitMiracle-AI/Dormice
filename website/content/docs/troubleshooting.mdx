@@ -80,7 +80,18 @@ The activity feed (`listActivity`, or the console's activity page) says
 which it was: the `reconciled` event that recorded the death carries the
 exit code and whether the kernel's memory cgroup OOM-killed the
 container. `OOM-killed` is the kernel's verdict; a plain `exit 137` is a
-SIGKILL from elsewhere.
+SIGKILL from elsewhere. The same verdict rides on the sandbox object as
+[`lastExit`](/docs/http-api#the-sandbox-object) — `cause: "oom-killed"`
+here — so a client that saw its stream end can read it straight from
+the `acquireSandbox` that revives the sandbox.
+
+"Revives" means now, not at the next heartbeat: an `acquireSandbox` (or
+any use verb) that finds the container dead under a record that still
+says active records the death and cold-starts the sandbox in the same
+call, and answers `ready` only once the container is running. Before
+2026-09-08 the answer came from the record alone, and for up to one scan
+interval after a death the caller's next command failed with "container
+is stopped, expected running".
 
 ## A sandbox vanished with exit code 2 and no OOM
 
@@ -90,8 +101,11 @@ that cap bounds the sandbox's host-side threads and processes, not a
 count the sandbox can see — so nothing inside gets an error; the
 sandbox's kernel simply dies, exit 2, and the host's own kernel log
 shows one line: `fork rejected by pids controller`. The `reconciled`
-activity event names this signature. The disk survives and the next
-acquire revives the sandbox. The default is 4096 (it was 512, runc's
+activity event names this signature, and the sandbox object's
+[`lastExit`](/docs/http-api#the-sandbox-object) reads
+`cause: "runtime-died"`. The disk survives and the next acquire revives
+the sandbox — immediately, even inside the heartbeat's blind spot (see
+the entry above). The default is 4096 (it was 512, runc's
 fork-bomb number — a browser plus a few agent sessions in one sandbox is
 enough to pass it). A daemon upgraded from the old default adopts 4096 at
 that boot and brings its running sandboxes to it right there; only an

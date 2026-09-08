@@ -476,6 +476,109 @@ describe('acquire after reality moved behind the ledger', () => {
   });
 });
 
+describe('acquire finds the shell dead under an active row', () => {
+  // The blind spot: a gVisor box dies whole (OOM, pids cap) and the ledger
+  // keeps saying active until the heartbeat's next reconcile — up to a
+  // scan interval later. Inside that window the old acquire answered
+  // "ready" from the ledger alone, and the caller's very next call failed
+  // "container is stopped, expected running". Measured by a consumer: 60
+  // such failures in two days, all within 120s of a death.
+  it('records the death, cold-starts the shell, and answers a true ready with lastExit set', async () => {
+    const { app, executor } = testApp();
+    const created = (await acquire(app, { name: 'alice' })).json();
+    const id = created.sandbox.id;
+    expect(created.sandbox.lastExit).toBeNull();
+    // The pids cgroup takes down the sentry — exit 2, no OOM flag — and no
+    // reconcile runs before the next acquire.
+    executor.crashContainer(id, {
+      exitCode: 2,
+      oomKilled: false,
+      runtimeDied: true,
+    });
+
+    const res = await acquire(app, { name: 'alice' });
+    expect(res.statusCode).toBe(200);
+    const again = res.json();
+    expect(again.status).toBe('ready');
+    expect(again.created).toBe(false);
+    expect(again.sandbox.id).toBe(id);
+    expect(again.sandbox.state).toBe('active');
+    // ready means running — the container, not the ledger.
+    expect(executor.stateOf(id)).toBe('running');
+    // The death travels on the wire: the caller who saw EOF reads why.
+    expect(again.sandbox.lastExit).toMatchObject({
+      exitCode: 2,
+      cause: 'runtime-died',
+    });
+    expect(again.sandbox.lastExit.at).toMatch(/^\d{4}-/);
+
+    const kinds = (await rpc(app, '/listActivity'))
+      .json()
+      .events.map((e: { kind: string; detail: string }) => [e.kind, e.detail]);
+    expect(kinds).toContainEqual([
+      'reconciled',
+      "container is stopped — state active corrected to stopped (exit 2, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see the sandbox pids cap in settings), found dead at wake and restarted",
+    ]);
+    expect(kinds[0]).toEqual(['woken', 'cold start from the surviving disk']);
+  });
+
+  it('lastExit is sticky history: a later idle stop and wake keep the last death readable', async () => {
+    const { app, db, executor, locks } = testApp();
+    const created = (
+      await acquire(app, {
+        name: 'alice',
+        policy: { freezeAfterSeconds: 60, stopAfterSeconds: 120 },
+      })
+    ).json();
+    const id = created.sandbox.id;
+    executor.crashContainer(id, {
+      exitCode: 137,
+      oomKilled: true,
+      runtimeDied: false,
+    });
+    const revived = (await acquire(app, { name: 'alice' })).json();
+    expect(revived.sandbox.lastExit.cause).toBe('oom-killed');
+
+    // The scanner's own stop is not a death and does not touch lastExit.
+    const t = revived.sandbox.lastActiveAt;
+    await scanOnce(db, executor, locks, after(t, 60));
+    await scanOnce(db, executor, locks, after(t, 120));
+    expect(executor.stateOf(id)).toBe('stopped');
+    const listed = (await rpc(app, '/listSandboxes'))
+      .json()
+      .sandboxes.find((s: { id: string }) => s.id === id);
+    expect(listed.state).toBe('stopped');
+    expect(listed.lastExit).toMatchObject({
+      exitCode: 137,
+      cause: 'oom-killed',
+    });
+
+    const woken = (await acquire(app, { name: 'alice' })).json();
+    expect(woken.sandbox.state).toBe('active');
+    expect(woken.sandbox.lastExit).toMatchObject({
+      exitCode: 137,
+      cause: 'oom-killed',
+    });
+  });
+
+  it('execCommand on a dead-but-active sandbox revives it instead of failing', async () => {
+    const { app, executor } = testApp();
+    const created = (await acquire(app, { name: 'alice' })).json();
+    executor.crashContainer(created.sandbox.id, {
+      exitCode: 137,
+      oomKilled: true,
+      runtimeDied: false,
+    });
+    const res = await rpc(app, '/execCommand', {
+      name: 'alice',
+      command: 'echo back',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().stdout).toBe('back\n');
+    expect(executor.stateOf(created.sandbox.id)).toBe('running');
+  });
+});
+
 describe('POST /execCommand', () => {
   it('runs a command in the sandbox and returns the buffered result', async () => {
     const { app } = testApp();

@@ -128,6 +128,18 @@ function toSandbox(
     metadata: row.metadata ? JSON.parse(row.metadata) : {},
     createdAt: row.createdAt,
     lastActiveAt: row.lastActiveAt,
+    // The three columns are written together (recordShellDeath); reading
+    // one as the sentinel for all is the same fact, not a guess.
+    lastExit:
+      row.lastExitAt !== null &&
+      row.lastExitCode !== null &&
+      row.lastExitCause !== null
+        ? {
+            at: row.lastExitAt,
+            exitCode: row.lastExitCode,
+            cause: row.lastExitCause,
+          }
+        : null,
   };
 }
 

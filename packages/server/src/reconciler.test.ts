@@ -99,6 +99,45 @@ describe('startup reconcile', () => {
       'bob',
       "container is stopped — state active corrected to stopped (exit 2, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see the sandbox pids cap in settings)",
     ]);
+    // The same verdict lands on the row as lastExit — the wire's copy of
+    // the death, for the client whose stream just ended in EOF.
+    expect(findByName(db, 'alice')).toMatchObject({
+      state: 'stopped',
+      lastExitCode: 137,
+      lastExitCause: 'oom-killed',
+    });
+    expect(findByName(db, 'bob')).toMatchObject({
+      state: 'stopped',
+      lastExitCode: 2,
+      lastExitCause: 'runtime-died',
+    });
+    expect(findByName(db, 'alice')?.lastExitAt).toMatch(/^\d{4}-/);
+  });
+
+  it('a stopped shell revived under the slot is left alone — the wake is the fresher observer', async () => {
+    const { db, executor, locks } = setup();
+    const row = await seed(db, executor, 'alice');
+    executor.crashContainer(row.id, {
+      exitCode: 137,
+      oomKilled: true,
+      runtimeDied: false,
+    });
+    // Between this pass's snapshot and its repair, an acquire took the slot,
+    // recorded the death and cold-started the shell. Staged by reviving the
+    // container before reconcile runs while the ledger already reads active
+    // again — the state the snapshot decided on. The repair must re-read
+    // reality inside the slot and see a live shell, not stamp a second
+    // death over a running sandbox.
+    const stale = await executor.listContainers();
+    expect(stale.get(row.id)).toBe('stopped');
+    await executor.start(row.id);
+
+    const result = await reconcile(db, executor, locks);
+    expect(result).toEqual(NONE);
+    expect(findByName(db, 'alice')).toMatchObject({
+      state: 'active',
+      lastExitAt: null,
+    });
   });
 
   it('a stop the daemon ordered itself is recorded as a SIGKILL, never as a death verdict', async () => {

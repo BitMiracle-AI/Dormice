@@ -2,6 +2,7 @@ import {
   type LifecyclePolicy,
   SANDBOX_STATES,
   type SandboxState,
+  type ShellExitCause,
 } from '@dormice/shared';
 import { count, eq } from 'drizzle-orm';
 import { recordActivity } from './activity';
@@ -83,6 +84,9 @@ export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
     diskGb: input.spec?.diskGb ?? null,
     createdAt: now,
     lastActiveAt: now,
+    lastExitAt: null,
+    lastExitCode: null,
+    lastExitCause: null,
     metadata: input.metadata ?? null,
     envs: input.e2b?.envs ?? null,
     deadlineAt: input.e2b?.deadlineAt ?? null,
@@ -163,6 +167,30 @@ export function deleteSandbox(db: Db, id: string): void {
  */
 export function overwriteState(db: Db, id: string, state: SandboxState): void {
   db.update(sandboxes).set({ state }).where(eq(sandboxes.id, id)).run();
+}
+
+/**
+ * Records an unordered death of the shell: the row goes to `stopped` and the
+ * three lastExit columns are written in the same statement — the state and
+ * the reason it is in that state are one fact. Like overwriteState this
+ * bypasses the transition table: a death is observed, never ordered, and
+ * whatever the ledger believed (active, frozen) is simply overwritten.
+ */
+export function recordShellDeath(
+  db: Db,
+  id: string,
+  exit: { exitCode: number; cause: ShellExitCause },
+  now: string = new Date().toISOString(),
+): void {
+  db.update(sandboxes)
+    .set({
+      state: 'stopped',
+      lastExitAt: now,
+      lastExitCode: exit.exitCode,
+      lastExitCause: exit.cause,
+    })
+    .where(eq(sandboxes.id, id))
+    .run();
 }
 
 /**

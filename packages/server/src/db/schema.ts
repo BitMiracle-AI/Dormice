@@ -1,4 +1,8 @@
-import { ACTIVITY_KINDS, SANDBOX_STATES } from '@dormice/shared';
+import {
+  ACTIVITY_KINDS,
+  SANDBOX_STATES,
+  SHELL_EXIT_CAUSES,
+} from '@dormice/shared';
 import { sql } from 'drizzle-orm';
 import {
   index,
@@ -50,6 +54,16 @@ export const sandboxes = sqliteTable('sandboxes', {
   diskGb: real('disk_gb'),
   createdAt: text('created_at').notNull(),
   lastActiveAt: text('last_active_at').notNull(),
+  /**
+   * The shell's last unordered death (shared lastExitSchema): the three
+   * travel together — all NULL until a death is recorded, then overwritten
+   * only by the next one. Written at exactly one place (lifecycle's
+   * recordShellDeath) from the two readers of a stopped shell that nobody
+   * stopped: the reconciler's heartbeat and a wake that found it dead.
+   */
+  lastExitAt: text('last_exit_at'),
+  lastExitCode: integer('last_exit_code'),
+  lastExitCause: text('last_exit_cause', { enum: SHELL_EXIT_CAUSES }),
   /**
    * JSON object of caller labels (string→string), NULL = none. Written by
    * both faces — native acquire/updateMetadata and E2B create — filtered on

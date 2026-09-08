@@ -1,3 +1,4 @@
+import type { ShellExitCause } from '@dormice/shared';
 import { type ArchiveStore, objectKey } from './archive/store';
 import { recordActivity } from './db/activity';
 import type { Db } from './db/db';
@@ -6,13 +7,14 @@ import {
   findById,
   setPausedByUser,
   transition,
+  recordShellDeath as writeShellDeath,
 } from './db/ledger';
 import { deleteSandboxMetricsSamples } from './db/metrics';
 import type { SandboxRow } from './db/schema';
 import { readRuntimeSettings } from './db/settings';
 import { resolveImage } from './db/templates';
 import type { WatcherTable } from './e2b/watcher-table';
-import type { Executor } from './executor/executor';
+import type { Executor, ShellExit } from './executor/executor';
 import { resolveSpec, shellSpecOf } from './spec';
 
 /**
@@ -140,6 +142,63 @@ export async function destroySandbox(
 }
 
 /**
+ * The wire's verdict on a death, from the executor's reading of the exit.
+ * Only the memory-cgroup OOM is asserted as a cause — Docker relays it
+ * straight from the kernel. The runtime's own death (ShellExit.runtimeDied
+ * — under gVisor, exit 2 without the OOM flag) is the signature a pids-cap
+ * hit leaves: a strong hint, named as such. Everything else is a bare exit.
+ */
+export function causeOfExit(exit: ShellExit): ShellExitCause {
+  if (exit.oomKilled) return 'oom-killed';
+  if (exit.runtimeDied) return 'runtime-died';
+  return 'exited';
+}
+
+/** The same three verdicts in the words the activity feed uses. */
+export function describeExit(exit: ShellExit | null): string {
+  if (exit === null) return '';
+  const cause = causeOfExit(exit);
+  if (cause === 'oom-killed') {
+    return ` (exit ${exit.exitCode}, OOM-killed by the kernel's memory cgroup)`;
+  }
+  if (cause === 'runtime-died') {
+    return ` (exit ${exit.exitCode}, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see the sandbox pids cap in settings)`;
+  }
+  return ` (exit ${exit.exitCode}, not an OOM kill)`;
+}
+
+/**
+ * A shell that stopped under a row that never ordered a stop — a death. The
+ * one place it is recorded, whoever noticed: the reconciler's heartbeat
+ * (an idle sandbox nobody touches) or a wake that found the shell dead (a
+ * busy one, whose caller is about to use it). Both write the same three
+ * facts — state stopped, lastExit, a `reconciled` event carrying the
+ * exit — so the console, the wire and the activity feed tell one story.
+ * Watchers are disposed here too: a dead container has ended every
+ * inotifywait it hosted. `noticed` names the observer in the detail, the
+ * only thing that differs between the two.
+ */
+export function recordShellDeath(
+  db: Db,
+  row: SandboxRow,
+  exit: ShellExit,
+  noticed: 'by the reconciler' | 'at wake',
+  watchers?: WatcherTable,
+): void {
+  watchers?.disposeSandbox(row.id);
+  writeShellDeath(db, row.id, {
+    exitCode: exit.exitCode,
+    cause: causeOfExit(exit),
+  });
+  recordActivity(db, {
+    kind: 'reconciled',
+    sandboxName: row.name,
+    sandboxId: row.id,
+    detail: `container is stopped — state ${row.state} corrected to stopped${describeExit(exit)}${noticed === 'at wake' ? ', found dead at wake and restarted' : ''}`,
+  });
+}
+
+/**
  * Swap the shell, keep the body: the container is removed (whatever state),
  * the disk stays, and the ledger records `stopped` — the state whose wake
  * path builds a fresh container from the surviving disk, and therefore from
@@ -210,9 +269,32 @@ export async function wakeSandbox(
   watchers?: WatcherTable,
 ): Promise<SandboxRow> {
   switch (row.state) {
-    case 'active':
-      await watchers?.reapDeferred(row.id);
-      return row;
+    case 'active': {
+      // The ledger says running; reality may have moved since the last
+      // heartbeat — a gVisor box exits whole on OOM or a pids-cap hit, and
+      // the reconciler only looks once an interval. A `ready` answered from
+      // the ledger alone would hand the caller a corpse (its very next envd
+      // call fails "container is stopped"; measured by a consumer: every
+      // such failure landed within 120s of a death, i.e. inside the
+      // heartbeat's blind spot). One inspect here (~1-2 ms on the local
+      // socket, a fraction of the exec that follows) makes `ready` a
+      // statement about the container, not the ledger. exitOf answers only
+      // for a stopped shell: a live one is null and takes the fast path
+      // unchanged; a dead one is recorded as the death it is and falls
+      // through to the stopped arm's cold start — the same seconds a
+      // stopped sandbox always costs, no `restoring` detour.
+      const exit = await executor.exitOf(row.id);
+      if (exit === null) {
+        await watchers?.reapDeferred(row.id);
+        return row;
+      }
+      recordShellDeath(db, row, exit, 'at wake', watchers);
+      const dead = findById(db, row.id);
+      if (dead === undefined) {
+        throw new Error(`sandbox ${row.id} vanished while recording its death`);
+      }
+      return wakeSandbox(db, executor, dead, actor, watchers);
+    }
     case 'frozen':
     case 'stopped': {
       const next = resolveImage(db, row.template) ?? executor.baseImage;

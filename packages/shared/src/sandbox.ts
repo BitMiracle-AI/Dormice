@@ -52,6 +52,47 @@ export const sandboxSpecSchema = z.object({
 export type SandboxSpec = z.infer<typeof sandboxSpecSchema>;
 
 /**
+ * How a sandbox's shell last ended when the daemon did not order it — the
+ * death the reconciler (or a wake that found the shell dead) recorded:
+ *   oom-killed   — the host kernel's memory cgroup killed the container;
+ *                  Docker relays the kernel's own verdict
+ *   runtime-died — the sandbox runtime itself died: under gVisor exit 2
+ *                  with no OOM flag, the signature a pids-cap hit leaves
+ *                  (a strong hint, not a kernel verdict)
+ *   exited       — any other exit; exitCode is all that is known
+ * Stops the daemon ordered (idle policy, rebuild, destroy) are not deaths
+ * and never appear here — those are the activity feed's stopped/rebuilt
+ * events. The vocabulary mirrors the reconciled event's three wordings.
+ */
+export const SHELL_EXIT_CAUSES = [
+  'oom-killed',
+  'runtime-died',
+  'exited',
+] as const;
+
+export type ShellExitCause = (typeof SHELL_EXIT_CAUSES)[number];
+
+/**
+ * The last unordered death of this sandbox's shell, or null if none has
+ * happened in this incarnation. Sticky on purpose: it is history, not
+ * state — a wake does not clear it (the caller who saw a stream end in EOF
+ * reads it right after re-acquiring), only the next death overwrites it and
+ * destroy deletes it with the row. `at` is when the death was recorded,
+ * within one heartbeat of the death itself (immediately when a wake found
+ * the shell dead); the activity feed carries the same event with wording.
+ */
+export const lastExitSchema = z
+  .object({
+    at: z.iso.datetime(),
+    /** The container init's exit code — Docker's State.ExitCode. */
+    exitCode: z.number().int(),
+    cause: z.enum(SHELL_EXIT_CAUSES),
+  })
+  .nullable();
+
+export type LastExit = z.infer<typeof lastExitSchema>;
+
+/**
  * A sandbox as reported by the daemon — the wire shape shared by the HTTP
  * API, the SDK, and the web console.
  *
@@ -89,6 +130,7 @@ export const sandboxSchema = z.object({
   metadata: sandboxMetadataSchema,
   createdAt: z.iso.datetime(),
   lastActiveAt: z.iso.datetime(),
+  lastExit: lastExitSchema,
 });
 
 export type Sandbox = z.infer<typeof sandboxSchema>;

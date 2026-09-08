@@ -9,8 +9,9 @@ import {
 } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import type { WatcherTable } from './e2b/watcher-table';
-import type { ContainerState, Executor, ShellExit } from './executor/executor';
+import type { ContainerState, Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
+import { recordShellDeath } from './lifecycle';
 
 export interface ReconcileResult {
   /** Rows whose state was corrected to what reality actually shows. */
@@ -37,27 +38,6 @@ const LEDGER_STATE: Record<ContainerState, SandboxState> = {
   paused: 'frozen',
   stopped: 'stopped',
 };
-
-/**
- * The death, in the words the host kernel used. Only the memory-cgroup OOM
- * verdict is asserted as a cause — Docker relays it straight from the
- * kernel. The runtime's own death is the executor's reading of the exit
- * (ShellExit.runtimeDied — under gVisor, exit 2 without the OOM flag),
- * named here for what it is the signature of, a pids-cap hit: a strong
- * hint, not a kernel verdict, and worded as one. Everything else is the
- * bare exit code. What any exit code means under a runtime is the
- * executor's knowledge, deliberately not this function's.
- */
-function describeExit(exit: ShellExit | null): string {
-  if (exit === null) return '';
-  if (exit.oomKilled) {
-    return ` (exit ${exit.exitCode}, OOM-killed by the kernel's memory cgroup)`;
-  }
-  if (exit.runtimeDied) {
-    return ` (exit ${exit.exitCode}, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see the sandbox pids cap in settings)`;
-  }
-  return ` (exit ${exit.exitCode}, not an OOM kill)`;
-}
 
 /**
  * Reads the ledger, then all of reality, and repairs every disagreement.
@@ -222,17 +202,23 @@ export async function reconcile(
         await repairUnderLock(row, async () => {
           // A stopped container under a row that never ordered a stop is a
           // death the daemon did not cause. Read how it died before the
-          // ledger moves on, so the record says "OOM-killed" or "exit 2"
-          // instead of leaving the operator — and the E2B client whose
-          // stream just ended in EOF — to guess between the two.
-          const exit =
-            observed === 'stopped' ? await executor.exitOf(row.id) : null;
-          if (observed === 'stopped') watchers?.disposeSandbox(row.id);
+          // ledger moves on — inside the slot, so a wake that just revived
+          // the shell (the other reader of deaths) is seen as the live
+          // container it left, not repaired over from this pass's stale
+          // snapshot. recordShellDeath writes what the wake would have:
+          // state, lastExit and the reconciled event, one story.
+          if (observed === 'stopped') {
+            const exit = await executor.exitOf(row.id);
+            if (exit === null) return; // Revived under us; nothing to repair.
+            recordShellDeath(db, row, exit, 'by the reconciler', watchers);
+            result.repairedStates += 1;
+            return;
+          }
           overwriteState(db, row.id, LEDGER_STATE[observed]);
           result.repairedStates += 1;
           note(
             row,
-            `container is ${observed} — state ${row.state} corrected to ${LEDGER_STATE[observed]}${describeExit(exit)}`,
+            `container is ${observed} — state ${row.state} corrected to ${LEDGER_STATE[observed]}`,
           );
         });
       }

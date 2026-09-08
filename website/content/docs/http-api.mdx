@@ -75,9 +75,23 @@ Everything that returns a sandbox returns this shape:
   "state": "active", "nodeId": "…", "endpoint": "http://127.0.0.1:3676",
   "policy": { "freezeAfterSeconds": 600, "stopAfterSeconds": 259200, "archiveAfterSeconds": null },
   "template": null, "metadata": { "app": "crawler", "env": "prod" },
-  "createdAt": "…", "lastActiveAt": "…"
+  "createdAt": "…", "lastActiveAt": "…",
+  "lastExit": null
 }
 ```
+
+`lastExit` is the last time this sandbox's container died on its own —
+`{ "at", "exitCode", "cause" }`, with `cause` one of `oom-killed` (the
+host kernel's memory cgroup killed it), `runtime-died` (the sandbox
+runtime itself died: under gVisor, exit 2 with no OOM flag — the
+signature of a [pids-cap hit](/docs/troubleshooting#a-sandbox-vanished-with-exit-code-2-and-no-oom))
+or `exited` (any other exit; the code is all that is known). Stops the
+daemon ordered — the idle policy, a rebuild, a destroy — are not deaths
+and never appear here; they are the activity feed's business. The field
+is history, not state: a wake does not clear it, only the next death
+overwrites it. That is what makes it useful — a client whose stream just
+ended in EOF re-acquires and reads *why* in the same answer, and can tell
+its user "raise the memory" from "raise the pids cap".
 
 `name` is yours and `id` is the platform's — [two identities with two
 jobs](/docs/core-concepts#sandboxes). Every verb addresses sandboxes by
