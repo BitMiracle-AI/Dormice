@@ -36,7 +36,13 @@ export type OutputChannel = 'stdout' | 'stderr' | 'pty';
 
 export type ProcessEnd =
   | { kind: 'exit'; exitCode: number }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string }
+  /**
+   * The daemon is shutting down: the stream ends, the process does not.
+   * Distinct from 'error' so the wire can say `unavailable` (retry after
+   * the restart) instead of `internal` (something broke).
+   */
+  | { kind: 'shutdown'; message: string };
 
 export interface ProcessSubscriber {
   /**
@@ -47,8 +53,12 @@ export interface ProcessSubscriber {
    * nobody watches drains and drops, it never wedges.
    */
   onOutput(channel: OutputChannel, chunk: Buffer): void | Promise<void>;
-  /** The process's ending. Called exactly once, after the last onOutput. */
-  onEnd(end: ProcessEnd): void;
+  /**
+   * The process's ending. Called exactly once, after the last onOutput. A
+   * returned promise settles when the ending is fully on the wire — what
+   * shutdown() waits for before the sockets are cut.
+   */
+  onEnd(end: ProcessEnd): void | Promise<void>;
 }
 
 export interface ProcessRecord {
@@ -159,15 +169,52 @@ export class ProcessTable {
     this.records.get(pid)?.subscribers.delete(subscriber);
   }
 
-  private finalize(record: InternalRecord, end: ProcessEnd): void {
+  /**
+   * Daemon shutdown: every attached stream is ended with the shutdown
+   * verdict — the process itself is not signaled (it keeps running in the
+   * sandbox, as it would across any daemon restart; the fresh daemon's
+   * table starts empty, so no pid can be reconnected to). Resolves once
+   * every ending is on the wire or `timeoutMs` has passed, whichever comes
+   * first — the caller cuts the sockets right after, and a client that has
+   * stopped reading must not hold the restart hostage. A process whose
+   * wait() settles afterwards finds no record and is a no-op.
+   */
+  async shutdown(timeoutMs = 5000): Promise<void> {
+    const endings: Promise<void>[] = [];
+    for (const record of [...this.records.values()]) {
+      endings.push(
+        this.finalize(record, {
+          kind: 'shutdown',
+          message:
+            'daemon shutting down — this stream ends; the process keeps running in the sandbox and cannot be reconnected to after the restart',
+        }),
+      );
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled(endings),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+  }
+
+  private async finalize(
+    record: InternalRecord,
+    end: ProcessEnd,
+  ): Promise<void> {
     if (!this.records.delete(record.pid)) return;
+    const endings: Promise<void>[] = [];
     for (const subscriber of [...record.subscribers]) {
       record.subscribers.delete(subscriber);
       try {
-        subscriber.onEnd(end);
+        const ending = subscriber.onEnd(end);
+        if (ending) endings.push(ending.catch(() => {}));
       } catch {
         // A subscriber whose stream already broke is its own ending.
       }
     }
+    await Promise.all(endings);
   }
 }

@@ -179,11 +179,18 @@ export function buildApp({
   }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
-  // Streaming WatchDir requests stay open until their watcher is stopped;
-  // preClose must cut those resources before Fastify waits for in-flight
-  // requests to drain. onClose would never be reached while a stream is live.
+  // The long-lived streams — attached process streams, streaming WatchDir
+  // requests — never end on their own, and Fastify's close waits for every
+  // in-flight request. preClose ends them first, each with an honest
+  // end-frame (the process face says `unavailable`, the watch face closes
+  // its watcher), bounded: a client that has stopped reading cannot hold
+  // the restart. The processes themselves are not signaled — they keep
+  // running in the sandbox, as they would across any daemon restart. What
+  // is still open afterwards (a native execCommand mid-run, a proxied
+  // request, an upgraded WebSocket) is the caller's business in main.ts,
+  // which cuts the sockets when its grace period ends.
   app.addHook('preClose', async () => {
-    await watchers.shutdown();
+    await Promise.all([processes.shutdown(), watchers.shutdown()]);
   });
 
   // The single arbiter for the wire's error shape: every non-2xx body is

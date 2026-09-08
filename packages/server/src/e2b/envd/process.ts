@@ -77,14 +77,22 @@ function streamSubscriber(write: (buf: Buffer) => Promise<void>): {
               envelope(FLAG_END_STREAM, {}),
             ]
           : [
-              // The container died under the process (a kill, a destroy):
-              // an in-stream internal error, which the SDK triages via its
-              // health check — the same feel as a killed E2B sandbox.
+              // 'error': the container died under the process (a kill, a
+              // destroy) — an in-stream internal error, which the SDK
+              // triages via its health check, the same feel as a killed
+              // E2B sandbox. 'shutdown': the daemon is restarting and the
+              // process is not — `unavailable`, the code that means
+              // "retry later", never "something broke".
               envelope(FLAG_END_STREAM, {
-                error: { code: 'internal', message: end.message },
+                error: {
+                  code: end.kind === 'shutdown' ? 'unavailable' : 'internal',
+                  message: end.message,
+                },
               }),
             ];
-      void (async () => {
+      // Returned so ProcessTable.shutdown can wait for the frames to reach
+      // the socket before the daemon cuts it.
+      return (async () => {
         for (const frame of frames) await write(frame);
         resolveDone('ended');
       })();

@@ -1234,6 +1234,34 @@ describe('E2B envd surface', () => {
     );
   });
 
+  it('daemon shutdown ends an attached stream with `unavailable`, not a reset — the process is left running', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    // A long command whose stream would otherwise hold app.close() for
+    // the whole run — the exact shape of the 90s-into-SIGKILL stop
+    // measured on two production hosts.
+    const streaming = startCommand(t, sandboxID, 'sleep 30; echo never');
+    await waitForPid(t, sandboxID);
+
+    const started = Date.now();
+    await t.app.close();
+    // Bounded: the stream was ended by preClose, not waited out.
+    expect(Date.now() - started).toBeLessThan(2000);
+
+    const frames = parseEnvelopes((await streaming).rawPayload);
+    expect((frames[0]?.json.event as { start: unknown }).start).toBeDefined();
+    const last = frames.at(-1);
+    expect(last?.flags).toBe(2);
+    expect(last?.json.error).toMatchObject({ code: 'unavailable' });
+    expect((last?.json.error as { message: string }).message).toMatch(
+      /daemon shutting down/,
+    );
+    // Not signaled: the fake's process is still tracked as running in the
+    // sandbox (the daemon's table is gone with the daemon, so nothing lists
+    // it — the honest post-restart state).
+    expect(t.executor.stateOf(sandboxID)).toBe('running');
+  });
+
   it('Connect to an unknown pid answers not_found inside the stream', async () => {
     const t = testApp();
     const { sandboxID } = await createSandbox(t);

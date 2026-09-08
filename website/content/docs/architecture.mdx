@@ -23,9 +23,13 @@ core job is keeping the two in agreement.**
   every heartbeat: a container that died behind the daemon's back is
   recorded as stopped (its disk, and therefore its data, kept), and
   ownerless leftovers are swept.
-- The design is **crash-only**: there is no graceful-shutdown path to
-  get wrong. You can kill the daemon at any moment; it reconciles on the
-  way up.
+- The design is **crash-only**: you can kill the daemon at any moment;
+  it reconciles on the way up. Its own shutdown is therefore short by
+  design — on SIGTERM it ends every attached stream with an honest
+  `unavailable` end-frame, gives in-flight requests ten seconds, cuts
+  what is still connected and exits — because waiting for hour-long
+  streams to finish would only widen the window in which the daemon is
+  down while changing nothing about how those streams end.
 - **One machine, one daemon**, enforced rather than assumed: an
   exclusive lock next to the database makes a second daemon refuse to
   start, and a startup guard refuses to boot when the database and the

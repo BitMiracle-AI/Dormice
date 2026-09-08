@@ -23,6 +23,7 @@ import { sampleOnce } from './metrics-sampler';
 import { sweepPidsLimit } from './pids-sweep';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
+import { closeWithGrace, trackConnections } from './shutdown';
 import { locallyClaimedCount, startupGuard } from './startup-guard';
 import { SwapManager } from './swap';
 import { Updater } from './updater';
@@ -308,10 +309,23 @@ recordActivity(db, {
 // the daemon to the outside world is a reverse proxy's job.
 await app.listen({ host: '127.0.0.1', port: config.DORMICE_PORT });
 
-// systemd stops the daemon with SIGTERM. Route both terminal signals through
-// Fastify so preClose can end long-lived streams and reap watcher ownership
-// before Node exits. The first signal owns shutdown; a second one still has
-// the platform's default behavior instead of leaving a wedged process forever.
+// systemd stops the daemon with SIGTERM. Shutdown is bounded on purpose
+// (shutdown.ts has the measurements): close the app — preClose ends the
+// long-lived streams with honest end-frames, the listener stops — give
+// in-flight short work SHUTDOWN_GRACE_MS, cut what is still connected, and
+// exit. The exit is explicit: an exec attached to dockerd (a background
+// process someone started) keeps the event loop alive for as long as the
+// process runs, and a daemon that "finished closing" but never exits is
+// exactly the 90s-into-SIGKILL stop this replaces. Crash-only makes the
+// explicit exit safe — every step is reality-first, the ledger's writes are
+// synchronous, and the next boot's reconcile repairs whatever a cut split.
+// 10s: an order of magnitude above the longest short step (a cold start,
+// a large write) and well under systemd's default TimeoutStopSec of 90s,
+// which stays the backstop for a process that cannot even run this code.
+// The first signal owns shutdown; a second one still has the platform's
+// default behavior instead of leaving a wedged process forever.
+const SHUTDOWN_GRACE_MS = 10_000;
+const connections = trackConnections(app.server);
 let closing = false;
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let metricsTimer: NodeJS.Timeout | undefined;
@@ -323,12 +337,22 @@ const close = async (signal: NodeJS.Signals) => {
   clearTimeout(heartbeatTimer);
   clearTimeout(metricsTimer);
   watchdog.stop();
+  app.log.info(
+    `${signal} received — shutting down (grace ${SHUTDOWN_GRACE_MS}ms)`,
+  );
   try {
-    await app.close();
+    const cut = await closeWithGrace(app, connections, SHUTDOWN_GRACE_MS);
+    if (cut > 0) {
+      app.log.warn(
+        { cut },
+        'connections still open at the end of the grace period were cut',
+      );
+    }
   } catch (error) {
     app.log.error(error, `graceful shutdown after ${signal} failed`);
     process.exitCode = 1;
   }
+  process.exit(process.exitCode ?? 0);
 };
 const onSigterm = () => void close('SIGTERM');
 const onSigint = () => void close('SIGINT');
