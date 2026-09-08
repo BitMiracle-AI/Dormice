@@ -1,5 +1,5 @@
 import { isAbsolute } from 'node:path';
-import { bareHostnameRegex } from '@dormice/shared';
+import { bareHostnameRegex, PIDS_LIMIT_MIN } from '@dormice/shared';
 import { z } from 'zod';
 import type { S3Settings } from './archive/s3-store';
 
@@ -82,12 +82,21 @@ const envSchema = z.object({
    * observed peak 470). 4096 is ~8x that peak; the cap still exists so a
    * fork bomb takes down its own sandbox and nothing else. A first-boot
    * seed since the same day (runtime_settings.pids_limit, edited from the
-   * console settings page; the floor lives in shared/settings.ts): the
-   * incident that earned the new default was exactly an operator needing
-   * to move this without shell access and a restart. Existing containers
-   * converge at their next wake (docker update, no rebuild).
+   * console settings page): the incident that earned the new default was
+   * exactly an operator needing to move this without shell access and a
+   * restart. Existing containers converge at their next wake (docker
+   * update, no rebuild). Floored at the wire's PIDS_LIMIT_MIN: the settings
+   * view promises that floor, so a lower seed adopted into the ledger would
+   * leave getConfig unable to serialize its own settings (measured: HTTP
+   * 500 on every call) — refused here, at boot, with the variable named.
    */
-  DORMICE_SANDBOX_PIDS_LIMIT: z.coerce.number().int().positive().default(4096),
+  DORMICE_SANDBOX_PIDS_LIMIT: z.coerce
+    .number()
+    .int()
+    .min(PIDS_LIMIT_MIN, {
+      error: `DORMICE_SANDBOX_PIDS_LIMIT must be at least ${PIDS_LIMIT_MIN} — below that a sandbox cannot boot its own runtime`,
+    })
+    .default(4096),
   DORMICE_RECLAIM_TIMEOUT_SECONDS: z.coerce
     .number()
     .int()

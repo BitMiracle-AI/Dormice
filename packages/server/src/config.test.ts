@@ -77,6 +77,22 @@ describe('the metrics sampler knobs', () => {
   });
 });
 
+describe('the pids cap seed', () => {
+  it('defaults to 4096 and refuses a seed below the wire floor, naming it', () => {
+    expect(loadConfig(TOKEN).DORMICE_SANDBOX_PIDS_LIMIT).toBe(4096);
+    expect(
+      loadConfig({ ...TOKEN, DORMICE_SANDBOX_PIDS_LIMIT: '256' })
+        .DORMICE_SANDBOX_PIDS_LIMIT,
+    ).toBe(256);
+    // The settings view promises >= 256. A lower seed would be adopted
+    // into the ledger and leave getConfig unable to serialize its own
+    // settings (measured: HTTP 500 "Response doesn't match the schema").
+    expect(() =>
+      loadConfig({ ...TOKEN, DORMICE_SANDBOX_PIDS_LIMIT: '255' }),
+    ).toThrow(/DORMICE_SANDBOX_PIDS_LIMIT must be at least 256/);
+  });
+});
+
 describe('the S3 set', () => {
   const S3 = {
     DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',

@@ -52,7 +52,7 @@ function describeExit(exit: ShellExit | null): string {
     return ` (exit ${exit.exitCode}, OOM-killed by the kernel's memory cgroup)`;
   }
   if (exit.exitCode === 2) {
-    return " (exit 2, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see DORMICE_SANDBOX_PIDS_LIMIT)";
+    return ` (exit ${exit.exitCode}, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see the sandbox pids cap in settings)`;
   }
   return ` (exit ${exit.exitCode}, not an OOM kill)`;
 }

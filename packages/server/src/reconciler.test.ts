@@ -89,7 +89,7 @@ describe('startup reconcile', () => {
     ]);
     expect(details).toContainEqual([
       'bob',
-      "container is stopped — state active corrected to stopped (exit 2, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see DORMICE_SANDBOX_PIDS_LIMIT)",
+      "container is stopped — state active corrected to stopped (exit 2, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see the sandbox pids cap in settings)",
     ]);
   });
 
