@@ -75,6 +75,7 @@ import {
   type ImportDiskOptions,
   NotADirectoryError,
   NotAFileError,
+  type PidsConvergence,
   type PtySize,
   type SandboxEntry,
   type SandboxMetrics,
@@ -679,7 +680,27 @@ export class DockerExecutor implements Executor {
     // State.ExitCode is the init process's; State.OOMKilled is containerd's
     // relay of the kernel's memcg OOM event — the only host-kernel death
     // verdict that survives the container's cgroup scope being torn down.
-    return { exitCode: found.exitCode, oomKilled: found.oomKilled };
+    // Exit 2 without it is the Go runtime's fatal-error code: the sentry
+    // died on its own (the pids cap refusing it a thread, measured
+    // 2026-09-08) — `sleep infinity` under tini cannot produce a 2 itself.
+    return {
+      exitCode: found.exitCode,
+      oomKilled: found.oomKilled,
+      runtimeDied: found.exitCode === 2 && !found.oomKilled,
+    };
+  }
+
+  async convergePidsLimit(sandboxId: string): Promise<PidsConvergence> {
+    const found = await this.inspect(sandboxId);
+    if (
+      found === null ||
+      containerStateFromDocker(found.status) !== 'running'
+    ) {
+      return 'skipped';
+    }
+    return (await this.applyPidsLimit(found, sandboxId))
+      ? 'updated'
+      : 'in-force';
   }
 
   async metrics(sandboxId: string): Promise<SandboxMetrics> {
@@ -1593,8 +1614,8 @@ export class DockerExecutor implements Executor {
             // kernel, Init reaps zombies, PidsLimit bounds the sandbox's
             // host-side footprint so a fork bomb kills only its own sandbox
             // (under gVisor it is not a guest process count — see
-            // config.ts, and applyPidsLimit for how existing shells
-            // follow a changed value). The image defaults to uid 1000
+            // config.ts, and applyPidsLimit / convergePidsLimit for how
+            // existing shells follow a changed value). The image defaults to uid 1000
             // (user). Deliberately NO
             // no-new-privileges (2026-08-31): it would veto the setuid
             // elevation that passwordless sudo needs (the E2B convention,

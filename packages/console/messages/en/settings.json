@@ -78,7 +78,7 @@
   "settings_swap_label": "Total Dormice-managed swap (GiB)",
   "settings_swap_field_desc": "Added on top of system swap; 0 = none. The swap file really occupies data disk space (it is not sparse), so check the data disk level on the overview page before growing it.",
   "settings_pids_dialog_title": "Adjust sandbox pids cap",
-  "settings_pids_dialog_desc": "Under gVisor this is not a process count the sandbox can see; it is the sandbox's host-side process + thread budget. Hitting it gives nothing inside an error: the whole sandbox exits at once (exit code 2, not an OOM). New containers are born with the new value immediately; existing sandboxes adopt it in place at their next wake, with no rebuild and no cold start.",
+  "settings_pids_dialog_desc": "Under gVisor this is not a process count the sandbox can see; it is the sandbox's host-side process + thread budget. Hitting it gives nothing inside an error: the whole sandbox exits at once (exit code 2, not an OOM). Takes effect on save: new containers are born with the new value, running sandboxes are brought to it in place right away (a host-side cgroup write their processes never notice), and frozen or stopped sandboxes adopt it at their next wake. No rebuild, no cold start.",
   "settings_pids_saved": "Sandbox pids cap changed to {value}",
   "settings_pids_label": "pids cap per sandbox",
   "settings_pids_field_desc": "Minimum {min}. This is the brake that keeps a fork bomb inside its own sandbox and cannot be unlimited; a browser plus a few agent sessions is enough to pass 512.",

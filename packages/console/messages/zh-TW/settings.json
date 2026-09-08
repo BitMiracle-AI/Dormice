@@ -78,7 +78,7 @@
   "settings_swap_label": "Dormice 管理的 swap 總量(GiB)",
   "settings_swap_field_desc": "在系統內建 swap 之外追加,0 = 不追加。swap 檔案真實佔據資料磁碟空間(不是稀疏的),調大前看一眼總覽頁的資料磁碟水位。",
   "settings_pids_dialog_title": "調整沙箱 pids 上限",
-  "settings_pids_dialog_desc": "gVisor 下這不是沙箱內能看見的程序數,而是整箱在宿主側的程序+執行緒預算:撞頂時沙箱內收不到任何錯誤,整箱瞬間退出(退出碼 2,非 OOM)。新建容器立即按新值出生,存量沙箱在下一次喚醒時就地跟上,不重建、不冷啟動。",
+  "settings_pids_dialog_desc": "gVisor 下這不是沙箱內能看見的程序數,而是整箱在宿主側的程序+執行緒預算:撞頂時沙箱內收不到任何錯誤,整箱瞬間退出(退出碼 2,非 OOM)。儲存即生效:新建容器按新值出生,執行中的沙箱當場就地跟上(宿主側 cgroup 寫入,箱內程序無感),凍結/停止的沙箱在下一次喚醒時跟上;全程不重建、不冷啟動。",
   "settings_pids_saved": "沙箱 pids 上限已改為 {value}",
   "settings_pids_label": "每個沙箱的 pids 上限",
   "settings_pids_field_desc": "最低 {min}。這是防 fork 炸彈波及整機的閘,不能設為無上限;一個瀏覽器加幾個 agent 工作階段就能超過 512。",

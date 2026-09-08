@@ -6,7 +6,7 @@ import {
   updateSettingsResponseSchema,
 } from '@dormice/shared';
 import { sql } from 'drizzle-orm';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app';
 import { type MiniS3, startMiniS3 } from '../archive/mini-s3';
 import { S3ProbeError } from '../archive/probe';
@@ -14,6 +14,7 @@ import type { S3Settings } from '../archive/s3-store';
 import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
 import { createSandbox, overwriteState } from '../db/ledger';
+import { readRuntimeSettings } from '../db/settings';
 import { FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
 import type { SwapControl, SwapStatus } from '../swap';
@@ -51,6 +52,7 @@ function appOn(
   env: Record<string, string> = {},
   swap?: SwapControl,
   probeS3: (s3: S3Settings) => Promise<void> = () => Promise.resolve(),
+  executor: FakeExecutor = new FakeExecutor(),
 ) {
   const config = loadConfig({
     DORMICE_DB_PATH: ':memory:',
@@ -61,7 +63,7 @@ function appOn(
   return buildApp({
     config,
     db,
-    executor: new FakeExecutor(),
+    executor,
     locks: new KeyedQueue(),
     logger: false,
     swap,
@@ -546,6 +548,58 @@ describe('updateSettings', () => {
       kind: 'settings-updated',
       detail: 'pidsLimit=4096',
     });
+  });
+
+  it('pidsLimit: running sandboxes follow the write in place, frozen ones at their wake', async () => {
+    const db = freshDb();
+    // The daemon's wiring: the fake reads the cap live from the ledger.
+    const executor = new FakeExecutor(
+      undefined,
+      () => readRuntimeSettings(db).pidsLimit,
+    );
+    const app = appOn(db, {}, undefined, undefined, executor);
+    const busy = (await rpc(app, '/acquireSandbox', { name: 'busy' })).json()
+      .sandbox.id as string;
+    const idle = (await rpc(app, '/acquireSandbox', { name: 'idle' })).json()
+      .sandbox.id as string;
+    expect(executor.pidsLimitOf(busy)).toBe(4096);
+    // Frozen behind the daemon's back the way the scanner would leave it:
+    // paused shell, frozen row.
+    await executor.freeze(idle);
+    overwriteState(db, idle, 'frozen');
+
+    const raised = await rpc(app, '/updateSettings', { pidsLimit: 2048 });
+    expect(raised.statusCode).toBe(200);
+    // The running shell moved in place — no rebuild, same shell; the
+    // paused one cannot be updated and waits for its wake.
+    expect(executor.pidsLimitOf(busy)).toBe(2048);
+    expect(executor.stateOf(busy)).toBe('running');
+    expect(executor.pidsLimitOf(idle)).toBe(4096);
+
+    const woken = await rpc(app, '/acquireSandbox', { name: 'idle' });
+    expect(woken.json().created).toBe(false);
+    expect(executor.pidsLimitOf(idle)).toBe(2048);
+  });
+
+  it('pidsLimit: a shell the runtime refuses is named, and the value stays saved', async () => {
+    const db = freshDb();
+    const executor = new FakeExecutor(
+      undefined,
+      () => readRuntimeSettings(db).pidsLimit,
+    );
+    const app = appOn(db, {}, undefined, undefined, executor);
+    await rpc(app, '/acquireSandbox', { name: 'stubborn' });
+    vi.spyOn(executor, 'convergePidsLimit').mockRejectedValue(
+      new Error('runsc refused: no such luck'),
+    );
+
+    const res = await rpc(app, '/updateSettings', { pidsLimit: 2048 });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().message).toBe(
+      'pids cap saved (2048) but 1 of 1 active sandboxes kept their old cap until their next wake — stubborn: runsc refused: no such luck',
+    );
+    // Saved: the next birth and every wake read the new value.
+    expect((await settingsOf(app)).pidsLimit).toBe(2048);
   });
 
   it('records the change in the activity ring with its actor', async () => {

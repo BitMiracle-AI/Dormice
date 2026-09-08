@@ -78,7 +78,7 @@
   "settings_swap_label": "Swap total gestionado por Dormice (GiB)",
   "settings_swap_field_desc": "Se añade por encima del swap del sistema; 0 = ninguno. El archivo de swap ocupa espacio real del disco de datos (no es disperso), así que revisa el nivel del disco de datos en el panel antes de ampliarlo.",
   "settings_pids_dialog_title": "Ajustar el límite pids del sandbox",
-  "settings_pids_dialog_desc": "Bajo gVisor no es un número de procesos visible dentro del sandbox, sino su presupuesto de procesos e hilos en el host. Al alcanzarlo nada dentro recibe un error: todo el sandbox termina de inmediato (código de salida 2, no OOM). Los contenedores nuevos nacen ya con el nuevo valor; los sandboxes existentes lo adoptan en su sitio en el siguiente despertar, sin reconstrucción ni arranque en frío.",
+  "settings_pids_dialog_desc": "Bajo gVisor no es un número de procesos visible dentro del sandbox, sino su presupuesto de procesos e hilos en el host. Al alcanzarlo nada dentro recibe un error: todo el sandbox termina de inmediato (código de salida 2, no OOM). Se aplica al guardar: los contenedores nuevos nacen con el nuevo valor, los sandboxes en ejecución se llevan a él en su sitio de inmediato (una escritura de cgroup en el host que sus procesos no notan) y los sandboxes congelados o detenidos lo adoptan en su siguiente despertar. Sin reconstrucción ni arranque en frío.",
   "settings_pids_saved": "Límite pids del sandbox cambiado a {value}",
   "settings_pids_label": "Límite pids por sandbox",
   "settings_pids_field_desc": "Mínimo {min}. Es el freno que mantiene una bomba fork dentro de su propio sandbox y no puede ser ilimitado; un navegador más unas pocas sesiones de agente bastan para superar 512.",

@@ -257,6 +257,7 @@ export function lifecycleTests(ctx: ContractContext) {
         expect(await ctx.executor.exitOf(id)).toEqual({
           exitCode: 137,
           oomKilled: false,
+          runtimeDied: false,
         });
         await ctx.executor.start(id);
         expect(await ctx.executor.exitOf(id)).toBeNull();
@@ -264,6 +265,22 @@ export function lifecycleTests(ctx: ContractContext) {
         await ctx.executor.stop(id);
         await ctx.subject.vanishContainer(id);
         expect(await ctx.executor.exitOf(id)).toBeNull();
+      },
+      timeoutMs,
+    );
+
+    it(
+      "convergePidsLimit touches a running shell only — paused, stopped and absent are the wake's business",
+      async () => {
+        const id = await ctx.fresh();
+        // Born under the configured cap: nothing to do, and said so.
+        expect(await ctx.executor.convergePidsLimit(id)).toBe('in-force');
+        await ctx.executor.freeze(id);
+        expect(await ctx.executor.convergePidsLimit(id)).toBe('skipped');
+        await ctx.executor.stop(id);
+        expect(await ctx.executor.convergePidsLimit(id)).toBe('skipped');
+        await ctx.subject.vanishContainer(id);
+        expect(await ctx.executor.convergePidsLimit(id)).toBe('skipped');
       },
       timeoutMs,
     );

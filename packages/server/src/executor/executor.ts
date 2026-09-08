@@ -280,17 +280,40 @@ export interface ShellLimits {
 }
 
 /**
- * How a stopped shell's processes ended, as the runtime recorded it:
- * the init process's exit code and whether the kernel's memory cgroup OOM
- * killer took the container down. Measured signatures under gVisor
+ * What convergePidsLimit did to one shell: `updated` — a running shell was
+ * brought to the configured cap in place; `in-force` — it already had it;
+ * `skipped` — nothing running to update (no shell, paused, exited), which
+ * take the cap at their wake instead.
+ */
+export type PidsConvergence = 'updated' | 'in-force' | 'skipped';
+
+/**
+ * How a stopped shell's processes ended, as the runtime recorded it, plus
+ * the executor's one reading of it. Measured signatures under gVisor
  * (2026-09-08): memcg OOM = 137 + oomKilled; our own stop() (SIGKILL) =
  * 137, not oomKilled; the pids cgroup refusing the sentry a thread = 2,
  * not oomKilled. The reconciler writes these into the record of a death
  * the ledger did not order, so nobody has to guess from "it's gone".
  */
 export interface ShellExit {
+  /** The init process's exit code — Docker's State.ExitCode. */
   exitCode: number;
+  /**
+   * The kernel's memory cgroup killed the container. Docker relays the
+   * kernel's own verdict — the only one that survives the cgroup's teardown.
+   */
   oomKilled: boolean;
+  /**
+   * The executor's reading, not a kernel verdict: the sandbox runtime
+   * itself died — gVisor's sentry, a Go program — rather than the workload
+   * exiting or being killed. Under runsc that is exit 2 without the OOM
+   * flag: the Go runtime's fatal-error code, and the signature a pids-cap
+   * hit leaves. The docker executor reads it soundly because its init
+   * command (`sleep infinity`) cannot exit 2 on its own. The reading lives
+   * here, with the runtime, so the reconciler never has to know what "2"
+   * means under any particular runtime.
+   */
+  runtimeDied: boolean;
 }
 
 export interface ImportDiskOptions {
@@ -457,6 +480,17 @@ export interface Executor {
    * a stop the daemon ordered itself.
    */
   exitOf(sandboxId: string): Promise<ShellExit | null>;
+  /**
+   * Brings a running shell's pids cap to the configured value in place.
+   * The cap is a host-side cgroup value the guest never sees, so this is
+   * neither a wake nor a rebuild — the shell's processes do not notice.
+   * Only a running shell is touched: the runtime refuses the update while
+   * paused, and an exited shell takes the cap when it starts (both the
+   * wake's own convergence). Throws when the runtime refuses or times out
+   * on a running shell — the sweep counts that by name; the wake points
+   * make their own, quieter call.
+   */
+  convergePidsLimit(sandboxId: string): Promise<PidsConvergence>;
   /**
    * Every sandbox disk on this host, summed: how many, what they were
    * promised, what they actually occupy. A snapshot like listDisks —

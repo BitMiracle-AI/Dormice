@@ -78,7 +78,7 @@
   "settings_swap_label": "Von Dormice verwalteter Swap gesamt (GiB)",
   "settings_swap_field_desc": "Zusätzlich zum System-Swap; 0 = keiner. Die Swap-Datei belegt echten Platz auf dem Datenlaufwerk (nicht sparse) — werfen Sie vor dem Vergrößern einen Blick auf den Pegel des Datenlaufwerks auf der Übersichtsseite.",
   "settings_pids_dialog_title": "pids-Limit der Sandbox anpassen",
-  "settings_pids_dialog_desc": "Unter gVisor ist dies keine in der Sandbox sichtbare Prozessanzahl, sondern ihr Prozess- und Thread-Budget auf dem Host. Wird es erreicht, bekommt nichts in der Sandbox einen Fehler: Die ganze Sandbox endet sofort (Exit-Code 2, kein OOM). Neue Container starten sofort mit dem neuen Wert; bestehende Sandboxes übernehmen ihn beim nächsten Aufwachen an Ort und Stelle, ohne Neuaufbau und ohne Kaltstart.",
+  "settings_pids_dialog_desc": "Unter gVisor ist dies keine in der Sandbox sichtbare Prozessanzahl, sondern ihr Prozess- und Thread-Budget auf dem Host. Wird es erreicht, bekommt nichts in der Sandbox einen Fehler: Die ganze Sandbox endet sofort (Exit-Code 2, kein OOM). Gilt ab dem Speichern: Neue Container starten mit dem neuen Wert, laufende Sandboxes werden sofort an Ort und Stelle darauf gebracht (ein cgroup-Schreibvorgang auf dem Host, den ihre Prozesse nicht bemerken), eingefrorene oder gestoppte Sandboxes übernehmen ihn beim nächsten Aufwachen. Kein Neuaufbau, kein Kaltstart.",
   "settings_pids_saved": "pids-Limit der Sandbox geändert auf {value}",
   "settings_pids_label": "pids-Limit je Sandbox",
   "settings_pids_field_desc": "Mindestens {min}. Dies ist die Bremse, die eine Fork-Bombe in ihrer eigenen Sandbox hält, und kann nicht unbegrenzt sein; ein Browser plus einige Agent-Sitzungen überschreiten bereits 512.",

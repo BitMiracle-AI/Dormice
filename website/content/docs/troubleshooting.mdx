@@ -84,7 +84,8 @@ SIGKILL from elsewhere.
 
 ## A sandbox vanished with exit code 2 and no OOM
 
-The sandbox hit its pids cap (`DORMICE_SANDBOX_PIDS_LIMIT`). Under gVisor
+The sandbox hit its pids cap (the `pidsLimit` setting;
+`DORMICE_SANDBOX_PIDS_LIMIT` is only its first-boot seed). Under gVisor
 that cap bounds the sandbox's host-side threads and processes, not a
 count the sandbox can see — so nothing inside gets an error; the
 sandbox's kernel simply dies, exit 2, and the host's own kernel log
@@ -93,9 +94,9 @@ activity event names this signature. The disk survives and the next
 acquire revives the sandbox. The default is 4096; daemons still running
 at the old default of 512 should raise it — a browser plus a few agent
 sessions in one sandbox is enough to reach 512. Raise it live from the
-console's settings page (or `updateSettings`'s `pidsLimit`); no restart,
-and existing sandboxes adopt the new value at their next wake, no rebuild
-needed.
+console's settings page (or `updateSettings`'s `pidsLimit`); no restart
+and no rebuild: running sandboxes are brought to the new value in place
+as it is saved, frozen or stopped ones at their next wake.
 
 ## E2B `watchDir` refuses to start
 

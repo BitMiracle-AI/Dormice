@@ -71,14 +71,14 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
   );
 
   /**
-   * Docker-only: the pids cap is a host-side cgroup value with no
-   * counterpart in the fake. Three executors over one data dir play "the
-   * operator changed pidsLimit in settings" (a live read in production;
-   * closures here); the container stays the same object throughout — the
-   * point is that no rebuild happens.
+   * Docker-only: the pids cap is a host-side cgroup value; the fake models
+   * the number but not the physics. Several executors over one data dir
+   * play "the operator changed pidsLimit in settings" (a live read in
+   * production; closures here); the container stays the same object
+   * throughout — the point is that no rebuild happens.
    */
-  describe('DockerExecutor: an existing shell follows the configured pids cap at wake', () => {
-    it('unpause and start bring HostConfig and the live cgroup to the configured cap', async () => {
+  describe('DockerExecutor: an existing shell follows the configured pids cap', () => {
+    it('the sweep verb moves a running shell in place; unpause and start bring HostConfig and the live cgroup to the cap', async () => {
       const dataDir = await mkdtemp(path.join(tmpdir(), 'dormice-contract-'));
       const withCap = (pidsLimit: number) =>
         new DockerExecutor({
@@ -107,18 +107,30 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
         expect(await hostConfigCap()).toBe(256);
         expect(await cgroupCap()).toBe('256');
 
-        // A frozen sandbox, daemon restarted with a higher cap: the wake
-        // is still a plain unpause — same container, processes alive.
-        await born.freeze(id);
-        await withCap(4096).unfreeze(id);
+        // The sweep's verb: a running shell moves in place — same
+        // container, its processes untouched — and a second pass finds
+        // the cap in force.
+        expect(await withCap(4096).convergePidsLimit(id)).toBe('updated');
         expect(await hostConfigCap()).toBe(4096);
         expect(await cgroupCap()).toBe('4096');
+        expect(await withCap(4096).convergePidsLimit(id)).toBe('in-force');
 
-        // A stopped shell: the update lands before start, and the
-        // started container runs under the new cap.
+        // Paused: runsc refuses the update, so the verb does not try; the
+        // wake converges instead — still a plain unpause of the same
+        // container, processes alive.
+        await born.freeze(id);
+        expect(await withCap(512).convergePidsLimit(id)).toBe('skipped');
+        expect(await hostConfigCap()).toBe(4096);
+        await withCap(512).unfreeze(id);
+        expect(await hostConfigCap()).toBe(512);
+        expect(await cgroupCap()).toBe('512');
+
+        // A stopped shell: the verb leaves it alone, the update lands
+        // before start, and the started container runs under the new cap.
         const lowered = withCap(1024);
         await lowered.freeze(id);
         await lowered.stop(id);
+        expect(await lowered.convergePidsLimit(id)).toBe('skipped');
         await lowered.start(id);
         expect(await hostConfigCap()).toBe(1024);
         expect(await cgroupCap()).toBe('1024');

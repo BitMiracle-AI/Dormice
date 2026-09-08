@@ -22,6 +22,7 @@ import {
   type ImportDiskOptions,
   NotADirectoryError,
   NotAFileError,
+  type PidsConvergence,
   type PtySize,
   type SandboxEntry,
   type SandboxMetrics,
@@ -36,6 +37,9 @@ import {
 
 /** The image the fake's shells boot from when no other image is asked for. */
 export const FAKE_BASE_IMAGE = 'fake-base';
+
+/** The fake's pids cap default when no live view is wired: the env seed's own default. */
+const FAKE_PIDS_LIMIT = 4096;
 
 /** The fake's own resource defaults — the numbers metrics has always reported — for daemons and tests that wire no live view. */
 const FAKE_RESOURCES: SandboxResources = {
@@ -219,6 +223,12 @@ export class FakeExecutor implements Executor {
    */
   constructor(
     private readonly resources: () => SandboxResources = () => FAKE_RESOURCES,
+    /**
+     * Live view of the pids cap, the docker executor's second knob closure:
+     * read at each birth and at each wake's convergence. The default serves
+     * the daemons and tests that never move it.
+     */
+    private readonly pidsLimit: () => number = () => FAKE_PIDS_LIMIT,
   ) {}
 
   /** ShellOptions -> the limits a shell is born with, the docker rounding rules. */
@@ -257,6 +267,13 @@ export class FakeExecutor implements Executor {
    * goes, so a live shell never reports a stale death.
    */
   private readonly exits = new Map<string, ShellExit>();
+  /**
+   * The pids cap each shell currently carries — the docker executor's
+   * HostConfig.PidsLimit. Set at birth, moved by the wake's convergence and
+   * by convergePidsLimit, gone with the shell. Keyed like images: a
+   * property of the shell, not the disk.
+   */
+  private readonly pids = new Map<string, number>();
   /**
    * Each disk's promised size in bytes — the docker executor's truncate
    * size. Keyed like disks; born at create/importDisk, grown by growDisk,
@@ -319,6 +336,19 @@ export class FakeExecutor implements Executor {
     return found ? { ...found } : null;
   }
 
+  async convergePidsLimit(sandboxId: string): Promise<PidsConvergence> {
+    if (this.containers.get(sandboxId) !== 'running') return 'skipped';
+    const want = this.pidsLimit();
+    if (this.pids.get(sandboxId) === want) return 'in-force';
+    this.pids.set(sandboxId, want);
+    return 'updated';
+  }
+
+  /** Test hook: the pids cap a shell currently carries, null without a shell. */
+  pidsLimitOf(sandboxId: string): number | null {
+    return this.pids.get(sandboxId) ?? null;
+  }
+
   /**
    * Test hook: the container dies on its own — the kernel's OOM killer, or
    * the pids cgroup refusing gVisor's sentry a thread — and leaves an
@@ -349,6 +379,7 @@ export class FakeExecutor implements Executor {
     this.images.delete(sandboxId);
     this.limits.delete(sandboxId);
     this.exits.delete(sandboxId);
+    this.pids.delete(sandboxId);
     this.killProcesses(sandboxId);
   }
 
@@ -370,6 +401,7 @@ export class FakeExecutor implements Executor {
     this.containers.set(sandboxId, 'running');
     this.images.set(sandboxId, opts?.image ?? FAKE_BASE_IMAGE);
     this.limits.set(sandboxId, this.bornLimits(opts));
+    this.pids.set(sandboxId, this.pidsLimit());
   }
 
   async freeze(sandboxId: string): Promise<void> {
@@ -380,13 +412,20 @@ export class FakeExecutor implements Executor {
   async unfreeze(sandboxId: string): Promise<void> {
     this.expect(sandboxId, 'paused');
     this.containers.set(sandboxId, 'running');
+    // The wake's convergence, as the docker executor does after unpause.
+    this.pids.set(sandboxId, this.pidsLimit());
   }
 
   async stop(sandboxId: string): Promise<void> {
     this.expect(sandboxId, 'paused');
     this.containers.set(sandboxId, 'stopped');
-    // What the real stop leaves behind: SIGKILL's 137, no OOM verdict.
-    this.exits.set(sandboxId, { exitCode: 137, oomKilled: false });
+    // What the real stop leaves behind: SIGKILL's 137, no OOM verdict, and
+    // a runtime that was killed rather than one that died.
+    this.exits.set(sandboxId, {
+      exitCode: 137,
+      oomKilled: false,
+      runtimeDied: false,
+    });
     this.killProcesses(sandboxId);
   }
 
@@ -402,13 +441,17 @@ export class FakeExecutor implements Executor {
       this.containers.set(sandboxId, 'running');
       this.images.set(sandboxId, opts?.image ?? FAKE_BASE_IMAGE);
       this.limits.set(sandboxId, this.bornLimits(opts));
+      this.pids.set(sandboxId, this.pidsLimit());
       this.exits.delete(sandboxId);
       return;
     }
     this.expect(sandboxId, 'stopped');
     // The existing shell keeps the image and limits it was born with —
-    // start only starts; opts applies to the rebuild path above.
+    // start only starts; opts applies to the rebuild path above. The pids
+    // cap is the one thing that follows the value in force (the docker
+    // executor's convergence before start).
     this.containers.set(sandboxId, 'running');
+    this.pids.set(sandboxId, this.pidsLimit());
     this.exits.delete(sandboxId);
   }
 
@@ -423,6 +466,7 @@ export class FakeExecutor implements Executor {
     this.images.delete(sandboxId);
     this.limits.delete(sandboxId);
     this.exits.delete(sandboxId);
+    this.pids.delete(sandboxId);
     this.diskNominal.delete(sandboxId);
     this.fs.delete(sandboxId);
     this.killProcesses(sandboxId);
@@ -444,6 +488,7 @@ export class FakeExecutor implements Executor {
     this.images.delete(sandboxId);
     this.limits.delete(sandboxId);
     this.exits.delete(sandboxId);
+    this.pids.delete(sandboxId);
     // The container's death takes every process and watcher with it, same
     // physics as stop and vanish.
     this.killProcesses(sandboxId);

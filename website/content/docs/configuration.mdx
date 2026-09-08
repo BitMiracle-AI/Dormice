@@ -46,9 +46,9 @@ These apply when a container (or disk) is created, so existing sandboxes
 keep what they were born with. A [rebuild](/docs/persistence#rebuild-a-sandbox)
 picks up current CPU/memory values — but keeps the disk, so a
 changed disk size only applies to new sandboxes and restores from
-archive. The pids cap is the exception: it needs no rebuild — an
-existing sandbox adopts the configured value the next time it wakes
-from frozen or stopped.
+archive. The pids cap is the exception: it needs no rebuild — a running
+sandbox is brought to a changed value in place the moment it is saved,
+and a frozen or stopped one adopts it the next time it wakes.
 
 The disk, CPU, memory and pids variables are **first-boot seeds**: on the
 daemon's first start they are written into its database as runtime

@@ -14,10 +14,20 @@ import {
   readRuntimeSettings,
   writeRuntimeSettings,
 } from '../db/settings';
+import type { Executor } from '../executor/executor';
+import type { KeyedQueue } from '../keyed-queue';
+import { sweepPidsLimit } from '../pids-sweep';
 import type { SwapControl } from '../swap';
 
 export interface SettingsRoutesOptions {
   db: Db;
+  /**
+   * For the pids cap's sweep over running shells after a write — the one
+   * settings knob with a reality on every running sandbox. Same executor
+   * and per-sandbox queue as the rest of the daemon.
+   */
+  executor: Executor;
+  locks: KeyedQueue;
   /**
    * The managed-swap surface, present exactly when the daemon can manage
    * swap (Linux host, docker executor — main.ts's adjudication). Absent,
@@ -35,18 +45,21 @@ export interface SettingsRoutesOptions {
  * session only, like the apiKey verbs — a leaked automation key must not
  * be able to raise the very limits that contain it.
  *
- * A pure ledger write with immediate effect: the consumers read live
+ * A ledger write with immediate effect: the consumers read live
  * (acquire's capacity gate, the executor's births, resolvePolicy's
  * defaults, the archiver's store, the sandbox proxy's domain, the
- * executor's pids cap at each birth and wake), so nothing here restarts,
- * wakes or touches any sandbox. Lowering maxSandboxes below
- * the current total is deliberately legal — the gate only blocks creation,
- * and refusing would leave an operator unable to say "no more" during an
+ * executor's pids cap at each birth and wake), so nothing here restarts or
+ * wakes a sandbox. Two knobs have a reality on the host that the write
+ * alone does not move, and each is reconciled right after it: managed swap
+ * (a swapfile) and the pids cap on the shells running right now (a cgroup
+ * write their processes never notice). Lowering maxSandboxes below the
+ * current total is deliberately legal — the gate only blocks creation, and
+ * refusing would leave an operator unable to say "no more" during an
  * incident.
  */
 export const settingsRoutes: FastifyPluginAsyncZod<
   SettingsRoutesOptions
-> = async (app, { db, swap, probeS3 = defaultProbeS3 }) => {
+> = async (app, { db, executor, locks, swap, probeS3 = defaultProbeS3 }) => {
   app.post(
     '/updateSettings',
     {
@@ -233,6 +246,20 @@ export const settingsRoutes: FastifyPluginAsyncZod<
             message: `swap target saved (${patch.swapGb} GiB) but applying it failed: ${
               error instanceof Error ? error.message : String(error)
             }`,
+          });
+        }
+      }
+      // The write already reached every future birth and wake; the sweep
+      // brings the shells running right now along — an operator raising
+      // the cap during an incident is looking at exactly those. A shell
+      // the runtime refuses keeps its old cap until its next wake, and the
+      // answer says so by name; the value stays saved either way.
+      if (patch.pidsLimit !== undefined) {
+        const sweep = await sweepPidsLimit(db, executor, locks);
+        app.log.info(sweep, 'pids cap sweep after updateSettings');
+        if (sweep.failures.length > 0) {
+          return reply.code(500).send({
+            message: `pids cap saved (${patch.pidsLimit}) but ${sweep.failures.length} of ${sweep.considered} active sandboxes kept their old cap until their next wake — ${sweep.failures[0]}`,
           });
         }
       }

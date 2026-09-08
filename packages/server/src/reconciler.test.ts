@@ -74,9 +74,17 @@ describe('startup reconcile', () => {
     // the pids cgroup taking down gVisor's sentry (exit 2, no OOM flag —
     // the signature measured on the test machine 2026-09-08).
     const oom = await seed(db, executor, 'alice');
-    executor.crashContainer(oom.id, { exitCode: 137, oomKilled: true });
+    executor.crashContainer(oom.id, {
+      exitCode: 137,
+      oomKilled: true,
+      runtimeDied: false,
+    });
     const pids = await seed(db, executor, 'bob');
-    executor.crashContainer(pids.id, { exitCode: 2, oomKilled: false });
+    executor.crashContainer(pids.id, {
+      exitCode: 2,
+      oomKilled: false,
+      runtimeDied: true,
+    });
 
     const result = await reconcile(db, executor, locks);
     expect(result).toEqual({ ...NONE, repairedStates: 2 });

@@ -20,6 +20,7 @@ import { CpuSampler } from './host-metrics';
 import { Ingress } from './ingress';
 import { KeyedQueue } from './keyed-queue';
 import { sampleOnce } from './metrics-sampler';
+import { sweepPidsLimit } from './pids-sweep';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
 import { locallyClaimedCount, startupGuard } from './startup-guard';
@@ -75,7 +76,12 @@ function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
       memoryGb: sandboxDefaults.memoryGb,
     };
   };
-  if (cfg.DORMICE_EXECUTOR === 'fake') return new FakeExecutor(resources);
+  // Live too: a console edit reaches the next birth and the next wake's
+  // in-place convergence without a restart.
+  const pidsLimit = () => readRuntimeSettings(db).pidsLimit;
+  if (cfg.DORMICE_EXECUTOR === 'fake') {
+    return new FakeExecutor(resources, pidsLimit);
+  }
   if (!cfg.DORMICE_BASE_IMAGE) {
     // loadConfig already rejected this combination; the check only narrows
     // the type here.
@@ -85,9 +91,7 @@ function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
     baseImage: cfg.DORMICE_BASE_IMAGE,
     dataDir: cfg.DORMICE_DATA_DIR,
     resources,
-    // Live too: a console edit reaches the next birth and the next wake's
-    // in-place convergence without a restart.
-    pidsLimit: () => readRuntimeSettings(db).pidsLimit,
+    pidsLimit,
     reclaimTimeoutSeconds: cfg.DORMICE_RECLAIM_TIMEOUT_SECONDS,
     log,
   });
@@ -278,12 +282,25 @@ const repaired = await reconcile(
   beat,
 );
 app.log.info(repaired, 'startup reconcile');
+
+// Running shells born under another cap follow the ledger now, in place.
+// Boot is one of the two moments the cap in force can differ from what a
+// running shell carries (the other is updateSettings, which sweeps itself):
+// the upgrade that moved the default from 512 to 4096 lands exactly here,
+// and the sandboxes at risk of the cap are the busy, running ones — waiting
+// for their next wake would have cost each of them one more death.
+const swept = await sweepPidsLimit(db, executor, locks, beat);
+app.log.info(swept, 'startup pids cap sweep');
 recordActivity(db, {
   kind: 'daemon-started',
   detail:
     `executor ${config.DORMICE_EXECUTOR}; startup reconcile: ` +
     `${repaired.repairedStates} states repaired, ${repaired.deletedRows} rows deleted, ` +
-    `${repaired.destroyedOrphans} orphan containers destroyed, ${repaired.removedDisks} disks removed`,
+    `${repaired.destroyedOrphans} orphan containers destroyed, ${repaired.removedDisks} disks removed; ` +
+    `pids cap: ${swept.updated} running shells brought to ${readRuntimeSettings(db).pidsLimit}` +
+    (swept.failures.length > 0
+      ? `, ${swept.failures.length} refused (daemon log has the names)`
+      : ''),
 });
 
 // Red line: the daemon binds to loopback only, and the host is deliberately

@@ -78,7 +78,7 @@
   "settings_swap_label": "Dormice 管理的 swap 总量(GiB)",
   "settings_swap_field_desc": "在系统自带 swap 之外追加,0 = 不追加。swap 文件真实占据数据盘空间(不是稀疏的),调大前看一眼总览页的数据盘水位。",
   "settings_pids_dialog_title": "调整沙箱 pids 上限",
-  "settings_pids_dialog_desc": "gVisor 下这不是沙箱内能看见的进程数,而是整箱在宿主侧的进程+线程预算:撞顶时沙箱内收不到任何错误,整箱瞬间退出(退出码 2,非 OOM)。新建容器立即按新值出生,存量沙箱在下一次唤醒时就地跟上,不重建、不冷启动。",
+  "settings_pids_dialog_desc": "gVisor 下这不是沙箱内能看见的进程数,而是整箱在宿主侧的进程+线程预算:撞顶时沙箱内收不到任何错误,整箱瞬间退出(退出码 2,非 OOM)。保存即生效:新建容器按新值出生,运行中的沙箱当场就地跟上(宿主侧 cgroup 写入,箱内进程无感),冻结/停止的沙箱在下一次唤醒时跟上;全程不重建、不冷启动。",
   "settings_pids_saved": "沙箱 pids 上限已改为 {value}",
   "settings_pids_label": "每个沙箱的 pids 上限",
   "settings_pids_field_desc": "最低 {min}。这是防 fork 炸弹波及整机的闸,不能设为无上限;一个浏览器加几个 agent 会话就能超过 512。",

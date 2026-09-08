@@ -300,6 +300,8 @@ export function buildApp({
     await admin.register(apiKeyRoutes, { db });
     await admin.register(settingsRoutes, {
       db,
+      executor,
+      locks,
       swap,
       ...(probeS3 ? { probeS3 } : {}),
     });

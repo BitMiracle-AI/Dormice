@@ -41,17 +41,19 @@ const LEDGER_STATE: Record<ContainerState, SandboxState> = {
 /**
  * The death, in the words the host kernel used. Only the memory-cgroup OOM
  * verdict is asserted as a cause — Docker relays it straight from the
- * kernel. Exit 2 is named for what it physically is: the code gVisor's
- * sentry (a Go program) leaves when it dies itself, which is exactly what a
- * pids-cap hit produces (measured 2026-09-08) — a strong hint, not a kernel
- * verdict, and worded as one. Everything else is the bare exit code.
+ * kernel. The runtime's own death is the executor's reading of the exit
+ * (ShellExit.runtimeDied — under gVisor, exit 2 without the OOM flag),
+ * named here for what it is the signature of, a pids-cap hit: a strong
+ * hint, not a kernel verdict, and worded as one. Everything else is the
+ * bare exit code. What any exit code means under a runtime is the
+ * executor's knowledge, deliberately not this function's.
  */
 function describeExit(exit: ShellExit | null): string {
   if (exit === null) return '';
   if (exit.oomKilled) {
     return ` (exit ${exit.exitCode}, OOM-killed by the kernel's memory cgroup)`;
   }
-  if (exit.exitCode === 2) {
+  if (exit.runtimeDied) {
     return ` (exit ${exit.exitCode}, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see the sandbox pids cap in settings)`;
   }
   return ` (exit ${exit.exitCode}, not an OOM kill)`;
