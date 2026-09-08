@@ -251,14 +251,25 @@ export function lifecycleTests(ctx: ContractContext) {
         expect(await ctx.executor.exitOf(id)).toBeNull();
         await ctx.executor.freeze(id);
         expect(await ctx.executor.exitOf(id)).toBeNull();
+        const before = Date.now();
         await ctx.executor.stop(id);
         // stop() is a SIGKILL: 137 by the shell convention, and not an OOM
         // — the one exit the reconciler must never read as a death verdict.
-        expect(await ctx.executor.exitOf(id)).toEqual({
+        // finishedAt is the runtime's own clock on the death, millisecond
+        // ISO like every other timestamp the ledger keeps.
+        const exit = await ctx.executor.exitOf(id);
+        expect(exit).toEqual({
           exitCode: 137,
           oomKilled: false,
           runtimeDied: false,
+          finishedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*\.\d{3}Z$/),
         });
+        expect(Date.parse(exit?.finishedAt ?? '')).toBeGreaterThanOrEqual(
+          before,
+        );
+        expect(Date.parse(exit?.finishedAt ?? '')).toBeLessThanOrEqual(
+          Date.now(),
+        );
         await ctx.executor.start(id);
         expect(await ctx.executor.exitOf(id)).toBeNull();
         await ctx.executor.freeze(id);

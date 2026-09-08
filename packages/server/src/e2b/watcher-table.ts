@@ -34,6 +34,12 @@ export class WatcherLimitError extends Error {}
 export class WatcherOperationLimitError extends Error {}
 /** The same operation identity was reused for a different canonical request. */
 export class WatcherOperationConflictError extends Error {}
+/**
+ * The ending shutdown() hands every streaming watcher: the daemon is going
+ * away, not the sandbox. Typed so the wire can say `unavailable` (retry
+ * after the restart) where a container's death says `internal`.
+ */
+export class WatcherShutdownError extends Error {}
 
 interface OperationIdentity {
   id: string;
@@ -292,14 +298,26 @@ export class WatcherTable {
     });
   }
 
-  /** Bounded best-effort teardown for Fastify/daemon shutdown. */
+  /**
+   * Bounded best-effort teardown for Fastify/daemon shutdown. Every
+   * streaming route is ended first, with the shutdown verdict — the wire
+   * frame goes out before the physical stops are even attempted — then
+   * the in-container watcher processes are stopped, `timeoutMs` at most.
+   * A watch is not resumed after the restart: this registry is daemon
+   * memory, and the client re-creates what it still wants watched.
+   */
   async shutdown(timeoutMs = 5000): Promise<void> {
     this.closed = true;
     const records = [...this.records.values()];
     for (const record of records) {
       record.state = 'retired';
       record.events.length = 0;
-      this.notifyStreamEnd(record);
+      this.notifyStreamEnd(
+        record,
+        new WatcherShutdownError(
+          'daemon shutting down — this watch ends and is not resumed after the restart; create it again',
+        ),
+      );
     }
     const stopping = Promise.allSettled(
       records.map((record) => this.stopRetired(record)),

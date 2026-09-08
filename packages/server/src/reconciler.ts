@@ -209,7 +209,8 @@ export async function reconcile(
           // state, lastExit and the reconciled event, one story.
           if (observed === 'stopped') {
             const exit = await executor.exitOf(row.id);
-            if (exit === null) return; // Revived under us; nothing to repair.
+            // Revived under us (or gone — the next pass sees that shape).
+            if (exit === null) return;
             recordShellDeath(db, row, exit, 'by the reconciler', watchers);
             result.repairedStates += 1;
             return;

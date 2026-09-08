@@ -314,6 +314,13 @@ export interface ShellExit {
    * means under any particular runtime.
    */
   runtimeDied: boolean;
+  /**
+   * When the shell's init exited, ISO-8601 at millisecond precision — the
+   * runtime's own record of the death (Docker's State.FinishedAt), not the
+   * moment the daemon noticed it. The reconciler notices within one
+   * heartbeat, a wake immediately; the wire's lastExit.at carries this.
+   */
+  finishedAt: string;
 }
 
 export interface ImportDiskOptions {

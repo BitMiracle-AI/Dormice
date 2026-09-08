@@ -7,7 +7,7 @@ import {
   findById,
   setPausedByUser,
   transition,
-  recordShellDeath as writeShellDeath,
+  writeShellDeath,
 } from './db/ledger';
 import { deleteSandboxMetricsSamples } from './db/metrics';
 import type { SandboxRow } from './db/schema';
@@ -155,8 +155,7 @@ export function causeOfExit(exit: ShellExit): ShellExitCause {
 }
 
 /** The same three verdicts in the words the activity feed uses. */
-export function describeExit(exit: ShellExit | null): string {
-  if (exit === null) return '';
+export function describeExit(exit: ShellExit): string {
   const cause = causeOfExit(exit);
   if (cause === 'oom-killed') {
     return ` (exit ${exit.exitCode}, OOM-killed by the kernel's memory cgroup)`;
@@ -176,7 +175,12 @@ export function describeExit(exit: ShellExit | null): string {
  * exit — so the console, the wire and the activity feed tell one story.
  * Watchers are disposed here too: a dead container has ended every
  * inotifywait it hosted. `noticed` names the observer in the detail, the
- * only thing that differs between the two.
+ * only thing that differs between the two — and only the observation is
+ * recorded here: the cold start a wake goes on to attempt is its own
+ * `woken` event once it has actually happened, never a claim made ahead
+ * of it. lastExit.at is the runtime's record of the exit (the death
+ * itself), which is why the row can say when a sandbox died even when the
+ * reconciler only found it a heartbeat later.
  */
 export function recordShellDeath(
   db: Db,
@@ -187,6 +191,7 @@ export function recordShellDeath(
 ): void {
   watchers?.disposeSandbox(row.id);
   writeShellDeath(db, row.id, {
+    at: exit.finishedAt,
     exitCode: exit.exitCode,
     cause: causeOfExit(exit),
   });
@@ -194,7 +199,7 @@ export function recordShellDeath(
     kind: 'reconciled',
     sandboxName: row.name,
     sandboxId: row.id,
-    detail: `container is stopped — state ${row.state} corrected to stopped${describeExit(exit)}${noticed === 'at wake' ? ', found dead at wake and restarted' : ''}`,
+    detail: `container is stopped — state ${row.state} corrected to stopped${describeExit(exit)}${noticed === 'at wake' ? ', found dead at wake' : ''}`,
   });
 }
 
@@ -282,7 +287,10 @@ export async function wakeSandbox(
       // for a stopped shell: a live one is null and takes the fast path
       // unchanged; a dead one is recorded as the death it is and falls
       // through to the stopped arm's cold start — the same seconds a
-      // stopped sandbox always costs, no `restoring` detour.
+      // stopped sandbox always costs, no `restoring` detour. The one shape
+      // this does not cover is a shell that is *gone* (also null): only an
+      // operator's prune or rm reaches a live-row container, and the
+      // reconciler's next pass records that as stopped-with-disk.
       const exit = await executor.exitOf(row.id);
       if (exit === null) {
         await watchers?.reapDeferred(row.id);

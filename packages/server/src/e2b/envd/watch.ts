@@ -16,6 +16,7 @@ import {
   WatcherLimitError,
   WatcherOperationConflictError,
   WatcherOperationLimitError,
+  WatcherShutdownError,
 } from '../watcher-table';
 import {
   type EnvdContext,
@@ -209,9 +210,19 @@ export function registerWatchRoutes(
           }),
         );
       } else if (outcome instanceof Error) {
+        // The container died under the watcher (or the watcher broke):
+        // `internal`, the same feel as a killed E2B sandbox. The daemon
+        // shutting down is `unavailable` — retry after the restart, the
+        // same code the process face uses for the same moment.
         await write(
           envelope(FLAG_END_STREAM, {
-            error: { code: 'internal', message: outcome.message },
+            error: {
+              code:
+                outcome instanceof WatcherShutdownError
+                  ? 'unavailable'
+                  : 'internal',
+              message: outcome.message,
+            },
           }),
         );
       }

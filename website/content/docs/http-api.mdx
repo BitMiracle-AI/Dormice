@@ -89,7 +89,9 @@ or `exited` (any other exit; the code is all that is known). Stops the
 daemon ordered — the idle policy, a rebuild, a destroy — are not deaths
 and never appear here; they are the activity feed's business. The field
 is history, not state: a wake does not clear it, only the next death
-overwrites it. That is what makes it useful — a client whose stream just
+overwrites it. `at` is when the container's init exited as the runtime
+recorded it (Docker's `State.FinishedAt`) — the death itself, not the
+moment the daemon noticed it. That is what makes it useful — a client whose stream just
 ended in EOF re-acquires and reads *why* in the same answer, and can tell
 its user "raise the memory" from "raise the pids cap".
 

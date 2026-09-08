@@ -10,6 +10,7 @@ import {
   WatcherLimitError,
   WatcherOperationConflictError,
   WatcherOperationLimitError,
+  WatcherShutdownError,
   WatcherTable,
 } from './watcher-table';
 
@@ -410,6 +411,10 @@ describe('WatcherTable', () => {
     const shutdown = table.shutdown();
     expect(shutdownEnd).toHaveBeenCalledTimes(1);
     expect(pendingEnd).toHaveBeenCalledTimes(1);
+    // The ending names the daemon's shutdown, not a broken watcher — the
+    // route turns this type into `unavailable` on the wire.
+    expect(shutdownEnd.mock.calls[0]?.[0]).toBeInstanceOf(WatcherShutdownError);
+    expect(pendingEnd.mock.calls[0]?.[0]).toBeInstanceOf(WatcherShutdownError);
     expect(stop).toHaveBeenCalledTimes(2);
     secondStop.resolve();
     await shutdown;

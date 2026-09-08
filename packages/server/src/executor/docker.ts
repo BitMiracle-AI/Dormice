@@ -131,6 +131,8 @@ interface Inspected {
   pidsLimit: number;
   exitCode: number;
   oomKilled: boolean;
+  /** State.FinishedAt as Docker writes it (RFC 3339 with nanoseconds). */
+  finishedAt: string;
 }
 
 /**
@@ -687,6 +689,9 @@ export class DockerExecutor implements Executor {
       exitCode: found.exitCode,
       oomKilled: found.oomKilled,
       runtimeDied: found.exitCode === 2 && !found.oomKilled,
+      // Docker keeps nanoseconds; the ledger's clock is millisecond ISO
+      // everywhere else, and a consumer parsing dates should meet one shape.
+      finishedAt: new Date(found.finishedAt).toISOString(),
     };
   }
 
@@ -1750,6 +1755,7 @@ export class DockerExecutor implements Executor {
         pidsLimit: info.HostConfig?.PidsLimit ?? 0,
         exitCode: info.State.ExitCode,
         oomKilled: info.State.OOMKilled,
+        finishedAt: info.State.FinishedAt,
       };
     } catch (err) {
       if (isDockerApiError(err) && err.statusCode === 404) return null;

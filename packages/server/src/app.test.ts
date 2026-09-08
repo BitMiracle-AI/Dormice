@@ -517,8 +517,10 @@ describe('acquire finds the shell dead under an active row', () => {
       .events.map((e: { kind: string; detail: string }) => [e.kind, e.detail]);
     expect(kinds).toContainEqual([
       'reconciled',
-      "container is stopped — state active corrected to stopped (exit 2, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see the sandbox pids cap in settings), found dead at wake and restarted",
+      "container is stopped — state active corrected to stopped (exit 2, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see the sandbox pids cap in settings), found dead at wake",
     ]);
+    // The restart is its own event, recorded once it has happened — the
+    // death record never claims it ahead of time.
     expect(kinds[0]).toEqual(['woken', 'cold start from the surviving disk']);
   });
 

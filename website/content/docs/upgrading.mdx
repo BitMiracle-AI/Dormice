@@ -44,9 +44,10 @@ Two footnotes. The E2B process and watcher registries live in daemon
 memory: processes and in-container watcher processes outlive the
 restart, but the fresh daemon no longer lists or controls those old
 handles. The restart itself is bounded: on SIGTERM the daemon ends every
-attached process stream with an `unavailable` end-frame (the process
-keeps running in its sandbox; the stream cannot be reconnected to after
-the restart), stops its watchers, gives in-flight requests ten seconds,
+attached process and watch stream with an `unavailable` end-frame (the
+process keeps running in its sandbox; neither stream can be reconnected
+to after the restart — create the watch again), gives in-flight
+requests ten seconds,
 then cuts whatever is still connected and exits — a stop takes seconds,
 never systemd's 90-second kill ([details](/docs/e2b-differences)). And
 the pinned toolchain (Node, gVisor) is only *installed* when missing — an

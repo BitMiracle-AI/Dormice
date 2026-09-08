@@ -77,9 +77,12 @@ export type ShellExitCause = (typeof SHELL_EXIT_CAUSES)[number];
  * happened in this incarnation. Sticky on purpose: it is history, not
  * state — a wake does not clear it (the caller who saw a stream end in EOF
  * reads it right after re-acquiring), only the next death overwrites it and
- * destroy deletes it with the row. `at` is when the death was recorded,
- * within one heartbeat of the death itself (immediately when a wake found
- * the shell dead); the activity feed carries the same event with wording.
+ * destroy deletes it with the row. `at` is when the container's init
+ * exited as the runtime recorded it (Docker's State.FinishedAt) — the
+ * death itself, not the moment the daemon noticed: the reconciler notices
+ * within one heartbeat, a wake immediately, and the activity feed's
+ * `reconciled` event is stamped with the noticing. Millisecond ISO like
+ * every other timestamp here.
  */
 export const lastExitSchema = z
   .object({

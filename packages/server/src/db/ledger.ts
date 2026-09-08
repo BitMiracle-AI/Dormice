@@ -1,8 +1,8 @@
 import {
+  type LastExit,
   type LifecyclePolicy,
   SANDBOX_STATES,
   type SandboxState,
-  type ShellExitCause,
 } from '@dormice/shared';
 import { count, eq } from 'drizzle-orm';
 import { recordActivity } from './activity';
@@ -170,22 +170,23 @@ export function overwriteState(db: Db, id: string, state: SandboxState): void {
 }
 
 /**
- * Records an unordered death of the shell: the row goes to `stopped` and the
+ * Writes an unordered death of the shell: the row goes to `stopped` and the
  * three lastExit columns are written in the same statement — the state and
  * the reason it is in that state are one fact. Like overwriteState this
  * bypasses the transition table: a death is observed, never ordered, and
- * whatever the ledger believed (active, frozen) is simply overwritten.
+ * whatever the ledger believed (active, frozen) is simply overwritten. The
+ * pure ledger write; lifecycle's recordShellDeath is the arbiter that
+ * reads the exit, calls this and records the activity.
  */
-export function recordShellDeath(
+export function writeShellDeath(
   db: Db,
   id: string,
-  exit: { exitCode: number; cause: ShellExitCause },
-  now: string = new Date().toISOString(),
+  exit: NonNullable<LastExit>,
 ): void {
   db.update(sandboxes)
     .set({
       state: 'stopped',
-      lastExitAt: now,
+      lastExitAt: exit.at,
       lastExitCode: exit.exitCode,
       lastExitCause: exit.cause,
     })

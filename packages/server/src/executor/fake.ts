@@ -355,7 +355,7 @@ export class FakeExecutor implements Executor {
    * exited shell carrying the given signature. The one death the fake
    * cannot produce by actually running out of anything.
    */
-  crashContainer(sandboxId: string, exit: ShellExit): void {
+  crashContainer(sandboxId: string, exit: Omit<ShellExit, 'finishedAt'>): void {
     const actual = this.containers.get(sandboxId);
     if (actual !== 'running' && actual !== 'paused') {
       throw new Error(
@@ -363,7 +363,11 @@ export class FakeExecutor implements Executor {
       );
     }
     this.containers.set(sandboxId, 'stopped');
-    this.exits.set(sandboxId, { ...exit });
+    // The death is now: the runtime's record of the exit is the crash itself.
+    this.exits.set(sandboxId, {
+      ...exit,
+      finishedAt: new Date().toISOString(),
+    });
     this.killProcesses(sandboxId);
   }
 
@@ -425,6 +429,7 @@ export class FakeExecutor implements Executor {
       exitCode: 137,
       oomKilled: false,
       runtimeDied: false,
+      finishedAt: new Date().toISOString(),
     });
     this.killProcesses(sandboxId);
   }

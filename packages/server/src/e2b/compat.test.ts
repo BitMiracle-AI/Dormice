@@ -1529,6 +1529,33 @@ describe('E2B envd surface', () => {
     );
   });
 
+  it('daemon shutdown ends an attached WatchDir stream with `unavailable`, like the process face', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    // A watch with a long deadline — the second long-lived stream shape
+    // (the process stream is the first) that would otherwise hold close().
+    const streaming = watchDir(t, sandboxID, { path: '/home/user' }, 60_000);
+    for (let i = 0; i < 200 && t.watchers.count(sandboxID) === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(t.watchers.count(sandboxID)).toBe(1);
+
+    const started = Date.now();
+    await t.app.close();
+    expect(Date.now() - started).toBeLessThan(2000);
+
+    const frames = parseEnvelopes((await streaming).rawPayload);
+    expect(frames[0]?.json).toEqual({ start: {} });
+    const last = frames.at(-1);
+    expect(last?.flags).toBe(2);
+    expect(last?.json.error).toMatchObject({ code: 'unavailable' });
+    expect((last?.json.error as { message: string }).message).toMatch(
+      /daemon shutting down/,
+    );
+    // The physical watcher was stopped by shutdown, not left running.
+    expect(t.watchers.count(sandboxID)).toBe(0);
+  });
+
   it('WatchDir refuses a missing path and a file before any start frame', async () => {
     const t = testApp();
     const { sandboxID } = await createSandbox(t);
