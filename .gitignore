@@ -1,9 +1,11 @@
 # ── Internal development files, never committed ──
-# CLAUDE.md carries private cross-references; RULES/ and docs/ are internal
-# conventions and decision records. Public-facing docs (README, SECURITY.md, …)
-# are separate deliverables written on their own. Anchored to the repo root:
-# an unanchored docs/ would swallow website/content/docs/ too.
+# CLAUDE.md carries private cross-references (AGENTS.md is its twin for
+# Codex, same contents); RULES/ and docs/ are internal conventions and
+# decision records. Public-facing docs (README, SECURITY.md, …) are separate
+# deliverables written on their own. Anchored to the repo root: an
+# unanchored docs/ would swallow website/content/docs/ too.
 CLAUDE.md
+AGENTS.md
 /RULES/
 /docs/
 
