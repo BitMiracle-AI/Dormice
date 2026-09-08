@@ -9,7 +9,7 @@ import {
 } from './db/ledger';
 import type { SandboxRow } from './db/schema';
 import type { WatcherTable } from './e2b/watcher-table';
-import type { ContainerState, Executor } from './executor/executor';
+import type { ContainerState, Executor, ShellExit } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
 
 export interface ReconcileResult {
@@ -37,6 +37,25 @@ const LEDGER_STATE: Record<ContainerState, SandboxState> = {
   paused: 'frozen',
   stopped: 'stopped',
 };
+
+/**
+ * The death, in the words the host kernel used. Only the memory-cgroup OOM
+ * verdict is asserted as a cause — Docker relays it straight from the
+ * kernel. Exit 2 is named for what it physically is: the code gVisor's
+ * sentry (a Go program) leaves when it dies itself, which is exactly what a
+ * pids-cap hit produces (measured 2026-09-08) — a strong hint, not a kernel
+ * verdict, and worded as one. Everything else is the bare exit code.
+ */
+function describeExit(exit: ShellExit | null): string {
+  if (exit === null) return '';
+  if (exit.oomKilled) {
+    return ` (exit ${exit.exitCode}, OOM-killed by the kernel's memory cgroup)`;
+  }
+  if (exit.exitCode === 2) {
+    return " (exit 2, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see DORMICE_SANDBOX_PIDS_LIMIT)";
+  }
+  return ` (exit ${exit.exitCode}, not an OOM kill)`;
+}
 
 /**
  * Reads the ledger, then all of reality, and repairs every disagreement.
@@ -198,13 +217,20 @@ export async function reconcile(
     if (observed !== undefined) {
       owners.add(row.id);
       if (LEDGER_STATE[observed] !== row.state) {
-        await repairUnderLock(row, () => {
+        await repairUnderLock(row, async () => {
+          // A stopped container under a row that never ordered a stop is a
+          // death the daemon did not cause. Read how it died before the
+          // ledger moves on, so the record says "OOM-killed" or "exit 2"
+          // instead of leaving the operator — and the E2B client whose
+          // stream just ended in EOF — to guess between the two.
+          const exit =
+            observed === 'stopped' ? await executor.exitOf(row.id) : null;
           if (observed === 'stopped') watchers?.disposeSandbox(row.id);
           overwriteState(db, row.id, LEDGER_STATE[observed]);
           result.repairedStates += 1;
           note(
             row,
-            `container is ${observed} — state ${row.state} corrected to ${LEDGER_STATE[observed]}`,
+            `container is ${observed} — state ${row.state} corrected to ${LEDGER_STATE[observed]}${describeExit(exit)}`,
           );
         });
       }

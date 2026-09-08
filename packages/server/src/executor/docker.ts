@@ -79,6 +79,7 @@ import {
   type SandboxEntry,
   type SandboxMetrics,
   type SandboxResources,
+  type ShellExit,
   type ShellLimits,
   type ShellOptions,
   type WatchDirHandle,
@@ -191,13 +192,22 @@ export class DockerExecutor implements Executor {
   }
 
   async unfreeze(sandboxId: string): Promise<void> {
-    const containerId = await this.expectState(sandboxId, 'paused');
+    const found = await this.inspect(sandboxId);
+    if (found === null || containerStateFromDocker(found.status) !== 'paused') {
+      throw new Error(
+        `container ${sandboxId} is ${found === null ? 'absent' : containerStateFromDocker(found.status)}, expected paused`,
+      );
+    }
     // Milliseconds; memory swaps back in lazily, on demand.
     await deadline(
-      this.docker.getContainer(containerId).unpause(),
+      this.docker.getContainer(found.id).unpause(),
       VERB_DEADLINE_SECONDS,
       `unpause of ${sandboxId}`,
     );
+    // After, not before: runsc refuses resource updates on a paused
+    // container ("cannot set resources … in state paused", measured
+    // 2026-09-08), and accepts them on a running one.
+    await this.convergePidsLimit(found, sandboxId);
   }
 
   async stop(sandboxId: string): Promise<void> {
@@ -250,10 +260,45 @@ export class DockerExecutor implements Executor {
     // Loop mounts live in kernel memory and are gone after a host reboot,
     // while the image file and the stopped container survive on disk.
     await this.ensureMounted(sandboxId);
+    // Before start: on an exited container the update rewrites HostConfig
+    // and the new cap is what the container starts under.
+    await this.convergePidsLimit(found, sandboxId);
     await deadline(
       this.docker.getContainer(found.id).start(),
       VERB_DEADLINE_SECONDS,
       `start of ${sandboxId}`,
+    );
+  }
+
+  /**
+   * Brings a surviving shell's pids cap to the configured value. The cap is
+   * fixed into HostConfig at create time, so without this an operator
+   * raising DORMICE_SANDBOX_PIDS_LIMIT would reach only newborn shells
+   * while every existing sandbox kept dying at the old number. Unlike the
+   * CPU/memory limits (which gVisor reads once at boot for the guest's CPU
+   * count and MemTotal, so changing them honestly needs a new shell), the
+   * pids cap is invisible to the guest and a pure host-side cgroup value:
+   * `docker update` changes it in place, so no rebuild and no cold start
+   * for a frozen fleet. Applied at the two wake points — before start() on
+   * an exited container, after unpause() on a paused one — because runsc
+   * accepts the update in the running and exited states and refuses it
+   * while paused (measured 2026-09-08). A shell already at the cap is left
+   * alone; no update call, no log line.
+   */
+  private async convergePidsLimit(
+    found: { id: string; pidsLimit: number },
+    sandboxId: string,
+  ): Promise<void> {
+    if (found.pidsLimit === this.opts.pidsLimit) return;
+    await deadline(
+      this.docker
+        .getContainer(found.id)
+        .update({ PidsLimit: this.opts.pidsLimit }),
+      VERB_DEADLINE_SECONDS,
+      `pids-limit update of ${sandboxId}`,
+    );
+    this.log(
+      `pids limit of ${sandboxId}: ${found.pidsLimit} -> ${this.opts.pidsLimit}`,
     );
   }
 
@@ -586,6 +631,20 @@ export class DockerExecutor implements Executor {
       if (isDockerApiError(err) && err.statusCode === 404) return null;
       throw err;
     }
+  }
+
+  async exitOf(sandboxId: string): Promise<ShellExit | null> {
+    const found = await this.inspect(sandboxId);
+    if (
+      found === null ||
+      containerStateFromDocker(found.status) !== 'stopped'
+    ) {
+      return null;
+    }
+    // State.ExitCode is the init process's; State.OOMKilled is containerd's
+    // relay of the kernel's memcg OOM event — the only host-kernel death
+    // verdict that survives the container's cgroup scope being torn down.
+    return { exitCode: found.exitCode, oomKilled: found.oomKilled };
   }
 
   async metrics(sandboxId: string): Promise<SandboxMetrics> {
@@ -1496,8 +1555,12 @@ export class DockerExecutor implements Executor {
           Labels: { [SANDBOX_LABEL]: sandboxId },
           HostConfig: {
             // The security set: gVisor keeps sandbox code off the real
-            // kernel, Init reaps zombies, PidsLimit stops fork bombs. The
-            // image defaults to uid 1000 (user). Deliberately NO
+            // kernel, Init reaps zombies, PidsLimit bounds the sandbox's
+            // host-side footprint so a fork bomb kills only its own sandbox
+            // (under gVisor it is not a guest process count — see
+            // config.ts, and convergePidsLimit for how existing shells
+            // follow a changed value). The image defaults to uid 1000
+            // (user). Deliberately NO
             // no-new-privileges (2026-08-31): it would veto the setuid
             // elevation that passwordless sudo needs (the E2B convention,
             // baked into the base image), and container root was never what
@@ -1617,9 +1680,14 @@ export class DockerExecutor implements Executor {
    * Docker's raw status and the shell's CPU allowance (metrics reports it
    * per sandbox), or null if no such container exists.
    */
-  private async inspect(
-    sandboxId: string,
-  ): Promise<{ id: string; status: string; nanoCpus: number } | null> {
+  private async inspect(sandboxId: string): Promise<{
+    id: string;
+    status: string;
+    nanoCpus: number;
+    pidsLimit: number;
+    exitCode: number;
+    oomKilled: boolean;
+  } | null> {
     try {
       const info = await deadline(
         this.docker.getContainer(containerName(sandboxId)).inspect(),
@@ -1630,6 +1698,9 @@ export class DockerExecutor implements Executor {
         id: info.Id,
         status: info.State.Status,
         nanoCpus: info.HostConfig?.NanoCpus ?? 0,
+        pidsLimit: info.HostConfig?.PidsLimit ?? 0,
+        exitCode: info.State.ExitCode,
+        oomKilled: info.State.OOMKilled,
       };
     } catch (err) {
       if (isDockerApiError(err) && err.statusCode === 404) return null;

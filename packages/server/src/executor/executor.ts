@@ -279,6 +279,20 @@ export interface ShellLimits {
   memoryBytes: number;
 }
 
+/**
+ * How a stopped shell's processes ended, as the runtime recorded it:
+ * the init process's exit code and whether the kernel's memory cgroup OOM
+ * killer took the container down. Measured signatures under gVisor
+ * (2026-09-08): memcg OOM = 137 + oomKilled; our own stop() (SIGKILL) =
+ * 137, not oomKilled; the pids cgroup refusing the sentry a thread = 2,
+ * not oomKilled. The reconciler writes these into the record of a death
+ * the ledger did not order, so nobody has to guess from "it's gone".
+ */
+export interface ShellExit {
+  exitCode: number;
+  oomKilled: boolean;
+}
+
 export interface ImportDiskOptions {
   /**
    * Nominal size of the fresh disk, GiB; absent means the executor's live
@@ -435,6 +449,14 @@ export interface Executor {
    * ledger to swap shells whose limits drifted from the spec in force.
    */
   limitsOf(sandboxId: string): Promise<ShellLimits | null>;
+  /**
+   * How the shell's processes ended — only meaningful for a stopped shell,
+   * so null for anything else: absent (no shell), running or paused (not
+   * ended). A pure read, never a wake. Distinguishes the deaths the
+   * reconciler discovers (OOM kill, sentry crash) from one another and from
+   * a stop the daemon ordered itself.
+   */
+  exitOf(sandboxId: string): Promise<ShellExit | null>;
   /**
    * Every sandbox disk on this host, summed: how many, what they were
    * promised, what they actually occupy. A snapshot like listDisks —

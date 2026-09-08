@@ -70,7 +70,21 @@ const envSchema = z.object({
   DORMICE_SANDBOX_DISK_GB: z.coerce.number().positive().default(10),
   DORMICE_SANDBOX_CPUS: z.coerce.number().positive().default(1),
   DORMICE_SANDBOX_MEMORY_GB: z.coerce.number().positive().default(2),
-  DORMICE_SANDBOX_PIDS_LIMIT: z.coerce.number().int().positive().default(512),
+  /**
+   * The pids cgroup cap on each sandbox's container. Under gVisor this is
+   * NOT "how many processes the sandbox may run": the guest never sees it.
+   * It caps the sandbox's host-side footprint — the sentry's threads, the
+   * gofer, and one stub process per guest process (systrap) — and when the
+   * cap is hit the Go runtime cannot create a thread and the whole sandbox
+   * dies (exit 2, no OOM flag; measured 2026-09-08). 512 was runc's
+   * fork-bomb number and killed real 16 GB agent sandboxes running a browser
+   * plus several node/claude sessions (a production fleet: 13 deaths in 10 days,
+   * observed peak 470). 4096 is ~8x that peak; the cap still exists so a
+   * fork bomb takes down its own sandbox and nothing else. Plain env, not a
+   * ledger setting: it is a host budget, not a per-sandbox spec. Existing
+   * containers converge at their next wake (docker update, no rebuild).
+   */
+  DORMICE_SANDBOX_PIDS_LIMIT: z.coerce.number().int().positive().default(4096),
   DORMICE_RECLAIM_TIMEOUT_SECONDS: z.coerce
     .number()
     .int()

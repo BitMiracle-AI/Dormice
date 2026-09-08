@@ -26,6 +26,7 @@ import {
   type SandboxEntry,
   type SandboxMetrics,
   type SandboxResources,
+  type ShellExit,
   type ShellLimits,
   type ShellOptions,
   type WatchDirHandle,
@@ -250,6 +251,13 @@ export class FakeExecutor implements Executor {
    */
   private readonly limits = new Map<string, ShellLimits>();
   /**
+   * How each stopped shell's processes ended — the docker executor's
+   * State.ExitCode/OOMKilled. Written by stop() (a SIGKILL: 137, not an
+   * OOM) and the crashContainer hook; gone when the shell runs again or
+   * goes, so a live shell never reports a stale death.
+   */
+  private readonly exits = new Map<string, ShellExit>();
+  /**
    * Each disk's promised size in bytes — the docker executor's truncate
    * size. Keyed like disks; born at create/importDisk, grown by growDisk,
    * gone with the disk.
@@ -305,6 +313,30 @@ export class FakeExecutor implements Executor {
     return found ? { ...found } : null;
   }
 
+  async exitOf(sandboxId: string): Promise<ShellExit | null> {
+    if (this.containers.get(sandboxId) !== 'stopped') return null;
+    const found = this.exits.get(sandboxId);
+    return found ? { ...found } : null;
+  }
+
+  /**
+   * Test hook: the container dies on its own — the kernel's OOM killer, or
+   * the pids cgroup refusing gVisor's sentry a thread — and leaves an
+   * exited shell carrying the given signature. The one death the fake
+   * cannot produce by actually running out of anything.
+   */
+  crashContainer(sandboxId: string, exit: ShellExit): void {
+    const actual = this.containers.get(sandboxId);
+    if (actual !== 'running' && actual !== 'paused') {
+      throw new Error(
+        `container ${sandboxId} is ${actual ?? 'absent'}, cannot crash`,
+      );
+    }
+    this.containers.set(sandboxId, 'stopped');
+    this.exits.set(sandboxId, { ...exit });
+    this.killProcesses(sandboxId);
+  }
+
   /**
    * Test hook: the container disappears, the disk stays — a removal behind
    * the daemon's back, or a crash in the middle of destroy. The one-sided
@@ -316,6 +348,7 @@ export class FakeExecutor implements Executor {
     }
     this.images.delete(sandboxId);
     this.limits.delete(sandboxId);
+    this.exits.delete(sandboxId);
     this.killProcesses(sandboxId);
   }
 
@@ -352,6 +385,8 @@ export class FakeExecutor implements Executor {
   async stop(sandboxId: string): Promise<void> {
     this.expect(sandboxId, 'paused');
     this.containers.set(sandboxId, 'stopped');
+    // What the real stop leaves behind: SIGKILL's 137, no OOM verdict.
+    this.exits.set(sandboxId, { exitCode: 137, oomKilled: false });
     this.killProcesses(sandboxId);
   }
 
@@ -367,12 +402,14 @@ export class FakeExecutor implements Executor {
       this.containers.set(sandboxId, 'running');
       this.images.set(sandboxId, opts?.image ?? FAKE_BASE_IMAGE);
       this.limits.set(sandboxId, this.bornLimits(opts));
+      this.exits.delete(sandboxId);
       return;
     }
     this.expect(sandboxId, 'stopped');
     // The existing shell keeps the image and limits it was born with —
     // start only starts; opts applies to the rebuild path above.
     this.containers.set(sandboxId, 'running');
+    this.exits.delete(sandboxId);
   }
 
   async destroy(sandboxId: string): Promise<void> {
@@ -385,6 +422,7 @@ export class FakeExecutor implements Executor {
     const hadDisk = this.disks.delete(sandboxId);
     this.images.delete(sandboxId);
     this.limits.delete(sandboxId);
+    this.exits.delete(sandboxId);
     this.diskNominal.delete(sandboxId);
     this.fs.delete(sandboxId);
     this.killProcesses(sandboxId);
@@ -405,6 +443,7 @@ export class FakeExecutor implements Executor {
     }
     this.images.delete(sandboxId);
     this.limits.delete(sandboxId);
+    this.exits.delete(sandboxId);
     // The container's death takes every process and watcher with it, same
     // physics as stop and vanish.
     this.killProcesses(sandboxId);

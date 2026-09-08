@@ -76,6 +76,25 @@ Out-of-memory *inside* the sandbox takes down the whole gVisor container
 next acquire revives the sandbox. Raise the limit if the workload
 honestly needs more.
 
+The activity feed (`listActivity`, or the console's activity page) says
+which it was: the `reconciled` event that recorded the death carries the
+exit code and whether the kernel's memory cgroup OOM-killed the
+container. `OOM-killed` is the kernel's verdict; a plain `exit 137` is a
+SIGKILL from elsewhere.
+
+## A sandbox vanished with exit code 2 and no OOM
+
+The sandbox hit its pids cap (`DORMICE_SANDBOX_PIDS_LIMIT`). Under gVisor
+that cap bounds the sandbox's host-side threads and processes, not a
+count the sandbox can see — so nothing inside gets an error; the
+sandbox's kernel simply dies, exit 2, and the host's own kernel log
+shows one line: `fork rejected by pids controller`. The `reconciled`
+activity event names this signature. The disk survives and the next
+acquire revives the sandbox. The default is 4096; daemons configured at
+the old default of 512 should raise it — a browser plus a few agent
+sessions in one sandbox is enough to reach 512. Existing sandboxes adopt
+the new value at their next wake, no rebuild needed.
+
 ## E2B `watchDir` refuses to start
 
 The sandbox image predates `inotify-tools`. Rebuild the image from

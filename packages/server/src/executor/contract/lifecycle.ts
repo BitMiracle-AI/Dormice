@@ -243,5 +243,29 @@ export function lifecycleTests(ctx: ContractContext) {
       },
       timeoutMs,
     );
+
+    it(
+      'exitOf reads how a stopped shell ended, and nothing for a live or absent one',
+      async () => {
+        const id = await ctx.fresh();
+        expect(await ctx.executor.exitOf(id)).toBeNull();
+        await ctx.executor.freeze(id);
+        expect(await ctx.executor.exitOf(id)).toBeNull();
+        await ctx.executor.stop(id);
+        // stop() is a SIGKILL: 137 by the shell convention, and not an OOM
+        // — the one exit the reconciler must never read as a death verdict.
+        expect(await ctx.executor.exitOf(id)).toEqual({
+          exitCode: 137,
+          oomKilled: false,
+        });
+        await ctx.executor.start(id);
+        expect(await ctx.executor.exitOf(id)).toBeNull();
+        await ctx.executor.freeze(id);
+        await ctx.executor.stop(id);
+        await ctx.subject.vanishContainer(id);
+        expect(await ctx.executor.exitOf(id)).toBeNull();
+      },
+      timeoutMs,
+    );
   });
 }

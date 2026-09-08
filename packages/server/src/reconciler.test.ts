@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
+import { listActivityEvents } from './db/activity';
 import { type Db, migrateDb, openDb } from './db/db';
 import { createSandbox, findByName, transition } from './db/ledger';
 import type { SandboxRow } from './db/schema';
@@ -65,6 +66,45 @@ describe('startup reconcile', () => {
     const result = await reconcile(db, executor, locks);
     expect(result).toEqual({ ...NONE, repairedStates: 1 });
     expect(findByName(db, 'alice')?.state).toBe('frozen');
+  });
+
+  it('records how a container died when it stopped on its own', async () => {
+    const { db, executor, locks } = setup();
+    // Two deaths the daemon never ordered: the kernel's OOM killer, and
+    // the pids cgroup taking down gVisor's sentry (exit 2, no OOM flag —
+    // the signature measured on the test machine 2026-09-08).
+    const oom = await seed(db, executor, 'alice');
+    executor.crashContainer(oom.id, { exitCode: 137, oomKilled: true });
+    const pids = await seed(db, executor, 'bob');
+    executor.crashContainer(pids.id, { exitCode: 2, oomKilled: false });
+
+    const result = await reconcile(db, executor, locks);
+    expect(result).toEqual({ ...NONE, repairedStates: 2 });
+    const details = listActivityEvents(db, 10)
+      .filter((e) => e.kind === 'reconciled')
+      .map((e) => [e.sandboxName, e.detail]);
+    expect(details).toContainEqual([
+      'alice',
+      "container is stopped — state active corrected to stopped (exit 137, OOM-killed by the kernel's memory cgroup)",
+    ]);
+    expect(details).toContainEqual([
+      'bob',
+      "container is stopped — state active corrected to stopped (exit 2, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see DORMICE_SANDBOX_PIDS_LIMIT)",
+    ]);
+  });
+
+  it('a stop the daemon ordered itself is recorded as a SIGKILL, never as a death verdict', async () => {
+    const { db, executor, locks } = setup();
+    // Crash between executor.stop() and transition(): our own kill.
+    const row = await seed(db, executor, 'alice');
+    await executor.freeze(row.id);
+    transition(db, row.id, 'frozen');
+    await executor.stop(row.id);
+
+    await reconcile(db, executor, locks);
+    expect(listActivityEvents(db, 1)[0]?.detail).toBe(
+      'container is stopped — state frozen corrected to stopped (exit 137, not an OOM kill)',
+    );
   });
 
   it('repairs across rungs and drops ownership when reality is stopped', async () => {

@@ -1,8 +1,9 @@
-import { mkdtemp } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Docker from 'dockerode';
-import { afterAll, describe } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { describeExecutorContract } from './contract';
 import { containerName, DockerExecutor } from './docker';
 
@@ -68,6 +69,65 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
     // Real containers under gVisor take seconds per operation.
     { timeoutMs: 120_000 },
   );
+
+  /**
+   * Docker-only: the pids cap is a host-side cgroup value with no
+   * counterpart in the fake. Three executors over one data dir play "the
+   * daemon restarted with a different DORMICE_SANDBOX_PIDS_LIMIT"; the
+   * container stays the same object throughout — the point is that no
+   * rebuild happens.
+   */
+  describe('DockerExecutor: an existing shell follows the configured pids cap at wake', () => {
+    it('unpause and start bring HostConfig and the live cgroup to the configured cap', async () => {
+      const dataDir = await mkdtemp(path.join(tmpdir(), 'dormice-contract-'));
+      const withCap = (pidsLimit: number) =>
+        new DockerExecutor({
+          baseImage: image,
+          dataDir,
+          resources: () => ({ diskSizeGb: 1, cpus: 1, memoryGb: 1 }),
+          pidsLimit,
+          reclaimTimeoutSeconds: 45,
+        });
+      const id = randomUUID();
+      const container = () => new Docker().getContainer(containerName(id));
+      const hostConfigCap = async () =>
+        (await container().inspect()).HostConfig.PidsLimit;
+      const cgroupCap = async () => {
+        const info = await container().inspect();
+        return (
+          await readFile(
+            `/sys/fs/cgroup/system.slice/docker-${info.Id}.scope/pids.max`,
+            'utf8',
+          )
+        ).trim();
+      };
+      const born = withCap(256);
+      try {
+        await born.create(id);
+        expect(await hostConfigCap()).toBe(256);
+        expect(await cgroupCap()).toBe('256');
+
+        // A frozen sandbox, daemon restarted with a higher cap: the wake
+        // is still a plain unpause — same container, processes alive.
+        await born.freeze(id);
+        await withCap(4096).unfreeze(id);
+        expect(await hostConfigCap()).toBe(4096);
+        expect(await cgroupCap()).toBe('4096');
+
+        // A stopped shell: the update lands before start, and the
+        // started container runs under the new cap.
+        const lowered = withCap(1024);
+        await lowered.freeze(id);
+        await lowered.stop(id);
+        await lowered.start(id);
+        expect(await hostConfigCap()).toBe(1024);
+        expect(await cgroupCap()).toBe('1024');
+      } finally {
+        await withCap(1024).destroy(id);
+        await rm(dataDir, { recursive: true, force: true });
+      }
+    }, 120_000);
+  });
 
   afterAll(async () => {
     try {
