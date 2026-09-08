@@ -191,19 +191,23 @@ describe('runtime settings: seeding', () => {
     const db = freshDb();
     appOn(db);
     db.run(
-      sql`UPDATE runtime_settings SET s3_endpoint = NULL, s3_bucket = NULL, s3_access_key_id = NULL, s3_secret_access_key = NULL, s3_region = NULL, s3_force_path_style = NULL, sandbox_domain = NULL, sandbox_domain_aliases = NULL`,
+      sql`UPDATE runtime_settings SET s3_endpoint = NULL, s3_bucket = NULL, s3_access_key_id = NULL, s3_secret_access_key = NULL, s3_region = NULL, s3_force_path_style = NULL, sandbox_domain = NULL, sandbox_domain_aliases = NULL, pids_limit = NULL`,
     );
 
     // The upgraded daemon's first boot: virgin columns adopt the env.
     const upgraded = appOn(db, {
       ...S3_ENV,
       DORMICE_SANDBOX_DOMAIN: 'sbx.example.com',
+      DORMICE_SANDBOX_PIDS_LIMIT: '2048',
     });
     const adopted = await settingsOf(upgraded);
     expect(adopted.s3?.bucket).toBe('seed-bucket');
     expect(adopted.sandboxDomain).toBe('sbx.example.com');
     // The alias column adopts too — always to none, no env to consult.
     expect(adopted.sandboxDomainAliases).toEqual([]);
+    // The pids cap adopts the value the fleet has been running under — the
+    // env's, not the new default that would silently move it.
+    expect(adopted.pidsLimit).toBe(2048);
     // Adoption never rewrites the standing default policy: this row
     // pre-existed with "never archive", and another group's seed must not
     // change it.
@@ -215,10 +219,12 @@ describe('runtime settings: seeding', () => {
       ...S3_ENV,
       DORMICE_S3_BUCKET: 'other-bucket',
       DORMICE_SANDBOX_DOMAIN: 'other.example.com',
+      DORMICE_SANDBOX_PIDS_LIMIT: '3000',
     });
     const kept = await settingsOf(later);
     expect(kept.s3?.bucket).toBe('seed-bucket');
     expect(kept.sandboxDomain).toBe('sbx.example.com');
+    expect(kept.pidsLimit).toBe(2048);
   });
 
   it('a console clear survives a restart with the env seed still set', async () => {
@@ -246,6 +252,62 @@ describe('runtime settings: seeding', () => {
 });
 
 describe('updateSettings', () => {
+  it('sets the pids cap live, floors it, and never accepts unlimited', async () => {
+    const app = appOn(freshDb());
+    expect((await settingsOf(app)).pidsLimit).toBe(4096);
+
+    const raised = await rpc(app, '/updateSettings', { pidsLimit: 8192 });
+    expect(raised.statusCode).toBe(200);
+    expect(
+      updateSettingsResponseSchema.parse(raised.json()).settings.pidsLimit,
+    ).toBe(8192);
+    expect((await settingsOf(app)).pidsLimit).toBe(8192);
+
+    // The floor is the wire's, not the console's: below it a sandbox
+    // cannot boot its own runtime, so the daemon refuses, named.
+    const tooLow = await rpc(app, '/updateSettings', { pidsLimit: 255 });
+    expect(tooLow.statusCode).toBe(400);
+    expect(tooLow.json().message).toMatch(/pidsLimit.*at least 256/);
+    expect((await settingsOf(app)).pidsLimit).toBe(8192);
+    // Exactly the floor passes; there is no "unlimited" spelling at all.
+    expect(
+      (await rpc(app, '/updateSettings', { pidsLimit: 256 })).statusCode,
+    ).toBe(200);
+    expect(
+      (await rpc(app, '/updateSettings', { pidsLimit: 0 })).statusCode,
+    ).toBe(400);
+
+    const events = listActivityResponseSchema.parse(
+      (await rpc(app, '/listActivity')).json(),
+    ).events;
+    expect(events[0]).toMatchObject({
+      kind: 'settings-updated',
+      detail: 'pidsLimit=256',
+    });
+  });
+  it('sets the pids cap live, floors it, and records the change', async () => {
+    const app = appOn(freshDb());
+    const set = await rpc(app, '/updateSettings', { pidsLimit: 8192 });
+    expect(set.statusCode).toBe(200);
+    expect(
+      updateSettingsResponseSchema.parse(set.json()).settings.pidsLimit,
+    ).toBe(8192);
+    expect((await settingsOf(app)).pidsLimit).toBe(8192);
+    const events = listActivityResponseSchema.parse(
+      (await rpc(app, '/listActivity')).json(),
+    ).events;
+    expect(events[0]).toMatchObject({
+      kind: 'settings-updated',
+      detail: 'pidsLimit=8192',
+    });
+
+    // Below the floor a sandbox cannot boot its own runtime — refused, and
+    // the ledger keeps the value in force. "Unlimited" has no spelling.
+    const low = await rpc(app, '/updateSettings', { pidsLimit: 255 });
+    expect(low.statusCode).toBe(400);
+    expect(low.json().message).toMatch(/at least 256/);
+    expect((await settingsOf(app)).pidsLimit).toBe(8192);
+  });
   it('pidsLimit: adopted from the env on an upgraded row, then editable live with a floor', async () => {
     // An upgraded daemon: the row predates the pids_limit column, and its
     // env has been running the fleet at 512 — the ledger's first value
@@ -457,6 +519,33 @@ describe('updateSettings', () => {
     expect(res.statusCode).toBe(500);
     expect(res.json().message).toMatch(/target saved.*ENOSPC/);
     expect((await settingsOf(app)).swapGb).toBe(512);
+  });
+
+  it('pidsLimit: live for the executor, floored, never unlimited, recorded', async () => {
+    const app = appOn(freshDb(), { DORMICE_SANDBOX_PIDS_LIMIT: '512' });
+    expect((await settingsOf(app)).pidsLimit).toBe(512);
+
+    const raised = await rpc(app, '/updateSettings', { pidsLimit: 4096 });
+    expect(raised.statusCode).toBe(200);
+    expect(
+      updateSettingsResponseSchema.parse(raised.json()).settings.pidsLimit,
+    ).toBe(4096);
+    expect((await settingsOf(app)).pidsLimit).toBe(4096);
+
+    // The floor is the wire's, not the console's: below it a sandbox
+    // cannot boot its own runtime, so "stricter" would mean "dead".
+    const tooLow = await rpc(app, '/updateSettings', { pidsLimit: 255 });
+    expect(tooLow.statusCode).toBe(400);
+    expect(tooLow.json().message).toMatch(/at least 256/);
+    expect((await settingsOf(app)).pidsLimit).toBe(4096);
+
+    const events = listActivityResponseSchema.parse(
+      (await rpc(app, '/listActivity')).json(),
+    ).events;
+    expect(events[0]).toMatchObject({
+      kind: 'settings-updated',
+      detail: 'pidsLimit=4096',
+    });
   });
 
   it('records the change in the activity ring with its actor', async () => {
