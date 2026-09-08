@@ -114,6 +114,13 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
         expect(await hostConfigCap()).toBe(4096);
         expect(await cgroupCap()).toBe('4096');
         expect(await withCap(4096).convergePidsLimit(id)).toBe('in-force');
+        // The update names the pids cap alone. Docker re-sends the shell's
+        // stored CPU and memory limits to the runtime alongside it — the
+        // same numbers it was born with, so a pids move is never a
+        // resource change in disguise.
+        const resources = (await container().inspect()).HostConfig;
+        expect(resources.NanoCpus).toBe(1e9);
+        expect(resources.Memory).toBe(1024 ** 3);
 
         // Paused: runsc refuses the update, so the verb does not try; the
         // wake converges instead — still a plain unpause of the same

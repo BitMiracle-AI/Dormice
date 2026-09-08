@@ -602,6 +602,32 @@ describe('updateSettings', () => {
     expect((await settingsOf(app)).pidsLimit).toBe(2048);
   });
 
+  it('one patch, two host realities: a failed swap grow does not spare the pids sweep, and both verdicts come back', async () => {
+    const db = freshDb();
+    const executor = new FakeExecutor(
+      undefined,
+      () => readRuntimeSettings(db).pidsLimit,
+    );
+    const swap = fakeSwap();
+    swap.reconcile = () => Promise.reject(new Error('fallocate: ENOSPC'));
+    const app = appOn(db, {}, swap, undefined, executor);
+    const busy = (await rpc(app, '/acquireSandbox', { name: 'busy' })).json()
+      .sandbox.id as string;
+
+    const res = await rpc(app, '/updateSettings', {
+      swapGb: 512,
+      pidsLimit: 2048,
+    });
+    expect(res.statusCode).toBe(500);
+    // The swap verdict first, and only the swap's: the sweep ran and every
+    // running shell followed, so it has nothing to add.
+    expect(res.json().message).toMatch(/^swap target saved.*ENOSPC$/);
+    expect(executor.pidsLimitOf(busy)).toBe(2048);
+    const saved = await settingsOf(app);
+    expect(saved.swapGb).toBe(512);
+    expect(saved.pidsLimit).toBe(2048);
+  });
+
   it('records the change in the activity ring with its actor', async () => {
     const app = appOn(freshDb());
     await rpc(app, '/updateSettings', { maxSandboxes: 3 });

@@ -91,12 +91,15 @@ count the sandbox can see — so nothing inside gets an error; the
 sandbox's kernel simply dies, exit 2, and the host's own kernel log
 shows one line: `fork rejected by pids controller`. The `reconciled`
 activity event names this signature. The disk survives and the next
-acquire revives the sandbox. The default is 4096; daemons still running
-at the old default of 512 should raise it — a browser plus a few agent
-sessions in one sandbox is enough to reach 512. Raise it live from the
-console's settings page (or `updateSettings`'s `pidsLimit`); no restart
-and no rebuild: running sandboxes are brought to the new value in place
-as it is saved, frozen or stopped ones at their next wake.
+acquire revives the sandbox. The default is 4096 (it was 512, runc's
+fork-bomb number — a browser plus a few agent sessions in one sandbox is
+enough to pass it). A daemon upgraded from the old default adopts 4096 at
+that boot and brings its running sandboxes to it right there; only an
+environment that pins `DORMICE_SANDBOX_PIDS_LIMIT` at the old number
+keeps it, and the console's settings page (or `updateSettings`'s
+`pidsLimit`) is where to raise it — no restart, no rebuild: running
+sandboxes are brought to the new value in place as it is saved, frozen or
+stopped ones at their next wake.
 
 ## E2B `watchDir` refuses to start
 

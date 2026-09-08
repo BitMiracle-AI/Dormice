@@ -79,13 +79,16 @@ describe('sweepPidsLimit', () => {
     });
   });
 
-  it('passes over a busy key and a row whose shell has died, and counts progress for the watchdog', async () => {
+  it('waits for a busy key instead of skipping it, passes over a row whose shell has died, and counts progress for the watchdog', async () => {
     const { db, executor, locks, view } = setup(512);
     const held = await seed(db, executor, 'held');
     const dead = await seed(db, executor, 'dead');
     const free = await seed(db, executor, 'free');
-    // Whoever holds the key is mid-transition; the wake it ends in
-    // converges. The dead one is the reconciler's case, not the sweep's.
+    // Whoever holds the key is mid-operation (an acquire's touch, an exec's
+    // wake). The sweep decides nothing until the slot is its own, so it
+    // waits rather than leave this one running shell at the old cap — a
+    // skip here would have no next moment to catch it. The dead one is the
+    // reconciler's case, not the sweep's.
     let release: () => void = () => {};
     const holding = locks.run(
       held.name,
@@ -99,17 +102,22 @@ describe('sweepPidsLimit', () => {
     const beats = vi.fn();
 
     view.cap = 4096;
-    expect(await sweepPidsLimit(db, executor, locks, beats)).toEqual({
+    const sweeping = sweepPidsLimit(db, executor, locks, beats);
+    // Queued behind the holder, not around it: the held shell is untouched
+    // for as long as the slot is taken.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(executor.pidsLimitOf(held.id)).toBe(512);
+    release();
+    await holding;
+    expect(await sweeping).toEqual({
       considered: 3,
-      updated: 1,
-      skipped: 2,
+      updated: 2,
+      skipped: 1,
       failures: [],
     });
     expect(beats).toHaveBeenCalledTimes(3);
-    expect(executor.pidsLimitOf(held.id)).toBe(512);
+    expect(executor.pidsLimitOf(held.id)).toBe(4096);
     expect(executor.pidsLimitOf(free.id)).toBe(4096);
-    release();
-    await holding;
   });
 
   it('records a refused shell by name and still visits the rest', async () => {

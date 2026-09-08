@@ -233,35 +233,45 @@ export const settingsRoutes: FastifyPluginAsyncZod<
             : []),
         ].join(', '),
       });
-      // Reconcile after the write: growing mounts new blocks now, shrinking
-      // defers itself (the planner never touches an active block). A failed
-      // grow — ENOSPC, most likely — leaves the target saved on purpose:
-      // the boot reconcile and the next edit retry it, and getConfig's
-      // swap.activeGb reports the divergence honestly.
+      // Reconcile the host after the write — each knob with a reality out
+      // there on its own, neither's failure sparing the other: the ledger
+      // holds both targets now, and a swapfile that would not grow says
+      // nothing about the shells that are waiting for their cap. The
+      // verdicts are collected and answered together; one patch carrying
+      // both knobs gets both.
+      const unfollowed: string[] = [];
+      // Swap: growing mounts new blocks now, shrinking defers itself (the
+      // planner never touches an active block). A failed grow — ENOSPC,
+      // most likely — leaves the target saved on purpose: the boot
+      // reconcile and the next edit retry it, and getConfig's swap.activeGb
+      // reports the divergence honestly.
       if (patch.swapGb !== undefined && swap !== undefined) {
         try {
           await swap.reconcile(patch.swapGb);
         } catch (error) {
-          return reply.code(500).send({
-            message: `swap target saved (${patch.swapGb} GiB) but applying it failed: ${
+          unfollowed.push(
+            `swap target saved (${patch.swapGb} GiB) but applying it failed: ${
               error instanceof Error ? error.message : String(error)
             }`,
-          });
+          );
         }
       }
-      // The write already reached every future birth and wake; the sweep
-      // brings the shells running right now along — an operator raising
-      // the cap during an incident is looking at exactly those. A shell
-      // the runtime refuses keeps its old cap until its next wake, and the
-      // answer says so by name; the value stays saved either way.
+      // Pids cap: the write already reached every future birth and wake;
+      // the sweep brings the shells running right now along — an operator
+      // raising the cap during an incident is looking at exactly those. A
+      // shell the runtime refuses keeps its old cap until its next wake,
+      // and the answer says so by name; the value stays saved either way.
       if (patch.pidsLimit !== undefined) {
         const sweep = await sweepPidsLimit(db, executor, locks);
         app.log.info(sweep, 'pids cap sweep after updateSettings');
         if (sweep.failures.length > 0) {
-          return reply.code(500).send({
-            message: `pids cap saved (${patch.pidsLimit}) but ${sweep.failures.length} of ${sweep.considered} active sandboxes kept their old cap until their next wake — ${sweep.failures[0]}`,
-          });
+          unfollowed.push(
+            `pids cap saved (${patch.pidsLimit}) but ${sweep.failures.length} of ${sweep.considered} active sandboxes kept their old cap until their next wake — ${sweep.failures[0]}`,
+          );
         }
+      }
+      if (unfollowed.length > 0) {
+        return reply.code(500).send({ message: unfollowed.join('; ') });
       }
       return { settings };
     },
