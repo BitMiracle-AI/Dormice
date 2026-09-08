@@ -91,6 +91,13 @@ export const s3ArchiveViewSchema = z.object({
 
 export type S3ArchiveView = z.infer<typeof s3ArchiveViewSchema>;
 
+/**
+ * The lowest pids cap updateSettings accepts (2026-09-08, operator's call).
+ * Below a few hundred the sandbox's own runtime cannot even boot its
+ * threads, so a lower value is not a stricter sandbox — it is a dead one.
+ */
+export const PIDS_LIMIT_MIN = 256;
+
 export const runtimeSettingsSchema = z.object({
   /** How many sandboxes may exist at once; past it, creation answers 429. Wakes are never blocked. */
   maxSandboxes: z.number().int().positive(),
@@ -136,6 +143,16 @@ export const runtimeSettingsSchema = z.object({
    * state with aliases but no canonical domain.
    */
   sandboxDomainAliases: z.array(z.string().regex(bareHostnameRegex)),
+  /**
+   * The pids cgroup cap on every sandbox container. Under gVisor this is
+   * the sandbox's host-side thread-and-process budget (sentry threads,
+   * gofer, one stub per guest process), not a count the sandbox can see:
+   * hitting it kills the whole sandbox at once (exit 2, no OOM). Applies
+   * live — new containers are born with it and existing shells adopt it
+   * at their next wake, no rebuild. Floored at PIDS_LIMIT_MIN and never
+   * unlimited: the cap is what keeps a fork bomb inside its own sandbox.
+   */
+  pidsLimit: z.number().int().min(PIDS_LIMIT_MIN),
   /** ISO 8601 of the last updateSettings; null = still exactly the first-boot seed. */
   updatedAt: z.string().nullable(),
 });
@@ -174,9 +191,18 @@ export const updateSettingsRequestSchema = z
         }),
       )
       .optional(),
+    /** The pids cgroup cap for every sandbox; floored, never unlimited. */
+    pidsLimit: z
+      .number()
+      .int()
+      .min(PIDS_LIMIT_MIN, {
+        error: `pidsLimit must be at least ${PIDS_LIMIT_MIN} — below that a sandbox cannot boot its own runtime`,
+      })
+      .optional(),
   })
   .refine(
     (patch) =>
+      patch.pidsLimit !== undefined ||
       patch.maxSandboxes !== undefined ||
       patch.sandboxDefaults !== undefined ||
       patch.defaultPolicy !== undefined ||
@@ -186,7 +212,7 @@ export const updateSettingsRequestSchema = z
       patch.sandboxDomainAliases !== undefined,
     {
       message:
-        'updateSettings needs at least one of maxSandboxes, sandboxDefaults, defaultPolicy, swapGb, s3, sandboxDomain, sandboxDomainAliases',
+        'updateSettings needs at least one of maxSandboxes, sandboxDefaults, defaultPolicy, swapGb, s3, sandboxDomain, sandboxDomainAliases, pidsLimit',
     },
   );
 

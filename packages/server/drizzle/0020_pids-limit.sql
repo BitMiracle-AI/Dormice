@@ -1,0 +1,1 @@
+ALTER TABLE `runtime_settings` ADD `pids_limit` integer;

@@ -50,20 +50,20 @@ archive. The pids cap is the exception: it needs no rebuild — an
 existing sandbox adopts the configured value the next time it wakes
 from frozen or stopped.
 
-The disk, CPU and memory variables are **first-boot seeds**: on the
+The disk, CPU, memory and pids variables are **first-boot seeds**: on the
 daemon's first start they are written into its database as runtime
 settings, and from then on the database value is what's in force — edit
 it live from the console's settings page (or the `updateSettings` verb),
 no restart needed. Once seeded, changing these variables in the
 environment has no effect. The same applies to `DORMICE_MAX_SANDBOXES`
-below. `DORMICE_SANDBOX_PIDS_LIMIT` stays a plain environment variable.
+below.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `DORMICE_SANDBOX_DISK_GB` | `10` | Size of each sandbox's disk. The quota is physical and the image is sparse — unwritten space costs nothing. |
 | `DORMICE_SANDBOX_CPUS` | `1` | CPU limit per sandbox. |
 | `DORMICE_SANDBOX_MEMORY_GB` | `2` | Memory cap per sandbox. A sandbox that hits it is killed by gVisor (exit 137) and parks at stopped — files intact, next acquire revives it. |
-| `DORMICE_SANDBOX_PIDS_LIMIT` | `4096` | Cap on the sandbox's host-side process and thread footprint (the pids cgroup). Under gVisor this is not a count of processes inside the sandbox — the sandbox never sees it, and hitting it kills the whole sandbox at once (exit 2, no OOM). Keeps a fork bomb from taking anything down but its own sandbox; a browser plus several agent sessions in one sandbox needs well over the old default of 512. |
+| `DORMICE_SANDBOX_PIDS_LIMIT` | `4096` | Cap on the sandbox's host-side process and thread footprint (the pids cgroup). Under gVisor this is not a count of processes inside the sandbox — the sandbox never sees it, and hitting it kills the whole sandbox at once (exit 2, no OOM). Keeps a fork bomb from taking anything down but its own sandbox; a browser plus several agent sessions in one sandbox needs well over the old default of 512. Floor 256; never unlimited. |
 
 ## Lifecycle engine
 

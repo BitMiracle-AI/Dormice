@@ -325,6 +325,14 @@ export const runtimeSettings = sqliteTable('runtime_settings', {
    * variable.
    */
   sandboxDomainAliases: text('sandbox_domain_aliases'),
+  /**
+   * The pids cgroup cap on every sandbox container (added 2026-09-08).
+   * Same NULL-until-adopted three-state; the adopt step consults
+   * DORMICE_SANDBOX_PIDS_LIMIT once, so an upgraded daemon keeps the value
+   * its env has been running with. Never '' — there is no "off": a cap
+   * always exists (shared/settings.ts enforces the floor).
+   */
+  pidsLimit: integer('pids_limit'),
   /** Null until the first updateSettings: "still exactly the seed" is information. */
   updatedAt: text('updated_at'),
 });

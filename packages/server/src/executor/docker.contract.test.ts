@@ -39,7 +39,7 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
         // A static closure, not a ledger read: the contract exam runs the
         // executor bare, without a daemon or its settings row.
         resources: () => ({ diskSizeGb: 1, cpus: 1, memoryGb: 1 }),
-        pidsLimit: 256,
+        pidsLimit: () => 256,
         reclaimTimeoutSeconds: 45,
       });
       // Idempotent: re-tagging the same target is a no-op, and the tag is
@@ -73,9 +73,9 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
   /**
    * Docker-only: the pids cap is a host-side cgroup value with no
    * counterpart in the fake. Three executors over one data dir play "the
-   * daemon restarted with a different DORMICE_SANDBOX_PIDS_LIMIT"; the
-   * container stays the same object throughout — the point is that no
-   * rebuild happens.
+   * operator changed pidsLimit in settings" (a live read in production;
+   * closures here); the container stays the same object throughout — the
+   * point is that no rebuild happens.
    */
   describe('DockerExecutor: an existing shell follows the configured pids cap at wake', () => {
     it('unpause and start bring HostConfig and the live cgroup to the configured cap', async () => {
@@ -85,7 +85,7 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
           baseImage: image,
           dataDir,
           resources: () => ({ diskSizeGb: 1, cpus: 1, memoryGb: 1 }),
-          pidsLimit,
+          pidsLimit: () => pidsLimit,
           reclaimTimeoutSeconds: 45,
         });
       const id = randomUUID();

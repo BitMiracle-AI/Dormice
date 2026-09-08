@@ -37,8 +37,9 @@ export interface SettingsRoutesOptions {
  *
  * A pure ledger write with immediate effect: the consumers read live
  * (acquire's capacity gate, the executor's births, resolvePolicy's
- * defaults, the archiver's store, the sandbox proxy's domain), so nothing
- * here restarts, wakes or touches any sandbox. Lowering maxSandboxes below
+ * defaults, the archiver's store, the sandbox proxy's domain, the
+ * executor's pids cap at each birth and wake), so nothing here restarts,
+ * wakes or touches any sandbox. Lowering maxSandboxes below
  * the current total is deliberately legal — the gate only blocks creation,
  * and refusing would leave an operator unable to say "no more" during an
  * incident.
@@ -213,6 +214,9 @@ export const settingsRoutes: FastifyPluginAsyncZod<
                   ? 'sandboxDomainAliases=cleared'
                   : `sandboxDomainAliases=${patch.sandboxDomainAliases.join('/')}`,
               ]
+            : []),
+          ...(patch.pidsLimit !== undefined
+            ? [`pidsLimit=${patch.pidsLimit}`]
             : []),
         ].join(', '),
       });

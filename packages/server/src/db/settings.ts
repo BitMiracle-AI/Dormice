@@ -59,9 +59,22 @@ export function ensureRuntimeSettings(db: Db, config: Config): void {
       // Aliases are console-era operations editing with deliberately no
       // env variable — every install starts with none.
       sandboxDomainAliases: '[]',
+      pidsLimit: config.DORMICE_SANDBOX_PIDS_LIMIT,
       updatedAt: null,
     })
     .onConflictDoNothing()
+    .run();
+  // Adopt from the env, not a constant: an upgraded daemon has been
+  // running its fleet at whatever its env says, and the ledger's first
+  // value must be that — not a default that silently moves the cap.
+  db.update(runtimeSettings)
+    .set({ pidsLimit: config.DORMICE_SANDBOX_PIDS_LIMIT })
+    .where(
+      and(
+        eq(runtimeSettings.id, SETTINGS_ROW_ID),
+        isNull(runtimeSettings.pidsLimit),
+      ),
+    )
     .run();
   db.update(runtimeSettings)
     .set(s3Columns(s3Seed))
@@ -127,6 +140,7 @@ function toView(row: RuntimeSettingsRow): RuntimeSettings {
   if (row.sandboxDomainAliases === null) {
     throw virginError('sandbox_domain_aliases');
   }
+  if (row.pidsLimit === null) throw virginError('pids_limit');
   return {
     maxSandboxes: row.maxSandboxes,
     sandboxDefaults: {
@@ -155,6 +169,7 @@ function toView(row: RuntimeSettingsRow): RuntimeSettings {
     // The one writer JSON.stringifies an array; a corrupt value should
     // throw right here, not read as "no aliases".
     sandboxDomainAliases: JSON.parse(row.sandboxDomainAliases) as string[],
+    pidsLimit: row.pidsLimit,
     updatedAt: row.updatedAt,
   };
 }
@@ -251,6 +266,7 @@ export function writeRuntimeSettings(
       ...(patch.sandboxDomainAliases !== undefined
         ? { sandboxDomainAliases: JSON.stringify(patch.sandboxDomainAliases) }
         : {}),
+      ...(patch.pidsLimit !== undefined ? { pidsLimit: patch.pidsLimit } : {}),
       updatedAt: now.toISOString(),
     })
     .where(eq(runtimeSettings.id, SETTINGS_ROW_ID))

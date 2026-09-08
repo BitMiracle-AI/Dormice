@@ -107,7 +107,12 @@ export interface DockerExecutorOptions {
    * executor holding a stale copy would be a second truth.
    */
   resources: () => SandboxResources;
-  pidsLimit: number;
+  /**
+   * Live view of the pids cap, read at each container birth and at each
+   * wake's convergence — a ledger knob since 2026-09-08, same reasoning as
+   * resources: the executor holding a copy would be a second truth.
+   */
+  pidsLimit: () => number;
   /** How long one memory.reclaim write may take before its subprocess is killed. */
   reclaimTimeoutSeconds: number;
   log?: (msg: string) => void;
@@ -273,7 +278,8 @@ export class DockerExecutor implements Executor {
   /**
    * Brings a surviving shell's pids cap to the configured value. The cap is
    * fixed into HostConfig at create time, so without this an operator
-   * raising DORMICE_SANDBOX_PIDS_LIMIT would reach only newborn shells
+   * raising the pids cap (console settings; DORMICE_SANDBOX_PIDS_LIMIT is
+   * only its first-boot seed) would reach only newborn shells
    * while every existing sandbox kept dying at the old number. Unlike the
    * CPU/memory limits (which gVisor reads once at boot for the guest's CPU
    * count and MemTotal, so changing them honestly needs a new shell), the
@@ -289,17 +295,14 @@ export class DockerExecutor implements Executor {
     found: { id: string; pidsLimit: number },
     sandboxId: string,
   ): Promise<void> {
-    if (found.pidsLimit === this.opts.pidsLimit) return;
+    const want = this.opts.pidsLimit();
+    if (found.pidsLimit === want) return;
     await deadline(
-      this.docker
-        .getContainer(found.id)
-        .update({ PidsLimit: this.opts.pidsLimit }),
+      this.docker.getContainer(found.id).update({ PidsLimit: want }),
       VERB_DEADLINE_SECONDS,
       `pids-limit update of ${sandboxId}`,
     );
-    this.log(
-      `pids limit of ${sandboxId}: ${found.pidsLimit} -> ${this.opts.pidsLimit}`,
-    );
+    this.log(`pids limit of ${sandboxId}: ${found.pidsLimit} -> ${want}`);
   }
 
   async destroy(sandboxId: string): Promise<void> {
@@ -1580,7 +1583,7 @@ export class DockerExecutor implements Executor {
             Memory: Math.round(
               (opts?.memoryGb ?? this.opts.resources().memoryGb) * 1024 ** 3,
             ),
-            PidsLimit: this.opts.pidsLimit,
+            PidsLimit: this.opts.pidsLimit(),
             Binds: [`${this.mountDir(sandboxId)}:/home/user`],
             // Life and death belong to the daemon's state machine; Docker
             // must not resurrect anything on its own.

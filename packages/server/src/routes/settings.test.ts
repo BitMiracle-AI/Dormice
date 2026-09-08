@@ -136,6 +136,8 @@ describe('runtime settings: seeding', () => {
       sandboxDomain: null,
       // Aliases have no env seed either — console-era editing only.
       sandboxDomainAliases: [],
+      // Seeded from DORMICE_SANDBOX_PIDS_LIMIT (default 4096).
+      pidsLimit: 4096,
       updatedAt: null,
     });
   });
@@ -244,6 +246,36 @@ describe('runtime settings: seeding', () => {
 });
 
 describe('updateSettings', () => {
+  it('pidsLimit: adopted from the env on an upgraded row, then editable live with a floor', async () => {
+    // An upgraded daemon: the row predates the pids_limit column, and its
+    // env has been running the fleet at 512 — the ledger's first value
+    // must be that, not a default that silently moves the cap.
+    const db = freshDb();
+    appOn(db);
+    db.run(sql`UPDATE runtime_settings SET pids_limit = NULL`);
+    const upgraded = appOn(db, { DORMICE_SANDBOX_PIDS_LIMIT: '512' });
+    expect((await settingsOf(upgraded)).pidsLimit).toBe(512);
+
+    // Below the floor is refused by the schema, ledger untouched.
+    const tooLow = await rpc(upgraded, '/updateSettings', { pidsLimit: 255 });
+    expect(tooLow.statusCode).toBe(400);
+    expect(tooLow.json().message).toMatch(/at least 256/);
+    expect((await settingsOf(upgraded)).pidsLimit).toBe(512);
+
+    const raised = await rpc(upgraded, '/updateSettings', { pidsLimit: 4096 });
+    expect(raised.statusCode).toBe(200);
+    expect(
+      updateSettingsResponseSchema.parse(raised.json()).settings.pidsLimit,
+    ).toBe(4096);
+    const events = listActivityResponseSchema.parse(
+      (await rpc(upgraded, '/listActivity')).json(),
+    ).events;
+    expect(events[0]?.detail).toBe('pidsLimit=4096');
+
+    // The ledger has spoken: a later env edit is ignored.
+    const later = appOn(db, { DORMICE_SANDBOX_PIDS_LIMIT: '999' });
+    expect((await settingsOf(later)).pidsLimit).toBe(4096);
+  });
   it('raises maxSandboxes with immediate effect on the acquire gate', async () => {
     const app = appOn(freshDb(), { DORMICE_MAX_SANDBOXES: '1' });
     expect((await rpc(app, '/acquireSandbox', { name: 'a' })).statusCode).toBe(

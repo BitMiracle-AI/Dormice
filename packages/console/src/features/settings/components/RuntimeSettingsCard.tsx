@@ -1,4 +1,5 @@
 import type { GetConfigResponse, RuntimeSettings } from '@dormice/shared';
+import { PIDS_LIMIT_MIN } from '@dormice/shared';
 import { PencilEdit02Icon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { useState } from 'react';
@@ -33,9 +34,10 @@ import { useUpdateSettings } from '../hooks/useUpdateSettings';
  * 一个弹窗,给哪组就整组替换(updatePolicy 的规矩:界面上看到什么就写
  * 下什么)。改的是"之后"不是"已经":容量上限管下一次创建,默认配额管
  * 下一次出生的磁盘/容器,默认策略管下一次 acquire 创建的沙箱 — 存量
- * 沙箱一根汗毛都不动,这句话在每个弹窗里都说清。唯一的例外是 swap:
- * 它改的是宿主不是沙箱,增容立即、缩容等重启(swapLine 负责把这个
- * 时间差摆在明面上)。归档存储与沙箱域名不在这张卡:前者是独立的
+ * 沙箱一根汗毛都不动,这句话在每个弹窗里都说清。两个例外:swap 改的是
+ * 宿主不是沙箱,增容立即、缩容等重启(swapLine 负责把这个时间差摆在
+ * 明面上);pids 上限反而会触达存量沙箱 — 下一次唤醒就地 docker update,
+ * 不重建。归档存储与沙箱域名不在这张卡:前者是独立的
  * 归档卡(六字段撑不进一行的形制),后者语义归域名页。
  */
 
@@ -230,6 +232,79 @@ function SandboxDefaultsDialog({ settings }: { settings: RuntimeSettings }) {
               />
               <FieldDescription>
                 {m.settings_defaults_disk_desc()}
+              </FieldDescription>
+            </Field>
+            {error && <FieldError>{error}</FieldError>}
+          </FieldGroup>
+          <DialogFooter className="mt-6">
+            <Button type="submit" disabled={!valid || pending}>
+              {pending && <Spinner />}
+              {m.common_save()}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * pids 上限:与容量上限同形的单数字弹窗。下限 PIDS_LIMIT_MIN 与 wire 同一
+ * 常量(shared),前端只做同款校验不另立数字;不设"无上限"选项 — 这道闸
+ * 是 fork 炸弹只炸自己箱的物理保证,弹窗文案说清 gVisor 下它不是箱内进程数。
+ */
+function PidsLimitDialog({ settings }: { settings: RuntimeSettings }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState('');
+  const { pending, error, setError, submit } = useUpdateSettings(() =>
+    setOpen(false),
+  );
+
+  const valid =
+    value.trim() !== '' &&
+    Number.isInteger(Number(value)) &&
+    Number(value) >= PIDS_LIMIT_MIN;
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) {
+          setValue(String(settings.pidsLimit));
+          setError(null);
+        }
+      }}
+    >
+      <EditTrigger />
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{m.settings_pids_dialog_title()}</DialogTitle>
+          <DialogDescription>{m.settings_pids_dialog_desc()}</DialogDescription>
+        </DialogHeader>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit(
+              { pidsLimit: Number(value) },
+              m.settings_pids_saved({ value: Number(value) }),
+            );
+          }}
+        >
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="settings-pids-limit">
+                {m.settings_pids_label()}
+              </FieldLabel>
+              <Input
+                id="settings-pids-limit"
+                type="number"
+                min={PIDS_LIMIT_MIN}
+                value={value}
+                onChange={(event) => setValue(event.target.value)}
+              />
+              <FieldDescription>
+                {m.settings_pids_field_desc({ min: PIDS_LIMIT_MIN })}
               </FieldDescription>
             </Field>
             {error && <FieldError>{error}</FieldError>}
@@ -526,6 +601,11 @@ export function RuntimeSettingsCard({ data }: { data: GetConfigResponse }) {
               archiveEnabled={data.archive.enabled}
             />
           }
+        />
+        <EditRow
+          label={m.settings_row_pids()}
+          value={m.settings_row_pids_value({ n: settings.pidsLimit })}
+          dialog={<PidsLimitDialog settings={settings} />}
         />
         <EditRow
           label={m.settings_row_swap()}

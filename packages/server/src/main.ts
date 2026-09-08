@@ -85,7 +85,9 @@ function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
     baseImage: cfg.DORMICE_BASE_IMAGE,
     dataDir: cfg.DORMICE_DATA_DIR,
     resources,
-    pidsLimit: cfg.DORMICE_SANDBOX_PIDS_LIMIT,
+    // Live too: a console edit reaches the next birth and the next wake's
+    // in-place convergence without a restart.
+    pidsLimit: () => readRuntimeSettings(db).pidsLimit,
     reclaimTimeoutSeconds: cfg.DORMICE_RECLAIM_TIMEOUT_SECONDS,
     log,
   });

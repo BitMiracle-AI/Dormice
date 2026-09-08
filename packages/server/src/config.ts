@@ -80,9 +80,12 @@ const envSchema = z.object({
    * fork-bomb number and killed real 16 GB agent sandboxes running a browser
    * plus several node/claude sessions (a production fleet: 13 deaths in 10 days,
    * observed peak 470). 4096 is ~8x that peak; the cap still exists so a
-   * fork bomb takes down its own sandbox and nothing else. Plain env, not a
-   * ledger setting: it is a host budget, not a per-sandbox spec. Existing
-   * containers converge at their next wake (docker update, no rebuild).
+   * fork bomb takes down its own sandbox and nothing else. A first-boot
+   * seed since the same day (runtime_settings.pids_limit, edited from the
+   * console settings page; the floor lives in shared/settings.ts): the
+   * incident that earned the new default was exactly an operator needing
+   * to move this without shell access and a restart. Existing containers
+   * converge at their next wake (docker update, no rebuild).
    */
   DORMICE_SANDBOX_PIDS_LIMIT: z.coerce.number().int().positive().default(4096),
   DORMICE_RECLAIM_TIMEOUT_SECONDS: z.coerce
