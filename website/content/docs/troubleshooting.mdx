@@ -85,6 +85,17 @@ SIGKILL from elsewhere. The same verdict rides on the sandbox object as
 here — so a client that saw its stream end can read it straight from
 the `acquireSandbox` that revives the sandbox.
 
+The verdict is read two ways, and one of them depends on the host. A
+wake that arrives while the container's cgroup still exists reads the
+kernel's own `oom_kill` counter from it. Afterwards only Docker's relay
+of the same event survives, and that relay rides on one inotify instance
+per running container — the distro default, `fs.inotify.max_user_instances`
+= 128, runs dry on a host with a few hundred sandboxes, after which every
+OOM on a newer container is recorded as a plain `exit 137`. The installer
+raises the limit to 8192 and [doctor](/docs/doctor) checks it; on a host
+that was already past the limit, containers born before the fix keep the
+dead relay until their next cold start.
+
 "Revives" means now, not at the next heartbeat: an `acquireSandbox` (or
 any use verb) that finds the container dead under a record that still
 says active records the death and cold-starts the sandbox in the same

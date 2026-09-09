@@ -61,6 +61,11 @@ know why; the Linux terms in it are covered in
 - **vm.swappiness = 100** — below 100 the kernel refuses to swap the
   kind of memory gVisor holds sandboxes in; measured at the default 60:
   0 bytes reclaimed. This is the check that reads the live value.
+- **fs.inotify.max_user_instances ≥ 8192** — each running sandbox's
+  container shim holds one inotify instance to watch for OOM kills; at
+  the distro default of 128 a host with a few hundred sandboxes runs
+  out, and every OOM on a newer sandbox is silently recorded as a plain
+  exit. A floor: higher is fine.
 
 ## Network
 

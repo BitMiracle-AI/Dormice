@@ -116,6 +116,14 @@ affect using Dormice.
   memory can hibernate at once" — when the installer's swapfile stops
   being enough, add more from the console's settings page (no shell
   needed; see [Console](/docs/console)).
+- **`fs.inotify.max_user_instances` raised to 8192.** Each running
+  sandbox's container shim holds one inotify instance to watch its
+  memory cgroup for OOM events — that watch is how Docker learns a
+  sandbox was OOM-killed at all. The distro default of 128 is exhausted
+  by a few hundred sandboxes, after which new ones silently lose the
+  watch and their OOM kills read as plain exits. Sandboxes cannot use
+  these up (gVisor virtualizes inotify inside the sandbox), so a
+  generous ceiling costs nothing; the installer verifies it as a floor.
 - **Network hardening.** Sandboxes run untrusted code, and a cloud
   server exposes a special internal address that hands out the
   machine's cloud credentials to anything that asks (the metadata
