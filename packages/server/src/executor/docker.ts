@@ -141,9 +141,12 @@ interface Inspected {
 /**
  * Whether the host process Docker reports as the container's init is still
  * a live process. A zombie counts as dead: it has exited and only awaits
- * its reaper. Reads /proc, so it can only answer on Linux next to a local
- * dockerd — everywhere else (and for a pid Docker has already cleared) it
- * says "alive" and exitOf falls back to Docker's own status.
+ * its reaper. Reads /proc, which presumes the daemon shares dockerd's pid
+ * namespace — true of the systemd unit install.sh writes, and of any host
+ * that can mount loop disks at all. Off Linux, and for a pid Docker has
+ * already cleared, it says "alive" and exitOf falls back to Docker's own
+ * status. A daemon in a foreign pid namespace would read every init as
+ * gone and pay exitOf's bounded wait on every wake: slow, never wrong.
  */
 async function initAlive(pid: number): Promise<boolean> {
   if (process.platform !== 'linux' || pid <= 0) return true;
