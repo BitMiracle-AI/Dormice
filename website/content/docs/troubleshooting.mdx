@@ -88,7 +88,10 @@ the `acquireSandbox` that revives the sandbox.
 "Revives" means now, not at the next heartbeat: an `acquireSandbox` (or
 any use verb) that finds the container dead under a record that still
 says active records the death and cold-starts the sandbox in the same
-call, and answers `ready` only once the container is running. Before
+call, and answers `ready` only once the container is running. That holds
+at the very instant your stream ends: Docker's own status trails the
+kernel by a few hundred milliseconds after an OOM or pids-cap death, and
+the wake waits that lag out rather than call the corpse alive. Before
 2026-09-08 the answer came from the record alone, and for up to one scan
 interval after a death the caller's next command failed with "container
 is stopped, expected running".
