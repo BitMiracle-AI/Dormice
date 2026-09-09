@@ -98,6 +98,7 @@
   "sandboxes_metric_disk": "Диск",
   "sandboxes_cpu_hint": "{n} vCPU · процент на один vCPU",
   "sandboxes_mem_hint": "Всего {total} · кэш {cache}",
+  "sandboxes_mem_swap_hint": "Всего {total} · кэш {cache} · в свопе {swap}",
   "sandboxes_disk_hint": "Номинально {total} — разреженный образ платит только за реальное содержимое",
   "sandboxes_no_container_title": "Нет работающего контейнера для замеров",
   "sandboxes_no_container_desc": "У песочницы сейчас нет живого контейнера (остановлена или в архиве). Наблюдение не будит её — разбудят только открытый терминал или выполнение команды. История ниже никуда не делась.",

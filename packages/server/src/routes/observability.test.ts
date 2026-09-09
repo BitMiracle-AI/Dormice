@@ -326,6 +326,8 @@ describe('getSandboxMetricsHistory', () => {
       memUsedBytes: 64,
       memTotalBytes: 2048,
       memCacheBytes: 0,
+      swapUsedBytes: 0,
+      swapTotalBytes: 2048,
       diskUsedBytes: 10,
       diskTotalBytes: 100,
     };

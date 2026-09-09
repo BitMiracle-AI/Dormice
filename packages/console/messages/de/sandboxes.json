@@ -98,6 +98,7 @@
   "sandboxes_metric_disk": "Datenträger",
   "sandboxes_cpu_hint": "{n} vCPU · Prozent pro einzelner vCPU",
   "sandboxes_mem_hint": "Gesamt {total} · Cache {cache}",
+  "sandboxes_mem_swap_hint": "Gesamt {total} · Cache {cache} · ausgelagert {swap}",
   "sandboxes_disk_hint": "Nominell {total} — das Sparse-Image zahlt nur für echten Inhalt",
   "sandboxes_no_container_title": "Kein laufender Container zum Messen",
   "sandboxes_no_container_desc": "Die Sandbox hat gerade keinen lebenden Container (gestoppt/archiviert). Beobachten weckt nie — erst ein Terminal oder ein Befehl weckt sie. Der Verlauf unten bleibt erhalten.",

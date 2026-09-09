@@ -98,6 +98,7 @@
   "sandboxes_metric_disk": "Disque",
   "sandboxes_cpu_hint": "{n} vCPU · pourcentage par vCPU",
   "sandboxes_mem_hint": "Total {total} · cache {cache}",
+  "sandboxes_mem_swap_hint": "Total {total} · cache {cache} · en swap {swap}",
   "sandboxes_disk_hint": "Nominal {total} — l'image sparse ne paie que le contenu réel",
   "sandboxes_no_container_title": "Aucun conteneur en cours à mesurer",
   "sandboxes_no_container_desc": "La sandbox n'a pas de conteneur vivant en ce moment (arrêtée/archivée). Observer ne réveille jamais — ouvrir un terminal ou exécuter une commande, si. L'historique ci-dessous reste disponible.",

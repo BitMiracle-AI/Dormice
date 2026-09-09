@@ -24,10 +24,20 @@ if (sample) {
   sample.cpuUsedPct;    // percent of one CPU; can exceed 100
   sample.memUsedBytes;
   sample.memTotalBytes;
+  sample.swapUsedBytes;  // memory the host has swapped out for it; null if unknown
+  sample.swapTotalBytes; // its swap allowance (Docker's default: = memTotalBytes)
   sample.diskUsedBytes; // real occupancy of the sandbox's disk
   sample.diskTotalBytes;
 }
 ```
+
+Memory has two halves. `memUsedBytes` is the container's memory cgroup
+charge — and once it reaches `memTotalBytes` the sandbox's own view of
+memory stops moving (its `MemAvailable` reads 0) while the host pushes
+its pages out to swap; `swapUsedBytes` climbs toward `swapTotalBytes`,
+and the OOM kill lands when both are full. A guard that reads only the
+first half sees the wall, not the drop. The E2B `getMetrics()` shape has
+no swap field, so this pair is native-only.
 
 The E2B SDK's `getMetrics()` reads the same numbers, returned as an
 array with one sample. Either way:

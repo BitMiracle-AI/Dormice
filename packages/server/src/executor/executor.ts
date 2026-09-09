@@ -194,6 +194,15 @@ export interface SandboxMetrics {
   memUsedBytes: number;
   memTotalBytes: number;
   memCacheBytes: number;
+  /**
+   * memory.swap.current / memory.swap.max of the container's cgroup: the
+   * sandbox's memory the host has swapped out, and the cap. Null when
+   * unreadable (no cgroup v2 swap accounting on this host); a null cap is
+   * "unlimited". Docker's stats endpoint does not carry swap on cgroup v2,
+   * so the docker executor reads the cgroup itself.
+   */
+  swapUsedBytes: number | null;
+  swapTotalBytes: number | null;
   diskUsedBytes: number;
   diskTotalBytes: number;
 }

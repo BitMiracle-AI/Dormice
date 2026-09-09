@@ -98,6 +98,7 @@
   "sandboxes_metric_disk": "ディスク",
   "sandboxes_cpu_hint": "{n} vCPU · パーセントは vCPU 1 基あたり",
   "sandboxes_mem_hint": "合計 {total} · キャッシュ {cache}",
+  "sandboxes_mem_swap_hint": "合計 {total} · キャッシュ {cache} · スワップ {swap}",
   "sandboxes_disk_hint": "名目 {total} — スパースイメージは実際の内容の分だけ消費します",
   "sandboxes_no_container_title": "計測できる実行中のコンテナがありません",
   "sandboxes_no_container_desc": "このサンドボックスには現在、稼働中のコンテナがありません(停止中/アーカイブ済み)。観察してもウェイクアップしません — ターミナルを開くかコマンドを実行したときだけ起こされます。下の履歴推移はそのまま残っています。",

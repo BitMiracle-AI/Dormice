@@ -166,6 +166,9 @@ export const sandboxMetricsSamples = sqliteTable(
     memUsedBytes: integer('mem_used_bytes').notNull(),
     memTotalBytes: integer('mem_total_bytes').notNull(),
     memCacheBytes: integer('mem_cache_bytes').notNull(),
+    /** Nullable: rows sampled before 2026-09-09, and hosts without swap accounting. */
+    swapUsedBytes: integer('swap_used_bytes'),
+    swapTotalBytes: integer('swap_total_bytes'),
     diskUsedBytes: integer('disk_used_bytes').notNull(),
     diskTotalBytes: integer('disk_total_bytes').notNull(),
   },

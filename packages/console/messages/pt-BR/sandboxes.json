@@ -98,6 +98,7 @@
   "sandboxes_metric_disk": "Disco",
   "sandboxes_cpu_hint": "{n} vCPU · percentual por vCPU",
   "sandboxes_mem_hint": "Total {total} · cache {cache}",
+  "sandboxes_mem_swap_hint": "Total {total} · cache {cache} · em swap {swap}",
   "sandboxes_disk_hint": "Nominal {total} — a imagem esparsa só paga pelo conteúdo real",
   "sandboxes_no_container_title": "Nenhum contêiner em execução para medir",
   "sandboxes_no_container_desc": "O sandbox não tem contêiner vivo agora (parado/arquivado). Observar nunca o acorda — abrir um terminal ou executar um comando, sim. O histórico abaixo continua aqui.",

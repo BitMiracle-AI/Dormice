@@ -857,6 +857,7 @@ export class DockerExecutor implements Executor {
       number
     >;
     const disk = await statfs(this.mountDir(sandboxId));
+    const swap = await this.cgroupSwap(found.id);
     return {
       cpuCount,
       cpuUsedPct:
@@ -867,9 +868,35 @@ export class DockerExecutor implements Executor {
       memTotalBytes:
         stats.memory_stats?.limit || Math.round(resources.memoryGb * 1024 ** 3),
       memCacheBytes: memStats.cache ?? memStats.inactive_file ?? 0,
+      swapUsedBytes: swap.used,
+      swapTotalBytes: swap.total,
       diskUsedBytes: (disk.blocks - disk.bfree) * disk.bsize,
       diskTotalBytes: disk.blocks * disk.bsize,
     };
+  }
+
+  /**
+   * The container's swap accounting, read from its cgroup: Docker's stats
+   * endpoint carries no swap figure on cgroup v2. Both null when the files
+   * cannot be read; a cap of "max" is unlimited, reported as null.
+   */
+  private async cgroupSwap(
+    containerId: string,
+  ): Promise<{ used: number | null; total: number | null }> {
+    const dir = this.scopeDir(containerId);
+    try {
+      const [current, max] = await Promise.all([
+        readFile(`${dir}/memory.swap.current`, 'utf8'),
+        readFile(`${dir}/memory.swap.max`, 'utf8'),
+      ]);
+      const cap = max.trim();
+      return {
+        used: Number(current.trim()),
+        total: cap === 'max' ? null : Number(cap),
+      };
+    } catch {
+      return { used: null, total: null };
+    }
   }
 
   async exec(sandboxId: string, opts: ExecOptions): Promise<ExecResult> {

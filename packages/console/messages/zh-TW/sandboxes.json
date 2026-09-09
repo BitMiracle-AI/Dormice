@@ -98,6 +98,7 @@
   "sandboxes_metric_disk": "磁碟",
   "sandboxes_cpu_hint": "{n} vCPU · 百分比以單一 vCPU 計",
   "sandboxes_mem_hint": "共 {total} · 快取 {cache}",
+  "sandboxes_mem_swap_hint": "共 {total} · 快取 {cache} · 換出 {swap}",
   "sandboxes_disk_hint": "名目 {total} — 稀疏映像檔只為真實內容付費",
   "sandboxes_no_container_title": "沒有執行中的容器可量測",
   "sandboxes_no_container_desc": "沙箱現在沒有活著的容器(已停止/已封存)。觀察不喚醒 — 開啟終端機或執行指令才會把它叫醒。下方的歷史走勢還在。",

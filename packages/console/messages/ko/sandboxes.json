@@ -98,6 +98,7 @@
   "sandboxes_metric_disk": "디스크",
   "sandboxes_cpu_hint": "{n} vCPU · 퍼센트는 단일 vCPU 기준",
   "sandboxes_mem_hint": "전체 {total} · 캐시 {cache}",
+  "sandboxes_mem_swap_hint": "전체 {total} · 캐시 {cache} · 스왑 {swap}",
   "sandboxes_disk_hint": "명목 {total} — 희소 이미지는 실제 내용만큼만 차지",
   "sandboxes_no_container_title": "측정할 실행 중인 컨테이너가 없습니다",
   "sandboxes_no_container_desc": "지금 이 샌드박스에는 살아 있는 컨테이너가 없습니다(중지됨/아카이브됨). 관찰은 절대 깨우지 않습니다 — 터미널을 열거나 명령을 실행해야 깨어납니다. 아래의 과거 추이는 그대로 남아 있습니다.",

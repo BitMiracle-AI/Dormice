@@ -20,6 +20,18 @@ export const sandboxMetricsSampleSchema = z.object({
   memUsedBytes: z.number(),
   memTotalBytes: z.number(),
   memCacheBytes: z.number(),
+  /**
+   * The sandbox's memory the host has pushed out to swap, and how much it
+   * may push (the container's memory.swap.max — Docker's default is the
+   * memory limit itself). The second half of a sandbox's memory story:
+   * once memUsedBytes reaches memTotalBytes the sandbox's own view of
+   * memory stops moving (measured 2026-09-09: guest MemAvailable stays 0
+   * for the whole swap phase) while this number climbs toward its cap,
+   * and the OOM kill lands when both are full. Null when the host cannot
+   * say (no cgroup v2 swap accounting); a cap of null means unlimited.
+   */
+  swapUsedBytes: z.number().nullable(),
+  swapTotalBytes: z.number().nullable(),
   diskUsedBytes: z.number(),
   diskTotalBytes: z.number(),
 });

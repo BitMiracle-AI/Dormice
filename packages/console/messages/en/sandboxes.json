@@ -98,6 +98,7 @@
   "sandboxes_metric_disk": "Disk",
   "sandboxes_cpu_hint": "{n} vCPU · percent is per single vCPU",
   "sandboxes_mem_hint": "Total {total} · cache {cache}",
+  "sandboxes_mem_swap_hint": "Total {total} · cache {cache} · swapped out {swap}",
   "sandboxes_disk_hint": "Nominal {total} — sparse image pays only for real content",
   "sandboxes_no_container_title": "No running container to measure",
   "sandboxes_no_container_desc": "The sandbox has no live container right now (stopped/archived). Observing never wakes it — opening a terminal or running a command does. The history below is still here.",

@@ -247,6 +247,8 @@ describe('sampleOnce', () => {
             memUsedBytes: 1,
             memTotalBytes: 2,
             memCacheBytes: 0,
+            swapUsedBytes: 0,
+            swapTotalBytes: 2048,
             diskUsedBytes: 1,
             diskTotalBytes: 2,
           },

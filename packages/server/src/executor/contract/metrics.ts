@@ -23,6 +23,14 @@ export function metricsTests(ctx: ContractContext) {
         expect(m.memUsedBytes).toBeGreaterThanOrEqual(0);
         expect(m.memUsedBytes).toBeLessThanOrEqual(m.memTotalBytes);
         expect(m.memCacheBytes).toBeGreaterThanOrEqual(0);
+        // Swap: both known or both unknown; a fresh sandbox has nothing
+        // swapped, and Docker's default cap equals the memory limit.
+        expect(m.swapUsedBytes === null).toBe(m.swapTotalBytes === null);
+        if (m.swapUsedBytes !== null && m.swapTotalBytes !== null) {
+          expect(m.swapUsedBytes).toBeGreaterThanOrEqual(0);
+          expect(m.swapUsedBytes).toBeLessThanOrEqual(m.swapTotalBytes);
+          expect(m.swapTotalBytes).toBe(m.memTotalBytes);
+        }
         expect(m.diskTotalBytes).toBeGreaterThan(0);
         expect(m.diskUsedBytes).toBeGreaterThanOrEqual(0);
         expect(m.diskUsedBytes).toBeLessThanOrEqual(m.diskTotalBytes);

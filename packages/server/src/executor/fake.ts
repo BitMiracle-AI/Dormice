@@ -652,6 +652,9 @@ export class FakeExecutor implements Executor {
       memUsedBytes: 64 * 1024 ** 2,
       memTotalBytes: limits.memoryBytes,
       memCacheBytes: 0,
+      // Docker's default: a swap allowance equal to the memory limit.
+      swapUsedBytes: 0,
+      swapTotalBytes: limits.memoryBytes,
       diskUsedBytes: diskUsedBytes(this.disk(sandboxId)),
       diskTotalBytes: this.diskNominal.get(sandboxId) ?? this.bornDiskBytes(),
     };

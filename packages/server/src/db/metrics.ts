@@ -303,6 +303,16 @@ export function bucketSamples(
     seen.memUsedBytes = Math.max(seen.memUsedBytes, row.memUsedBytes);
     seen.memTotalBytes = Math.max(seen.memTotalBytes, row.memTotalBytes);
     seen.memCacheBytes = Math.max(seen.memCacheBytes, row.memCacheBytes);
+    seen.swapUsedBytes = extremeNullable(
+      Math.max,
+      seen.swapUsedBytes,
+      row.swapUsedBytes,
+    );
+    seen.swapTotalBytes = extremeNullable(
+      Math.max,
+      seen.swapTotalBytes,
+      row.swapTotalBytes,
+    );
     seen.diskUsedBytes = Math.max(seen.diskUsedBytes, row.diskUsedBytes);
     seen.diskTotalBytes = Math.max(seen.diskTotalBytes, row.diskTotalBytes);
   }

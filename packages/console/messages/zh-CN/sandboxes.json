@@ -98,6 +98,7 @@
   "sandboxes_metric_disk": "磁盘",
   "sandboxes_cpu_hint": "{n} vCPU · 百分比按单 vCPU 计",
   "sandboxes_mem_hint": "共 {total} · 缓存 {cache}",
+  "sandboxes_mem_swap_hint": "共 {total} · 缓存 {cache} · 换出 {swap}",
   "sandboxes_disk_hint": "名义 {total} — 稀疏镜像只为真实内容付费",
   "sandboxes_no_container_title": "没有运行中的容器可测",
   "sandboxes_no_container_desc": "沙箱现在没有活着的容器(已停止/已归档)。观察不唤醒 — 打开终端或执行命令才会把它叫醒。下方的历史走势还在。",

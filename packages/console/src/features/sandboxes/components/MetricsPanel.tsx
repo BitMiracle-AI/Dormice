@@ -263,10 +263,18 @@ export function MetricsPanel({ sandbox }: { sandbox: Sandbox }) {
             icon={RamMemoryIcon}
             label={m.sandboxes_metric_memory()}
             value={formatBytes(sample.memUsedBytes)}
-            hint={m.sandboxes_mem_hint({
-              total: formatBytes(sample.memTotalBytes),
-              cache: formatBytes(sample.memCacheBytes),
-            })}
+            hint={
+              sample.swapUsedBytes === null
+                ? m.sandboxes_mem_hint({
+                    total: formatBytes(sample.memTotalBytes),
+                    cache: formatBytes(sample.memCacheBytes),
+                  })
+                : m.sandboxes_mem_swap_hint({
+                    total: formatBytes(sample.memTotalBytes),
+                    cache: formatBytes(sample.memCacheBytes),
+                    swap: formatBytes(sample.swapUsedBytes),
+                  })
+            }
             pct={pctOf(sample.memUsedBytes, sample.memTotalBytes)}
           />
           <MetricCard
