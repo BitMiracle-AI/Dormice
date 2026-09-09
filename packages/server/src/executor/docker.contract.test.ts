@@ -101,11 +101,22 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
           )
         ).trim();
       };
+      // The executor's other cgroup write: an OOM kills the box as a unit.
+      const oomGroup = async () => {
+        const info = await container().inspect();
+        return (
+          await readFile(
+            `/sys/fs/cgroup/system.slice/docker-${info.Id}.scope/memory.oom.group`,
+            'utf8',
+          )
+        ).trim();
+      };
       const born = withCap(256);
       try {
         await born.create(id);
         expect(await hostConfigCap()).toBe(256);
         expect(await cgroupCap()).toBe('256');
+        expect(await oomGroup()).toBe('1');
 
         // The sweep's verb: a running shell moves in place — same
         // container, its processes untouched — and a second pass finds
@@ -139,6 +150,8 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
         await lowered.stop(id);
         expect(await lowered.convergePidsLimit(id)).toBe('skipped');
         await lowered.start(id);
+        // Set again on the warm start — the cgroup was recreated with it.
+        expect(await oomGroup()).toBe('1');
         expect(await hostConfigCap()).toBe(1024);
         expect(await cgroupCap()).toBe('1024');
       } finally {

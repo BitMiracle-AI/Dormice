@@ -357,6 +357,8 @@ export class DockerExecutor implements Executor {
       VERB_DEADLINE_SECONDS,
       `start of ${sandboxId}`,
     );
+    // A fresh cgroup every start: the knob does not survive the exit.
+    await this.setOomGroup(found.id, sandboxId);
   }
 
   /**
