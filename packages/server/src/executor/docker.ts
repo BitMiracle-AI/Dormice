@@ -10,6 +10,7 @@ import {
   rm,
   stat,
   statfs,
+  writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
 import { type Duplex, Transform, type Writable } from 'node:stream';
@@ -1721,6 +1722,38 @@ export class DockerExecutor implements Executor {
       VERB_DEADLINE_SECONDS,
       `start of ${sandboxId}`,
     );
+    await this.setOomGroup(container.id, sandboxId);
+  }
+
+  /**
+   * Kill the whole sandbox as a unit when the memory cgroup OOMs, not one
+   * process at a time. Under gVisor the cgroup holds only the sentry, the
+   * gofer and the systrap stubs — all essential — so a single-process OOM
+   * kill (the cgroup-v2 default, memory.oom.group=0) still fells the box,
+   * but not at once: measured 2026-09-09, the sentry's own thread group
+   * lingers in state S for hundreds of milliseconds after the kill while
+   * Docker still reports the container running. A consumer that re-acquires
+   * on its stream's EOF meets a corpse that reads alive (init not yet a
+   * zombie, and — if the shim's OOM relay is starved — no OOMKilled flag
+   * either). oom.group=1 makes the kill atomic: the sentry goes to Z within
+   * ~10ms, so exitOf's liveness check is a dependable death signal even
+   * when State.OOMKilled never arrives. Best effort and cgroup-v2 only:
+   * a host without the knob loses this sharpening, not correctness.
+   */
+  private async setOomGroup(
+    containerId: string,
+    sandboxId: string,
+  ): Promise<void> {
+    const file = `/sys/fs/cgroup/system.slice/docker-${containerId}.scope/memory.oom.group`;
+    try {
+      await writeFile(file, '1');
+    } catch (err) {
+      this.log(
+        `memory.oom.group not set for ${sandboxId} (a whole-box OOM kill stays best-effort): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /**
