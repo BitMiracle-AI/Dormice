@@ -350,11 +350,27 @@ fi
 # must be the one we need. The value, not the file — a host may legitimately
 # set ip_forward=1 in its own later-sorting config (the test host does), and
 # that is agreement, not a conflict.
-log 'kernel parameters (vm.swappiness = 100, net.ipv4.ip_forward = 1)'
+#
+# fs.inotify.max_user_instances is a floor, not an exact match: each running
+# sandbox's containerd shim opens one inotify instance to watch its cgroup
+# for OOM events, and that is how Docker's State.OOMKilled — the only kernel
+# OOM verdict that survives the container's death — is set at all. The
+# distro default of 128 is exhausted by a host running a few hundred
+# sandboxes (measured 2026-09-09 on a production host: 415 shims, 128
+# instances, ~300 shims with no OOM watch and every OOM on them silently
+# recorded as a plain exit). Below the floor the relay fails silently; a host
+# that sets it higher is agreement. Sandboxes cannot consume host instances —
+# gVisor virtualizes their inotify inside the sentry — so a generous ceiling
+# costs nothing.
+log 'kernel parameters (swappiness 100, ip_forward 1, inotify instances 8192)'
 SYSCTL_FILE=/etc/sysctl.d/99-dormice.conf
 sysctl_wanted='# Managed by Dormice install.sh — rewritten on every run.
 vm.swappiness=100
-net.ipv4.ip_forward=1'
+net.ipv4.ip_forward=1
+fs.inotify.max_user_instances=8192'
+# Keys verified as a floor (winner must be >= ours) rather than an exact
+# match — more is only better.
+sysctl_floor_keys=' fs.inotify.max_user_instances '
 if [ "$(cat "$SYSCTL_FILE" 2>/dev/null)" = "$sysctl_wanted" ]; then
   note "[skip] $SYSCTL_FILE is in place"
 else
@@ -394,8 +410,17 @@ for kv in $(printf '%s\n' "$sysctl_wanted" | grep -v '^#'); do
   winner=$(printf '%s\n' "$cat_config" | sysctl_winner "$key")
   [ -n "$winner" ] \
     || die "could not find $key anywhere in systemd-sysctl --cat-config output — expected at least $SYSCTL_FILE to appear; parse failure"
-  [ "${winner#*|}" = "$want" ] \
-    || die "$key must be $want at boot, but the sysctl boot order ends with ${winner%%|*} setting it to ${winner#*|} — change or remove that line, then re-run"
+  # A floor key agrees when the winner is at least ours; every other key
+  # needs the exact value (dockerd flips ip_forward, a cloud file may pin
+  # swappiness — either drifting either way is a conflict).
+  case "$sysctl_floor_keys" in
+    *" $key "*)
+      [ "${winner#*|}" -ge "$want" ] 2>/dev/null \
+        || die "$key must be at least $want at boot, but the sysctl boot order ends with ${winner%%|*} setting it to ${winner#*|} — raise or remove that line, then re-run" ;;
+    *)
+      [ "${winner#*|}" = "$want" ] \
+        || die "$key must be $want at boot, but the sysctl boot order ends with ${winner%%|*} setting it to ${winner#*|} — change or remove that line, then re-run" ;;
+  esac
   # procps `sysctl --system` (other installers run it) applies
   # /etc/sysctl.conf after every sysctl.d file, symlink or not — a
   # disagreeing value there overrides us at the very next replay even when
@@ -403,11 +428,17 @@ for kv in $(printf '%s\n' "$sysctl_wanted" | grep -v '^#'); do
   if [ -f /etc/sysctl.conf ]; then
     conf_value=$(sysctl_winner "$key" /etc/sysctl.conf)
     conf_value=${conf_value#*|}
-    [ -z "$conf_value" ] || [ "$conf_value" = "$want" ] \
-      || die "$key must be $want, but /etc/sysctl.conf sets it to $conf_value — procps sysctl --system applies that file last, so the next config replay overrides us; change or remove that line, then re-run"
+    case "$sysctl_floor_keys" in
+      *" $key "*)
+        [ -z "$conf_value" ] || [ "$conf_value" -ge "$want" ] 2>/dev/null \
+          || die "$key must be at least $want, but /etc/sysctl.conf sets it to $conf_value — procps sysctl --system applies that file last, so the next config replay overrides us; raise or remove that line, then re-run" ;;
+      *)
+        [ -z "$conf_value" ] || [ "$conf_value" = "$want" ] \
+          || die "$key must be $want, but /etc/sysctl.conf sets it to $conf_value — procps sysctl --system applies that file last, so the next config replay overrides us; change or remove that line, then re-run" ;;
+    esac
   fi
 done
-note 'verified: both keys survive the sysctl boot order and a procps sysctl --system replay'
+note 'verified: the sysctl keys survive the boot order and a procps sysctl --system replay'
 
 # ---- cloud metadata firewall -------------------------------------------------
 # Sandboxes run untrusted code; on a cloud host with an attached role, one

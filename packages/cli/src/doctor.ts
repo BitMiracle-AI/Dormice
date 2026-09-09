@@ -114,6 +114,12 @@ const FIREWALL_UNIT = '/etc/systemd/system/dormice-metadata-firewall.service';
 const METADATA_IP = '100.100.100.200';
 const METADATA_RANGE = '169.254.0.0/16';
 const SYSCTL_FILE = '/etc/sysctl.d/99-dormice.conf';
+// Floor, mirrored from install.sh's sysctl block: each running sandbox's
+// shim needs one inotify instance to watch its cgroup for OOM events, and
+// that watch is how Docker's State.OOMKilled gets set at all. The distro
+// default of 128 is exhausted by a few hundred sandboxes, and then OOMs are
+// silently misrecorded as plain exits.
+const INOTIFY_INSTANCES_FLOOR = 8192;
 // Not on PATH; same probe as install.sh — /usr/lib first, then /lib for
 // hosts without a merged /usr.
 const SYSTEMD_SYSCTL_PATHS = [
@@ -455,6 +461,34 @@ const CHECKS: DoctorCheck[] = [
           ? '1 (effective value; no boot config sets it — dockerd re-enables it at every start)'
           : `1 (effective value, persisted by ${verdict.file})`,
       );
+    },
+  },
+  {
+    id: 'inotify-instances',
+    title: `fs.inotify.max_user_instances ≥ ${INOTIFY_INSTANCES_FLOOR}`,
+    needs: ['os-linux'],
+    run: async (ctx) => {
+      // Each running sandbox's containerd shim opens one inotify instance to
+      // watch its cgroup for OOM events — the mechanism that sets Docker's
+      // State.OOMKilled, the only kernel OOM verdict that survives the
+      // container's death. Once the limit is exhausted, new shims fail that
+      // watch silently ("failed to create inotify fd: too many open files")
+      // and every OOM on them is misrecorded as a plain exit. A floor, not
+      // an exact match: more is only better, and sandboxes cannot consume
+      // host instances (gVisor virtualizes their inotify in the sentry).
+      const raw = await ctx.readTextFile(
+        '/proc/sys/fs/inotify/max_user_instances',
+      );
+      const value = Number(raw?.trim());
+      if (!Number.isFinite(value))
+        return fail('cannot read /proc/sys/fs/inotify/max_user_instances');
+      if (value < INOTIFY_INSTANCES_FLOOR) {
+        return fail(
+          `effective value is ${value} — a host running more than that many sandboxes runs out of OOM watchers, and their OOM kills are silently recorded as plain exits`,
+          `re-run install.sh — it persists ${INOTIFY_INSTANCES_FLOOR} in ${SYSCTL_FILE}, applies it, and verifies the sysctl boot order`,
+        );
+      }
+      return pass(`${value} (effective value)`);
     },
   },
   {

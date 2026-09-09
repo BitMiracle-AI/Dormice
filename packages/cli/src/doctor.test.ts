@@ -51,6 +51,7 @@ const CAT_CONFIG_GOOD = [
   '# Managed by Dormice install.sh — rewritten on every run.',
   'vm.swappiness=100',
   'net.ipv4.ip_forward=1',
+  'fs.inotify.max_user_instances=8192',
 ].join('\n');
 
 /**
@@ -74,6 +75,7 @@ function fakeHost(
     '/proc/meminfo': 'MemTotal: 30000000 kB\nSwapTotal: 16777212 kB',
     '/proc/sys/vm/swappiness': '100\n',
     '/proc/sys/net/ipv4/ip_forward': '1\n',
+    '/proc/sys/fs/inotify/max_user_instances': '8192\n',
     // The stock Debian/Ubuntu file: a header comment that starts with
     // `# /` but is not a file marker, and no keys. procps `sysctl
     // --system` reads this file last; doctor checks it agrees.
@@ -211,6 +213,31 @@ describe('freezing prerequisites', () => {
       fix: expect.stringContaining('99-dormice.conf'),
     });
     expect(report).toContain('effective value is 0');
+  });
+
+  it('flags a low inotify instance limit as a silent OOM-watch failure', async () => {
+    // The distro default: exhausted by a few hundred sandbox shims, after
+    // which OOM kills stop setting State.OOMKilled and read as plain exits.
+    const { results, report, failed } = await runDoctor(
+      fakeHost({
+        files: { '/proc/sys/fs/inotify/max_user_instances': '128\n' },
+      }),
+    );
+    expect(failed).toBe(true);
+    expect(results['inotify-instances']).toMatchObject({
+      status: 'fail',
+      fix: expect.stringContaining('99-dormice.conf'),
+    });
+    expect(report).toContain('effective value is 128');
+  });
+
+  it('accepts an inotify instance limit above the floor', async () => {
+    const { results } = await runDoctor(
+      fakeHost({
+        files: { '/proc/sys/fs/inotify/max_user_instances': '65536\n' },
+      }),
+    );
+    expect(statusOf(results, 'inotify-instances')).toBe('pass');
   });
 
   it('flags a swapless host as a freezing failure', async () => {
