@@ -163,6 +163,12 @@ async function initAlive(pid: number): Promise<boolean> {
   return state !== 'Z' && state !== 'X';
 }
 
+/** One counter out of a cgroup-v2 events file ("key N" per line); 0 if absent. */
+export function cgroupCounter(events: string, key: string): number {
+  const match = new RegExp(`^${key} (\\d+)$`, 'm').exec(events);
+  return match ? Number(match[1]) : 0;
+}
+
 /**
  * Docker reports seven statuses; the executor's contract knows three. With
  * RestartPolicy "no" a container never restarts on its own, so everything
@@ -206,13 +212,55 @@ export class DockerExecutor implements Executor {
   private readonly docker: Docker;
   private readonly opts: DockerExecutorOptions;
   private readonly log: (msg: string) => void;
+  private readonly cgroupRoot: string;
 
-  constructor(opts: DockerExecutorOptions, docker?: Docker) {
+  constructor(
+    opts: DockerExecutorOptions,
+    docker?: Docker,
+    cgroupRoot = '/sys/fs/cgroup',
+  ) {
     this.opts = opts;
     this.log = opts.log ?? (() => {});
     // The local socket only. Red line: this socket is the daemon's alone and
     // must never be mounted into any container.
     this.docker = docker ?? new Docker({ socketPath: '/var/run/docker.sock' });
+    // Where the container's cgroup lives on this host (Docker under the
+    // systemd cgroup driver). Injectable so a unit test can stage the
+    // kernel's own counter files; production never passes it.
+    this.cgroupRoot = cgroupRoot;
+  }
+
+  /** The container's cgroup-v2 directory: the kernel's own view of the box. */
+  private scopeDir(containerId: string): string {
+    return `${this.cgroupRoot}/system.slice/docker-${containerId}.scope`;
+  }
+
+  /**
+   * The kernel's own death counters for a running container, read straight
+   * from its cgroup: memory.events `oom_kill` (the memory cgroup killed
+   * something in it) and pids.events `max` (the pids cap refused a fork).
+   * Both are written by the kernel at the moment of the event, before the
+   * dying process has torn anything down — so they are readable in the
+   * window where Docker still says running. Null when the cgroup cannot be
+   * read (torn down already, or a host whose cgroup layout differs):
+   * unknown, not a verdict either way.
+   */
+  private async cgroupEvents(
+    containerId: string,
+  ): Promise<{ oomKills: number; forksRejected: number } | null> {
+    const dir = this.scopeDir(containerId);
+    try {
+      const [memory, pids] = await Promise.all([
+        readFile(`${dir}/memory.events`, 'utf8'),
+        readFile(`${dir}/pids.events`, 'utf8'),
+      ]);
+      return {
+        oomKills: cgroupCounter(memory, 'oom_kill'),
+        forksRejected: cgroupCounter(pids, 'max'),
+      };
+    } catch {
+      return null;
+    }
   }
 
   get baseImage(): string {
@@ -702,43 +750,58 @@ export class DockerExecutor implements Executor {
   async exitOf(sandboxId: string): Promise<ShellExit | null> {
     let found = await this.inspect(sandboxId);
     if (found === null) return null;
-    if (
-      containerStateFromDocker(found.status) === 'running' &&
-      (found.oomKilled || !(await initAlive(found.pid)))
-    ) {
-      // Docker's status lags the kernel. After a memcg OOM or a sentry
-      // crash the init process is a zombie (or already reaped) and, for an
-      // OOM, State.OOMKilled is set, while State.Status still says running
-      // — measured 2026-09-09 at 100-300ms between an exec stream's EOF
-      // and the `exited` status. A consumer that learns of the death from
-      // its own stream and asks at once lands inside that window every
-      // time, and a status-only read would call the corpse alive. So a
-      // running shell whose init is dead, or which the kernel has already
-      // OOM-killed, is treated as ending: wait, bounded, for the runtime to
-      // record the exit, then read again. Still running afterwards means
-      // alive after all (under runc an OOM-killed child need not take the
-      // container down), and the second read says so.
-      await this.docker
-        .getContainer(found.id)
-        .wait({
-          condition: 'not-running',
-          abortSignal: AbortSignal.timeout(EXIT_SETTLE_SECONDS * 1000),
-        })
-        .catch(() => {});
-      found = await this.inspect(sandboxId);
-      if (found === null) return null;
+    // The kernel's verdict read at the source, while the cgroup still
+    // exists. Docker's State.OOMKilled is the same verdict relayed by the
+    // container's shim through an inotify watch — and a big host runs out
+    // of inotify instances (the distro default is 128; install.sh raises
+    // it), after which new shims lose the watch silently and every OOM on
+    // them arrives as a plain exit 137. The counter does not depend on the
+    // relay. Nothing to read once the cgroup is torn down: then the relay
+    // is all that survives, which is why the floor is enforced too.
+    let kernelOomKilled = false;
+    if (containerStateFromDocker(found.status) === 'running') {
+      const events = await this.cgroupEvents(found.id);
+      kernelOomKilled = (events?.oomKills ?? 0) > 0;
+      const dying =
+        found.oomKilled ||
+        kernelOomKilled ||
+        (events?.forksRejected ?? 0) > 0 ||
+        !(await initAlive(found.pid));
+      if (dying) {
+        // Docker's status lags the kernel. After a memcg OOM or a sentry
+        // crash the counters above are already written and the init
+        // process is dead or dying, while State.Status still says running —
+        // measured 2026-09-09 at 100-300ms (small box) to ~900ms (a loaded
+        // 16 GiB box) between an exec stream's EOF and the `exited`
+        // status. A consumer that learns of the death from its own stream
+        // and asks at once lands inside that window every time, and a
+        // status-only read would call the corpse alive. So such a shell is
+        // treated as ending: wait, bounded, for the runtime to record the
+        // exit, then read again. Still running afterwards means alive after
+        // all, and the second read says so.
+        await this.docker
+          .getContainer(found.id)
+          .wait({
+            condition: 'not-running',
+            abortSignal: AbortSignal.timeout(EXIT_SETTLE_SECONDS * 1000),
+          })
+          .catch(() => {});
+        found = await this.inspect(sandboxId);
+        if (found === null) return null;
+      }
     }
     if (containerStateFromDocker(found.status) !== 'stopped') return null;
-    // State.ExitCode is the init process's; State.OOMKilled is containerd's
-    // relay of the kernel's memcg OOM event — the only host-kernel death
-    // verdict that survives the container's cgroup scope being torn down.
-    // Exit 2 without it is the Go runtime's fatal-error code: the sentry
-    // died on its own (the pids cap refusing it a thread, measured
-    // 2026-09-08) — `sleep infinity` under tini cannot produce a 2 itself.
+    // State.ExitCode is the init process's. The OOM verdict is the kernel's
+    // either way — its own counter read above, or Docker's relay of the
+    // same memcg event. Exit 2 without it is the Go runtime's fatal-error
+    // code: the sentry died on its own (the pids cap refusing it a thread,
+    // measured 2026-09-08) — `sleep infinity` under tini cannot produce a
+    // 2 itself.
+    const oomKilled = found.oomKilled || kernelOomKilled;
     return {
       exitCode: found.exitCode,
-      oomKilled: found.oomKilled,
-      runtimeDied: found.exitCode === 2 && !found.oomKilled,
+      oomKilled,
+      runtimeDied: found.exitCode === 2 && !oomKilled,
       // Docker keeps nanoseconds; the ledger's clock is millisecond ISO
       // everywhere else, and a consumer parsing dates should meet one shape.
       finishedAt: new Date(found.finishedAt).toISOString(),
@@ -1744,9 +1807,8 @@ export class DockerExecutor implements Executor {
     containerId: string,
     sandboxId: string,
   ): Promise<void> {
-    const file = `/sys/fs/cgroup/system.slice/docker-${containerId}.scope/memory.oom.group`;
     try {
-      await writeFile(file, '1');
+      await writeFile(`${this.scopeDir(containerId)}/memory.oom.group`, '1');
     } catch (err) {
       this.log(
         `memory.oom.group not set for ${sandboxId} (a whole-box OOM kill stays best-effort): ${
@@ -1881,7 +1943,7 @@ export class DockerExecutor implements Executor {
    * tail was never reclaimable to begin with.
    */
   private async reclaimMemory(containerId: string): Promise<void> {
-    const dir = `/sys/fs/cgroup/system.slice/docker-${containerId}.scope`;
+    const dir = this.scopeDir(containerId);
     try {
       await access(dir);
     } catch {

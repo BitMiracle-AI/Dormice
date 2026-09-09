@@ -1,9 +1,18 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type Docker from 'dockerode';
 import { afterEach, describe, expect, it } from 'vitest';
-import { containerName, DockerExecutor } from './docker';
+import { cgroupCounter, containerName, DockerExecutor } from './docker';
 
 /**
  * exitOf's one piece of logic the contract cannot pin: the lag between a
@@ -68,7 +77,7 @@ function stubDocker(
   return { docker: docker as unknown as Docker, calls };
 }
 
-function executor(docker: Docker): DockerExecutor {
+function executor(docker: Docker, cgroupRoot?: string): DockerExecutor {
   return new DockerExecutor(
     {
       baseImage: 'unused',
@@ -78,8 +87,26 @@ function executor(docker: Docker): DockerExecutor {
       reclaimTimeoutSeconds: 1,
     },
     docker,
+    cgroupRoot,
   );
 }
+
+/**
+ * A staged cgroup directory for the stub container 'c0ffee': the kernel's
+ * event files as it writes them. Returns the root to hand the executor.
+ */
+async function stagedCgroup(memoryEvents: string, pidsEvents: string) {
+  const root = await mkdtemp(path.join(tmpdir(), 'dormice-cgroup-'));
+  const dir = path.join(root, 'system.slice', 'docker-c0ffee.scope');
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, 'memory.events'), memoryEvents);
+  await writeFile(path.join(dir, 'pids.events'), pidsEvents);
+  return { root, cleanup: () => rm(root, { recursive: true, force: true }) };
+}
+
+const QUIET_MEMORY =
+  'low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n';
+const QUIET_PIDS = 'max 0\n';
 
 const NEVER = () => new Promise<never>(() => {});
 const ABORTED = () =>
@@ -290,6 +317,92 @@ describe('DockerExecutor.exitOf across the runtime lag', () => {
       expect(calls.waited).toEqual(['c0ffee']);
     },
   );
+
+  it('parses one counter out of a cgroup-v2 events file', () => {
+    expect(cgroupCounter(QUIET_MEMORY, 'oom_kill')).toBe(0);
+    expect(
+      cgroupCounter('low 0\nhigh 3\nmax 12\noom 1\noom_kill 1\n', 'oom_kill'),
+    ).toBe(1);
+    // `max` must not match `oom_group_kill`'s or another key's tail.
+    expect(cgroupCounter('max 7\n', 'max')).toBe(7);
+    expect(cgroupCounter('', 'max')).toBe(0);
+  });
+
+  it("the shim's OOM relay dead: no OOMKilled, init still S — the cgroup's own oom_kill counter is the verdict", async () => {
+    // A production shape (2026-09-09): the host's inotify instances ran
+    // out, the shim never set State.OOMKilled, and at the default
+    // memory.oom.group=0 the sentry lingered in S for ~650ms. Nothing
+    // Docker reports says death; the kernel's counter does.
+    const cgroup = await stagedCgroup(
+      'low 0\nhigh 0\nmax 0\noom 1\noom_kill 1\noom_group_kill 0\n',
+      QUIET_PIDS,
+    );
+    cleanups.push(() => void cgroup.cleanup());
+    const shell: ShellState = {
+      status: 'running',
+      oomKilled: false,
+      exitCode: 0,
+      pid: process.pid,
+      finishedAt: '0001-01-01T00:00:00Z',
+    };
+    const { docker, calls } = stubDocker(shell, async () => {
+      shell.status = 'exited';
+      shell.exitCode = 137;
+      shell.pid = 0;
+      shell.finishedAt = '2026-09-09T12:31:46.000000000Z';
+      return { StatusCode: 137 };
+    });
+    expect(await executor(docker, cgroup.root).exitOf('sbx')).toEqual({
+      exitCode: 137,
+      oomKilled: true,
+      runtimeDied: false,
+      finishedAt: '2026-09-09T12:31:46.000Z',
+    });
+    expect(calls.waited).toEqual(['c0ffee']);
+  });
+
+  it('the pids cap refused a fork: pids.events max>0 on a "running" shell is the sentry dying', async () => {
+    const cgroup = await stagedCgroup(QUIET_MEMORY, 'max 3\n');
+    cleanups.push(() => void cgroup.cleanup());
+    const shell: ShellState = {
+      status: 'running',
+      oomKilled: false,
+      exitCode: 0,
+      pid: process.pid,
+      finishedAt: '0001-01-01T00:00:00Z',
+    };
+    const { docker, calls } = stubDocker(shell, async () => {
+      shell.status = 'exited';
+      shell.exitCode = 2;
+      shell.pid = 0;
+      shell.finishedAt = '2026-09-09T04:04:24.709696455Z';
+      return { StatusCode: 2 };
+    });
+    expect(await executor(docker, cgroup.root).exitOf('sbx')).toEqual({
+      exitCode: 2,
+      oomKilled: false,
+      runtimeDied: true,
+      finishedAt: '2026-09-09T04:04:24.709Z',
+    });
+    expect(calls.waited).toEqual(['c0ffee']);
+  });
+
+  it('quiet counters and a live init: alive, no wait', async () => {
+    const cgroup = await stagedCgroup(QUIET_MEMORY, QUIET_PIDS);
+    cleanups.push(() => void cgroup.cleanup());
+    const { docker, calls } = stubDocker(
+      {
+        status: 'running',
+        oomKilled: false,
+        exitCode: 0,
+        pid: process.pid,
+        finishedAt: '0001-01-01T00:00:00Z',
+      },
+      NEVER,
+    );
+    expect(await executor(docker, cgroup.root).exitOf('sbx')).toBeNull();
+    expect(calls.waited).toEqual([]);
+  });
 
   it('off Linux there is no /proc to read: a running shell with no OOM flag is alive, whatever its pid', async () => {
     const platform = Object.getOwnPropertyDescriptor(process, 'platform');

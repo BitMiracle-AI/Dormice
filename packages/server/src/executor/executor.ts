@@ -299,8 +299,14 @@ export interface ShellExit {
   /** The init process's exit code — Docker's State.ExitCode. */
   exitCode: number;
   /**
-   * The kernel's memory cgroup killed the container. Docker relays the
-   * kernel's own verdict — the only one that survives the cgroup's teardown.
+   * The kernel's memory cgroup killed the container — the kernel's own
+   * verdict, read either from the cgroup's oom_kill counter while the
+   * cgroup still existed (a wake that arrives inside the death window) or
+   * from Docker's relay of the same event, the only form that survives
+   * the cgroup's teardown. The relay rides on one inotify instance per
+   * container shim and runs dry silently on a big host; the executor reads
+   * the counter itself where it can, and install.sh keeps the host's
+   * instance limit above the fleet.
    */
   oomKilled: boolean;
   /**
