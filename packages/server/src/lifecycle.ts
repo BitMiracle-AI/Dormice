@@ -284,7 +284,10 @@ export async function wakeSandbox(
       // heartbeat's blind spot). One inspect here (~1-2 ms on the local
       // socket, a fraction of the exec that follows) makes `ready` a
       // statement about the container, not the ledger. exitOf answers only
-      // for a stopped shell: a live one is null and takes the fast path
+      // for a stopped shell (waiting out the runtime's own few hundred ms
+      // of lag when the processes are already dead — the caller who saw
+      // its stream end and asks at once is always inside that lag): a live
+      // one is null and takes the fast path
       // unchanged; a dead one is recorded as the death it is and falls
       // through to the stopped arm's cold start — the same seconds a
       // stopped sandbox always costs, no `restoring` detour. The one shape

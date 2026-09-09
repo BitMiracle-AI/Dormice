@@ -482,9 +482,14 @@ export interface Executor {
   /**
    * How the shell's processes ended — only meaningful for a stopped shell,
    * so null for anything else: absent (no shell), running or paused (not
-   * ended). A pure read, never a wake. Distinguishes the deaths the
-   * reconciler discovers (OOM kill, sentry crash) from one another and from
-   * a stop the daemon ordered itself.
+   * ended). A shell whose processes are already dead but whose runtime has
+   * not yet recorded the exit counts as ended: the read waits, bounded, for
+   * the record instead of calling the corpse alive — the moment a caller
+   * who just watched its own stream end asks is exactly inside that lag
+   * (the docker executor measured it at 100-300ms). A pure read, never a
+   * wake. Distinguishes the deaths the reconciler discovers (OOM kill,
+   * sentry crash) from one another and from a stop the daemon ordered
+   * itself.
    */
   exitOf(sandboxId: string): Promise<ShellExit | null>;
   /**

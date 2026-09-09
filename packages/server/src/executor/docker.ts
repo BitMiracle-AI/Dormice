@@ -22,6 +22,7 @@ import Docker from 'dockerode';
 import { execa } from 'execa';
 import {
   deadline,
+  EXIT_SETTLE_SECONDS,
   QUERY_DEADLINE_SECONDS,
   VERB_DEADLINE_SECONDS,
   WAIT_DEADLINE_SECONDS,
@@ -133,6 +134,29 @@ interface Inspected {
   oomKilled: boolean;
   /** State.FinishedAt as Docker writes it (RFC 3339 with nanoseconds). */
   finishedAt: string;
+  /** State.Pid: the host pid of the container's init (the sentry under runsc); 0 once exited. */
+  pid: number;
+}
+
+/**
+ * Whether the host process Docker reports as the container's init is still
+ * a live process. A zombie counts as dead: it has exited and only awaits
+ * its reaper. Reads /proc, so it can only answer on Linux next to a local
+ * dockerd — everywhere else (and for a pid Docker has already cleared) it
+ * says "alive" and exitOf falls back to Docker's own status.
+ */
+async function initAlive(pid: number): Promise<boolean> {
+  if (process.platform !== 'linux' || pid <= 0) return true;
+  let stat: string;
+  try {
+    stat = await readFile(`/proc/${pid}/stat`, 'utf8');
+  } catch {
+    return false;
+  }
+  // "pid (comm) S ...": comm may contain spaces and parentheses, so the
+  // state letter is the first field after the last ')'.
+  const state = stat.slice(stat.lastIndexOf(')') + 2).trimStart()[0];
+  return state !== 'Z' && state !== 'X';
 }
 
 /**
@@ -672,13 +696,35 @@ export class DockerExecutor implements Executor {
   }
 
   async exitOf(sandboxId: string): Promise<ShellExit | null> {
-    const found = await this.inspect(sandboxId);
+    let found = await this.inspect(sandboxId);
+    if (found === null) return null;
     if (
-      found === null ||
-      containerStateFromDocker(found.status) !== 'stopped'
+      containerStateFromDocker(found.status) === 'running' &&
+      (found.oomKilled || !(await initAlive(found.pid)))
     ) {
-      return null;
+      // Docker's status lags the kernel. After a memcg OOM or a sentry
+      // crash the init process is a zombie (or already reaped) and, for an
+      // OOM, State.OOMKilled is set, while State.Status still says running
+      // — measured 2026-09-09 at 100-300ms between an exec stream's EOF
+      // and the `exited` status. A consumer that learns of the death from
+      // its own stream and asks at once lands inside that window every
+      // time, and a status-only read would call the corpse alive. So a
+      // running shell whose init is dead, or which the kernel has already
+      // OOM-killed, is treated as ending: wait, bounded, for the runtime to
+      // record the exit, then read again. Still running afterwards means
+      // alive after all (under runc an OOM-killed child need not take the
+      // container down), and the second read says so.
+      await this.docker
+        .getContainer(found.id)
+        .wait({
+          condition: 'not-running',
+          abortSignal: AbortSignal.timeout(EXIT_SETTLE_SECONDS * 1000),
+        })
+        .catch(() => {});
+      found = await this.inspect(sandboxId);
+      if (found === null) return null;
     }
+    if (containerStateFromDocker(found.status) !== 'stopped') return null;
     // State.ExitCode is the init process's; State.OOMKilled is containerd's
     // relay of the kernel's memcg OOM event — the only host-kernel death
     // verdict that survives the container's cgroup scope being torn down.
@@ -1756,6 +1802,7 @@ export class DockerExecutor implements Executor {
         exitCode: info.State.ExitCode,
         oomKilled: info.State.OOMKilled,
         finishedAt: info.State.FinishedAt,
+        pid: info.State.Pid,
       };
     } catch (err) {
       if (isDockerApiError(err) && err.statusCode === 404) return null;

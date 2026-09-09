@@ -148,6 +148,82 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
     }, 120_000);
   });
 
+  /**
+   * Docker-only: the lag between a sandbox's death and Docker recording
+   * it. The fake's deaths are instantaneous; only a real runtime shows
+   * the 100-300ms in which State.Status still says running while the
+   * sentry is a zombie (and, for an OOM, State.OOMKilled is already set).
+   * A consumer learns of the death from its own exec stream's EOF and
+   * asks at once — exitOf must answer with the death, not null. Both
+   * signatures the fleet has actually died of: the memory cgroup, and the
+   * pids cap refusing the sentry a thread.
+   */
+  describe('DockerExecutor: exitOf sees a death before Docker has marked the shell exited', () => {
+    const dyingShell = async (memoryGb: number) => {
+      const dataDir = await mkdtemp(path.join(tmpdir(), 'dormice-contract-'));
+      const executor = new DockerExecutor({
+        baseImage: image,
+        dataDir,
+        resources: () => ({ diskSizeGb: 1, cpus: 1, memoryGb }),
+        pidsLimit: () => 256,
+        reclaimTimeoutSeconds: 45,
+      });
+      const id = randomUUID();
+      await executor.create(id);
+      return {
+        executor,
+        id,
+        // The killer's exec ends with the sandbox; however it surfaces, the
+        // question is what exitOf says the instant afterwards.
+        die: (command: string) =>
+          executor
+            .exec(id, { command, timeoutSeconds: 60 })
+            .catch(() => undefined),
+        cleanup: async () => {
+          await executor.destroy(id);
+          await rm(dataDir, { recursive: true, force: true });
+        },
+      };
+    };
+
+    it('a memory-cgroup OOM kill reads as oom-killed the instant the exec stream ends', async () => {
+      const shell = await dyingShell(0.5);
+      try {
+        await shell.die(
+          "node -e 'const a=[];for(;;){const b=Buffer.allocUnsafe(64<<20);b.fill(1);a.push(b);}'",
+        );
+        const exit = await shell.executor.exitOf(shell.id);
+        expect(exit).toMatchObject({
+          exitCode: 137,
+          oomKilled: true,
+          runtimeDied: false,
+        });
+      } finally {
+        await shell.cleanup();
+      }
+    }, 120_000);
+
+    it('a pids-cap hit reads as runtime-died the instant the exec stream ends', async () => {
+      const shell = await dyingShell(1);
+      try {
+        // Lowered behind the executor's back, as an operator's `docker
+        // update` would: 64 is below the sentry's own thread budget.
+        await new Docker()
+          .getContainer(containerName(shell.id))
+          .update({ PidsLimit: 64 });
+        await shell.die('for i in $(seq 1 200); do sleep 300 & done; wait');
+        const exit = await shell.executor.exitOf(shell.id);
+        expect(exit).toMatchObject({
+          exitCode: 2,
+          oomKilled: false,
+          runtimeDied: true,
+        });
+      } finally {
+        await shell.cleanup();
+      }
+    }, 120_000);
+  });
+
   afterAll(async () => {
     try {
       await new Docker().getImage(ALT_IMAGE).remove();

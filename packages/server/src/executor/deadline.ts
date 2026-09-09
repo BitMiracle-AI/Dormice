@@ -65,3 +65,14 @@ export const VERB_DEADLINE_SECONDS = 120;
  * exit itself.
  */
 export const WAIT_DEADLINE_SECONDS = 180;
+
+/**
+ * How long exitOf waits for the runtime to record an exit it can already
+ * see has happened (the container's init dead on the host, or the kernel's
+ * OOM verdict set) before concluding the shell is alive after all.
+ * Measured 2026-09-09 on a gVisor host: Docker marks the container exited
+ * 100-300ms after the sentry dies. Five seconds is an order of magnitude
+ * of headroom for a loaded dockerd; the cost of a false "dying" read is
+ * one such wait, never a wrong answer.
+ */
+export const EXIT_SETTLE_SECONDS = 5;
