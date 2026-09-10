@@ -272,6 +272,24 @@ describe('apikey commands over real HTTP', () => {
     );
   });
 
+  it('disable and revoke resolve a name by the same trimmed spelling creation stored', async () => {
+    // Creation trims the name (apiKeyNameSchema), so `ls` and every other
+    // read shows "incident key". Disable/enable/revoke must resolve by
+    // that same trimmed spelling, whether the operator retypes it exactly
+    // or reuses the untrimmed spelling they originally typed at creation.
+    await apikeyCreate(client, '  incident key  ');
+    expect(await apikeyLs(client)).toMatch(/incident key\s{2,}/);
+
+    expect(await apikeyDisable(client, '  incident key  ')).toBe(
+      'Disabled API key "  incident key  " — it stops working until re-enabled.',
+    );
+    expect(await apikeyLs(client)).toMatch(/incident key\s{2,}.*disabled/);
+
+    expect(await apikeyRevoke(client, 'incident key')).toBe(
+      'Revoked API key "incident key" — it stops working immediately.',
+    );
+  });
+
   it('--expires mints a TTL key through end-of-day and refuses garbage dates', async () => {
     const created = await apikeyCreate(client, 'ttl', '2030-06-15');
     expect(created.split('\n')[0]).toMatch(
