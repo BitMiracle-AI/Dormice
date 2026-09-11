@@ -44,10 +44,15 @@ const config = loadConfig();
 
 // One ledger, one daemon — enforced, not assumed. A second instance would
 // run its own destructive reconcile against sandboxes this one is still
-// operating, well before it ever loses the race for the port.
+// operating, well before it ever loses the race for the port. The handle
+// is kept for the life of the process: better-sqlite3 closes a handle
+// whose object is garbage collected, and a closed handle drops the file
+// lock — with the return value discarded, a second daemon on the same
+// ledger started fine seconds later (measured 2026-09-11, fake executor).
+let ledgerLock: ReturnType<typeof acquireSingleWriterLock> | undefined;
 if (config.DORMICE_DB_PATH !== ':memory:') {
   try {
-    acquireSingleWriterLock(config.DORMICE_DB_PATH);
+    ledgerLock = acquireSingleWriterLock(config.DORMICE_DB_PATH);
   } catch (error) {
     fatal(error instanceof Error ? error.message : String(error));
   }
@@ -352,6 +357,7 @@ const close = async (signal: NodeJS.Signals) => {
     app.log.error(error, `graceful shutdown after ${signal} failed`);
     process.exitCode = 1;
   }
+  ledgerLock?.close();
   process.exit(process.exitCode ?? 0);
 };
 const onSigterm = () => void close('SIGTERM');
