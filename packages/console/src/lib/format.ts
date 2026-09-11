@@ -15,7 +15,15 @@ export function formatBytes(bytes: number): string {
     value /= 1024;
     unit += 1;
   }
-  const digits = value >= 100 || unit === 0 ? 0 : value >= 10 ? 1 : 2;
+  let digits = value >= 100 || unit === 0 ? 0 : value >= 10 ? 1 : 2;
+  // Rounding at the chosen precision can push value back up to the next unit
+  // (e.g. 1023.73 KiB → "1024 KiB"). Re-check after toFixed and promote once
+  // so "1024 <unit>" is never emitted.
+  if (Number(value.toFixed(digits)) >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+    digits = 2;
+  }
   return `${value.toFixed(digits)} ${units[unit]}`;
 }
 
