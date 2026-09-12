@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -28,6 +28,28 @@ function cli(...args: string[]) {
       DORMICE_API_TOKEN: inject('dormiceToken'),
     },
   });
+}
+
+function cliWithClosedStdout(...args: string[]) {
+  return new Promise<{ code: number | null; stderr: string }>(
+    (resolve, reject) => {
+      const child = spawn('node', [CLI, ...args], {
+        env: {
+          ...process.env,
+          DORMICE_ENDPOINT: inject('dormiceEndpoint'),
+          DORMICE_API_TOKEN: inject('dormiceToken'),
+        },
+      });
+      let stderr = '';
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk: string) => {
+        stderr += chunk;
+      });
+      child.stdout.once('data', () => child.stdout.destroy());
+      child.once('error', reject);
+      child.once('close', (code) => resolve({ code, stderr }));
+    },
+  );
 }
 
 describe('dor CLI against a real daemon', () => {
@@ -105,6 +127,23 @@ describe('dor CLI against a real daemon', () => {
     await expect(
       cli('sandbox', 'exec', 'cli-exec-key', 'exit 3'),
     ).rejects.toMatchObject({ code: 3 });
+  });
+
+  it('keeps the sandbox exit code when downstream closes stdout early', async () => {
+    const sdk = new Dormice({
+      endpoint: inject('dormiceEndpoint'),
+      token: inject('dormiceToken'),
+    });
+    await sdk.acquireSandbox('cli-broken-pipe-key');
+
+    const result = await cliWithClosedStdout(
+      'sandbox',
+      'exec',
+      'cli-broken-pipe-key',
+      'seq 1 300000; exit 3',
+    );
+    expect(result.code).toBe(3);
+    expect(result.stderr).not.toContain('EPIPE');
   });
 
   it('sandbox push and pull move a file in and back out through the real binary', async () => {
