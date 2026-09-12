@@ -28,6 +28,15 @@ import {
 } from './commands';
 import { realDoctorContext, runDoctor } from './doctor';
 
+// A downstream command such as `head` may close either pipe while output is
+// still buffered. EPIPE is normal in that case; leaving the process alive also
+// preserves `sandbox exec`'s own exit code. Every other stream error stays fatal.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code !== 'EPIPE') throw error;
+  });
+}
+
 const program = new Command('dor').description(
   'Command-line tool for a Dormice daemon (also installed as `dormice`)',
 );
