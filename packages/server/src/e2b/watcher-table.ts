@@ -85,6 +85,8 @@ interface CreateArgs {
   sandboxId: string;
   path: string;
   recursive: boolean;
+  /** Same identity as the other filesystem verbs; absent means the default user. */
+  user?: string;
   operationId?: string;
 }
 
@@ -391,6 +393,7 @@ export class WatcherTable {
       const handle = await args.executor.watchDir(args.sandboxId, {
         path: resolveSandboxPath(args.path),
         recursive: args.recursive,
+        user: args.user,
         onEvent,
         onEnd: (error) => {
           record.endError = error;

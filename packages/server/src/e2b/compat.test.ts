@@ -1482,6 +1482,7 @@ describe('E2B envd surface', () => {
     sandboxID: string,
     body: Record<string, unknown>,
     deadlineMs: number,
+    headers: Record<string, string> = {},
   ) {
     return t.app.inject({
       method: 'POST',
@@ -1490,6 +1491,7 @@ describe('E2B envd surface', () => {
         ...envdHeaders(t, sandboxID),
         'content-type': 'application/connect+json',
         'connect-timeout-ms': String(deadlineMs),
+        ...headers,
       },
       payload: enveloped(body),
     });
@@ -1582,6 +1584,58 @@ describe('E2B envd surface', () => {
     expect(fileFrames[0]?.json.error).toEqual({
       code: 'invalid_argument',
       message: 'not a directory: /home/user/plain.txt',
+    });
+  });
+
+  it('WatchDir vets the requested user like every other filesystem verb', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t);
+    const basic = (name: string) => ({
+      authorization: `Basic ${Buffer.from(`${name}:`).toString('base64')}`,
+    });
+
+    // Unknown name: refused before any start frame, same shape as Start.
+    const refused = await watchDir(
+      t,
+      sandboxID,
+      { path: '/home/user' },
+      500,
+      basic('nobody'),
+    );
+    const frames = parseEnvelopes(refused.rawPayload);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toEqual({
+      flags: 2,
+      json: {
+        error: {
+          code: 'unauthenticated',
+          message: "invalid username: 'nobody'",
+        },
+      },
+    });
+    expect(t.watchers.count(sandboxID)).toBe(0);
+
+    // A supported name still opens the watch normally.
+    const asRoot = await watchDir(
+      t,
+      sandboxID,
+      { path: '/home/user' },
+      500,
+      basic('root'),
+    );
+    expect(parseEnvelopes(asRoot.rawPayload)[0]?.json).toEqual({ start: {} });
+
+    // The unary polling face vets the same way.
+    const created = await t.app.inject({
+      method: 'POST',
+      url: '/e2b/envd/filesystem.Filesystem/CreateWatcher',
+      headers: { ...envdHeaders(t, sandboxID), ...basic('nobody') },
+      payload: { path: '/home/user' },
+    });
+    expect(created.statusCode).toBe(401);
+    expect(created.json()).toEqual({
+      code: 'unauthenticated',
+      message: "invalid username: 'nobody'",
     });
   });
 

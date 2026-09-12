@@ -1553,6 +1553,7 @@ export class DockerExecutor implements Executor {
       ],
       stdout: new CallbackSink(onStdout),
       stderr: new CallbackSink(onStderr),
+      user: opts.user,
     });
     const exitInfo = started.wait().then(
       (exitCode) => ({ exitCode, error: undefined as Error | undefined }),
