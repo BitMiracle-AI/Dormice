@@ -54,6 +54,38 @@ describe('WatcherTable', () => {
     await Promise.all(starts);
   });
 
+  it('passes the requested user through to the executor, for both create and createStreaming', async () => {
+    const executor = {
+      watchDir: vi.fn().mockResolvedValue({ stop: async () => {} }),
+    } as unknown as Executor;
+    const table = new WatcherTable();
+
+    await table.create({ ...args(executor), user: 'root' });
+    expect(executor.watchDir).toHaveBeenLastCalledWith(
+      'sandbox-1',
+      expect.objectContaining({ user: 'root' }),
+    );
+
+    await table.createStreaming({
+      ...args(executor),
+      user: 'root',
+      onEvent: () => {},
+      onEnd: () => {},
+    });
+    expect(executor.watchDir).toHaveBeenLastCalledWith(
+      'sandbox-1',
+      expect.objectContaining({ user: 'root' }),
+    );
+
+    // Omitted stays omitted — the executor falls back to its own default,
+    // the same as every other filesystem verb.
+    await table.create(args(executor));
+    expect(executor.watchDir).toHaveBeenLastCalledWith(
+      'sandbox-1',
+      expect.objectContaining({ user: undefined }),
+    );
+  });
+
   it('releases a reservation when start fails', async () => {
     const executor = {
       watchDir: vi.fn().mockRejectedValueOnce(new Error('start failed')),

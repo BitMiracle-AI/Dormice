@@ -24,6 +24,8 @@ import {
   rawWriter,
   sandboxIdOf,
   streamError,
+  usernameOf,
+  vetUsername,
   wireDeadlineMs,
 } from './shared';
 
@@ -111,6 +113,15 @@ export function registerWatchRoutes(
     if (!message.path) {
       return streamError(reply, 'invalid_argument', 'missing path');
     }
+    // Identity rides the Basic auth header (SDK: user option); vetted here,
+    // in the streaming dialect, before anything wakes — same as Start.
+    let user: string | undefined;
+    try {
+      user = vetUsername(usernameOf(request));
+    } catch (error) {
+      const e = error as { code: string | number; message: string };
+      return streamError(reply, String(e.code), e.message);
+    }
     const sandboxId = sandboxIdOf(request);
     let reservationId: string;
     try {
@@ -153,6 +164,7 @@ export function registerWatchRoutes(
         reservationId,
         path: message.path,
         recursive: message.recursive === true,
+        user,
         onEvent: async (event) => {
           await opened;
           await write(
@@ -247,6 +259,8 @@ export function registerWatchRoutes(
     const body = request.body as { path?: string; recursive?: boolean };
     if (!body.path) throw connectError('invalid_argument', 'missing path');
     const path = body.path;
+    // Same identity as the other filesystem verbs, vetted the same way.
+    const user = vetUsername(usernameOf(request));
     const operationId = operationIdOf(request);
     return ctx.inSlot(sandboxIdOf(request), async (row) => {
       try {
@@ -255,6 +269,7 @@ export function registerWatchRoutes(
           sandboxId: row.id,
           path,
           recursive: body.recursive === true,
+          user,
           operationId,
         });
         return { watcherId };

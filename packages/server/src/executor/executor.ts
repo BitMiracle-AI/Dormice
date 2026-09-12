@@ -149,6 +149,8 @@ export interface WatchDirOptions {
   path: string;
   /** Watch the whole subtree; directories created later are picked up too. */
   recursive: boolean;
+  /** Same identity as the other filesystem verbs; absent means the default user. */
+  user?: string;
   /** A returned promise is awaited before the next event: backpressure. */
   onEvent: (event: WatchEvent) => void | Promise<void>;
   /**
