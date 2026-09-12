@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
+import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from '../app';
 import { Archiver } from '../archive/archiver';
@@ -12,6 +13,7 @@ import { objectKey } from '../archive/store';
 import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
 import { findById, setDeadline } from '../db/ledger';
+import { sandboxes } from '../db/schema';
 import { getOrCreateSigningSecret } from '../db/secrets';
 import { FAKE_BASE_IMAGE, FakeExecutor } from '../executor/fake';
 import { CpuSampler } from '../host-metrics';
@@ -647,6 +649,40 @@ describe('E2B control plane', () => {
     const stopped = await control(t, 'GET', `/sandboxes/${sandboxID}/metrics`);
     expect(stopped.statusCode).toBe(200);
     expect(stopped.json()).toEqual([]);
+  });
+
+  it('metrics with no start defaults to the sandbox creation, not a 1h span', async () => {
+    const t = testApp();
+    const { sandboxID } = await createSandbox(t, { timeout: 86400 });
+    // The SDK contract only bites once a sandbox outlives an hour with
+    // retained samples on both sides of that line. createdAt is immutable
+    // through the ledger (no helper ages a row), so the column is backdated
+    // directly; the deadline clock runs independently of it, and the
+    // timeout above keeps the sandbox live across the two-hour past.
+    const past = new Date(Date.now() - 2 * 3600_000).toISOString();
+    t.db
+      .update(sandboxes)
+      .set({ createdAt: past })
+      .where(eq(sandboxes.id, sandboxID))
+      .run();
+    const t0 = Date.now() - 90 * 60_000;
+    await sampleOnce(t.db, t.executor, new Date(t0), tickOpts());
+    await sampleOnce(t.db, t.executor, new Date(t0 + 80 * 60_000), tickOpts());
+
+    const res = await control(t, 'GET', `/sandboxes/${sandboxID}/metrics`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toHaveLength(2);
+
+    // The explicit spelling of the same intent agrees with the new default.
+    const explicit = await control(
+      t,
+      'GET',
+      `/sandboxes/${sandboxID}/metrics?start=${Math.floor(
+        Date.parse(past) / 1000,
+      )}`,
+    );
+    expect(explicit.statusCode).toBe(200);
+    expect(explicit.json()).toHaveLength(2);
   });
 
   it('metrics 404s an unknown sandbox in the control-plane dialect', async () => {

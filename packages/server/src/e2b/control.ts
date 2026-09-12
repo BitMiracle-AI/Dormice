@@ -470,8 +470,17 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
       const measurable = row.state === 'active' || row.state === 'frozen';
 
       const now = new Date();
+      // The E2B SDKs document an omitted start as "defaults to the start of
+      // the sandbox" (SandboxMetricsOpts.start, js and python alike), so this
+      // face anchors an omitted start at the ledger's createdAt — the shared
+      // one-hour span silently dropped every retained sample past an hour
+      // from an unqualified getMetrics(). start is therefore always defined
+      // here and the span below is inert; it stays because the resolver
+      // requires one and the native faces still mean it.
       const { startIso, endIso, startMs, endMs } = resolveWindow(
-        start === undefined ? undefined : new Date(start * 1000).toISOString(),
+        start === undefined
+          ? row.createdAt
+          : new Date(start * 1000).toISOString(),
         end === undefined ? undefined : new Date(end * 1000).toISOString(),
         3600_000,
         now,
