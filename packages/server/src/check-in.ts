@@ -101,11 +101,22 @@ export class CheckIn {
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(CHECK_IN_TIMEOUT_MS),
+        // A front that redirects (a Caddy binding the gateway's domain
+        // answers plain http with a 308 to https) is reported as what it
+        // is. Followed, the redirect would cross origins and fetch would
+        // drop the Authorization header on the way (the Fetch standard's
+        // rule), so the gateway would answer 401 — and the operator would
+        // read a wrong token where there is a wrong address (found by
+        // review, 2026-09-14).
+        redirect: 'manual',
       });
       if (res.status !== 200) {
         const text = await res.text();
+        const location = res.headers.get('location');
         throw new Error(
-          `gateway answered ${res.status}: ${text.slice(0, 200)}`,
+          location === null
+            ? `gateway answered ${res.status}: ${text.slice(0, 200)}`
+            : `gateway answered ${res.status} redirecting to ${location} — DORMICE_GATEWAY_ENDPOINT must be the gateway's own address, not a front that redirects`,
         );
       }
       checkInResponseSchema.parse(await res.json());

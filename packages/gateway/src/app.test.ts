@@ -383,6 +383,21 @@ describe('check-in and the node verbs', () => {
     const bad = await rpc(h, '/checkIn', { nodeId: 'z' });
     expect(bad.status).toBe(400);
     expect(h.fleet.get('z')).toBeUndefined();
+    // An endpoint the gateway could not use is refused at the wire (shared
+    // endpointSchema has the measurement): undici takes the endpoint as
+    // the request's origin and throws on a path — a node every lookup
+    // would find and no forward could reach. A trailing slash is merely
+    // dropped; the two ends must agree byte for byte.
+    const pathy = await rpc(
+      h,
+      '/checkIn',
+      checkInOf('p', 'http://10.0.0.9:80/dormice'),
+    );
+    expect(pathy.status).toBe(400);
+    expect(message(pathy)).toMatch(/an endpoint is an origin/);
+    expect(h.fleet.get('p')).toBeUndefined();
+    await rpc(h, '/checkIn', checkInOf('s', 'http://10.0.0.9:80/'));
+    expect(h.fleet.get('s')?.endpoint).toBe('http://10.0.0.9:80');
   });
 
   it('removeNode forgets the node and everything cached on it; a removed node that checks in again re-joins', async () => {

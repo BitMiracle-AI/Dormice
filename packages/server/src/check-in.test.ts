@@ -21,7 +21,13 @@ afterEach(async () => {
 });
 
 /** A gateway-shaped listener: records every check-in, answers what the test says. */
-async function gateway(answer: () => { status: number; body: string }) {
+async function gateway(
+  answer: () => {
+    status: number;
+    body: string;
+    headers?: Record<string, string>;
+  },
+) {
   const seen: Array<{ headers: http.IncomingHttpHeaders; body: unknown }> = [];
   const server = http.createServer((req, res) => {
     let text = '';
@@ -31,7 +37,10 @@ async function gateway(answer: () => { status: number; body: string }) {
     req.on('end', () => {
       seen.push({ headers: req.headers, body: JSON.parse(text) });
       const a = answer();
-      res.writeHead(a.status, { 'content-type': 'application/json' });
+      res.writeHead(a.status, {
+        'content-type': 'application/json',
+        ...a.headers,
+      });
       res.end(a.body);
     });
   });
@@ -46,12 +55,17 @@ async function gateway(answer: () => { status: number; body: string }) {
 function logSpy() {
   const infos: string[] = [];
   const warns: string[] = [];
+  const details: unknown[] = [];
   return {
     infos,
     warns,
+    details,
     log: {
       info: (msg: string) => infos.push(msg),
-      warn: (_obj: unknown, msg: string) => warns.push(msg),
+      warn: (obj: unknown, msg: string) => {
+        warns.push(msg);
+        details.push(obj);
+      },
     },
   };
 }
@@ -152,6 +166,21 @@ describe('CheckIn', () => {
     await checkIn.once();
     await checkIn.once();
     expect(warns).toHaveLength(2);
+  });
+
+  it('a front that redirects is reported as a wrong address, not followed with the token stripped', async () => {
+    const gw = await gateway(() => ({
+      status: 308,
+      body: '',
+      headers: { location: 'https://gateway.example/checkIn' },
+    }));
+    const { log, warns, details } = logSpy();
+    await new CheckIn(options(gw.endpoint, log)).once();
+    expect(gw.seen).toHaveLength(1);
+    expect(warns).toEqual([expect.stringMatching(/check-in failed/)]);
+    expect((details[0] as { error: string }).error).toMatch(
+      /gateway answered 308 redirecting to https:\/\/gateway\.example\/checkIn — DORMICE_GATEWAY_ENDPOINT must be the gateway's own address/,
+    );
   });
 
   it('a gateway that is not there is a logged failure, never a throw', async () => {

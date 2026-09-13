@@ -184,6 +184,28 @@ describe('the fleet knobs: gateway, node endpoint, check-in interval', () => {
     ).toThrow();
   });
 
+  it('a node endpoint with a path or a query is refused at boot, naming why; a trailing slash is still just dropped', () => {
+    expect(() =>
+      loadConfig({
+        ...TOKEN,
+        DORMICE_GATEWAY_ENDPOINT: 'http://10.0.0.5:3677',
+        DORMICE_NODE_ENDPOINT: 'http://10.0.0.7:80/dormice',
+      }),
+    ).toThrow(
+      /DORMICE_NODE_ENDPOINT must name the node's front without a path/,
+    );
+    expect(() =>
+      loadConfig({
+        ...TOKEN,
+        DORMICE_NODE_ENDPOINT: 'http://10.0.0.7:80/?x=1',
+      }),
+    ).toThrow(/without a path/);
+    expect(
+      loadConfig({ ...TOKEN, DORMICE_NODE_ENDPOINT: 'http://10.0.0.7:80/' })
+        .DORMICE_NODE_ENDPOINT,
+    ).toBe('http://10.0.0.7:80');
+  });
+
   it('a gateway on another machine requires the node endpoint, naming why; a loopback gateway does not', () => {
     expect(() =>
       loadConfig({

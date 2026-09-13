@@ -1,5 +1,9 @@
 import { isAbsolute } from 'node:path';
-import { bareHostnameRegex, PIDS_LIMIT_MIN } from '@dormice/shared';
+import {
+  bareHostnameRegex,
+  isOriginUrl,
+  PIDS_LIMIT_MIN,
+} from '@dormice/shared';
 import { z } from 'zod';
 import type { S3Settings } from './archive/s3-store';
 
@@ -207,6 +211,13 @@ const envSchema = z.object({
         'DORMICE_NODE_ENDPOINT must be a full http(s) URL, e.g. http://10.0.0.7:80',
     })
     .transform((url) => url.replace(/\/+$/, ''))
+    // An origin, nothing more (shared endpointSchema has the measurement):
+    // the gateway would answer this node's every check-in with a 400
+    // otherwise — refused here, at boot, where the operator is looking.
+    .refine(isOriginUrl, {
+      error:
+        "DORMICE_NODE_ENDPOINT must name the node's front without a path — scheme, host and port only, e.g. http://10.0.0.7:80 (the gateway dials <endpoint>/<verb>)",
+    })
     .optional(),
   /**
    * How often the node checks in with its gateway. The gateway reads two

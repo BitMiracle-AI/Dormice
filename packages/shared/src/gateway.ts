@@ -27,6 +27,40 @@ export const buildInfoSchema = z.object({
 export type BuildInfo = z.infer<typeof buildInfoSchema>;
 
 /**
+ * Whether a URL is an origin and nothing more: scheme, host and port — no
+ * path, query or fragment. False for a string that is not a URL at all.
+ */
+export function isOriginUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return parsed.pathname === '/' && parsed.search === '' && parsed.hash === '';
+}
+
+/**
+ * Where a process can be dialled — an origin. The gateway joins
+ * `<endpoint>/<verb>` for its own lookup and hands the endpoint to undici
+ * as the request's origin when it forwards, and undici refuses an origin
+ * that carries a path (UND_ERR_INVALID_ARG, measured 2026-09-14): a node
+ * reporting `http://10.0.0.7:80/dormice` would be found by every lookup
+ * and reached by no forward. So a path is refused at the wire. A trailing
+ * slash is dropped rather than refused — the same address to everyone but
+ * a string compare, and the two ends must agree byte for byte (the join
+ * above would otherwise ask for `//lookupSandbox`, a 404 the gateway reads
+ * as silence).
+ */
+export const endpointSchema = z
+  .url({ protocol: /^https?$/ })
+  .transform((url) => url.replace(/\/+$/, ''))
+  .refine(isOriginUrl, {
+    error:
+      'an endpoint is an origin — scheme, host and port only, no path or query, e.g. http://10.0.0.7:80',
+  });
+
+/**
  * What a node reports about itself at every check-in — everything
  * placement decides on: the machine's CPU, memory and data disk, and the
  * ledger's census by state. The same host reading getHostMetrics answers
@@ -57,8 +91,8 @@ export type NodeReading = z.infer<typeof nodeReadingSchema>;
 export const checkInRequestSchema = z.object({
   /** DORMICE_NODE_ID — the node's name in every sandbox's `nodeId`. */
   nodeId: z.string().min(1),
-  /** Where the gateway forwards to: the node's intranet front (DORMICE_NODE_ENDPOINT). */
-  endpoint: z.url({ protocol: /^https?$/ }),
+  /** Where the gateway forwards to: the node's intranet front (DORMICE_NODE_ENDPOINT) — an origin, endpointSchema has why. */
+  endpoint: endpointSchema,
   /** How often this node checks in — the gateway's yardstick for "missed two in a row". */
   intervalSeconds: z.number().int().positive(),
   build: buildInfoSchema.nullable(),
