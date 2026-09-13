@@ -140,7 +140,12 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bRoutesOptions> = async (
       }
       const name = judged.data;
       return locks.run(name, async () => {
-        const found = verdict(await finder.byName(name), `sandbox "${name}"`);
+        // Confirmed with the cached node first (find.ts byName has why):
+        // the daemon's create builds what it does not find.
+        const found = verdict(
+          await finder.byName(name, { confirm: true }),
+          `sandbox "${name}"`,
+        );
         if (found.kind === 'refuse') {
           return refuse(reply, found, (message) => ({
             code: found.status,

@@ -166,11 +166,17 @@ export const nativeRoutes: FastifyPluginAsyncZod<NativeRoutesOptions> = async (
     name: string,
     body: Buffer | undefined,
   ) {
-    const judged = verdict(await finder.byName(name), `sandbox "${name}"`);
+    // A creator confirms a cache hit with its node first (find.ts byName
+    // has why): the daemon's acquire builds what it does not find.
+    const judged = verdict(
+      await finder.byName(name, { confirm: true }),
+      `sandbox "${name}"`,
+    );
     if (judged.kind === 'refuse') return refuse(reply, judged);
     let target = judged.kind === 'node' ? judged.node : null;
     // Found nowhere: a placement, counted against the node it lands on.
-    // Found somewhere: a wake, already in that node's reading.
+    // Found somewhere — and confirmed there: a wake, already in that
+    // node's reading.
     const placed = target === null;
     if (target === null) {
       if (clientGone(reply)) return;

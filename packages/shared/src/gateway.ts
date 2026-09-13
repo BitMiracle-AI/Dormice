@@ -142,7 +142,10 @@ export type ListNodesResponse = z.infer<typeof listNodesResponseSchema>;
  * goes, its sandboxes are no longer looked for, and a name that lived only
  * there is a new name again. A node that is merely down needs nothing —
  * it is back the moment it checks in — and one removed by mistake re-adds
- * itself the same way.
+ * itself the same way. Refused (409) while the node is still checking in:
+ * a name of its acquired in the seconds before its next check-in would be
+ * built elsewhere and come back on two nodes. Stop the daemon, wait two of
+ * its intervals (that is "down"), then remove.
  */
 export const removeNodeRequestSchema = z.object({
   id: z.string().min(1),

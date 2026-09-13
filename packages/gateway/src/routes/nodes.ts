@@ -15,6 +15,11 @@ export interface NodeRoutesOptions {
   cache: NameCache;
 }
 
+/** A refusal in the native dialect, rendered by the app's error handler as `{ message }` under its status. */
+function refusal(statusCode: number, message: string): Error {
+  return Object.assign(new Error(message), { statusCode });
+}
+
 /**
  * The gateway's own verbs about its nodes: the check-in the nodes send
  * (RULES/协议.md「网关」), and what an operator reads and does about them.
@@ -34,7 +39,15 @@ export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
       },
     },
     async (request) => {
-      const { node, joined, movedFrom } = fleet.checkIn(request.body);
+      const outcome = fleet.checkIn(request.body);
+      if ('refused' in outcome) {
+        request.log.warn(
+          { nodeId: request.body.nodeId, endpoint: request.body.endpoint },
+          outcome.refused,
+        );
+        throw refusal(409, outcome.refused);
+      }
+      const { node, joined, movedFrom } = outcome;
       if (joined) {
         request.log.info(
           { nodeId: node.id, endpoint: node.endpoint },
@@ -107,6 +120,27 @@ export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
       },
     },
     async (request) => {
+      // "Gone for good" is refused for a node that is still checking in:
+      // its row would go, its names would be new names, and any of them
+      // acquired in the seconds before its next check-in would be built
+      // elsewhere — then the node re-adds itself and every such name is on
+      // two nodes, a 409 an operator clears by hand. Stop the daemon
+      // first; two of its intervals of silence is what "down" means
+      // (fleet.ts downReason), and a down node is removable (found by
+      // review, 2026-09-14).
+      const node = fleet.get(request.body.id);
+      if (node !== undefined) {
+        const now = new Date();
+        if (downReason(node, now) === null && node.lastCheckInAt !== null) {
+          const ago = Math.round(
+            (now.getTime() - node.lastCheckInAt.getTime()) / 1000,
+          );
+          throw refusal(
+            409,
+            `node ${node.id} checked in ${ago}s ago — it is running, and its names would be placed elsewhere before it checked in again and come back as a 409 on two nodes; stop its daemon, wait two of its intervals (${node.intervalSeconds}s each), then remove it`,
+          );
+        }
+      }
       const removed = fleet.remove(request.body.id);
       const evicted = cache.evictNode(request.body.id);
       if (removed) {

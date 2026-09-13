@@ -29,10 +29,12 @@ function node(
     checkedInAt?: Date;
   } = {},
 ): NodeState {
-  const { node } = f.checkIn(
+  const outcome = f.checkIn(
     checkInOf(id, `http://${id}:80`, over),
     over.checkedInAt ?? NOW,
   );
+  if ('refused' in outcome) throw new Error(outcome.refused);
+  const { node } = outcome;
   node.placedSinceCheckIn = over.placed ?? 0;
   return node;
 }

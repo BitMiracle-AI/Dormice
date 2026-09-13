@@ -41,26 +41,62 @@ export class Finder {
     private readonly log: FinderLog,
   ) {}
 
-  byName(name: string): Promise<Found> {
-    return this.find(this.cache.getByName(name), { name });
+  /**
+   * `confirm`: a creator's cache hit is checked with the cached node before
+   * it is trusted. For every other verb a stale entry costs one misrouted
+   * request whose 404 evicts it (verify below); a create forwarded as a
+   * wake to a node that no longer holds the name *builds* — the daemon's
+   * acquire and E2B create are create-or-wake — on a node placement never
+   * judged and never counted, and the daemon deletes rows on its own (an
+   * E2B deadline kill is the scanner's routine, five minutes by default),
+   * so every re-create of an expired name would pin to its first node
+   * past every gate. One question to one node, by id so no name slot is
+   * waited on; "absent" evicts and the fleet is asked afresh (found by
+   * review, 2026-09-14).
+   */
+  byName(name: string, options: { confirm?: boolean } = {}): Promise<Found> {
+    return this.find(
+      this.cache.getByName(name),
+      { name },
+      options.confirm === true,
+    );
   }
 
   byId(id: string): Promise<Found> {
-    return this.find(this.cache.getById(id), { id });
+    return this.find(this.cache.getById(id), { id }, false);
   }
 
   private async find(
     cached: CacheEntry | undefined,
     query: LookupQuery,
+    confirm: boolean,
   ): Promise<Found> {
     if (cached !== undefined) {
       const node = this.fleet.get(cached.nodeId);
-      // A node the operator removed while the entry was cached: the
-      // entry is stale by definition, and the fleet is asked afresh.
-      if (node !== undefined) {
+      if (node === undefined) {
+        // A node the operator removed while the entry was cached: the
+        // entry is stale by definition, and the fleet is asked afresh.
+        this.cache.evict(cached);
+      } else if (!confirm) {
         return { kind: 'one', node, id: cached.id, name: cached.name };
+      } else {
+        const answer = await this.ask(node, { id: cached.id });
+        if (answer.kind === 'found') {
+          return { kind: 'one', node, id: answer.id, name: answer.name };
+        }
+        if (answer.kind === 'silent') {
+          // The one node that may hold it did not answer: not new, not
+          // known to be there — the same refusal a silent stranger earns.
+          const silent = [{ nodeId: node.id, why: answer.why }];
+          this.log.warn(
+            { query, silent },
+            'lookup: the cached node did not confirm; the name cannot be treated as new',
+          );
+          return { kind: 'unsure', silent };
+        }
+        // The node itself says the sandbox is gone: the entry was stale.
+        this.cache.evict(cached);
       }
-      this.cache.evict(cached);
     }
     const members = this.fleet.all();
     const answers = await Promise.all(

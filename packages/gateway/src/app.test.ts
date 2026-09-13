@@ -375,6 +375,20 @@ describe('check-in and the node verbs', () => {
     ).toBe(8);
     const moved = new FakeNode('b');
     await moved.start();
+    // Inside the first reporter's interval a different address is a second
+    // daemon under one DORMICE_NODE_ID, refused with why; the first keeps
+    // the id. An interval later the same report is a move.
+    const twin = await rpc(
+      h,
+      '/checkIn',
+      checkInOf('b', moved.endpoint, { active: 3 }),
+    );
+    expect(twin.status).toBe(409);
+    expect(message(twin)).toMatch(/two daemons share one DORMICE_NODE_ID/);
+    expect(h.fleet.get('b')?.endpoint).toBe(h.nodes[0]?.endpoint);
+    const first = h.fleet.get('b');
+    if (!first) throw new Error('node lost');
+    first.lastCheckInAt = new Date(Date.now() - 16_000);
     await h.checkIn(moved, { active: 3 });
     expect(h.fleet.get('b')?.endpoint).toBe(moved.endpoint);
     expect(h.fleet.get('b')?.reading?.sandboxes.byState.active).toBe(3);
@@ -404,6 +418,17 @@ describe('check-in and the node verbs', () => {
     const h = await gateway(['b', 'c']);
     const created = sandboxOf(await rpc(h, '/acquireSandbox', { name: 'x' }));
     expect(h.cache.getByName('x')?.nodeId).toBe(created.nodeId);
+    // Still checking in: refused, with what to do instead — its names
+    // would be placed elsewhere before its next check-in and come back on
+    // two nodes.
+    const live = await rpc(h, '/removeNode', { id: created.nodeId });
+    expect(live.status).toBe(409);
+    expect(message(live)).toMatch(/checked in \ds ago — it is running/);
+    expect(h.fleet.get(created.nodeId)).toBeDefined();
+    // Silent for two of its intervals: down, and removable.
+    const silent = h.fleet.get(created.nodeId);
+    if (!silent) throw new Error('node lost');
+    silent.lastCheckInAt = new Date(Date.now() - 31_000);
     expect((await rpc(h, '/removeNode', { id: created.nodeId })).body).toEqual({
       removed: true,
     });
@@ -424,7 +449,7 @@ describe('check-in and the node verbs', () => {
 });
 
 describe('acquire: placing and finding', () => {
-  it('a new name lands on the emptiest node by active density, under the fleet token, and is cached: the second acquire asks nobody', async () => {
+  it('a new name lands on the emptiest node by active density, under the fleet token, and is cached: the second acquire asks only its node, once', async () => {
     const h = await gateway(['a', 'b']);
     const [a, b] = h.nodes as [FakeNode, FakeNode];
     await h.checkIn(a, { active: 10, cores: 8 });
@@ -445,8 +470,58 @@ describe('acquire: placing and finding', () => {
     const again = await rpc(h, '/acquireSandbox', { name: 'alice' });
     expect(sandboxOf(again).id).toBe(sandboxOf(first).id);
     expect((again.body as { created: boolean }).created).toBe(false);
+    // A creator confirms its cache hit with that one node (by id) before
+    // trusting it; the other node hears nothing.
     expect(a.lookups()).toBe(1);
-    expect(b.lookups()).toBe(1);
+    expect(b.lookups()).toBe(2);
+    expect(h.fleet.get('b')?.placedSinceCheckIn).toBe(1);
+  });
+
+  it('a name whose sandbox its node has since removed on its own is a placement again: the cached node is asked first, the gate judges afresh, the count moves — on either face', async () => {
+    const h = await gateway(['a', 'b'], {
+      DORMICE_GATEWAY_NODE_ACTIVE_LIMIT: '2',
+    });
+    const [a, b] = h.nodes as [FakeNode, FakeNode];
+    await h.checkIn(a, { active: 0 });
+    await h.checkIn(b, { active: 1 });
+    const born = sandboxOf(await rpc(h, '/acquireSandbox', { name: 'ttl' }));
+    expect(born.nodeId).toBe('a');
+    expect(h.cache.getByName('ttl')?.nodeId).toBe('a');
+    // The node reaps it on its own (an E2B deadline kill is the scanner's
+    // routine): the gateway hears nothing, the entry is stale. Meanwhile a
+    // fills up and b empties — the gate must judge afresh, not wake.
+    a.sandboxes.delete('ttl');
+    await h.checkIn(a, { active: 2 });
+    await h.checkIn(b, { active: 0 });
+    const again = await rpc(h, '/acquireSandbox', { name: 'ttl' });
+    expect(again.status).toBe(200);
+    expect(sandboxOf(again).nodeId).toBe('b');
+    expect((again.body as { created: boolean }).created).toBe(true);
+    // Nothing was rebuilt on the full node; the placement is counted where
+    // it landed and the cache follows.
+    expect(a.creates).toBe(1);
+    expect(h.fleet.get('b')?.placedSinceCheckIn).toBe(1);
+    expect(h.cache.getByName('ttl')?.nodeId).toBe('b');
+
+    // The E2B face takes the same slot and the same confirmation.
+    const create = (name: string) =>
+      fetch(`${h.endpoint}/e2b/api/sandboxes`, {
+        method: 'POST',
+        headers: {
+          'x-api-key': `e2b_${TOKEN}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ metadata: { name } }),
+      });
+    await h.checkIn(a, { active: 0 });
+    await h.checkIn(b, { active: 2 });
+    expect((await create('ttl-e2b')).status).toBe(201);
+    expect(h.cache.getByName('ttl-e2b')?.nodeId).toBe('a');
+    a.sandboxes.delete('ttl-e2b');
+    await h.checkIn(a, { active: 2 });
+    await h.checkIn(b, { active: 0 });
+    expect((await create('ttl-e2b')).status).toBe(201);
+    expect(h.cache.getByName('ttl-e2b')?.nodeId).toBe('b');
     expect(h.fleet.get('b')?.placedSinceCheckIn).toBe(1);
   });
 
@@ -578,6 +653,13 @@ describe('acquire: placing and finding', () => {
     expect(message(fresh)).toContain('node a did not answer');
     expect(message(fresh)).toContain('cannot be treated as new');
     expect(b.creates).toBe(0);
+    // Its socket is dead but its check-in was seconds ago: not yet "down",
+    // and removeNode says so. Two of its intervals of silence later it is.
+    const early = await rpc(h, '/removeNode', { id: 'a' });
+    expect(early.status).toBe(409);
+    const silent = h.fleet.get('a');
+    if (!silent) throw new Error('node lost');
+    silent.lastCheckInAt = new Date(Date.now() - 31_000);
     expect((await rpc(h, '/removeNode', { id: 'a' })).body).toEqual({
       removed: true,
     });

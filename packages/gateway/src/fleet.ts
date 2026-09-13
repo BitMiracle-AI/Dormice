@@ -46,6 +46,11 @@ export function downReason(node: NodeState, now: Date): string | null {
   return null;
 }
 
+/** What a check-in came to: taken (and whether it joined or moved), or refused with the sentence the node is told (routes/nodes.ts answers 409). */
+export type CheckInOutcome =
+  | { node: NodeState; joined: boolean; movedFrom: string | null }
+  | { refused: string };
+
 /**
  * The fleet: every node that has ever checked in. Rows come from the
  * database at start (a node that is down must still be known — its names
@@ -82,18 +87,22 @@ export class Fleet {
    * A node reporting for duty. A first check-in adds the node (`joined`
    * says so, for the log); a changed endpoint is written through — the
    * node states where it lives, the gateway does not remember better —
-   * and `movedFrom` names the old one, for the log: a node that moves at
-   * every check-in is two machines sharing one DORMICE_NODE_ID. The
+   * and `movedFrom` names the old one, for the log. Except inside the
+   * previous reporter's own interval: a different address that soon is a
+   * second machine with the same DORMICE_NODE_ID (the daemon's default is
+   * node-1), not a move, and is refused — written through, the two would
+   * flip the endpoint at every check-in, a lookup would ask whichever is
+   * current, a name on the other would read as new and be built again, on
+   * two nodes, with no 409 ever (traced by review, 2026-09-14). The first
+   * reporter keeps the id; the second is told why. A node that really
+   * moved is taken at its next check-in, one interval on. The
    * placement counter restarts at zero: what was placed before this
    * reading is in it now, and what is still in flight on the node (its
    * row is written after the container is up) is in neither figure until
    * the next reading — one interval of slack, self-correcting, the same
    * as before.
    */
-  checkIn(
-    report: CheckInRequest,
-    now = new Date(),
-  ): { node: NodeState; joined: boolean; movedFrom: string | null } {
+  checkIn(report: CheckInRequest, now = new Date()): CheckInOutcome {
     let node = this.members.get(report.nodeId);
     let joined = false;
     let movedFrom: string | null = null;
@@ -117,6 +126,19 @@ export class Fleet {
       this.members.set(node.id, node);
       joined = true;
     } else if (node.endpoint !== report.endpoint) {
+      if (
+        node.lastCheckInAt !== null &&
+        node.intervalSeconds !== null &&
+        now.getTime() - node.lastCheckInAt.getTime() <
+          node.intervalSeconds * 1000
+      ) {
+        const ago = Math.round(
+          (now.getTime() - node.lastCheckInAt.getTime()) / 1000,
+        );
+        return {
+          refused: `node ${report.nodeId} checked in from ${node.endpoint} ${ago}s ago and now from ${report.endpoint} — two daemons share one DORMICE_NODE_ID (give this one its own), or the node just moved (then its next check-in, an interval later, is taken)`,
+        };
+      }
       this.db
         .update(nodes)
         .set({ endpoint: report.endpoint })
@@ -134,7 +156,7 @@ export class Fleet {
     return { node, joined, movedFrom };
   }
 
-  /** The operator's word that the node is gone for good; a node still running re-adds itself at its next check-in. */
+  /** The operator's word that the node is gone for good (routes/nodes.ts refuses it for a node still checking in); one removed while briefly silent re-adds itself at its next check-in. */
   remove(id: string): boolean {
     const existed = this.members.delete(id);
     this.db.delete(nodes).where(eq(nodes.id, id)).run();

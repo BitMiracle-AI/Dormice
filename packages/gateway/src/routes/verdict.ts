@@ -43,7 +43,7 @@ export function verdict(found: Found, what: string): Verdict {
           .map((s) => `node ${s.nodeId} did not answer (${s.why})`)
           .join(
             ', ',
-          )} — it cannot be treated as new while a node that may hold it is silent; retry, or remove the node if it is gone for good`,
+          )} — it cannot be treated as new while a node that may hold it is silent: that node may be down, or busy building this very name (its lookup waits for that); retry after Retry-After, and remove the node only if it is gone for good`,
         retryAfterSeconds: RETRY_AFTER_SECONDS,
       };
   }
