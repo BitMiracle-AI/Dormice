@@ -84,6 +84,23 @@ export async function sandboxLs(client: Dormice): Promise<string> {
 }
 
 /**
+ * Parses the `--timeout` seconds value for `dor sandbox exec`. A bare
+ * `Number(value)` turns a typo into `NaN`, which is not nullish, so it
+ * skips the SDK's default and blows up later as a confusing
+ * `AbortSignal.timeout(NaN)` error with no mention of the flag — named
+ * here instead, where the offending value is still known.
+ */
+export function parseTimeoutSeconds(value: string): number {
+  const seconds = Number(value);
+  if (!Number.isInteger(seconds) || seconds <= 0) {
+    throw new Error(
+      `--timeout must be a positive integer of seconds, got "${value}"`,
+    );
+  }
+  return seconds;
+}
+
+/**
  * Parses `key=value` label arguments for `dor sandbox meta`. Split on the
  * FIRST `=` only — values may contain `=` (base64, URLs), keys may not.
  */

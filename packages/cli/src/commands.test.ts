@@ -17,6 +17,7 @@ import {
   apikeyRevoke,
   clientFromEnv,
   parseLabels,
+  parseTimeoutSeconds,
   pullSavedMessage,
   sandboxDestroy,
   sandboxExec,
@@ -206,6 +207,33 @@ describe('sandbox commands over real HTTP', () => {
     );
     expect(await sandboxDestroy(client, 'carol')).toBe(
       'No sandbox named "carol" — nothing to destroy.',
+    );
+  });
+});
+
+describe('parseTimeoutSeconds', () => {
+  it('accepts a positive integer', () => {
+    expect(parseTimeoutSeconds('10')).toBe(10);
+  });
+
+  it('names the flag when the value is not a number', () => {
+    expect(() => parseTimeoutSeconds('10m')).toThrow(
+      /--timeout must be a positive integer of seconds, got "10m"/,
+    );
+  });
+
+  it('rejects zero and negative values', () => {
+    expect(() => parseTimeoutSeconds('0')).toThrow(
+      /--timeout must be a positive integer/,
+    );
+    expect(() => parseTimeoutSeconds('-5')).toThrow(
+      /--timeout must be a positive integer/,
+    );
+  });
+
+  it('rejects a non-integer value', () => {
+    expect(() => parseTimeoutSeconds('10.5')).toThrow(
+      /--timeout must be a positive integer/,
     );
   });
 });
