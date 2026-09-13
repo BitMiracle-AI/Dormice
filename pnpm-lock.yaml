@@ -36,6 +36,9 @@ importers:
         specifier: ^2.31.0
         version: 2.31.0
     devDependencies:
+      '@dormice/gateway':
+        specifier: workspace:*
+        version: link:../packages/gateway
       '@dormice/server':
         specifier: workspace:*
         version: link:../packages/server

@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { DEFAULT_LIFECYCLE_POLICY, Dormice } from '@dormice/sdk';
 import { describe, expect, inject, it } from 'vitest';
 
@@ -109,6 +110,42 @@ describe('native API over a real daemon', () => {
         body: JSON.stringify({ policy: {} }),
       }).then((res) => res.status),
     ).resolves.toBe(400);
+  });
+
+  it('a second daemon on the same ledger dies at boot naming the conflict — one ledger, one daemon', async () => {
+    // The same environment as the running daemon, another port: the port
+    // is not what must refuse it, the ledger lock is (measured 2026-09-11:
+    // with the lock handle garbage-collected, this second daemon started).
+    const child = spawn('node', [inject('dormiceDaemonMain')], {
+      env: {
+        ...inject('dormiceNodeAEnv'),
+        DORMICE_PORT: String(
+          Number(new URL(inject('dormiceEndpoint')).port) + 1000,
+        ),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    child.stdout.on('data', (chunk) => {
+      output += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      output += chunk;
+    });
+    const code = await new Promise<number | null>((resolve) => {
+      const timer = setTimeout(() => {
+        child.kill();
+        resolve(null);
+      }, 10_000);
+      child.on('exit', (exitCode) => {
+        clearTimeout(timer);
+        resolve(exitCode);
+      });
+    });
+    expect(code, output).toBe(1);
+    expect(output).toMatch(
+      /another daemon is already running against .*dormice\.db/,
+    );
   });
 
   it('destroys a sandbox: gone, forgotten, idempotent', async () => {
