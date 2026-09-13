@@ -2358,3 +2358,100 @@ describe('activity attribution', () => {
     expect((await eventOf(app, 'apikey-created'))?.actor).toBe('console');
   });
 });
+
+describe('POST /lookupSandbox', () => {
+  it('answers by name and by id with the state, without waking or touching the idle clock', async () => {
+    const { app, db } = testApp();
+    const created = (await acquire(app, { name: 'alice' })).json();
+    const row = findById(db, created.sandbox.id);
+    if (!row) throw new Error('no row');
+    // A cold sandbox stays cold: lookup is observation, not use.
+    transition(db, row.id, 'frozen');
+
+    const byName = await rpc(app, '/lookupSandbox', { name: 'alice' });
+    expect(byName.statusCode).toBe(200);
+    expect(byName.json()).toEqual({
+      found: true,
+      sandbox: { id: row.id, name: 'alice', state: 'frozen' },
+    });
+    const byId = await rpc(app, '/lookupSandbox', { id: row.id });
+    expect(byId.json()).toEqual(byName.json());
+    expect(findById(db, row.id)?.state).toBe('frozen');
+    expect(findById(db, row.id)?.lastActiveAt).toBe(row.lastActiveAt);
+
+    expect(
+      (await rpc(app, '/lookupSandbox', { name: 'nobody' })).json(),
+    ).toEqual({ found: false });
+    expect(
+      (await rpc(app, '/lookupSandbox', { id: 'no-such-id' })).json(),
+    ).toEqual({ found: false });
+    // Neither a name nor an id is not a question.
+    expect((await rpc(app, '/lookupSandbox', {})).statusCode).toBe(400);
+  });
+
+  it('a name whose slot is busy waits its turn: asked while an acquire is mid-create, it answers found once the row exists', async () => {
+    // A create that parks inside the executor — the daemon's own shape of
+    // "in flight": the acquire holds the name's slot, the container is
+    // being built, the row is not written yet.
+    let release: () => void = () => {};
+    let inCreate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reached = new Promise<void>((resolve) => {
+      inCreate = resolve;
+    });
+    class ParkedCreate extends FakeExecutor {
+      override async create(
+        ...args: Parameters<FakeExecutor['create']>
+      ): Promise<void> {
+        inCreate();
+        await gate;
+        return super.create(...args);
+      }
+    }
+    const { app } = testApp(new ParkedCreate());
+    const creating = acquire(app, { name: 'alice' });
+    await reached;
+    // No row, slot busy: the question must wait, not answer "no".
+    const asked = rpc(app, '/lookupSandbox', { name: 'alice' });
+    const early = await Promise.race([
+      asked.then(() => 'answered'),
+      new Promise((resolve) => setTimeout(() => resolve('pending'), 50)),
+    ]);
+    expect(early).toBe('pending');
+    release();
+    const created = (await creating).json();
+    expect((await asked).json()).toEqual({
+      found: true,
+      sandbox: { id: created.sandbox.id, name: 'alice', state: 'active' },
+    });
+  });
+
+  it('a sandbox with a row answers at once even while its slot is held — a restore in progress must not read as silence', async () => {
+    const { app, db, locks } = testApp();
+    const created = (await acquire(app, { name: 'alice' })).json();
+    transition(db, created.sandbox.id, 'frozen');
+    transition(db, created.sandbox.id, 'stopped');
+    transition(db, created.sandbox.id, 'archived');
+    transition(db, created.sandbox.id, 'restoring');
+    let release: () => void = () => {};
+    const held = locks.run(
+      'alice',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const answer = await Promise.race([
+      rpc(app, '/lookupSandbox', { name: 'alice' }).then((r) => r.json()),
+      new Promise((resolve) => setTimeout(() => resolve('pending'), 500)),
+    ]);
+    expect(answer).toEqual({
+      found: true,
+      sandbox: { id: created.sandbox.id, name: 'alice', state: 'restoring' },
+    });
+    release();
+    await held;
+  });
+});

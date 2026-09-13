@@ -9,6 +9,7 @@ export * from './host';
 export * from './images';
 export * from './ingress';
 export * from './list';
+export * from './lookup';
 export * from './metrics';
 export * from './policy';
 export * from './rebuild';
