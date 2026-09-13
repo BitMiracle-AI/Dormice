@@ -175,8 +175,9 @@ async function dispatch(
  * Throws UnreachableError only before any byte of the answer was written;
  * once the head is out, a failure mid-stream can only be a cut connection
  * — there is no honest status left to send. Resolves null when the client
- * left before the node answered: the node-side request is aborted and
- * nothing is rendered (the response is gone). Otherwise an abandoned exec
+ * left before the node answered: the node-side request is aborted — or,
+ * for a client already gone, never sent — and nothing is rendered (the
+ * response is gone). Otherwise an abandoned exec
  * against a slow node would hold a gateway→node socket until the node
  * answered — on a hung node, until its TCP died. forwardCapture follows
  * the same rule.
@@ -186,6 +187,11 @@ export async function forwardStream(
   res: http.ServerResponse,
   options: ForwardOptions,
 ): Promise<number | null> {
+  // The client left while its sandbox was being found (a lookup round is
+  // up to two seconds): 'close' has fired already, the abort below would
+  // never come, and the node would run an exec to its end for nobody —
+  // forwardCapture's first line, missing here (found by review, 2026-09-14).
+  if (res.destroyed) return null;
   const gone = new AbortController();
   const onClose = () => gone.abort();
   res.once('close', onClose);

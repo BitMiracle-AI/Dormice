@@ -155,6 +155,38 @@ describe('forwardStream', () => {
     await closed;
   });
 
+  it('a client already gone when the forward begins is not sent to the node at all, and answers null', async () => {
+    let requests = 0;
+    const node = http.createServer((_req, res) => {
+      requests += 1;
+      res.end('{}');
+    });
+    const endpoint = await listen(node);
+    // The shape forwardNamed produces: the lookup round took a while and
+    // the caller hung up meanwhile — the response is destroyed before the
+    // forward starts, so its 'close' has already fired and no abort would
+    // ever follow.
+    const gone = new http.IncomingMessage(new net.Socket());
+    const res = new http.ServerResponse(gone);
+    res.destroy();
+    expect(
+      await forwardStream(
+        Object.assign(gone, {
+          url: '/execCommand',
+          method: 'POST',
+          headers: {},
+        }),
+        res,
+        {
+          target: { endpoint, token: TOKEN },
+          credential: 'bearer',
+          body: Buffer.from('{"name":"x","command":"sleep 3600"}'),
+        },
+      ),
+    ).toBeNull();
+    expect(requests).toBe(0);
+  });
+
   it('forwards the request verbatim — path, query, body — with the credential swapped and the Host renamed to the node unless the face keeps it', async () => {
     const seen: Array<{
       url?: string;
