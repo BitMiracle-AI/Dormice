@@ -194,7 +194,11 @@ const envSchema = z.object({
    * node share a machine (the single-machine install is a fleet of one).
    * On a machine of its own the daemon still binds loopback (the red
    * line), so this names the front the gateway may dial — the node's
-   * Caddy on the intranet interface, e.g. http://10.0.0.7:80.
+   * Caddy on the intranet interface, e.g. http://10.0.0.7:80 — and is
+   * required there (checkedSchema below): left at the default, the node
+   * would tell a remote gateway to dial 127.0.0.1, an address on the
+   * gateway's own machine, and every sandbox placed "here" would land on
+   * whatever daemon lives there and be found twice.
    */
   DORMICE_NODE_ENDPOINT: z
     .url({
@@ -215,6 +219,27 @@ const envSchema = z.object({
     .positive()
     .default(15),
 });
+
+/**
+ * Loopback as an operator writes it: 127.0.0.0/8, ::1, localhost. Null
+ * when the URL does not parse — its own field has already said so, and an
+ * object-level rule must not throw over it (zod runs the refinements even
+ * when a field failed).
+ */
+function isLoopbackUrl(url: string): boolean | null {
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return null;
+  }
+  return (
+    host === 'localhost' ||
+    host === '::1' ||
+    host === '[::1]' ||
+    host.startsWith('127.')
+  );
+}
 
 const checkedSchema = envSchema
   .refine(
@@ -246,6 +271,23 @@ const checkedSchema = envSchema
       message:
         'DORMICE_DATA_DIR must be an absolute path when DORMICE_EXECUTOR=docker — sandbox disks must not move when the start directory does',
       path: ['DORMICE_DATA_DIR'],
+    },
+  )
+  // A node whose gateway is on another machine must say where it is. The
+  // check-in's default endpoint is this daemon's loopback address, which
+  // on the gateway's machine names the gateway's own daemon (or nothing):
+  // a remote gateway dialing 127.0.0.1 for this node would place sandboxes
+  // on the wrong machine and then find every one of them twice (409). An
+  // explicit value is the operator's word and is taken as written.
+  .refine(
+    (cfg) =>
+      cfg.DORMICE_GATEWAY_ENDPOINT === undefined ||
+      isLoopbackUrl(cfg.DORMICE_GATEWAY_ENDPOINT) !== false ||
+      cfg.DORMICE_NODE_ENDPOINT !== undefined,
+    {
+      message:
+        "DORMICE_NODE_ENDPOINT is required when DORMICE_GATEWAY_ENDPOINT is not loopback: the gateway is on another machine, and without it this node would report http://127.0.0.1:<DORMICE_PORT> — an address on the gateway's machine, not this one. Name this node's address on the network, e.g. http://10.0.0.7:80",
+      path: ['DORMICE_NODE_ENDPOINT'],
     },
   )
   // All-or-none: a half-configured store would make the archiver's

@@ -183,4 +183,32 @@ describe('the fleet knobs: gateway, node endpoint, check-in interval', () => {
       loadConfig({ ...TOKEN, DORMICE_CHECK_IN_INTERVAL_SECONDS: '0' }),
     ).toThrow();
   });
+
+  it('a gateway on another machine requires the node endpoint, naming why; a loopback gateway does not', () => {
+    expect(() =>
+      loadConfig({
+        ...TOKEN,
+        DORMICE_GATEWAY_ENDPOINT: 'http://10.0.0.5:3677',
+      }),
+    ).toThrow(
+      /DORMICE_NODE_ENDPOINT is required when DORMICE_GATEWAY_ENDPOINT is not loopback/,
+    );
+    expect(
+      loadConfig({
+        ...TOKEN,
+        DORMICE_GATEWAY_ENDPOINT: 'http://10.0.0.5:3677',
+        DORMICE_NODE_ENDPOINT: 'http://10.0.0.7:80',
+      }).DORMICE_NODE_ENDPOINT,
+    ).toBe('http://10.0.0.7:80');
+    for (const local of [
+      'http://127.0.0.1:3677',
+      'http://localhost:3677',
+      'http://[::1]:3677',
+    ]) {
+      expect(
+        loadConfig({ ...TOKEN, DORMICE_GATEWAY_ENDPOINT: local })
+          .DORMICE_NODE_ENDPOINT,
+      ).toBeUndefined();
+    }
+  });
 });
