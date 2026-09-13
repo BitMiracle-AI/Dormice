@@ -84,7 +84,7 @@ import {
   NotAFileError,
 } from '../executor/executor';
 import { httpError } from '../http-error';
-import { type KeyedQueue, SKIPPED } from '../keyed-queue';
+import type { KeyedQueue } from '../keyed-queue';
 import { destroySandbox, rebuildSandbox, wakeSandbox } from '../lifecycle';
 import { ArchiveDisabledError, resolvePolicy } from '../policy';
 import { resolveSpec } from '../spec';
@@ -1119,17 +1119,17 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
 
   // The gateway's one question on its own account: does this node hold
   // the sandbox? Read-only — never wakes, never touches the idle clock —
-  // and truthful about a create in flight, in three steps. A row that
+  // and truthful about a create in flight, in two steps. A row that
   // exists answers at once, whatever its state: a restoring sandbox has a
   // row, and waiting for its slot would hold the answer for the whole
   // restore, long past the gateway's two-second patience — the gateway
-  // would read a live sandbox as a node that did not answer. No row while
-  // the name's slot is busy means an acquire may be writing the row right
-  // now (create first, row second, both under the slot), so the answer
-  // waits its turn behind it and looks again. No row and a free slot is a
-  // plain no. By id there is no slot to wait on (slots are keyed by name),
-  // and none is needed: nobody can ask about an id before the create that
-  // minted it has answered.
+  // would read a live sandbox as a node that did not answer. No row means
+  // an acquire may be writing it right now (create first, row second,
+  // both under the name's slot), so the answer takes the slot itself and
+  // looks again: at once when the slot is free (a plain no), behind the
+  // acquire when it is not. By id there is no slot to wait on (slots are
+  // keyed by name), and none is needed: nobody can ask about an id before
+  // the create that minted it has answered.
   app.post(
     '/lookupSandbox',
     {
@@ -1151,8 +1151,6 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           : { found: false as const };
       const now = look();
       if (now !== undefined || !('name' in query)) return answer(now);
-      const unheld = await locks.tryRun(query.name, async () => look());
-      if (unheld !== SKIPPED) return answer(unheld);
       return answer(await locks.run(query.name, async () => look()));
     },
   );
