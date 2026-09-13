@@ -177,6 +177,43 @@ importers:
         specifier: ^8.1.3
         version: 8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)
 
+  packages/gateway:
+    dependencies:
+      '@dormice/server':
+        specifier: workspace:*
+        version: link:../server
+      '@dormice/shared':
+        specifier: workspace:*
+        version: link:../shared
+      better-sqlite3:
+        specifier: ^12.11.1
+        version: 12.11.1
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@types/better-sqlite3@7.6.13)(better-sqlite3@12.11.1)(kysely@0.28.17)
+      fastify:
+        specifier: ^5.10.0
+        version: 5.10.0
+      fastify-type-provider-zod:
+        specifier: ^7.0.0
+        version: 7.0.0(@fastify/swagger@9.7.0)(fastify@5.10.0)(openapi-types@12.1.3)(zod@4.4.3)
+      pino:
+        specifier: ^10.3.1
+        version: 10.3.1
+      undici:
+        specifier: ^8.7.0
+        version: 8.7.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
+      drizzle-kit:
+        specifier: ^0.31.10
+        version: 0.31.10
+
   packages/sdk:
     dependencies:
       '@dormice/shared':
