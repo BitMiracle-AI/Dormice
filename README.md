@@ -243,6 +243,7 @@ pnpm monorepo:
 | `packages/sdk` | `@dormice/sdk` — TypeScript client for the native API |
 | `packages/cli` | `dormice` command-line tool (`dor` for short) |
 | `packages/console` | Web console: React SPA, served by the daemon at `/console` |
+| `packages/gateway` | The fleet's one door in front of one or more daemons: places new sandboxes, finds existing ones by asking the nodes, forwards everything else |
 | `e2e` | Black-box suite: boots the built daemon, drives it over the wire |
 | `examples` | Runnable demos: the native SDK, the official `e2b` package, a resident agent |
 

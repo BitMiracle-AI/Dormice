@@ -1,0 +1,24 @@
+# Dormice gateway: the fleet's one door in front of one or more daemons.
+# Configuration lives in /etc/dormice/gateway.env (full-line comments only
+# there — systemd's EnvironmentFile treats an inline comment as part of the
+# value). install.sh does not install this unit yet: the two-role install
+# (gateway + node on one machine, `--role node` elsewhere) is a later step;
+# until then it is copied into place by hand (docs/测试机搭建手册.md).
+[Unit]
+Description=Dormice gateway (fleet front door)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/node /opt/dormice/packages/gateway/dist/main.js
+EnvironmentFile=/etc/dormice/gateway.env
+# Crash-only: the gateway holds no sandbox state — nodes check in again
+# within seconds and the cache refills by asking — so restarting it is
+# always safe.
+Restart=always
+RestartSec=3
+# One process per database file. The SQLite lock enforces this; never wrap
+# the gateway in a process manager that forks workers.
+
+[Install]
+WantedBy=multi-user.target
