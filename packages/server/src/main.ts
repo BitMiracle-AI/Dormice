@@ -325,8 +325,13 @@ let checkIn: CheckIn | undefined;
 if (config.DORMICE_GATEWAY_ENDPOINT !== undefined) {
   const nodeEndpoint =
     config.DORMICE_NODE_ENDPOINT ?? `http://127.0.0.1:${config.DORMICE_PORT}`;
+  // Not primed: the first check-in then reports cpuUsedPct null — "no
+  // interval yet" — which placement lets through as unknown. A sample a
+  // few milliseconds before it would make that first reading a percentage
+  // over the sliver in between, near 0 or near 100 by luck, and a freshly
+  // restarted node could sit out its first interval on a number that
+  // meant nothing (found by review, 2026-09-14).
   const checkInCpu = new CpuSampler();
-  checkInCpu.sample();
   checkIn = new CheckIn({
     gateway: config.DORMICE_GATEWAY_ENDPOINT,
     token: config.DORMICE_API_TOKEN,
