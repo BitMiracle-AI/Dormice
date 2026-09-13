@@ -13,8 +13,17 @@ import Database from 'better-sqlite3';
  * The lock is an OS-level file lock held by a dedicated SQLite handle in
  * EXCLUSIVE locking mode: released the instant the process dies, crash
  * included, so there is no stale-pidfile problem to solve.
+ *
+ * The returned handle must be kept for the life of the process: better-
+ * sqlite3 closes a handle whose object is garbage collected, and a closed
+ * handle drops the lock (main.ts has the 2026-09-11 measurement). The
+ * busy sentence is the caller's, because the gateway takes the same lock
+ * over its own file and must name its own variable in the exit.
  */
-export function acquireSingleWriterLock(dbPath: string): Database.Database {
+export function acquireSingleWriterLock(
+  dbPath: string,
+  busyMessage = `another daemon is already running against ${dbPath} — one ledger, one daemon. Stop the other instance, or point this one at its own DORMICE_DB_PATH.`,
+): Database.Database {
   mkdirSync(dirname(dbPath), { recursive: true });
   // Fail fast: a held lock answers in 100ms instead of the default 5s wait.
   const lock = new Database(`${dbPath}.lock`, { timeout: 100 });
@@ -29,10 +38,7 @@ export function acquireSingleWriterLock(dbPath: string): Database.Database {
   } catch (error) {
     lock.close();
     if ((error as { code?: string }).code === 'SQLITE_BUSY') {
-      throw new Error(
-        `another daemon is already running against ${dbPath} — one ledger, one daemon. ` +
-          'Stop the other instance, or point this one at its own DORMICE_DB_PATH.',
-      );
+      throw new Error(busyMessage);
     }
     throw error;
   }

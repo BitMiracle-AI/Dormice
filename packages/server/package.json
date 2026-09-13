@@ -13,6 +13,22 @@
     "./mini-s3": {
       "types": "./dist/archive/mini-s3.d.ts",
       "default": "./dist/archive/mini-s3.js"
+    },
+    "./auth": {
+      "types": "./dist/auth.d.ts",
+      "default": "./dist/auth.js"
+    },
+    "./keyed-queue": {
+      "types": "./dist/keyed-queue.d.ts",
+      "default": "./dist/keyed-queue.js"
+    },
+    "./lock": {
+      "types": "./dist/db/lock.d.ts",
+      "default": "./dist/db/lock.js"
+    },
+    "./shutdown": {
+      "types": "./dist/shutdown.d.ts",
+      "default": "./dist/shutdown.js"
     }
   },
   "files": [

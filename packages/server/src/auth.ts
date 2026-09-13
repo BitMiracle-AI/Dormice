@@ -161,7 +161,14 @@ function sessionCookieValid(
   request: FastifyRequest,
   getSessionSecret: () => string | null,
 ): boolean {
-  const cookie = request.cookies?.[SESSION_COOKIE];
+  // The jar exists only where the app registered @fastify/cookie: the
+  // daemon does; the gateway never mounts the console and passes a getter
+  // that answers null, so no cookie can pass there. Typed structurally so
+  // this module stands alone as the `@dormice/server/auth` subpath entry
+  // without that plugin's request augmentation in its build graph.
+  const jar = (request as { cookies?: Record<string, string | undefined> })
+    .cookies;
+  const cookie = jar?.[SESSION_COOKIE];
   const secret = getSessionSecret();
   return Boolean(
     cookie &&
