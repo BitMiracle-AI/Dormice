@@ -1,4 +1,4 @@
-import { type Readable, Writable } from 'node:stream';
+import { type Readable, type Transform, Writable } from 'node:stream';
 
 /**
  * A Writable that keeps the first `cap` bytes and drains the rest. Draining
@@ -82,6 +82,22 @@ function deliver(sink: Writable, chunk: Buffer): Promise<void> {
   return new Promise((resolve, reject) => {
     sink.write(chunk, (err) => (err ? reject(err) : resolve()));
   });
+}
+
+/**
+ * `src.pipe(dest)` does not forward `src`'s 'error' to `dest` — Node's
+ * pipe only forwards data and end/close, on purpose, since a pipe can
+ * have several sources. Used by importDisk: a host read failure (EIO, or
+ * the archive file removed after the caller's own stat) must reach the
+ * catch that tears down the half-provisioned disk, not become an
+ * unlistened 'error' event that crashes the daemon.
+ */
+export function pipeForwardingErrors(
+  src: Readable,
+  dest: Transform,
+): Transform {
+  src.on('error', (err) => dest.destroy(err));
+  return src.pipe(dest);
 }
 
 /**

@@ -1,9 +1,10 @@
-import { PassThrough, Readable } from 'node:stream';
+import { PassThrough, Readable, Transform } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
 import {
   CallbackSink,
   CappedBuffer,
+  pipeForwardingErrors,
   pumpMultiplexedStream,
   pumpRawStream,
 } from './docker-streams';
@@ -126,5 +127,41 @@ describe('pumpRawStream', () => {
     source.end('c');
     await pump;
     expect(seen.join('')).toBe('abc');
+  });
+});
+
+describe('pipeForwardingErrors', () => {
+  function echo(): Transform {
+    return new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        callback(null, chunk);
+      },
+    });
+  }
+
+  it('pipes data through untouched, same as a plain pipe()', async () => {
+    const source = new PassThrough();
+    const dest = echo();
+    const chunks: Buffer[] = [];
+    dest.on('data', (c) => chunks.push(c));
+    pipeForwardingErrors(source, dest);
+    source.end('hello');
+    await new Promise((resolve) => dest.on('end', resolve));
+    expect(Buffer.concat(chunks).toString('utf8')).toBe('hello');
+  });
+
+  it("destroys the destination with the source's error instead of leaving it unlistened", async () => {
+    const source = new PassThrough();
+    const dest = echo();
+    const seen = new Promise<Error>((resolve) => dest.on('error', resolve));
+    pipeForwardingErrors(source, dest);
+
+    const boom = new Error('EIO: read failed');
+    // A plain source.pipe(dest) would leave this 'error' with no listener —
+    // an unhandled 'error' event, which Node turns into a thrown exception.
+    source.emit('error', boom);
+
+    expect(await seen).toBe(boom);
+    expect(dest.destroyed).toBe(true);
   });
 });

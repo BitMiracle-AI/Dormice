@@ -57,6 +57,7 @@ import {
 import {
   CallbackSink,
   CappedBuffer,
+  pipeForwardingErrors,
   pumpMultiplexedStream,
   pumpRawStream,
 } from './docker-streams';
@@ -586,7 +587,7 @@ export class DockerExecutor implements Executor {
           callback(null, chunk);
         },
       });
-      createReadStream(srcPath).pipe(meter);
+      pipeForwardingErrors(createReadStream(srcPath), meter);
       // -p as root restores the recorded owners — uid-1000 files stay
       // uid 1000 (measured in the predecessor system).
       await execa(
