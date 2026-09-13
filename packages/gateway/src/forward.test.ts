@@ -85,6 +85,29 @@ describe('forwardStream', () => {
     expect(res.headers['transfer-encoding']).toBe('chunked');
   });
 
+  it("the node's head reaches the client when it arrives, not with the first body byte", async () => {
+    let nodeEnded = false;
+    const node = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.flushHeaders();
+      setTimeout(() => {
+        nodeEnded = true;
+        res.end('late');
+      }, 800);
+    });
+    const endpoint = await listen(node);
+    const res = await request(`${await front(endpoint)}/execCommand`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"name":"x"}',
+    });
+    // undici resolves on the head; the node has not written a body byte.
+    expect(res.statusCode).toBe(200);
+    expect(nodeEnded).toBe(false);
+    expect(await res.body.text()).toBe('late');
+    expect(nodeEnded).toBe(true);
+  });
+
   it("resolves with the node's status once the answer is relayed — the named verbs read a 404 off it", async () => {
     const node = http.createServer((_req, res) => {
       res.writeHead(404, { 'content-type': 'application/json' });

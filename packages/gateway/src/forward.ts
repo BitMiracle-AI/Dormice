@@ -205,6 +205,12 @@ export async function forwardStream(
     res.off('close', onClose);
   }
   res.writeHead(upstream.statusCode, inboundHeaders(upstream.headers));
+  // Node holds a written head until the first body byte; the node's head
+  // has arrived, so it goes out now — a stream that opens and then waits
+  // (a process stream before its first event) must look open to the
+  // caller, not like a node that has not answered (found by review,
+  // 2026-09-14).
+  res.flushHeaders();
   try {
     // pipeline destroys both ends on failure: a client that went away
     // aborts the node's response, a node that died cuts the client.
