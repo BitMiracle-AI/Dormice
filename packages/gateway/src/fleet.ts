@@ -9,7 +9,10 @@ import { nodes } from './db/schema';
  * check-in, gone with the process and rightly so). placedSinceCheckIn
  * counts the sandboxes the gateway sent here since the last reading, so a
  * burst inside one interval is counted against the node before its next
- * reading shows it (placement.ts).
+ * reading shows it (placement.ts); placedIds are the ones among them whose
+ * create answered with an id, so a sandbox placed and destroyed inside one
+ * interval — a short job, the exam's churn — is taken off the count again
+ * instead of holding a slot the reading will never show (routes/destroy.ts).
  */
 export interface NodeState {
   readonly id: string;
@@ -20,6 +23,7 @@ export interface NodeState {
   build: BuildInfo | null;
   reading: NodeReading | null;
   placedSinceCheckIn: number;
+  placedIds: Set<string>;
 }
 
 /**
@@ -61,6 +65,7 @@ export class Fleet {
         build: null,
         reading: null,
         placedSinceCheckIn: 0,
+        placedIds: new Set(),
       });
     }
   }
@@ -104,6 +109,7 @@ export class Fleet {
         build: null,
         reading: null,
         placedSinceCheckIn: 0,
+        placedIds: new Set(),
       };
       this.members.set(node.id, node);
       joined = true;
@@ -120,6 +126,7 @@ export class Fleet {
     node.build = report.build;
     node.reading = report.reading;
     node.placedSinceCheckIn = 0;
+    node.placedIds.clear();
     return { node, joined };
   }
 

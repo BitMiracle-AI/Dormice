@@ -79,15 +79,19 @@ export interface CreateOptions {
 /**
  * Forwards a create and learns from the node's answer: a 2xx with a
  * readable id goes into the cache (name and id → this node), so the next
- * request for the sandbox skips the round of questions. A 2xx without a
- * readable id is logged — the sandbox exists on the node and the next
- * lookup finds it there, never silently. Any other answer teaches
- * nothing: a 4xx or the node's own 500 means the node holds nothing under
- * the name and the next attempt may be placed elsewhere; a 502/503/504
- * from a hop in front of the node, or no answer at all, leaves the
- * question to the next lookup — the node that may have built it answers
- * from inside the name's slot.
+ * request for the sandbox skips the round of questions, and into the
+ * node's placedIds, so a destroy inside the same interval can take the
+ * placement off the count again. A 2xx without a readable id is logged —
+ * the sandbox exists on the node and the next lookup finds it there,
+ * never silently. A 4xx or the node's own 500 means the node built
+ * nothing: the placement is taken off the count at once (it would have
+ * held a slot for a whole interval otherwise) and the next attempt may be
+ * placed elsewhere. A 502/503/504 from a hop in front of the node, or no
+ * answer at all, leaves the count as it is and the question to the next
+ * lookup — the node that may have built it answers from inside the
+ * name's slot.
  */
+const HOP_STATUSES = new Set([502, 503, 504]);
 export async function forwardCreate(
   cache: NameCache,
   request: FastifyRequest,
@@ -104,16 +108,26 @@ export async function forwardCreate(
     const id = face.idOf(parseJson(answer.body));
     if (id !== null) {
       cache.put({ id, name, nodeId: target.id });
+      target.placedIds.add(id);
     } else {
       request.log.warn(
         { node: target.id, name, status: answer.status },
         'create answered 2xx without a readable sandbox id; the next lookup finds it on the node',
       );
     }
-  } else if (answer.status >= 500) {
+  } else if (!HOP_STATUSES.has(answer.status)) {
+    // The node itself answered no: nothing was built there.
+    target.placedSinceCheckIn = Math.max(0, target.placedSinceCheckIn - 1);
+    if (answer.status >= 500) {
+      request.log.warn(
+        { node: target.id, name, status: answer.status },
+        'the node itself failed the create; nothing cached, the placement is uncounted',
+      );
+    }
+  } else {
     request.log.warn(
       { node: target.id, name, status: answer.status },
-      'create was refused by the node or a hop in front of it; nothing cached',
+      'a hop in front of the node answered the create; nothing cached, the placement stays counted until the next reading',
     );
   }
   return answer;

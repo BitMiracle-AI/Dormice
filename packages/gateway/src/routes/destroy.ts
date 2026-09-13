@@ -20,7 +20,9 @@ export interface DestroyOptions {
 /**
  * The one destroy path, the mirror of create.ts: the native destroySandbox
  * and the E2B kill both forward, wait for the node's whole answer and
- * learn from a 2xx — the cache entry goes. Only the node's yes teaches
+ * learn from a 2xx — the cache entry goes, and a sandbox placed since the
+ * node's last reading comes off its placement count (fleet.ts placedIds).
+ * Only the node's yes teaches
  * anything: its 404 is not "gone" (the daemon answers 404 for a sandbox
  * past its kill deadline that its scanner has not torn down yet, a row a
  * lookup would still answer yes for), and a 5xx or no answer leaves the
@@ -39,6 +41,11 @@ export async function forwardDestroy(
     body,
   });
   if (answer === null) return null;
-  if (answer.status >= 200 && answer.status < 300) cache.evict(entry);
+  if (answer.status >= 200 && answer.status < 300) {
+    cache.evict(entry);
+    if (target.placedIds.delete(entry.id)) {
+      target.placedSinceCheckIn = Math.max(0, target.placedSinceCheckIn - 1);
+    }
+  }
   return answer;
 }

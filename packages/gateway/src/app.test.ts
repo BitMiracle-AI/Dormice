@@ -62,11 +62,13 @@ class FakeNode {
     return [...this.sandboxes.values()].find((s) => s.id === id);
   }
 
+  // Inferred return type on purpose: the early `return json(...)` exits
+  // read as statements, and an explicit void would flag each one.
   private answer(
     req: http.IncomingMessage,
     res: http.ServerResponse,
     text: string,
-  ): void {
+  ) {
     const url = req.url ?? '/';
     const path = url.split('?')[0] ?? url;
     const auth =
@@ -569,6 +571,9 @@ describe('using, destroying, and the cache', () => {
     });
     expect(h.cache.getByName('d')).toBeUndefined();
     expect(h.cache.getById(first.id)).toBeUndefined();
+    // Placed and destroyed inside one interval: the placement no longer
+    // counts against the node — the reading will never show it.
+    expect(h.fleet.get('a')?.placedSinceCheckIn).toBe(0);
     expect((await rpc(h, '/destroySandbox', { name: 'd' })).body).toEqual({
       destroyed: false,
     });
