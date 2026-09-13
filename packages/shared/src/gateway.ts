@@ -1,0 +1,124 @@
+import { z } from 'zod';
+import {
+  dataDiskSchema,
+  hostReadingSchema,
+  sandboxStateCountsSchema,
+} from './host';
+
+/**
+ * The gateway's wire: the verbs between a node and the gateway that fronts
+ * it, and the gateway's own observation verbs. A fleet is N daemons that
+ * know nothing of each other behind one gateway that holds no sandbox
+ * state — only what the nodes tell it every few seconds and what its own
+ * configuration tables say. A single machine runs the same two processes
+ * and is a fleet of one.
+ */
+
+/** The identity a build carries: the commit its dist was built from. Null where the dist was built outside a checkout. */
+export const buildInfoSchema = z.object({
+  /** Short hash. */
+  commit: z.string(),
+  /** The commit's subject line. */
+  title: z.string(),
+  /** ISO 8601 UTC — the commit's time, not the build's. */
+  committedAt: z.iso.datetime(),
+});
+
+export type BuildInfo = z.infer<typeof buildInfoSchema>;
+
+/**
+ * What a node reports about itself at every check-in — everything
+ * placement decides on: the machine's CPU, memory and data disk, and the
+ * ledger's census by state. The same host reading getHostMetrics answers
+ * (host.ts), minus the daemon-local knobs no gateway places by.
+ */
+export const nodeReadingSchema = z.object({
+  host: hostReadingSchema,
+  dataDisk: dataDiskSchema.nullable(),
+  sandboxes: z.object({
+    total: z.number().int(),
+    byState: sandboxStateCountsSchema,
+  }),
+});
+
+export type NodeReading = z.infer<typeof nodeReadingSchema>;
+
+/**
+ * checkIn — a node reporting for duty, every DORMICE_CHECK_IN_INTERVAL_SECONDS
+ * (15 by default), authenticated with the token the gateway and every node
+ * share. The gateway learns of a node from its first check-in: there is no
+ * registration verb and no nodes file — "which nodes exist" has one home,
+ * the gateway's nodes table, written by the nodes themselves. Two missed
+ * check-ins read as down: no new sandbox is placed there and its sandboxes
+ * answer 502 until it reports again. Who knows the truth speaks: the node
+ * knows what it runs and where it can be reached; the gateway only listens
+ * and compares, and never keeps a record of what it told whom.
+ */
+export const checkInRequestSchema = z.object({
+  /** DORMICE_NODE_ID — the node's name in every sandbox's `nodeId`. */
+  nodeId: z.string().min(1),
+  /** Where the gateway forwards to: the node's intranet front (DORMICE_NODE_ENDPOINT). */
+  endpoint: z.url({ protocol: /^https?$/ }),
+  /** How often this node checks in — the gateway's yardstick for "missed two in a row". */
+  intervalSeconds: z.number().int().positive(),
+  build: buildInfoSchema.nullable(),
+  reading: nodeReadingSchema,
+});
+
+export type CheckInRequest = z.infer<typeof checkInRequestSchema>;
+
+/** Nothing yet: the configuration version the gateway will answer with arrives with the configuration authority. */
+export const checkInResponseSchema = z.object({});
+
+export type CheckInResponse = z.infer<typeof checkInResponseSchema>;
+
+/**
+ * listNodes — every node the gateway has ever heard from, with what it
+ * last said. Everything here is what the gateway already holds; answering
+ * costs no node anything.
+ */
+export const listNodesRequestSchema = z.object({});
+
+export const nodeViewSchema = z.object({
+  id: z.string(),
+  endpoint: z.string(),
+  /** ISO 8601 UTC — the first check-in. */
+  addedAt: z.iso.datetime(),
+  /** ISO 8601 UTC — null only right after a gateway start, before the node's next check-in. */
+  lastCheckInAt: z.iso.datetime().nullable(),
+  intervalSeconds: z.number().int().positive().nullable(),
+  /** Checked in within two of its own intervals. */
+  reachable: z.boolean(),
+  build: buildInfoSchema.nullable(),
+  reading: nodeReadingSchema.nullable(),
+  /** Sandboxes the gateway placed here since the last check-in — counted against the node until the next reading shows them. */
+  placedSinceCheckIn: z.number().int().nonnegative(),
+});
+
+export type NodeView = z.infer<typeof nodeViewSchema>;
+
+export const listNodesResponseSchema = z.object({
+  nodes: z.array(nodeViewSchema),
+});
+
+export type ListNodesResponse = z.infer<typeof listNodesResponseSchema>;
+
+/**
+ * removeNode — the operator's word that a node is gone for good: its row
+ * goes, its sandboxes are no longer looked for, and a name that lived only
+ * there is a new name again. A node that is merely down needs nothing —
+ * it is back the moment it checks in — and one removed by mistake re-adds
+ * itself the same way.
+ */
+export const removeNodeRequestSchema = z.object({
+  id: z.string().min(1),
+});
+
+export type RemoveNodeRequest = z.infer<typeof removeNodeRequestSchema>;
+
+export const removeNodeResponseSchema = z.object({
+  /** True when a row existed and was removed; false when there was none. */
+  removed: z.boolean(),
+});
+
+export type RemoveNodeResponse = z.infer<typeof removeNodeResponseSchema>;

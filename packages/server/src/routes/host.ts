@@ -1,4 +1,3 @@
-import os from 'node:os';
 import {
   getFleetTimelineRequestSchema,
   getFleetTimelineResponseSchema,
@@ -22,7 +21,7 @@ import {
 } from '../db/metrics';
 import { readRuntimeSettings } from '../db/settings';
 import type { Executor } from '../executor/executor';
-import { CpuSampler, readDiskSpace, readHostMemory } from '../host-metrics';
+import { CpuSampler, readHostReading } from '../host-metrics';
 
 export interface HostRoutesOptions {
   config: Config;
@@ -58,17 +57,8 @@ export const hostRoutes: FastifyPluginAsyncZod<HostRoutesOptions> = async (
       const rows = listSandboxes(db);
       const { byState, total } = countByState(rows);
 
-      const memory = await readHostMemory();
-      const dataDisk = await readDiskSpace(config.DORMICE_DATA_DIR);
       return {
-        host: {
-          cpuCount: os.cpus().length,
-          cpuUsedPct: cpu.sample(),
-          ...memory,
-        },
-        dataDisk: dataDisk
-          ? { path: config.DORMICE_DATA_DIR, ...dataDisk }
-          : null,
+        ...(await readHostReading(cpu, config.DORMICE_DATA_DIR)),
         sandboxes: {
           total,
           // The ledger's live knob, not the env seed — the console edits it.

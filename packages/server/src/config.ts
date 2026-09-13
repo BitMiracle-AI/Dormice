@@ -169,6 +169,51 @@ const envSchema = z.object({
   DORMICE_S3_REGION: z.string().default('us-east-1'),
   /** Path-style addressing: MinIO needs true; the clouds route by subdomain. */
   DORMICE_S3_FORCE_PATH_STYLE: z.stringbool().default(false),
+  /**
+   * The gateway this daemon is a node of — its intranet address, e.g.
+   * http://10.0.0.5:3677. Set, the daemon checks in with it every
+   * DORMICE_CHECK_IN_INTERVAL_SECONDS (check-in.ts): its readings, its
+   * build, and where it can be reached. That check-in is the gateway's
+   * only source of "which nodes exist and how full are they" — no
+   * registration, no nodes file. Unset, the daemon is the whole platform
+   * by itself, as it always was, and checks in with nobody. The token it
+   * presents is DORMICE_API_TOKEN: gateway and nodes share one, and the
+   * gateway speaks to every node with the same one.
+   */
+  DORMICE_GATEWAY_ENDPOINT: z
+    .url({
+      protocol: /^https?$/,
+      error:
+        'DORMICE_GATEWAY_ENDPOINT must be a full http(s) URL, e.g. http://10.0.0.5:3677',
+    })
+    .transform((url) => url.replace(/\/+$/, ''))
+    .optional(),
+  /**
+   * Where the gateway reaches this node — the address it forwards to.
+   * Default: this daemon's own loopback address, right when gateway and
+   * node share a machine (the single-machine install is a fleet of one).
+   * On a machine of its own the daemon still binds loopback (the red
+   * line), so this names the front the gateway may dial — the node's
+   * Caddy on the intranet interface, e.g. http://10.0.0.7:80.
+   */
+  DORMICE_NODE_ENDPOINT: z
+    .url({
+      protocol: /^https?$/,
+      error:
+        'DORMICE_NODE_ENDPOINT must be a full http(s) URL, e.g. http://10.0.0.7:80',
+    })
+    .transform((url) => url.replace(/\/+$/, ''))
+    .optional(),
+  /**
+   * How often the node checks in with its gateway. The gateway reads two
+   * missed check-ins as down — the one number both ends of that wire
+   * share, so the node states it in every check-in.
+   */
+  DORMICE_CHECK_IN_INTERVAL_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(15),
 });
 
 const checkedSchema = envSchema
@@ -261,6 +306,9 @@ export const CONFIG_KEYS: Record<keyof Config, { sensitive: boolean }> = {
   DORMICE_S3_SECRET_ACCESS_KEY: { sensitive: true },
   DORMICE_S3_REGION: { sensitive: false },
   DORMICE_S3_FORCE_PATH_STYLE: { sensitive: false },
+  DORMICE_GATEWAY_ENDPOINT: { sensitive: false },
+  DORMICE_NODE_ENDPOINT: { sensitive: false },
+  DORMICE_CHECK_IN_INTERVAL_SECONDS: { sensitive: false },
 };
 
 export type ConfigSources = Record<keyof Config, 'env' | 'default'>;

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pino } from 'pino';
 import { buildApp } from './app';
+import { CheckIn, readNodeReading } from './check-in';
 import { Archiver } from './archive/archiver';
 import { LedgerArchiveStore } from './archive/ledger-store';
 import { type Config, loadConfig } from './config';
@@ -314,6 +315,36 @@ recordActivity(db, {
 // the daemon to the outside world is a reverse proxy's job.
 await app.listen({ host: '127.0.0.1', port: config.DORMICE_PORT });
 
+// A node of a fleet reports to its gateway; a daemon on its own reports to
+// nobody. Started after listen on purpose: the check-in names where the
+// gateway may forward to, and that door must be open before the gateway
+// hears of it. Its CpuSampler is its own — a delta spans "since this
+// instance's last sample", and the route's and the metrics ticker's
+// windows must not be stolen (host-metrics.ts).
+let checkIn: CheckIn | undefined;
+if (config.DORMICE_GATEWAY_ENDPOINT !== undefined) {
+  const nodeEndpoint =
+    config.DORMICE_NODE_ENDPOINT ?? `http://127.0.0.1:${config.DORMICE_PORT}`;
+  const checkInCpu = new CpuSampler();
+  checkInCpu.sample();
+  checkIn = new CheckIn({
+    gateway: config.DORMICE_GATEWAY_ENDPOINT,
+    token: config.DORMICE_API_TOKEN,
+    nodeId: config.DORMICE_NODE_ID,
+    endpoint: nodeEndpoint,
+    intervalSeconds: config.DORMICE_CHECK_IN_INTERVAL_SECONDS,
+    build,
+    readReading: () => readNodeReading(db, checkInCpu, config.DORMICE_DATA_DIR),
+    log,
+  });
+  checkIn.start();
+  log.info(
+    `node ${config.DORMICE_NODE_ID} checks in with gateway ${config.DORMICE_GATEWAY_ENDPOINT} every ${config.DORMICE_CHECK_IN_INTERVAL_SECONDS}s, reachable at ${nodeEndpoint}`,
+  );
+} else {
+  log.info('no gateway: standalone daemon (DORMICE_GATEWAY_ENDPOINT unset)');
+}
+
 // systemd stops the daemon with SIGTERM. Shutdown is bounded on purpose
 // (shutdown.ts has the measurements): close the app — preClose ends the
 // long-lived streams with honest end-frames, the listener stops — give
@@ -341,6 +372,7 @@ const close = async (signal: NodeJS.Signals) => {
   process.removeListener('SIGINT', onSigint);
   clearTimeout(heartbeatTimer);
   clearTimeout(metricsTimer);
+  checkIn?.stop();
   watchdog.stop();
   app.log.info(
     `${signal} received — shutting down (grace ${SHUTDOWN_GRACE_MS}ms)`,

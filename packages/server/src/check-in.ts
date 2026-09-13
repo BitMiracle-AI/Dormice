@@ -1,0 +1,135 @@
+import {
+  type BuildInfo,
+  type CheckInRequest,
+  checkInResponseSchema,
+  type NodeReading,
+} from '@dormice/shared';
+import type { Db } from './db/db';
+import { countByState, listSandboxes } from './db/ledger';
+import { type CpuSampler, readHostReading } from './host-metrics';
+
+/**
+ * A node's reading for its check-in: the host half (host-metrics.ts) and
+ * the ledger's census. The same numbers getHostMetrics answers a caller
+ * with, minus the daemon-local knobs no gateway places by.
+ */
+export async function readNodeReading(
+  db: Db,
+  cpu: CpuSampler,
+  dataDir: string,
+): Promise<NodeReading> {
+  const { byState, total } = countByState(listSandboxes(db));
+  return {
+    ...(await readHostReading(cpu, dataDir)),
+    sandboxes: { total, byState },
+  };
+}
+
+export interface CheckInLog {
+  info(msg: string): void;
+  warn(obj: unknown, msg: string): void;
+}
+
+export interface CheckInOptions {
+  /** DORMICE_GATEWAY_ENDPOINT. */
+  gateway: string;
+  /** The token gateway and nodes share (DORMICE_API_TOKEN). */
+  token: string;
+  nodeId: string;
+  /** Where the gateway reaches this node (DORMICE_NODE_ENDPOINT or the loopback default). */
+  endpoint: string;
+  intervalSeconds: number;
+  build: BuildInfo | null;
+  readReading: () => Promise<NodeReading>;
+  log: CheckInLog;
+  /** Test seam; production uses the platform's fetch. */
+  fetchImpl?: typeof fetch;
+}
+
+/** A gateway that has not answered within this is a gateway not answering; the next tick tries again. */
+const CHECK_IN_TIMEOUT_MS = 10_000;
+
+/**
+ * The node's check-in ticker: every interval, one POST /checkIn to the
+ * gateway carrying the node's id, where it can be reached, its build and
+ * a fresh reading (RULES/协议.md「网关」). The gateway learns of a node from
+ * its first check-in — no registration verb, no nodes file — and reads
+ * two missed check-ins as down.
+ *
+ * Chained setTimeout, the daemon's discipline: the next tick is scheduled
+ * when this one is done, so a slow gateway never has ticks pile up.
+ * Failures are logged on the change — once when the gateway stops
+ * answering, once when it answers again — never every tick: a gateway
+ * down for an hour is one event, not two hundred and forty lines. Never
+ * fatal: the gateway is the fleet's front door and configuration
+ * authority, not the node's reason to live; the node keeps running its
+ * sandboxes and keeps trying.
+ */
+export class CheckIn {
+  private timer: NodeJS.Timeout | undefined;
+  private closing = false;
+  /** The failure the gateway is currently in, or null while it answers. */
+  private failing: string | null = null;
+
+  constructor(private readonly opts: CheckInOptions) {}
+
+  start(): void {
+    this.schedule(0);
+  }
+
+  stop(): void {
+    this.closing = true;
+    clearTimeout(this.timer);
+  }
+
+  /** One check-in. Never throws: a failure is recorded and the next tick retries. */
+  async once(): Promise<void> {
+    const { opts } = this;
+    try {
+      const body: CheckInRequest = {
+        nodeId: opts.nodeId,
+        endpoint: opts.endpoint,
+        intervalSeconds: opts.intervalSeconds,
+        build: opts.build,
+        reading: await opts.readReading(),
+      };
+      const res = await (opts.fetchImpl ?? fetch)(`${opts.gateway}/checkIn`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${opts.token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(CHECK_IN_TIMEOUT_MS),
+      });
+      if (res.status !== 200) {
+        const text = await res.text();
+        throw new Error(
+          `gateway answered ${res.status}: ${text.slice(0, 200)}`,
+        );
+      }
+      checkInResponseSchema.parse(await res.json());
+      if (this.failing !== null) {
+        opts.log.info(`check-in with gateway ${opts.gateway} answers again`);
+        this.failing = null;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (this.failing === null) {
+        opts.log.warn(
+          { gateway: opts.gateway, error: message },
+          'check-in failed; the gateway places nothing here and forwards no new names to this node until it answers again — retrying every interval',
+        );
+      }
+      this.failing = message;
+    }
+  }
+
+  private schedule(delayMs: number): void {
+    if (this.closing) return;
+    this.timer = setTimeout(async () => {
+      await this.once();
+      this.schedule(this.opts.intervalSeconds * 1000);
+    }, delayMs);
+  }
+}

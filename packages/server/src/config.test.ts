@@ -151,3 +151,36 @@ describe('the S3 set', () => {
     expect(off.DORMICE_S3_FORCE_PATH_STYLE).toBe(false);
   });
 });
+
+describe('the fleet knobs: gateway, node endpoint, check-in interval', () => {
+  it('defaults: no gateway (standalone), no node endpoint, 15s check-in', () => {
+    const config = loadConfig(TOKEN);
+    expect(config.DORMICE_GATEWAY_ENDPOINT).toBeUndefined();
+    expect(config.DORMICE_NODE_ENDPOINT).toBeUndefined();
+    expect(config.DORMICE_CHECK_IN_INTERVAL_SECONDS).toBe(15);
+  });
+
+  it('parses both endpoints as full URLs and drops a trailing slash', () => {
+    const config = loadConfig({
+      ...TOKEN,
+      DORMICE_GATEWAY_ENDPOINT: 'http://10.0.0.5:3677/',
+      DORMICE_NODE_ENDPOINT: 'http://10.0.0.7:80///',
+      DORMICE_CHECK_IN_INTERVAL_SECONDS: '5',
+    });
+    expect(config.DORMICE_GATEWAY_ENDPOINT).toBe('http://10.0.0.5:3677');
+    expect(config.DORMICE_NODE_ENDPOINT).toBe('http://10.0.0.7:80');
+    expect(config.DORMICE_CHECK_IN_INTERVAL_SECONDS).toBe(5);
+  });
+
+  it('refuses an endpoint without a scheme, naming the variable', () => {
+    expect(() =>
+      loadConfig({ ...TOKEN, DORMICE_GATEWAY_ENDPOINT: '10.0.0.5:3677' }),
+    ).toThrow(/DORMICE_GATEWAY_ENDPOINT must be a full http\(s\) URL/);
+    expect(() =>
+      loadConfig({ ...TOKEN, DORMICE_NODE_ENDPOINT: 'node-7' }),
+    ).toThrow(/DORMICE_NODE_ENDPOINT must be a full http\(s\) URL/);
+    expect(() =>
+      loadConfig({ ...TOKEN, DORMICE_CHECK_IN_INTERVAL_SECONDS: '0' }),
+    ).toThrow();
+  });
+});
