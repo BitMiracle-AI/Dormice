@@ -288,6 +288,19 @@ const sandboxOf = (r: { body: unknown }) =>
   (r.body as { created: boolean; sandbox: { id: string; nodeId: string } })
     .sandbox;
 
+/** Builds a sandbox directly on a node, behind the gateway's back. */
+async function stage(node: FakeNode, name: string) {
+  const res = await fetch(`${node.endpoint}/acquireSandbox`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${TOKEN}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ name }),
+  });
+  return sandboxOf({ body: await res.json() });
+}
+
 /** Polls until the probe answers something — cache verification runs off the request path. */
 async function until<T>(
   probe: () => Promise<T | undefined> | T | undefined,
@@ -470,6 +483,45 @@ describe('acquire: placing and finding', () => {
     expect((found.body as { created: boolean }).created).toBe(false);
   });
 
+  it('a wake is not a placement: it neither counts against the node nor pays a placement back when destroyed — on either face', async () => {
+    const h = await gateway(['a', 'b']);
+    const [a, b] = h.nodes as [FakeNode, FakeNode];
+    await h.checkIn(a, { active: 10 });
+    await h.checkIn(b, { active: 1 });
+    const placedOnB = () => h.fleet.get('b')?.placedSinceCheckIn;
+    // Sandboxes that already live on b: the gateway finds and wakes them
+    // there, and b's reading already counts them.
+    await stage(b, 'sleepy');
+    await stage(b, 'dozy');
+    expect(
+      sandboxOf(await rpc(h, '/acquireSandbox', { name: 'sleepy' })).nodeId,
+    ).toBe('b');
+    expect(placedOnB()).toBe(0);
+    const e2bWake = await fetch(`${h.endpoint}/e2b/api/sandboxes`, {
+      method: 'POST',
+      headers: {
+        'x-api-key': `e2b_${TOKEN}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ metadata: { name: 'dozy' } }),
+    });
+    expect(e2bWake.status).toBe(201);
+    expect(placedOnB()).toBe(0);
+    // A new name placed on b (the emptiest) is counted once.
+    expect(
+      sandboxOf(await rpc(h, '/acquireSandbox', { name: 'fresh' })).nodeId,
+    ).toBe('b');
+    expect(placedOnB()).toBe(1);
+    // Destroying the woken sandboxes must not pay back a placement that
+    // never was: b would be judged one sandbox emptier than it is.
+    await rpc(h, '/destroySandbox', { name: 'sleepy' });
+    expect(placedOnB()).toBe(1);
+    await rpc(h, '/destroySandbox', { name: 'dozy' });
+    expect(placedOnB()).toBe(1);
+    await rpc(h, '/destroySandbox', { name: 'fresh' });
+    expect(placedOnB()).toBe(0);
+  });
+
   it('one name on two nodes is a 409 naming both, for every verb; once one copy is gone the name routes again', async () => {
     const h = await gateway(['a', 'b']);
     const [a, b] = h.nodes as [FakeNode, FakeNode];
@@ -605,6 +657,31 @@ describe('using, destroying, and the cache', () => {
     expect((await rpc(h, '/createApiKey', { name: 'k' })).status).toBe(501);
     expect((await rpc(h, '/acquireSandbx', { name: 'x' })).status).toBe(404);
     expect((await rpc(h, '/execCommand', { command: 'x' })).status).toBe(400);
+    expect(h.nodes[0]?.hits).toEqual([]);
+  });
+
+  it('a name the wire refuses is a 400 at the door on both faces, and no node is asked', async () => {
+    const h = await gateway(['a']);
+    const long = 'x'.repeat(129);
+    const native = await rpc(h, '/acquireSandbox', { name: long });
+    expect(native.status).toBe(400);
+    expect(message(native)).toMatch(/^invalid name: /);
+    expect(
+      (await rpc(h, '/execCommand', { name: 7, command: 'x' })).status,
+    ).toBe(400);
+    const e2b = await fetch(`${h.endpoint}/e2b/api/sandboxes`, {
+      method: 'POST',
+      headers: {
+        'x-api-key': `e2b_${TOKEN}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ metadata: { name: long } }),
+    });
+    expect(e2b.status).toBe(400);
+    expect(await e2b.json()).toMatchObject({
+      code: 400,
+      message: expect.stringMatching(/^invalid metadata\.name: /),
+    });
     expect(h.nodes[0]?.hits).toEqual([]);
   });
 });

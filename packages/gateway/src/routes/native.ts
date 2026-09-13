@@ -1,5 +1,8 @@
 import type { KeyedQueue } from '@dormice/server/keyed-queue';
-import { WRITE_FILES_BODY_LIMIT_BYTES } from '@dormice/shared';
+import {
+  sandboxNameSchema,
+  WRITE_FILES_BODY_LIMIT_BYTES,
+} from '@dormice/shared';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { relay } from '../errors';
@@ -113,12 +116,11 @@ export const nativeRoutes: FastifyPluginAsyncZod<NativeRoutesOptions> = async (
       bodyLimit === undefined ? {} : { bodyLimit },
       async (request, reply) => {
         const body = request.body as Buffer | undefined;
-        const name = nameOf(body);
-        if (name === null) {
-          return reply
-            .code(400)
-            .send({ message: 'name is required and must be a string' });
+        const named = nameOf(body);
+        if ('refusal' in named) {
+          return reply.code(400).send({ message: named.refusal });
         }
+        const { name } = named;
         // Only the two verbs that create or remove take the name's slot —
         // the daemon's own discipline (its other verbs run unserialized
         // too). The slot is what keeps twenty simultaneous acquires of a
@@ -167,6 +169,9 @@ export const nativeRoutes: FastifyPluginAsyncZod<NativeRoutesOptions> = async (
     const judged = verdict(await finder.byName(name), `sandbox "${name}"`);
     if (judged.kind === 'refuse') return refuse(reply, judged);
     let target = judged.kind === 'node' ? judged.node : null;
+    // Found nowhere: a placement, counted against the node it lands on.
+    // Found somewhere: a wake, already in that node's reading.
+    const placed = target === null;
     if (target === null) {
       if (clientGone(reply)) return;
       const placement = place(fleet, knobs, new Date());
@@ -184,6 +189,7 @@ export const nativeRoutes: FastifyPluginAsyncZod<NativeRoutesOptions> = async (
         name,
         body,
         face: NATIVE_CREATE,
+        placed,
       });
       if (answer !== null) replay(reply.raw, answer);
     });
@@ -249,9 +255,25 @@ export const nativeRoutes: FastifyPluginAsyncZod<NativeRoutesOptions> = async (
   }
 };
 
-/** The one field the gateway reads from a native body. */
-export function nameOf(body: Buffer | undefined): string | null {
+/**
+ * The one field the gateway reads from a native body, judged by the wire's
+ * own rule (shared sandboxNameSchema — what lookupSandbox validates
+ * against) so no node is ever asked a question it would refuse: a node's
+ * 400 to the lookup reads as silence, and the caller would get a 503 with
+ * Retry-After for a name that can never be valid (found by review,
+ * 2026-09-14).
+ */
+export function nameOf(
+  body: Buffer | undefined,
+): { name: string } | { refusal: string } {
   const parsed = parseJson(body) as { name?: unknown } | undefined;
-  const name = parsed?.name;
-  return typeof name === 'string' && name.length > 0 ? name : null;
+  if (parsed?.name === undefined) {
+    return { refusal: 'name is required and must be a string' };
+  }
+  const judged = sandboxNameSchema.safeParse(parsed.name);
+  return judged.success
+    ? { name: judged.data }
+    : {
+        refusal: `invalid name: ${judged.error.issues[0]?.message ?? 'refused by the wire'}`,
+      };
 }

@@ -81,7 +81,9 @@ export class Fleet {
   /**
    * A node reporting for duty. A first check-in adds the node (`joined`
    * says so, for the log); a changed endpoint is written through — the
-   * node states where it lives, the gateway does not remember better. The
+   * node states where it lives, the gateway does not remember better —
+   * and `movedFrom` names the old one, for the log: a node that moves at
+   * every check-in is two machines sharing one DORMICE_NODE_ID. The
    * placement counter restarts at zero: what was placed before this
    * reading is in it now, and what is still in flight on the node (its
    * row is written after the container is up) is in neither figure until
@@ -91,9 +93,10 @@ export class Fleet {
   checkIn(
     report: CheckInRequest,
     now = new Date(),
-  ): { node: NodeState; joined: boolean } {
+  ): { node: NodeState; joined: boolean; movedFrom: string | null } {
     let node = this.members.get(report.nodeId);
     let joined = false;
+    let movedFrom: string | null = null;
     if (node === undefined) {
       const addedAt = now.toISOString();
       this.db
@@ -119,6 +122,7 @@ export class Fleet {
         .set({ endpoint: report.endpoint })
         .where(eq(nodes.id, report.nodeId))
         .run();
+      movedFrom = node.endpoint;
       node.endpoint = report.endpoint;
     }
     node.lastCheckInAt = now;
@@ -127,7 +131,7 @@ export class Fleet {
     node.reading = report.reading;
     node.placedSinceCheckIn = 0;
     node.placedIds.clear();
-    return { node, joined };
+    return { node, joined, movedFrom };
   }
 
   /** The operator's word that the node is gone for good; a node still running re-adds itself at its next check-in. */

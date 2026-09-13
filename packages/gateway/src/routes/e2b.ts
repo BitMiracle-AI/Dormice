@@ -1,5 +1,6 @@
 import { tokensEqual } from '@dormice/server/auth';
 import type { KeyedQueue } from '@dormice/server/keyed-queue';
+import { sandboxNameSchema } from '@dormice/shared';
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { relay } from '../errors';
@@ -66,7 +67,6 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bRoutesOptions> = async (
     }
   });
 
-  const dialect = (message: string) => ({ code: 0, message });
   const send = (reply: FastifyReply, code: number, message: string) =>
     reply.code(code).send({ code, message });
 
@@ -87,12 +87,14 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bRoutesOptions> = async (
   const RETRY_FINDS_IT =
     ' — retry: if the sandbox was built, the node answers for it';
 
+  /** `placed`: pick() chose the node for a new name (counted there) — false for a name found on it, a wake. */
   function create(
     request: FastifyRequest,
     reply: FastifyReply,
     target: NodeState,
     name: string | null,
     body: Buffer | undefined,
+    placed: boolean,
   ) {
     return forwarded(request, reply, RETRY_FINDS_IT, async () => {
       const answer = await forwardCreate(finder.cache, request, reply.raw, {
@@ -101,12 +103,14 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bRoutesOptions> = async (
         name,
         body,
         face: E2B_CREATE,
+        placed,
       });
       if (answer !== null) replay(reply.raw, answer);
     });
   }
 
-  function placed(reply: FastifyReply): NodeState | null {
+  /** Places a new sandbox, or sends the 503 and answers null (null too for a client that already left). */
+  function placeOrRefuse(reply: FastifyReply): NodeState | null {
     if (clientGone(reply)) return null;
     const placement = place(fleet, knobs, new Date());
     if (placement.node === null) {
@@ -122,24 +126,38 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bRoutesOptions> = async (
     const parsed = parseJson(body) as
       | { metadata?: { name?: unknown } }
       | undefined;
-    const name = parsed?.metadata?.name;
-    if (typeof name === 'string' && name.length > 0) {
+    if (parsed?.metadata?.name !== undefined) {
+      // Judged by the wire's own rule before any node is asked (native.ts
+      // nameOf has why); the node's stricter E2B pattern still answers its
+      // own 400, relayed as it came.
+      const judged = sandboxNameSchema.safeParse(parsed.metadata.name);
+      if (!judged.success) {
+        return send(
+          reply,
+          400,
+          `invalid metadata.name: ${judged.error.issues[0]?.message ?? 'refused by the wire'}`,
+        );
+      }
+      const name = judged.data;
       return locks.run(name, async () => {
-        const judged = verdict(await finder.byName(name), `sandbox "${name}"`);
-        if (judged.kind === 'refuse') {
-          return refuse(reply, judged, (message) => ({
-            ...dialect(message),
-            code: judged.status,
+        const found = verdict(await finder.byName(name), `sandbox "${name}"`);
+        if (found.kind === 'refuse') {
+          return refuse(reply, found, (message) => ({
+            code: found.status,
+            message,
           }));
         }
-        const target = judged.kind === 'node' ? judged.node : placed(reply);
+        if (found.kind === 'node') {
+          return create(request, reply, found.node, name, body, false);
+        }
+        const target = placeOrRefuse(reply);
         if (target === null) return reply;
-        return create(request, reply, target, name, body);
+        return create(request, reply, target, name, body, true);
       });
     }
-    const target = placed(reply);
+    const target = placeOrRefuse(reply);
     if (target === null) return reply;
-    return create(request, reply, target, null, body);
+    return create(request, reply, target, null, body, true);
   });
 
   app.get('/v2/sandboxes', async (_request, reply) =>
@@ -155,8 +173,8 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bRoutesOptions> = async (
     const judged = verdict(await finder.byId(id), `sandbox "${id}"`);
     if (judged.kind === 'refuse') {
       return refuse(reply, judged, (message) => ({
-        ...dialect(message),
         code: judged.status,
+        message,
       }));
     }
     if (judged.kind === 'none') {

@@ -34,11 +34,38 @@ export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
       },
     },
     async (request) => {
-      const { node, joined } = fleet.checkIn(request.body);
+      const { node, joined, movedFrom } = fleet.checkIn(request.body);
       if (joined) {
         request.log.info(
           { nodeId: node.id, endpoint: node.endpoint },
           'a node checked in for the first time and joined the fleet',
+        );
+      }
+      // Two misconfigurations show only here, so they are said here. A
+      // node whose endpoint moves at every check-in is two machines
+      // sharing one DORMICE_NODE_ID (the daemon's default is `node-1`).
+      // Two nodes reporting one endpoint is a DORMICE_NODE_ENDPOINT that
+      // names the wrong machine — the daemon refuses the loopback default
+      // when its gateway is remote, but a hand-written value still can.
+      // Either way the symptom downstream is a 409 on every name (both
+      // "nodes" answer the lookup) or sandboxes on the wrong machine.
+      if (movedFrom !== null) {
+        request.log.warn(
+          { nodeId: node.id, from: movedFrom, to: node.endpoint },
+          'a node checked in from a new endpoint; the gateway forwards there from now on',
+        );
+      }
+      const twins = fleet
+        .all()
+        .filter((n) => n.id !== node.id && n.endpoint === node.endpoint);
+      if (twins.length > 0) {
+        request.log.warn(
+          {
+            nodeId: node.id,
+            endpoint: node.endpoint,
+            alsoReportedBy: twins.map((n) => n.id),
+          },
+          'two nodes report the same endpoint — check DORMICE_NODE_ID and DORMICE_NODE_ENDPOINT on both; their sandboxes will be found twice (409) or land on the wrong machine',
         );
       }
       return {};

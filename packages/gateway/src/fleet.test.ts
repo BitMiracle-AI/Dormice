@@ -49,6 +49,8 @@ describe('Fleet', () => {
       new Date(NOW.getTime() + 15_000),
     );
     expect(second.joined).toBe(false);
+    expect(first.movedFrom).toBeNull();
+    expect(second.movedFrom).toBe('http://10.0.0.7:80');
     expect(second.node).toBe(first.node);
     expect(second.node.endpoint).toBe('http://10.0.0.8:80');
     expect(second.node.reading?.sandboxes.byState.active).toBe(12);

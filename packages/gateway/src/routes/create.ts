@@ -74,21 +74,34 @@ export interface CreateOptions {
   name: string | null;
   body: Buffer | undefined;
   face: CreateFace;
+  /**
+   * True when place() chose the target for a name no node held — the
+   * placement was counted against it in placedSinceCheckIn. False for a
+   * wake: the name was found on the target, its sandbox is in the reading
+   * already, and nothing was counted that could be uncounted.
+   */
+  placed: boolean;
 }
 
 /**
  * Forwards a create and learns from the node's answer: a 2xx with a
  * readable id goes into the cache (name and id → this node), so the next
- * request for the sandbox skips the round of questions, and into the
- * node's placedIds, so a destroy inside the same interval can take the
- * placement off the count again. A 2xx without a readable id is logged —
- * the sandbox exists on the node and the next lookup finds it there,
- * never silently. A 4xx or the node's own 500 means the node built
- * nothing: the placement is taken off the count at once (it would have
- * held a slot for a whole interval otherwise) and the next attempt may be
- * placed elsewhere. A 502/503/504 from a hop in front of the node, or no
- * answer at all, leaves the count as it is and the question to the next
- * lookup — the node that may have built it answers from inside the
+ * request for the sandbox skips the round of questions. A 2xx without a
+ * readable id is logged — the sandbox exists on the node and the next
+ * lookup finds it there, never silently.
+ *
+ * The placement count moves only for a placement (`placed`): a 2xx id
+ * also goes into the node's placedIds, so a destroy inside the same
+ * interval takes the placement off the count again; a 4xx or the node's
+ * own 500 means the node built nothing, and the placement comes off the
+ * count at once (it would have held a slot for a whole interval
+ * otherwise), so the next attempt may be placed elsewhere. A wake — a
+ * name found on the node — moves nothing either way: its sandbox is in
+ * the reading already, and paying back a placement that never was would
+ * open the gate one sandbox wider than the reading allows (found by
+ * review, 2026-09-14). A 502/503/504 from a hop in front of the node, or
+ * no answer at all, leaves the count as it is and the question to the
+ * next lookup — the node that may have built it answers from inside the
  * name's slot.
  */
 const HOP_STATUSES = new Set([502, 503, 504]);
@@ -96,7 +109,7 @@ export async function forwardCreate(
   cache: NameCache,
   request: FastifyRequest,
   res: http.ServerResponse,
-  { target, token, name, body, face }: CreateOptions,
+  { target, token, name, body, face, placed }: CreateOptions,
 ): Promise<CapturedResponse | null> {
   const answer = await forwardCapture(request.raw, res, {
     target: { endpoint: target.endpoint, token },
@@ -108,7 +121,7 @@ export async function forwardCreate(
     const id = face.idOf(parseJson(answer.body));
     if (id !== null) {
       cache.put({ id, name, nodeId: target.id });
-      target.placedIds.add(id);
+      if (placed) target.placedIds.add(id);
     } else {
       request.log.warn(
         { node: target.id, name, status: answer.status },
@@ -117,7 +130,9 @@ export async function forwardCreate(
     }
   } else if (!HOP_STATUSES.has(answer.status)) {
     // The node itself answered no: nothing was built there.
-    target.placedSinceCheckIn = Math.max(0, target.placedSinceCheckIn - 1);
+    if (placed) {
+      target.placedSinceCheckIn = Math.max(0, target.placedSinceCheckIn - 1);
+    }
     if (answer.status >= 500) {
       request.log.warn(
         { node: target.id, name, status: answer.status },
