@@ -3,7 +3,9 @@
 # there — systemd's EnvironmentFile treats an inline comment as part of the
 # value). install.sh does not install this unit yet: the two-role install
 # (gateway + node on one machine, `--role node` elsewhere) is a later step;
-# until then it is copied into place by hand (docs/测试机搭建手册.md).
+# until then it is copied into place by hand (docs/测试机搭建手册.md). Once it
+# is enabled, install.sh re-runs rebuild the gateway with the daemon and
+# restart this unit before the daemon's, so both run one commit.
 [Unit]
 Description=Dormice gateway (fleet front door)
 Wants=network-online.target

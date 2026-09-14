@@ -520,11 +520,15 @@ build_repo() {
   else
     pnpm install --frozen-lockfile
   fi
-  # Build only what a daemon host runs: the server (plus its workspace deps),
-  # the CLI, and the console SPA. The website package is the project's Next.js
-  # marketing site — building it here would cost minutes and import a frontend
-  # toolchain's failure modes into an installer whose job is the daemon.
-  pnpm --filter "@dormice/server..." --filter "@dormice/cli..." --filter "@dormice/console" build
+  # Build only what a Dormice host runs: the server (plus its workspace deps),
+  # the CLI, the console SPA — and the gateway, whose dist must move with the
+  # daemon's on a machine that runs both (the single-machine install is a
+  # fleet of one): a gateway left on an older dist runs it at its next
+  # restart, against a daemon whose check-in it may no longer parse. Seconds
+  # to build. The website package is the project's Next.js marketing site —
+  # building it here would cost minutes and import a frontend toolchain's
+  # failure modes into an installer whose job is the daemon.
+  pnpm --filter "@dormice/server..." --filter "@dormice/gateway..." --filter "@dormice/cli..." --filter "@dormice/console" build
 }
 
 log "Dormice code ($INSTALL_DIR)"
@@ -728,6 +732,16 @@ log 'systemd service'
 cp "$INSTALL_DIR/deploy/dormice.service" /etc/systemd/system/dormice.service
 systemctl daemon-reload
 systemctl enable dormice >/dev/null 2>&1
+# A gateway installed by hand on this machine (deploy/dormice-gateway.service;
+# install.sh does not install it yet) was just rebuilt with the daemon and is
+# restarted first, so the daemon's first check-in lands on the new one: the two
+# processes of a fleet of one run one commit, never two. Running or enabled —
+# a unit started by hand and never enabled is running the old dist just the
+# same.
+if systemctl is-active -q dormice-gateway 2>/dev/null || systemctl is-enabled -q dormice-gateway 2>/dev/null; then
+  systemctl restart dormice-gateway
+  note 'restarted dormice-gateway (hand-installed unit, rebuilt with the daemon)'
+fi
 # Restart, not start: a re-run just built fresh code, and the daemon is
 # crash-only by design — restarting it is always safe.
 systemctl restart dormice
