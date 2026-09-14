@@ -14,8 +14,6 @@ import { bucketIndex } from '../history';
 import type { HostSample } from '../host-metrics';
 import type { Db } from './db';
 import {
-  type FleetSnapshotRow,
-  fleetSnapshots,
   type HostMetricsSampleRow,
   hostMetricsSamples,
   type SandboxMetricsSampleRow,
@@ -24,38 +22,31 @@ import {
 } from './schema';
 
 /**
- * How long fleet snapshots and host samples live. Not a knob: the
- * dashboard's widest range (30 days) defines the need, and at one small row
- * per tick each table stays a few megabytes — nobody sizes an explanation
- * window (ACTIVITY_KEEP's reasoning). Per-sandbox samples DO get a knob
+ * How long host samples live. Not a knob: the dashboard's widest range
+ * (30 days) defines the need, and at one small row per tick the table
+ * stays a few megabytes — nobody sizes an explanation window
+ * (ACTIVITY_KEEP's reasoning). Per-sandbox samples DO get a knob
  * (DORMICE_METRICS_RETENTION_HOURS): their volume scales with fleet size.
+ * (The fleet's state history lives at the gateway since the third cut,
+ * under the same 30 days.)
  */
-export const FLEET_SNAPSHOT_KEEP_DAYS = 30;
-
-export interface FleetCounts {
-  active: number;
-  frozen: number;
-  stopped: number;
-  archived: number;
-  restoring: number;
-  total: number;
-}
+export const HOST_SAMPLE_KEEP_DAYS = 30;
 
 export interface MetricsTickInput {
   /** ISO 8601 UTC — the tick's single timestamp, shared by every row. */
   at: string;
-  fleetCounts: FleetCounts;
   host: HostSample;
   samples: Array<{ sandboxId: string; metrics: SandboxMetrics }>;
   retentionHours: number;
 }
 
 /**
- * Writes one sampler tick — fleet snapshot, per-sandbox samples, and both
- * retention prunes — in a single synchronous transaction: a tick's data is
- * either fully visible or not at all. Sampling (async, ~1s per container)
- * happened before this call; better-sqlite3 transactions cannot span an
- * await, so "collect first, write once" is not a choice but a law.
+ * Writes one sampler tick — the host sample, per-sandbox samples, and
+ * both retention prunes — in a single synchronous transaction: a tick's
+ * data is either fully visible or not at all. Sampling (async, ~1s per
+ * container) happened before this call; better-sqlite3 transactions
+ * cannot span an await, so "collect first, write once" is not a choice
+ * but a law.
  *
  * Samples are re-filtered against the ledger inside the transaction: a
  * sandbox destroyed while its reading was in flight must not leave orphan
@@ -65,15 +56,11 @@ export function insertMetricsTick(db: Db, input: MetricsTickInput): void {
   const sampleCutoff = new Date(
     Date.parse(input.at) - input.retentionHours * 3600_000,
   ).toISOString();
-  const fleetCutoff = new Date(
-    Date.parse(input.at) - FLEET_SNAPSHOT_KEEP_DAYS * 86_400_000,
+  const hostCutoff = new Date(
+    Date.parse(input.at) - HOST_SAMPLE_KEEP_DAYS * 86_400_000,
   ).toISOString();
 
   db.transaction((tx) => {
-    tx.insert(fleetSnapshots)
-      .values({ at: input.at, ...input.fleetCounts })
-      .run();
-
     tx.insert(hostMetricsSamples)
       .values({ at: input.at, ...input.host })
       .run();
@@ -103,16 +90,15 @@ export function insertMetricsTick(db: Db, input: MetricsTickInput): void {
     tx.delete(sandboxMetricsSamples)
       .where(lt(sandboxMetricsSamples.at, sampleCutoff))
       .run();
-    tx.delete(fleetSnapshots).where(lt(fleetSnapshots.at, fleetCutoff)).run();
     tx.delete(hostMetricsSamples)
-      .where(lt(hostMetricsSamples.at, fleetCutoff))
+      .where(lt(hostMetricsSamples.at, hostCutoff))
       .run();
   });
 }
 
 /**
  * The destroy cascade: a sandbox whose disk is gone has no owner for its
- * history. Fleet snapshots are untouched — they belong to no sandbox.
+ * history. Host samples are untouched — they belong to no sandbox.
  */
 export function deleteSandboxMetricsSamples(db: Db, sandboxId: string): void {
   db.delete(sandboxMetricsSamples)
@@ -189,43 +175,6 @@ export function queryHostCpuPeak(
   return row && row.cpuUsedPct !== null
     ? { cpuUsedPct: row.cpuUsedPct, at: row.at }
     : null;
-}
-
-/** Ascending slice of fleet snapshots. */
-export function queryFleetSnapshots(
-  db: Db,
-  startIso: string,
-  endIso: string,
-): FleetSnapshotRow[] {
-  return db
-    .select()
-    .from(fleetSnapshots)
-    .where(
-      and(gte(fleetSnapshots.at, startIso), lte(fleetSnapshots.at, endIso)),
-    )
-    .orderBy(asc(fleetSnapshots.at))
-    .all();
-}
-
-/**
- * The window's concurrency peak, from raw rows so no bucketing can flatten
- * it: highest active count, and the earliest instant it was observed.
- */
-export function queryFleetPeak(
-  db: Db,
-  startIso: string,
-  endIso: string,
-): { active: number; at: string } | null {
-  const row = db
-    .select({ active: fleetSnapshots.active, at: fleetSnapshots.at })
-    .from(fleetSnapshots)
-    .where(
-      and(gte(fleetSnapshots.at, startIso), lte(fleetSnapshots.at, endIso)),
-    )
-    .orderBy(desc(fleetSnapshots.active), asc(fleetSnapshots.at))
-    .limit(1)
-    .get();
-  return row ?? null;
 }
 
 /**

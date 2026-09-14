@@ -12,6 +12,7 @@ import {
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import type { NameCache } from '../cache';
 import type { Db } from '../db/db';
+import { recordFleetSample } from '../db/fleet-samples';
 import { readNodeConfig } from '../db/node-config';
 import { readConfigVersion } from '../db/settings';
 import {
@@ -87,6 +88,9 @@ export const checkInRoutes: FastifyPluginAsyncZod<
         throw refusal(409, outcome.refused);
       }
       const { node, joined, movedFrom } = outcome;
+      // The fleet's state, sampled now that this node's reading is in
+      // (db/fleet-samples.ts has when a sample is not written).
+      recordFleetSample(db, fleet, new Date());
       if (joined) {
         request.log.info(
           { nodeId: node.id, endpoint: node.endpoint },

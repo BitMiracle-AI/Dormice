@@ -1,4 +1,10 @@
-import type { BuildInfo, CheckInRequest, NodeReading } from '@dormice/shared';
+import type {
+  BuildInfo,
+  CheckInRequest,
+  NodeReading,
+  SandboxDisks,
+  SandboxStateCounts,
+} from '@dormice/shared';
 import { eq } from 'drizzle-orm';
 import type { Db } from './db/db';
 import { nodes } from './db/schema';
@@ -90,6 +96,58 @@ export function awaitingFirstConfigWhy(node: NodeState): string | null {
   return total === 0
     ? null
     : `not listening — it holds ${total} sandboxes but no configuration copy yet, and its first bundle rides on its next check-in`;
+}
+
+/**
+ * The figures that add up across the fleet, summed over the nodes that
+ * have a reading — the census by state and the sandbox disks' bill — and
+ * how many nodes that is. A node without a reading (not heard from since
+ * this gateway started) contributes nothing, and `reported` says so: the
+ * sums are a lower bound until every node has spoken. A node that is
+ * down but did report contributes its last reading — its sandboxes are
+ * still there, merely out of reach. One function for the check-in's
+ * sample (db/fleet-samples.ts) and getFleetMetrics (routes/fleet.ts), so
+ * the curve and the number under it can never disagree.
+ */
+export function sumReadings(nodes: readonly NodeState[]): {
+  reported: number;
+  sandboxes: { total: number; byState: SandboxStateCounts };
+  sandboxDisks: SandboxDisks;
+} {
+  const byState: SandboxStateCounts = {
+    active: 0,
+    frozen: 0,
+    stopped: 0,
+    archived: 0,
+    restoring: 0,
+  };
+  const sandboxDisks: SandboxDisks = {
+    count: 0,
+    nominalBytes: 0,
+    actualBytes: 0,
+  };
+  let total = 0;
+  let reported = 0;
+  for (const node of nodes) {
+    if (node.reading === null) continue;
+    reported += 1;
+    total += node.reading.sandboxes.total;
+    for (const state of Object.keys(byState) as Array<
+      keyof SandboxStateCounts
+    >) {
+      byState[state] += node.reading.sandboxes.byState[state];
+    }
+    // Optional on the wire for the rolling upgrade (shared gateway.ts):
+    // a node on the previous build reports no disks, and its share is
+    // simply not in the sum.
+    const disks = node.reading.sandboxDisks;
+    if (disks !== undefined) {
+      sandboxDisks.count += disks.count;
+      sandboxDisks.nominalBytes += disks.nominalBytes;
+      sandboxDisks.actualBytes += disks.actualBytes;
+    }
+  }
+  return { reported, sandboxes: { total, byState }, sandboxDisks };
 }
 
 /** What a check-in came to: taken (and whether it joined or moved), or refused with the sentence the node is told (routes/nodes.ts answers 409). */

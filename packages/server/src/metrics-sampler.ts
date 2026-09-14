@@ -1,13 +1,16 @@
 import type { Db } from './db/db';
-import { countByState, listSandboxes } from './db/ledger';
+import { listSandboxes } from './db/ledger';
 import { insertMetricsTick } from './db/metrics';
 import type { Executor, SandboxMetrics } from './executor/executor';
 import { type CpuSampler, readHostSample } from './host-metrics';
 
 /**
- * The metrics sampler: one tick reads every measurable sandbox, the
- * fleet's state census and the host machine itself, and persists all
- * three. This is the daemon keeping history — a reversal of the original
+ * The metrics sampler: one tick reads every measurable sandbox and the
+ * host machine itself, and persists both. (The fleet's state census went
+ * to the gateway with the third cut, 2026-09-15: it is summed there over
+ * every node at each check-in — the one figure no single node can
+ * compute — and the node keeps no fleet history of its own.) This is the
+ * daemon keeping history — a reversal of the original
  * "observation window, not a monitoring system" stance, overturned for
  * three reasons (2026-07-15): the E2B metrics endpoint's start/end slice
  * is a compatibility contract we were answering with a single sample;
@@ -58,7 +61,6 @@ export async function sampleOnce(
   },
 ): Promise<SampleResult> {
   const rows = listSandboxes(db);
-  const { byState, total } = countByState(rows);
   const measurable = rows.filter(
     (row) => row.state === 'active' || row.state === 'frozen',
   );
@@ -82,7 +84,6 @@ export async function sampleOnce(
   const host = await readHostSample(opts.hostCpu, opts.dataDir);
   insertMetricsTick(db, {
     at: now.toISOString(),
-    fleetCounts: { ...byState, total },
     host,
     samples,
     retentionHours: opts.retentionHours,

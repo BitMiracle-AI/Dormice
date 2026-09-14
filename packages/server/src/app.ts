@@ -1,5 +1,6 @@
 import http from 'node:http';
 import nodePath from 'node:path';
+import { GATEWAY_ONLY_VERBS } from '@dormice/shared';
 import fastify, { type FastifyError, type FastifyServerFactory } from 'fastify';
 import {
   serializerCompiler,
@@ -162,10 +163,23 @@ export function buildApp({
     }
     reply.code(status).send({ message: error.message });
   });
+  // A verb that answers at the gateway alone, asked of a node: the 404
+  // names the door. The emergency path is ssh to a node and curl its
+  // loopback with the fleet token, and an operator on it asking for the
+  // keys or the settings should be sent to where they live, not left
+  // with a plain "not found" (shared GATEWAY_ONLY_VERBS; the console too,
+  // which a node has not served since the second cut).
   app.setNotFoundHandler((request, reply) => {
-    reply
-      .code(404)
-      .send({ message: `route ${request.method} ${request.url} not found` });
+    const path = request.url.split('?')[0] ?? request.url;
+    const atGateway =
+      (GATEWAY_ONLY_VERBS as readonly string[]).includes(path.slice(1)) ||
+      path === '/console' ||
+      path.startsWith('/console/');
+    reply.code(404).send({
+      message: atGateway
+        ? `${path} answers at the gateway (${config.DORMICE_GATEWAY_ENDPOINT}), not on a node`
+        : `route ${request.method} ${request.url} not found`,
+    });
   });
 
   // Liveness probe: open by design (probes have no secrets), everything

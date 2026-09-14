@@ -248,6 +248,20 @@ describe('error shape', () => {
     expect(res.statusCode).toBe(404);
     expect(Object.keys(res.json())).toEqual(['message']);
   });
+
+  it('a verb that answers at the gateway alone is a 404 naming the gateway; so is the console', async () => {
+    const { app } = testApp();
+    for (const verb of ['listApiKeys', 'getConfig', 'getFleetMetrics']) {
+      const res = await rpc(app, `/${verb}`);
+      expect(res.statusCode).toBe(404);
+      expect(res.json().message).toBe(
+        `/${verb} answers at the gateway (http://127.0.0.1:3677), not on a node`,
+      );
+    }
+    const page = await app.inject({ method: 'GET', url: '/console/' });
+    expect(page.statusCode).toBe(404);
+    expect(page.json().message).toMatch(/^\/console\/ answers at the gateway/);
+  });
 });
 
 describe('concurrent acquires', () => {

@@ -116,11 +116,12 @@ export type TemplateRow = typeof templates.$inferSelect;
  * compatibility contract — the E2B metrics endpoint slices by start/end —
  * and because nothing outside the ledger can measure per-sandbox.
  *
- * Three tables, not one: this, fleet_snapshots and host_metrics_samples
- * differ in unit of meaning (one sandbox's resources vs the fleet's state
- * counts vs the machine's own resources), retention
- * (DORMICE_METRICS_RETENTION_HOURS vs a fixed 30 days for the other two)
- * and deletion path (destroy cascades here, never there).
+ * Two tables, not one: this and host_metrics_samples differ in unit of
+ * meaning (one sandbox's resources vs the machine's own), retention
+ * (DORMICE_METRICS_RETENTION_HOURS vs a fixed 30 days) and deletion path
+ * (destroy cascades here, never there). The fleet's state counts are the
+ * gateway's table since the third cut (fleet_snapshots below is the
+ * legacy).
  *
  * Keyed by the sandbox's platform id, not its name: rebuild replaces the
  * shell but keeps the id, so history stays continuous across rebuilds;
@@ -159,15 +160,17 @@ export const sandboxMetricsSamples = sqliteTable(
 export type SandboxMetricsSampleRow = typeof sandboxMetricsSamples.$inferSelect;
 
 /**
- * Fleet state counts over time, one row per sampler tick: the data behind
- * the console's concurrency curve and peak. Owned by no sandbox — destroy
- * never touches it — and kept a fixed 30 days (the dashboard's widest
- * range defines the need; like ACTIVITY_KEEP, nobody tunes the size of an
- * explanation window).
- *
- * Five explicit state columns instead of a JSON blob: the window peak is
- * max(active) in one SQL aggregate, and the stacked chart needs each state
- * addressable. `total` is stored redundantly so readers never re-derive it.
+ * LEGACY, read by nothing on the node since the third cut (2026-09-15):
+ * the fleet's state counts per sampler tick, as this node sampled them
+ * while it was a product of its own. The fleet's history is the gateway's
+ * table now (gateway db/schema.ts fleet_state_samples, summed over every
+ * node at each check-in), and the sampler writes here no more. The table
+ * and its rows stay until the fourth cut's import tool has carried a
+ * production node's last 30 days into the gateway — a single-node fleet's
+ * history is the same figure — so the console's 30-day curve does not
+ * break at the cut-over; the DROP ships with that import, beside
+ * api_keys and console_account. Not a bug to delete early: the import
+ * reads it.
  */
 export const fleetSnapshots = sqliteTable('fleet_snapshots', {
   /** ISO 8601 UTC; one row per tick, so time itself is the key. */
@@ -189,8 +192,7 @@ export type FleetSnapshotRow = typeof fleetSnapshots.$inferSelect;
  * self-hosted single box nobody runs Prometheus, and overcommit-by-
  * observation — the platform's own capacity story — is impossible without
  * a peak to look at. Owned by no sandbox (destroy never touches it), kept
- * a fixed 30 days like fleet_snapshots and for the same reason: the
- * dashboard's widest range defines the need.
+ * a fixed 30 days: the dashboard's widest range defines the need.
  *
  * Nullable columns are honest platform gaps, never zeros: cpu_used_pct is
  * null on the tick after a daemon start (a delta needs two samples), swap

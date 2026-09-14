@@ -431,6 +431,47 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
     }
   });
 
+  it('getFleetMetrics sums both nodes from their check-ins without asking them; getFleetStateHistory grows a point per check-in with a peak', async () => {
+    const metrics = await viaGateway().getFleetMetrics();
+    expect(metrics.nodes).toEqual({ total: 2, reachable: 2, reported: 2 });
+    const own = await Promise.all(
+      nodes().map((n) => direct(n.id).getHostMetrics()),
+    );
+    expect(metrics.sandboxes.total).toBe(
+      own.reduce((sum, m) => sum + m.sandboxes.total, 0),
+    );
+    expect(metrics.sandboxDisks.count).toBe(
+      own.reduce((sum, m) => sum + m.sandboxDisks.count, 0),
+    );
+    // A check-in a second: a couple of them bring points and a peak.
+    const history = await until(async () => {
+      const h = await viaGateway().getFleetStateHistory();
+      return h.points.length >= 2 && h.peak !== null ? h : undefined;
+    });
+    for (const point of history.points) {
+      const sum = Object.values(point.byState).reduce((a, b) => a + b, 0);
+      expect(sum).toBe(point.total);
+    }
+    expect(history.bucketSeconds).toBeNull();
+  });
+
+  it('a host reading at the door names its node; unnamed in a fleet of two it is a 400 naming both', async () => {
+    const b = await viaGateway().getHostMetrics({ nodeId: 'node-b' });
+    const own = await direct('node-b').getHostMetrics();
+    expect(b.host.cpuCount).toBe(own.host.cpuCount);
+    expect(b.sandboxes.total).toBe(own.sandboxes.total);
+    await expect(viaGateway().getHostMetrics()).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringMatching(
+        /the fleet has 2 nodes \(node-b, node-c\)/,
+      ),
+    });
+    const history = await viaGateway().getHostMetricsHistory({
+      nodeId: 'node-c',
+    });
+    expect(history.points.length).toBeGreaterThanOrEqual(1);
+  });
+
   it('the upgrade verbs are an honest 501 until their cut; a misspelled verb is a 404', async () => {
     await expect(viaGateway().checkUpgrade()).rejects.toMatchObject({
       status: 501,

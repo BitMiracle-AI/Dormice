@@ -1,6 +1,5 @@
 import { fileURLToPath } from 'node:url';
 import {
-  getFleetStateHistoryResponseSchema,
   getHostMetricsHistoryResponseSchema,
   getSandboxMetricsHistoryResponseSchema,
   getSandboxMetricsResponseSchema,
@@ -196,14 +195,6 @@ describe('getSandboxMetricsHistory', () => {
       insertMetricsTick(db, {
         at: new Date(t0 + i * 30_000).toISOString(),
         host: HOST,
-        fleetCounts: {
-          active: 1,
-          frozen: 0,
-          stopped: 0,
-          archived: 0,
-          restoring: 0,
-          total: 1,
-        },
         // One reading spikes; every neighbor idles. Averaging would bury it.
         samples: [
           {
@@ -227,103 +218,6 @@ describe('getSandboxMetricsHistory', () => {
     const times = samples.map((s) => Date.parse(s.timestamp));
     expect([...times].sort((a, b) => a - b)).toEqual(times);
     expect(Math.max(...samples.map((s) => s.cpuUsedPct))).toBe(95);
-  });
-});
-
-describe('getFleetStateHistory', () => {
-  it('answers an empty window with no points and a null peak', async () => {
-    const { app } = testApp();
-    const res = await rpc(app, '/getFleetStateHistory', {});
-    expect(res.statusCode).toBe(200);
-    const body = getFleetStateHistoryResponseSchema.parse(res.json());
-    expect(body).toEqual({ points: [], bucketSeconds: null, peak: null });
-  });
-
-  it('returns snapshots ascending with byState summing to total', async () => {
-    const { app, db, executor } = testApp();
-    await rpc(app, '/acquireSandbox', { name: 'one' });
-    const t0 = Date.parse('2026-07-15T10:00:00.000Z');
-    await sampleOnce(db, executor, new Date(t0), tickOpts());
-    await rpc(app, '/acquireSandbox', { name: 'two' });
-    await sampleOnce(db, executor, new Date(t0 + 30_000), tickOpts());
-
-    const res = await rpc(app, '/getFleetStateHistory', {
-      start: new Date(t0 - 1000).toISOString(),
-      end: new Date(t0 + 60_000).toISOString(),
-    });
-    const { points, bucketSeconds, peak } =
-      getFleetStateHistoryResponseSchema.parse(res.json());
-    expect(bucketSeconds).toBe(null);
-    expect(points.map((p) => p.at)).toEqual([
-      new Date(t0).toISOString(),
-      new Date(t0 + 30_000).toISOString(),
-    ]);
-    for (const point of points) {
-      const sum = Object.values(point.byState).reduce((a, b) => a + b, 0);
-      expect(sum).toBe(point.total);
-    }
-    expect(peak).toEqual({
-      active: 2,
-      at: new Date(t0 + 30_000).toISOString(),
-    });
-  });
-
-  it('computes the peak from raw rows — bucketing cannot flatten it', async () => {
-    const { app, db } = testApp();
-    const t0 = Date.parse('2026-07-15T00:00:00.000Z');
-    const counts = (active: number) => ({
-      active,
-      frozen: 0,
-      stopped: 0,
-      archived: 0,
-      restoring: 0,
-      total: active,
-    });
-    const rows = MAX_POINTS + 40;
-    for (let i = 0; i < rows; i += 1) {
-      insertMetricsTick(db, {
-        at: new Date(t0 + i * 30_000).toISOString(),
-        host: HOST,
-        fleetCounts: counts(1),
-        samples: [],
-        retentionHours: 168,
-      });
-    }
-    // A spike squeezed between two grid rows of its own bucket: the bucket
-    // keeps its LAST whole snapshot, so no point ever shows 9 — the peak
-    // field is the only honest carrier.
-    insertMetricsTick(db, {
-      at: new Date(t0 + 200 * 30_000 + 1000).toISOString(),
-      host: HOST,
-      fleetCounts: counts(9),
-      samples: [],
-      retentionHours: 168,
-    });
-    insertMetricsTick(db, {
-      at: new Date(t0 + 200 * 30_000 + 2000).toISOString(),
-      host: HOST,
-      fleetCounts: counts(1),
-      samples: [],
-      retentionHours: 168,
-    });
-
-    const res = await rpc(app, '/getFleetStateHistory', {
-      start: new Date(t0).toISOString(),
-      end: new Date(t0 + rows * 30_000).toISOString(),
-    });
-    const { points, bucketSeconds, peak } =
-      getFleetStateHistoryResponseSchema.parse(res.json());
-    expect(bucketSeconds).not.toBe(null);
-    expect(points.length).toBeLessThanOrEqual(MAX_POINTS);
-    expect(peak).toEqual({
-      active: 9,
-      at: new Date(t0 + 200 * 30_000 + 1000).toISOString(),
-    });
-    // Whole-snapshot buckets: sums still hold after bucketing.
-    for (const point of points) {
-      const sum = Object.values(point.byState).reduce((a, b) => a + b, 0);
-      expect(sum).toBe(point.total);
-    }
   });
 });
 
@@ -381,14 +275,6 @@ describe('getHostMetricsHistory', () => {
         at: new Date(t0 + i * 30_000).toISOString(),
         // One reading spikes; every neighbor idles. Averaging would bury it.
         host: hostReading(i === 200 ? 95 : 5),
-        fleetCounts: {
-          active: 0,
-          frozen: 0,
-          stopped: 0,
-          archived: 0,
-          restoring: 0,
-          total: 0,
-        },
         samples: [],
         retentionHours: 168,
       });
@@ -416,25 +302,15 @@ describe('getHostMetricsHistory', () => {
   it('a null-CPU tick never competes for the peak', async () => {
     const { app, db } = testApp();
     const t0 = Date.parse('2026-07-15T10:00:00.000Z');
-    const counts = {
-      active: 0,
-      frozen: 0,
-      stopped: 0,
-      archived: 0,
-      restoring: 0,
-      total: 0,
-    };
     insertMetricsTick(db, {
       at: new Date(t0).toISOString(),
       host: hostReading(null),
-      fleetCounts: counts,
       samples: [],
       retentionHours: 168,
     });
     insertMetricsTick(db, {
       at: new Date(t0 + 30_000).toISOString(),
       host: hostReading(40),
-      fleetCounts: counts,
       samples: [],
       retentionHours: 168,
     });

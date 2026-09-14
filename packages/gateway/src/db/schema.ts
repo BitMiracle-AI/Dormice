@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  index,
   integer,
   real,
   sqliteTable,
@@ -10,12 +11,14 @@ import {
 /**
  * The gateway's tables are "how the fleet is configured and who may
  * enter" — never a sandbox's state, which lives in the ledger of the node
- * that runs it and is asked for when needed (find.ts). Five tables: the
- * nodes that have ever checked in, the fleet-wide settings row, the
- * templates, the API keys and the console account. The last four moved
- * here from the daemon with the configuration authority (design record
- * #22, 2026-09-13): one authority, one edit, every node pulls it at its
- * next check-in and keeps a copy in its own ledger.
+ * that runs it and is asked for when needed (find.ts). Five tables of
+ * configuration: the nodes that have ever checked in, the fleet-wide
+ * settings row, the templates, the API keys and the console account. The
+ * last four moved here from the daemon with the configuration authority
+ * (design record #22, 2026-09-13): one authority, one edit, every node
+ * pulls it at its next check-in and keeps a copy in its own ledger. And
+ * one table of observation, fleet_state_samples: the one figure no single
+ * node can compute (design record #26).
  */
 
 /**
@@ -186,3 +189,39 @@ export const consoleAccount = sqliteTable('console_account', {
 });
 
 export type ConsoleAccountRow = typeof consoleAccount.$inferSelect;
+
+/**
+ * The fleet's state counts over time — how many sandboxes sat in each
+ * state across every node — one row per node check-in (routes/nodes.ts,
+ * db/fleet-samples.ts): the sum of every node's last census at that
+ * moment, the data behind the console's concurrency curve and its peak.
+ * Written on the check-in rather than by a ticker of the gateway's own,
+ * which has none: the gateway only listens and compares, and the
+ * check-ins are its clock. The one figure no single node can compute
+ * (design record #26) — each node's own machine history stays on that
+ * node (host_metrics_samples), and the nodes wrote no fleet history of
+ * their own since the third cut. Kept 30 days, the dashboard's widest
+ * range; pruned with every write.
+ *
+ * Five explicit state columns instead of a JSON blob, as on the node's
+ * old table: the window peak is max(active) in one SQL aggregate, and the
+ * stacked chart needs each state addressable. `total` is stored
+ * redundantly so readers never re-derive it. `at` is indexed, not unique:
+ * two nodes may check in within the same millisecond.
+ */
+export const fleetStateSamples = sqliteTable(
+  'fleet_state_samples',
+  {
+    /** ISO 8601 UTC — when the check-in that produced this sum arrived. */
+    at: text('at').notNull(),
+    active: integer('active').notNull(),
+    frozen: integer('frozen').notNull(),
+    stopped: integer('stopped').notNull(),
+    archived: integer('archived').notNull(),
+    restoring: integer('restoring').notNull(),
+    total: integer('total').notNull(),
+  },
+  (table) => [index('fleet_state_samples_at_idx').on(table.at)],
+);
+
+export type FleetStateSampleRow = typeof fleetStateSamples.$inferSelect;

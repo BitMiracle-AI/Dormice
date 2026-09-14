@@ -28,6 +28,7 @@ import { apiKeyRoutes } from './routes/api-keys';
 import { consoleRoutes } from './routes/console';
 import { e2bControlRoutes } from './routes/e2b';
 import { envdTokenRoutes } from './routes/envd-token';
+import { fleetRoutes } from './routes/fleet';
 import { ingressRoutes } from './routes/ingress';
 import { nativeRoutes } from './routes/native';
 import { checkInRoutes, nodeRoutes } from './routes/nodes';
@@ -251,6 +252,7 @@ export function buildGatewayApp({
     api.addHook('onRequest', apiAuth);
     await api.register(envdTokenRoutes, { finder, token });
     await api.register(observeRoutes, { fleet, ask: askVerb });
+    await api.register(fleetRoutes, { db, fleet });
     // Its own sub-scope: the byte-preserving body parser it installs must
     // not reach the gateway's own verbs, which keep Fastify's JSON parsing.
     await api.register(nativeRoutes, { fleet, finder, locks, knobs, token });

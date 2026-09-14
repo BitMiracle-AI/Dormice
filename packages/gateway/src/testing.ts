@@ -107,6 +107,8 @@ export function testGateway(
     ingress?: Ingress;
     /** Forged by default: the suites here are about the settings machinery, not S3's availability. */
     probeS3?: NonNullable<Parameters<typeof buildGatewayApp>[0]['probeS3']>;
+    /** When this gateway "started" — what the startup grace is judged against (fleet.ts STARTUP_GRACE_MS). */
+    startedAt?: Date;
   } = {},
 ) {
   const db = openDb(':memory:');
@@ -118,7 +120,7 @@ export function testGateway(
   };
   const config = loadConfig(rawEnv);
   ensureSettings(db, config);
-  const fleet = new Fleet(db);
+  const fleet = new Fleet(db, opts.startedAt);
   // Under the fleet token the config carries: a suite that embeds a real
   // node beside this gateway (the SDK's) gives both the same token, and
   // the lookups must present it, not the scaffolding's default.

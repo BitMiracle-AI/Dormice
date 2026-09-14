@@ -1,6 +1,4 @@
 import {
-  getFleetStateHistoryRequestSchema,
-  getFleetStateHistoryResponseSchema,
   getHostMetricsHistoryRequestSchema,
   getHostMetricsHistoryResponseSchema,
   hostMetricsResponseSchema,
@@ -11,13 +9,11 @@ import type { Db } from '../db/db';
 import { countByState, listSandboxes } from '../db/ledger';
 import {
   bucketHostSamples,
-  queryFleetPeak,
-  queryFleetSnapshots,
   queryHostCpuPeak,
   queryHostSamples,
 } from '../db/metrics';
 import type { Executor } from '../executor/executor';
-import { bucketLast, resolveBucketSeconds, resolveWindow } from '../history';
+import { resolveBucketSeconds, resolveWindow } from '../history';
 import { CpuSampler, readHostReading } from '../host-metrics';
 
 export interface HostRoutesOptions {
@@ -120,52 +116,6 @@ export const hostRoutes: FastifyPluginAsyncZod<HostRoutesOptions> = async (
         })),
         bucketSeconds,
         peak: queryHostCpuPeak(db, startIso, endIso),
-      };
-    },
-  );
-
-  // The fleet's past: state counts per sampler tick, sliced and (past 360
-  // points) bucketed. Buckets carry whole raw snapshots — the last one in
-  // the bucket — so byState always sums to total; the concurrency peak is
-  // computed from raw rows and travels beside the points, immune to
-  // bucketing. A window the daemon slept through simply has no rows: the
-  // gap IS the answer. (The gateway answers this verb for the fleet from
-  // its own samples; this node-local answer leaves with the third cut.)
-  app.post(
-    '/getFleetStateHistory',
-    {
-      schema: {
-        body: getFleetStateHistoryRequestSchema,
-        response: { 200: getFleetStateHistoryResponseSchema },
-      },
-    },
-    async (request) => {
-      const { startIso, endIso, startMs, endMs } = resolveWindow(
-        request.body.start,
-        request.body.end,
-        24 * 3600_000,
-        new Date(),
-      );
-      const rows = queryFleetSnapshots(db, startIso, endIso);
-      const bucketSeconds = resolveBucketSeconds(rows.length, startMs, endMs);
-      const points =
-        bucketSeconds === null
-          ? rows
-          : bucketLast(rows, startMs, bucketSeconds);
-      return {
-        points: points.map((row) => ({
-          at: row.at,
-          byState: {
-            active: row.active,
-            frozen: row.frozen,
-            stopped: row.stopped,
-            archived: row.archived,
-            restoring: row.restoring,
-          },
-          total: row.total,
-        })),
-        bucketSeconds,
-        peak: queryFleetPeak(db, startIso, endIso),
       };
     },
   );

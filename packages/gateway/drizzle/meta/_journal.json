@@ -15,6 +15,13 @@
       "when": 1789371415369,
       "tag": "0001_configuration-authority",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789403526928,
+      "tag": "0002_fleet-state-samples",
+      "breakpoints": true
     }
   ]
 }

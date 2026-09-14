@@ -45,7 +45,7 @@ const envSchema = z.object({
     .default(30),
   /**
    * How long per-sandbox samples live (fleet rows are fixed at 30 days —
-   * FLEET_SNAPSHOT_KEEP_DAYS). A knob because volume scales with the fleet:
+   * HOST_SAMPLE_KEEP_DAYS). A knob because volume scales with the fleet:
    * at the 30s default, a worst-case 100 always-hot sandboxes over the
    * default 7 days is ~2M rows — fine for SQLite, but the operator of such
    * a box may want to trade history depth for disk.

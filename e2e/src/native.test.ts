@@ -872,17 +872,23 @@ describe('the observability verbs over a real daemon', () => {
     ).rejects.toMatchObject({ name: 'DormiceApiError', status: 404 });
   });
 
-  it('getFleetStateHistory reports points and a peak once the fleet was seen', async () => {
+  it('getFleetStateHistory at the door reports points and a peak once the fleet was seen; a node answers no fleet history of its own', async () => {
     await client().acquireSandbox('obs-timeline-key');
+    // The node's own answer: none — the fleet's history is the gateway's,
+    // and the node's 404 says where it lives.
+    await expect(client().getFleetStateHistory()).rejects.toMatchObject({
+      status: 404,
+      message: expect.stringMatching(/answers at the gateway/),
+    });
     const deadline = Date.now() + 15_000;
-    let timeline = await client().getFleetStateHistory();
+    let timeline = await viaDoor().getFleetStateHistory();
     // Wait for a tick that observed at least one sandbox alive.
     while (
       (timeline.points.length < 1 || (timeline.peak?.active ?? 0) < 1) &&
       Date.now() < deadline
     ) {
       await sleep(0.5);
-      timeline = await client().getFleetStateHistory();
+      timeline = await viaDoor().getFleetStateHistory();
     }
     expect(timeline.points.length).toBeGreaterThanOrEqual(1);
     expect(timeline.peak?.active).toBeGreaterThanOrEqual(1);
