@@ -16,14 +16,17 @@ curl -X POST http://127.0.0.1:3677/acquireSandbox \
 
 Two doors answer this wire. The **gateway** (`127.0.0.1:3677`) is the
 fleet's one door: it answers the configuration verbs itself — templates,
-API keys, settings, domains, nodes — and forwards every per-sandbox verb
-to the node that holds the sandbox (placing a new name on a node first).
-The **daemon** (`127.0.0.1:3676`) is a node: it answers the per-sandbox
-verbs and the list and observation verbs directly. Until the gateway
-answers the fleet-wide list and observation verbs itself (the next step
-of the move), point clients at the daemon for those; the gateway answers
-them with an honest `501` naming the node meanwhile. The rows below say
-which door.
+API keys, settings, domains, nodes — and the fleet's own figures
+(`getFleetMetrics`, `getFleetStateHistory`); it forwards every
+per-sandbox verb to the node that holds the sandbox (placing a new name
+on a node first), merges the fleet-wide lists from every node (saying in
+`silent` which node it could not include), and forwards a host reading
+to the node the request names. The **daemon** (`127.0.0.1:3676`) is a
+node: it answers the per-sandbox, list and host verbs for itself; asked
+for a verb that lives at the gateway, it answers `404` naming the
+gateway. Point clients at the gateway; the rows below say which door
+answers what. The three upgrade verbs are the one thing the gateway does
+not route yet (an honest `501`).
 
 Two rules cover the whole surface:
 
@@ -45,7 +48,7 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | `POST /acquireSandbox` | both | create, wake, or restore — idempotent per name; at the gateway a new name is placed on a node first | 400 invalid policy/unknown template; 503 with `Retry-After` when no node can take a new sandbox (each node and its reason named) |
 | `POST /updatePolicy` | both | patch an existing sandbox's [lifecycle policy](/docs/lifecycle#change-the-policy-later) in place; never wakes, never resets the idle clock | 404 unknown name, 400 invalid merged policy |
 | `POST /updateMetadata` | both | replace an existing sandbox's label set wholesale (`{}` clears); never wakes, never resets the idle clock | 404 unknown name |
-| `POST /listSandboxes` | daemon | every sandbox and its state; never wakes anything | — |
+| `POST /listSandboxes` | both | every sandbox and its state; never wakes anything. At the gateway: every node's list, with `silent` naming any node it could not include (down, not listening yet, or too slow) — a shorter list is never mistaken for the whole fleet | — |
 | `POST /execCommand` | both | run a command, buffered | 404 unknown name, 409 archived/restoring |
 | `POST /writeFiles` | both | batch write, base64 in JSON | 404/409 as above; body over 48 MiB refused |
 | `POST /writeFile` | both | write one file — the single form of `writeFiles` | same as `writeFiles` |
@@ -60,10 +63,12 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | `POST /listApiKeys` | gateway | every key ever minted, revoked ones included, newest first — no secrets | — |
 | `POST /updateApiKey` | gateway | edit a key by `id`: rename, change/clear `expiresAt`, park/resume via `disabled` — absent fields untouched | 404 unknown id; 409 revoked row or name collision |
 | `POST /revokeApiKey` | gateway | soft-revoke a key by `id`; idempotent (`revoked: false` when none was) | — |
-| `POST /getHostMetrics` | daemon | host snapshot; never wakes anything | — |
+| `POST /getHostMetrics` | both | one machine's snapshot; never wakes anything. At the gateway, `nodeId` names the machine (a fleet of one needs none) | 400 at the gateway when the fleet has several nodes and none is named; 404 unknown `nodeId` |
+| `POST /getFleetMetrics` | gateway | the figures that add up across the fleet — nodes (total / reachable / reported), the sandbox census by state, the sandbox disks' bill — from the nodes' last check-ins, asking nobody; `nodes.reported` says how many nodes the sums cover | — |
+| `POST /getFleetStateHistory` | gateway | how many sandboxes sat in each state over time, one sample per node check-in, with the window's concurrency `peak`; bucketed past 360 points by whole rows | 400 unparseable `start`/`end` |
 | `POST /getSandboxMetrics` | both | one sandbox's live CPU/memory/disk sample; `sample` is `null` when nothing is running | 404 unknown name |
-| `POST /listSandboxMetrics` | daemon | every measurable sandbox's sample in one answer | — |
-| `POST /listSandboxImages` | daemon | each sandbox's born image vs its template's current one | — |
+| `POST /listSandboxMetrics` | both | every measurable sandbox's sample in one answer; at the gateway, every node's, with `silent` as in `listSandboxes` | — |
+| `POST /listSandboxImages` | both | each sandbox's born image vs its template's current one; at the gateway, every node's, with `silent` as in `listSandboxes` | — |
 | `POST /getConfig` | gateway | effective configuration: the gateway's env knobs (read-only; secrets reported present-or-absent, value never sent), the live fleet `settings`, and `configVersion` — the number every node reports back once it runs this configuration | — |
 | `POST /updateSettings` | gateway | rewrite the fleet settings (new-sandbox defaults, default policy, the S3 archive store, the sandbox domain, the per-sandbox pids cap) — no restart; the version counts up and every node applies the bundle at its next check-in (within 15 seconds); each provided group replaces that group whole. The `s3` group takes all six fields every time (keys included — they are never read back) and is probed with a real write-read-delete round trip before anything is saved; `s3: null` turns archiving off. `sandboxDomain` takes a bare hostname or `null`; `sandboxDomainAliases` takes the full list of inbound-only alias hostnames (`[]` clears) — swapping the canonical domain is one call carrying both fields, see [Exposing ports](/docs/ports). `pidsLimit` (floor 256, never unlimited) reaches new containers at birth, running sandboxes in place as their node takes the bundle, and frozen or stopped ones at their next wake — no rebuild | 400 empty patch, a `pidsLimit` below 256, a default policy that asks to archive with no store in force, a failed probe (S3 answered 4xx), clearing/moving the store while sandboxes are archived in it (counted across the fleet from the nodes' check-ins), or an alias list that contradicts the post-patch state (duplicates, the canonical domain listed as an alias, or aliases left standing with no canonical domain); 502 when the probed store is unreachable; 503 with `Retry-After` when a node has not checked in since the gateway started, so the archived count is unknown |
 | `POST /getIngress` | gateway | domains bound on the gateway's managed reverse proxy, with live DNS and certificate probes | — |

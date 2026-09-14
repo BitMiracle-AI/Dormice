@@ -36,14 +36,28 @@ account (via the token) invalidates every existing session.
 
 ## Overview
 
-The "is this machine healthy" page: CPU, memory, **swap** and the **data
-disk** as first-class cards — swap filling up means "idle is free" is
-ending, and a full data disk is the real capacity ceiling. Below them:
-sandbox counts by lifecycle state and the disk-overcommit figure
-(promised vs actually occupied — the same numbers as
-[`getHostMetrics`](/docs/metrics)). Usage bars turn amber at 75% and red
-at 90%; a host without swap gets an amber warning pointing at
-`dor doctor`.
+The "how busy is the fleet" page: sandboxes active now, the window's
+concurrency peak, the total by lifecycle state and the disk-overcommit
+figure (promised vs actually occupied — the same numbers as
+[`getFleetMetrics`](/docs/metrics)), the stacked concurrency curve over
+the chosen window, and a nodes card with each machine's CPU, memory and
+data-disk levels. When a node has not reported since the gateway
+started, the card says so — the figures above are then a lower bound.
+
+## Nodes
+
+Every node that has ever checked in, one row each: reachable or not,
+the build it runs (marked when it differs from the gateway's), CPU,
+memory and data-disk levels, its sandbox census, and its configuration
+version against the gateway's — in sync, behind, or not open yet. The
+row menu sets the one per-node knob (extra swap the node's daemon
+manages on its own data disk) and removes a node that is gone for good;
+the gateway refuses to remove one still checking in. A node's own page
+shows its **swap** and **data disk** beside CPU and memory, each with
+its trend and the window's CPU peak — swap filling up means "idle is
+free" is ending, and a full data disk is the real capacity ceiling.
+Usage bars turn amber at 75% and red at 90%; a host without swap gets an
+amber warning pointing at `dor doctor`.
 
 ## Sandboxes
 

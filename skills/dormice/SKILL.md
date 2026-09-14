@@ -131,11 +131,15 @@ nodes learn a template at their next check-in),
 gateway: revocable peers of the API token with optional expiry and a
 reversible disable switch; the create response shows the key once, never
 again; these four verbs accept only the token),
-`getHostMetrics`, `getSandboxMetrics` / `listSandboxMetrics` (live
-resource samples; never wake anything), `listSandboxImages` (who still
-runs an old template image) — the list and host verbs at the daemon —
-`getConfig` / `updateSettings` (the fleet's settings at the gateway,
-secrets redacted; applied by every node at its next check-in),
+`getHostMetrics` (one machine's reading; at the gateway name the node
+with `nodeId`, a fleet of one needs none), `getSandboxMetrics` /
+`listSandboxMetrics` (live resource samples; never wake anything),
+`listSandboxImages` (who still runs an old template image) — the lists
+at the gateway are every node's, with `silent` naming a node it could
+not include — `getFleetMetrics` / `getFleetStateHistory` (the fleet's
+sums and its census over time, answered by the gateway from the nodes'
+check-ins), `getConfig` / `updateSettings` (the fleet's settings at the
+gateway, secrets redacted; applied by every node at its next check-in),
 `getIngress` / `setIngress` (bind domains on the gateway's managed reverse
 proxy), `listNodes` (every node and what it last reported).
 `execCommand` takes

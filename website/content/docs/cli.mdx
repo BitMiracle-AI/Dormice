@@ -13,12 +13,9 @@ export DORMICE_ENDPOINT=http://127.0.0.1:3677
 export DORMICE_API_TOKEN=<token>   # on the host: grep ^DORMICE_API_TOKEN /etc/dormice/env
 ```
 
-Two forms read the sandbox list — `dor sandbox ls`, and `dor sandbox
-meta <name>` without labels (showing labels reads the list) — and the
-gateway does not route the list verbs yet: for those, point
-`DORMICE_ENDPOINT` at the daemon (`http://127.0.0.1:3676`) until it
-does. Everything else on this page goes to the gateway, `meta` with
-labels included.
+Everything on this page goes to the gateway. `dor sandbox ls` lists
+every node's sandboxes; when a node did not answer, a `warning:` line
+under the table names it and says its sandboxes are not listed.
 
 Errors print as one line on stderr (no stack traces at a shell prompt)
 and exit 1.
