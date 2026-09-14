@@ -175,6 +175,44 @@ describe('Finder', () => {
     expect(queries.length).toBe(4);
   });
 
+  it('a node that reported no configuration copy is not dialled: empty, it is a no; holding sandboxes, it is silence saying so — and a node not heard from since the start is asked', async () => {
+    const db = openDb(':memory:');
+    migrateDb(db, MIGRATIONS);
+    const fleet = new Fleet(db);
+    fleet.checkIn(checkInOf('a', 'http://a:80'), NOW);
+    // b is booting: checked in, holds no copy, its port is shut.
+    fleet.checkIn(
+      checkInOf('b', 'http://b:80', { configVersion: null, active: 0 }),
+      NOW,
+    );
+    const { ask, asked } = scripted({});
+    const finder = new Finder(fleet, new NameCache(), ask, silentLog);
+    expect(await finder.byName('new-name')).toEqual({ kind: 'none' });
+    expect(asked).toEqual(['a']);
+
+    // The same node, but its ledger holds sandboxes (a node upgraded into
+    // the fleet, waiting for its first bundle): unreachable, not absent.
+    asked.length = 0;
+    fleet.checkIn(
+      checkInOf('b', 'http://b:80', { configVersion: null, active: 3 }),
+      NOW,
+    );
+    const unsure = await finder.byName('new-name');
+    expect(unsure).toMatchObject({
+      kind: 'unsure',
+      silent: [{ nodeId: 'b', why: expect.stringMatching(/not listening/) }],
+    });
+    expect(asked).toEqual(['a']);
+
+    // A gateway restarted over the same rows: nothing has checked in,
+    // both are asked — b may be running on the copy it kept.
+    asked.length = 0;
+    await new Finder(new Fleet(db), new NameCache(), ask, silentLog).byName(
+      'new-name',
+    );
+    expect(asked.sort()).toEqual(['a', 'b']);
+  });
+
   it('an empty fleet finds nothing and asks nobody', async () => {
     const { ask, asked } = scripted({});
     expect(

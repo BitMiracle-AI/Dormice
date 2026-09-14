@@ -64,6 +64,20 @@ export function downReason(node: NodeState, now: Date): string | null {
   return null;
 }
 
+/**
+ * A node that has checked in since this gateway started and reported no
+ * configuration copy: its daemon fetches its first bundle before it opens
+ * its port (server/main.ts, CheckIn.untilConfigured), so until its next
+ * check-in says otherwise nothing dialled there answers — the socket is
+ * shut. Placement refuses it, a lookup does not dial it (find.ts), a
+ * merged list does not wait on it (merge.ts). A node not heard from at
+ * all since the start is not this: it may well be running on a copy it
+ * kept, and is asked like any other.
+ */
+export function awaitingFirstConfig(node: NodeState): boolean {
+  return node.reading !== null && node.configVersion === null;
+}
+
 /** What a check-in came to: taken (and whether it joined or moved), or refused with the sentence the node is told (routes/nodes.ts answers 409). */
 export type CheckInOutcome =
   | { node: NodeState; joined: boolean; movedFrom: string | null }

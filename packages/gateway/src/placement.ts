@@ -1,4 +1,4 @@
-import { downReason, type NodeState } from './fleet';
+import { awaitingFirstConfig, downReason, type NodeState } from './fleet';
 
 export interface PlacementKnobs {
   /** A reading above this refuses the node. */
@@ -90,10 +90,10 @@ export function pick(
       continue;
     }
     // A node that reported no configuration copy has no defaults to build
-    // a sandbox from — and is not listening yet: the daemon fetches its
-    // first bundle before it opens its port (server/main.ts), and a create
-    // sent there would be refused at the socket.
-    if (node.configVersion === null) {
+    // a sandbox from — and is not listening yet (fleet.ts
+    // awaitingFirstConfig): a create sent there would be refused at the
+    // socket.
+    if (awaitingFirstConfig(node)) {
       refuse(
         'holds no configuration copy yet — its first bundle rides on its next check-in',
       );

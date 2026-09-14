@@ -1,7 +1,7 @@
 import type { SignedFileLookup } from '@dormice/shared';
 import type { CacheEntry, NameCache } from './cache';
-import type { Fleet, NodeState } from './fleet';
-import type { AskNode, LookupQuery } from './lookup';
+import { awaitingFirstConfig, type Fleet, type NodeState } from './fleet';
+import type { AskNode, LookupAnswer, LookupQuery } from './lookup';
 
 /**
  * Where a sandbox is, adjudicated once for every face:
@@ -68,6 +68,33 @@ export class Finder {
   }
 
   /**
+   * One node's answer to one question — or, for a node that has checked
+   * in since this gateway started and reported no configuration copy, the
+   * answer without the question (fleet.ts awaitingFirstConfig): its port
+   * is shut until its first bundle applies, so a dial there is refused at
+   * the socket and would read as silence — a 503 to every caller of every
+   * uncached name for as long as the node boots (left by the second cut's
+   * review, 2026-09-14). Its reading says what it holds: nothing, and it
+   * is a plain no; sandboxes, and it is silence in the operator's words —
+   * they are there, and unreachable until its next check-in says the port
+   * is open.
+   */
+  private askNode(node: NodeState, query: LookupQuery): Promise<LookupAnswer> {
+    if (awaitingFirstConfig(node)) {
+      const total = node.reading?.sandboxes.total ?? 0;
+      return Promise.resolve(
+        total === 0
+          ? { kind: 'absent' }
+          : {
+              kind: 'silent',
+              why: `not listening — it holds ${total} sandboxes but no configuration copy yet, and its first bundle rides on its next check-in`,
+            },
+      );
+    }
+    return this.ask(node, query);
+  }
+
+  /**
    * The bare signed-URL form: the signature is the only identity the
    * request carries, and only the secret of the node that minted it reads
    * it — so there is no key to consult the cache by, every node is asked,
@@ -93,7 +120,7 @@ export class Finder {
       } else if (!confirm) {
         return { kind: 'one', node, id: cached.id, name: cached.name };
       } else {
-        const answer = await this.ask(node, { id: cached.id });
+        const answer = await this.askNode(node, { id: cached.id });
         if (answer.kind === 'found') {
           return { kind: 'one', node, id: answer.id, name: answer.name };
         }
@@ -115,7 +142,7 @@ export class Finder {
     const answers = await Promise.all(
       members.map(async (node) => ({
         node,
-        answer: await this.ask(node, query),
+        answer: await this.askNode(node, query),
       })),
     );
     const found = answers.flatMap(({ node, answer }) =>
@@ -169,7 +196,7 @@ export class Finder {
       this.cache.evict(entry);
       return;
     }
-    const answer = await this.ask(node, { id: entry.id });
+    const answer = await this.askNode(node, { id: entry.id });
     if (answer.kind === 'absent') this.cache.evict(entry);
   }
 }

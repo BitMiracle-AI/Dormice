@@ -615,6 +615,61 @@ describe('check-in and the node verbs', () => {
     expect(warned()).toHaveLength(3);
   });
 
+  it('a node behind on configuration is said to be so once per gap, not at every check-in; catching up is said once', async () => {
+    const logs: string[] = [];
+    const h = await gateway(['b'], {}, { logs });
+    const node = h.nodes[0];
+    if (!node) throw new Error('node lost');
+    const rides = () =>
+      logs.filter((l) => l.includes('the bundle rides on this answer'));
+    const caughtUp = () =>
+      logs.filter((l) =>
+        l.includes('now runs the current configuration version'),
+      );
+    // The harness's first check-in reported version 1 = current: nothing
+    // said. Three check-ins on version 0 while current is 1: one line.
+    expect(rides()).toHaveLength(0);
+    for (let i = 0; i < 3; i += 1) {
+      await rpc(
+        h,
+        '/checkIn',
+        checkInOf('b', node.endpoint, { configVersion: 0 }),
+      );
+    }
+    expect(rides()).toHaveLength(1);
+    expect(JSON.parse(rides()[0] ?? '{}')).toMatchObject({
+      nodeId: 'b',
+      runs: 0,
+      current: 1,
+    });
+    // An edit widens the gap: news again, once.
+    await rpc(h, '/updateSettings', { pidsLimit: 512 });
+    await rpc(
+      h,
+      '/checkIn',
+      checkInOf('b', node.endpoint, { configVersion: 0 }),
+    );
+    await rpc(
+      h,
+      '/checkIn',
+      checkInOf('b', node.endpoint, { configVersion: 0 }),
+    );
+    expect(rides()).toHaveLength(2);
+    // The node applies it: said once, then nothing while it stays current.
+    await rpc(
+      h,
+      '/checkIn',
+      checkInOf('b', node.endpoint, { configVersion: 2 }),
+    );
+    await rpc(
+      h,
+      '/checkIn',
+      checkInOf('b', node.endpoint, { configVersion: 2 }),
+    );
+    expect(caughtUp()).toHaveLength(1);
+    expect(rides()).toHaveLength(2);
+  });
+
   it('right after a gateway start a node not yet heard from cannot be removed; past two default intervals it can', async () => {
     // A restart: the rows are known, nothing has checked in yet.
     const fresh = await gateway(['b']);

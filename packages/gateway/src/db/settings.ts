@@ -111,13 +111,8 @@ export function readConfigVersion(db: Db): number {
   return readRow(db).version;
 }
 
-/**
- * The S3 store in force, keys included — for the probe that guards a
- * settings write and for the bundle a node pulls, never for the
- * observation wire (readSettings withholds both keys).
- */
-export function readS3Settings(db: Db): S3Settings | null {
-  const row = readRow(db);
+/** The six S3 columns read back as one unit, keys included — or null when the store is off. */
+function s3Of(row: SettingsRow): S3Settings | null {
   if (row.s3Endpoint === null) return null;
   return {
     endpoint: row.s3Endpoint,
@@ -129,6 +124,31 @@ export function readS3Settings(db: Db): S3Settings | null {
     forcePathStyle: row.s3ForcePathStyle!,
     // biome-ignore-end lint/style/noNonNullAssertion: the six columns write as one unit (s3Columns)
   };
+}
+
+/**
+ * The S3 store in force, keys included — for the probe that guards a
+ * settings write, never for the observation wire (readSettings withholds
+ * both keys).
+ */
+export function readS3Settings(db: Db): S3Settings | null {
+  return s3Of(readRow(db));
+}
+
+/**
+ * What of this row a node's bundle carries — the version, the knobs and
+ * the store with its keys — from one read (db/node-config.ts): one
+ * statement at every check-in that carries a bundle instead of three, and
+ * no way for the version to come from one write and the content from the
+ * next.
+ */
+export function readSettingsForBundle(db: Db): {
+  version: number;
+  settings: RuntimeSettings;
+  s3: S3Settings | null;
+} {
+  const row = readRow(db);
+  return { version: row.version, settings: toView(row), s3: s3Of(row) };
 }
 
 /**

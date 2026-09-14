@@ -57,6 +57,17 @@ export const checkInRoutes: FastifyPluginAsyncZod<
    * the same discipline, server/check-in.ts).
    */
   const twinsWarned = new Map<string, string>();
+  /**
+   * Per node, the gap (version it runs → version current) the bundle was
+   * last said to ride on — so the line below is said when a node falls
+   * behind or the gap changes, not at every check-in: a node that cannot
+   * apply a bundle reports the old version every fifteen seconds and is
+   * answered the bundle every time (the retry is the protocol,
+   * server/check-in.ts) — one situation, not two hundred and forty lines
+   * an hour (left by the second cut's review, 2026-09-14). Catching up is
+   * said once too: it is the edit's arrival at that node.
+   */
+  const bundleSaid = new Map<string, string>();
 
   app.post(
     '/checkIn',
@@ -119,15 +130,26 @@ export const checkInRoutes: FastifyPluginAsyncZod<
         );
       }
       const version = readConfigVersion(db);
-      if (request.body.configVersion === version) {
+      const runs = request.body.configVersion;
+      if (runs === version) {
+        if (bundleSaid.delete(node.id)) {
+          request.log.info(
+            { nodeId: node.id, version },
+            'the node now runs the current configuration version',
+          );
+        }
         return { configVersion: version };
       }
-      request.log.info(
-        { nodeId: node.id, runs: request.body.configVersion, current: version },
-        request.body.configVersion === null
-          ? 'a node with no configuration copy checked in; the bundle rides on this answer'
-          : 'a node runs another configuration version; the bundle rides on this answer',
-      );
+      const gap = `${String(runs)}→${version}`;
+      if (bundleSaid.get(node.id) !== gap) {
+        bundleSaid.set(node.id, gap);
+        request.log.info(
+          { nodeId: node.id, runs, current: version },
+          runs === null
+            ? 'a node with no configuration copy checked in; the bundle rides on this answer'
+            : 'a node runs another configuration version; the bundle rides on this answer',
+        );
+      }
       return { configVersion: version, config: readNodeConfig(db, node) };
     },
   );
