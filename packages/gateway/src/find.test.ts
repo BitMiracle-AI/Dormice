@@ -11,6 +11,7 @@ import {
   httpAskNode,
   LOOKUP_TIMEOUT_MS,
   type LookupAnswer,
+  type LookupQuery,
 } from './lookup';
 import { checkInOf } from './testing';
 
@@ -143,6 +144,35 @@ describe('Finder', () => {
       silent: [{ nodeId: 'b', why: 'timeout' }],
     });
     expect(warned).toHaveLength(1);
+  });
+
+  it('by signature there is no cache to consult: every node is asked with the query as it came, the one yes is cached by id and name, and the next signed request asks again', async () => {
+    const fleet = fleetOf('a', 'b');
+    const cache = new NameCache();
+    const queries: LookupQuery[] = [];
+    const ask: AskNode = async (node, query) => {
+      queries.push(query);
+      return node.id === 'b'
+        ? { kind: 'found', id: 'sb-9', name: 'signer', state: 'active' }
+        : { kind: 'absent' };
+    };
+    const finder = new Finder(fleet, cache, ask, silentLog);
+    const signed = {
+      operation: 'read' as const,
+      query: 'path=out.txt&signature=v1_abc',
+    };
+    const found = await finder.bySignature(signed);
+    expect(found).toMatchObject({ kind: 'one', id: 'sb-9', name: 'signer' });
+    expect(found.kind === 'one' && found.node.id).toBe('b');
+    expect(queries).toEqual([{ signed }, { signed }]);
+    expect(cache.getById('sb-9')?.nodeId).toBe('b');
+    expect(cache.getByName('signer')?.id).toBe('sb-9');
+    // The other faces now find it without asking; a signature is not a
+    // key the cache holds, so a signed request is a round of questions.
+    expect((await finder.byId('sb-9')).kind).toBe('one');
+    expect(queries.length).toBe(2);
+    await finder.bySignature(signed);
+    expect(queries.length).toBe(4);
   });
 
   it('an empty fleet finds nothing and asks nobody', async () => {

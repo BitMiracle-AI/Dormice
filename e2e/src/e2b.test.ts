@@ -235,6 +235,29 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
+  it('signed URLs minted through the door work through the door: the form carries no sandbox id, and the door asks the node', async () => {
+    const sbx = await Sandbox.create({
+      ...connection(),
+      apiUrl: `${door()}/e2b/api`,
+      sandboxUrl: `${door()}/e2b/envd`,
+    });
+    try {
+      await sbx.files.write('signed/door.txt', 'through the door\n');
+      const url = await sbx.downloadUrl('signed/door.txt');
+      // The URL the SDK really builds off a door origin: the door's root
+      // /files, no sandbox id anywhere — what a browser opens.
+      expect(url.startsWith(`${door()}/files?`)).toBe(true);
+      const res = await fetch(url);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('through the door\n');
+      const forged = new URL(url);
+      forged.searchParams.set('signature', 'v1_forged');
+      expect((await fetch(forged)).status).toBe(401);
+    } finally {
+      await sbx.kill();
+    }
+  });
+
   it('reports info, appears in list, and can be found by metadata', async () => {
     const sbx = await Sandbox.create({
       ...connection(),

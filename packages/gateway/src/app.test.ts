@@ -97,6 +97,19 @@ class FakeNode {
     return [...this.sandboxes.values()].find((s) => s.id === id);
   }
 
+  /**
+   * This double's signing secret is its own id: a signature
+   * `sig-<node>-<sandboxId>` speaks for that sandbox here and for nothing
+   * anywhere else — as a real node's HMAC, keyed by its own secret, does.
+   */
+  bySignature(query: string) {
+    const signature = new URLSearchParams(query).get('signature') ?? '';
+    const prefix = `sig-${this.id}-`;
+    return signature.startsWith(prefix)
+      ? this.byId(signature.slice(prefix.length))
+      : undefined;
+  }
+
   // Inferred return type on purpose: the early `return json(...)` exits
   // read as statements, and an explicit void would flag each one.
   private answer(
@@ -136,6 +149,31 @@ class FakeNode {
       });
     }
     this.hits.push({ path, auth });
+    if (path === '/files') {
+      // The daemon's signed file door as the gateway meets it: judged by
+      // the query alone, no headers wanted, CORS on every answer — and
+      // here an echo of what arrived.
+      const sandbox = this.bySignature(url.slice(url.indexOf('?') + 1));
+      res.writeHead(sandbox ? 200 : 401, {
+        'content-type': 'application/json',
+        'access-control-allow-origin': '*',
+      });
+      res.end(
+        JSON.stringify(
+          sandbox
+            ? {
+                signedDoor: this.id,
+                sandboxId: sandbox.id,
+                method: req.method,
+                url,
+                auth: auth ?? null,
+                bodyBytes: text.length,
+              }
+            : { code: 'unauthenticated', message: 'invalid signature' },
+        ),
+      );
+      return;
+    }
     const body = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     if (path.startsWith('/e2b/envd/')) {
       return json(200, {
@@ -187,7 +225,13 @@ class FakeNode {
         return json(200, { sandboxNames: [] });
       }
       case '/lookupSandbox': {
-        const sandbox = 'id' in body ? this.byId(body.id as string) : found;
+        const signed = body.signed as { query: string } | undefined;
+        const sandbox =
+          signed !== undefined
+            ? this.bySignature(signed.query)
+            : 'id' in body
+              ? this.byId(body.id as string)
+              : found;
         return json(
           200,
           sandbox
@@ -1133,11 +1177,13 @@ describe('the E2B faces', () => {
     });
     expect(preflight.status).toBe(204);
     expect(preflight.headers.get('access-control-allow-origin')).toBe('*');
+    // The bare signed form is its own face (below): a signature nobody
+    // signed is the door's own 401, with CORS.
     const bare = await fetch(`${h.endpoint}/files?signature=x`);
-    expect(bare.status).toBe(501);
+    expect(bare.status).toBe(401);
     expect(bare.headers.get('access-control-allow-origin')).toBe('*');
     expect(((await bare.json()) as { code: string }).code).toBe(
-      'unimplemented',
+      'unauthenticated',
     );
   });
 });
@@ -1391,5 +1437,97 @@ describe('the sandbox port proxy face', () => {
       ).status,
     ).toBe(200);
     expect((await viaHost(h, host, '/x')).status).toBe(404);
+  });
+});
+
+describe('the bare signed-URL face', () => {
+  it('a signed /files request at the root is routed by asking every node whose signature it is: download and upload reach the node whose sandbox signed it, whole and credential-less; a signature nobody signed is the door’s own 401, no signature the door’s first rule; a silent node makes it a 503', async () => {
+    const h = await gateway(['a', 'b']);
+    const nodeA = h.nodes[0] as FakeNode;
+    const nodeB = h.nodes[1] as FakeNode;
+    // Built behind the gateway's back: nothing cached, nothing but the
+    // signature to go on — the form the SDK's downloadUrl mints off the
+    // door's origin, whatever domain is in force.
+    const staged = await stage(nodeB, 'signer');
+    const query = `path=out.txt&signature=${encodeURIComponent(`sig-b-${staged.id}`)}&signature_expiration=1`;
+    const download = await fetch(`${h.endpoint}/files?${query}`);
+    expect(download.status).toBe(200);
+    expect(download.headers.get('access-control-allow-origin')).toBe('*');
+    expect(await download.json()).toEqual({
+      signedDoor: 'b',
+      sandboxId: staged.id,
+      method: 'GET',
+      url: `/files?${query}`,
+      auth: null,
+      bodyBytes: 0,
+    });
+    // Every node was asked, once; what b answered is cached by id, so the
+    // sandbox's other faces now ask nobody.
+    expect(nodeA.lookups()).toBe(1);
+    expect(nodeB.lookups()).toBe(1);
+    expect(h.cache.getById(staged.id)?.nodeId).toBe('b');
+    // An upload: the body rides whole to the same node, once — never
+    // "tried" against each node. A signature is no key the cache holds,
+    // so each signed request is one round of questions.
+    const upload = await fetch(`${h.endpoint}/files?${query}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: 'x'.repeat(5000),
+    });
+    expect(upload.status).toBe(200);
+    expect(await upload.json()).toMatchObject({
+      signedDoor: 'b',
+      method: 'POST',
+      bodyBytes: 5000,
+    });
+    expect(nodeA.lookups()).toBe(2);
+    expect(nodeB.hits.filter((hit) => hit.path === '/files').length).toBe(2);
+    expect(nodeA.hits.some((hit) => hit.path === '/files')).toBe(false);
+
+    // A signature no node's sandbox signed: the door's own 401, in its
+    // words and dialect, readable by a browser.
+    const forged = await fetch(
+      `${h.endpoint}/files?path=out.txt&signature=v1_forged`,
+    );
+    expect(forged.status).toBe(401);
+    expect(forged.headers.get('access-control-allow-origin')).toBe('*');
+    expect(await forged.json()).toEqual({
+      code: 'unauthenticated',
+      message: 'invalid signature',
+    });
+    // No signature at all: the door's first rule, and no node is asked.
+    const asked = nodeA.lookups();
+    const bare = await fetch(`${h.endpoint}/files?path=out.txt`);
+    expect(bare.status).toBe(401);
+    expect(bare.headers.get('access-control-allow-origin')).toBe('*');
+    expect(await bare.json()).toEqual({
+      code: 'unauthenticated',
+      message: 'missing signature query parameter',
+    });
+    expect(nodeA.lookups()).toBe(asked);
+    // The preflight is the door's own answer, as on the envd face.
+    const preflight = await fetch(`${h.endpoint}/files`, {
+      method: 'OPTIONS',
+      headers: { 'access-control-request-headers': 'content-type' },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('access-control-allow-headers')).toBe(
+      'content-type',
+    );
+
+    // A node that does not answer: a signature it may recognize cannot be
+    // called invalid — retry. One that another node does recognize still
+    // routes: one yes wins over a silence.
+    await nodeA.stop();
+    const unsure = await fetch(
+      `${h.endpoint}/files?path=out.txt&signature=v1_forged`,
+    );
+    expect(unsure.status).toBe(503);
+    expect(unsure.headers.get('retry-after')).toBe('15');
+    expect(unsure.headers.get('access-control-allow-origin')).toBe('*');
+    expect(((await unsure.json()) as { code: string }).code).toBe(
+      'unavailable',
+    );
+    expect((await fetch(`${h.endpoint}/files?${query}`)).status).toBe(200);
   });
 });

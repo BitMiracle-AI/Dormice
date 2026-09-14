@@ -1,3 +1,4 @@
+import type { SignedFileLookup } from '@dormice/shared';
 import type { CacheEntry, NameCache } from './cache';
 import type { Fleet, NodeState } from './fleet';
 import type { AskNode, LookupQuery } from './lookup';
@@ -64,6 +65,18 @@ export class Finder {
 
   byId(id: string): Promise<Found> {
     return this.find(this.cache.getById(id), { id }, false);
+  }
+
+  /**
+   * The bare signed-URL form: the signature is the only identity the
+   * request carries, and only the secret of the node that minted it reads
+   * it — so there is no key to consult the cache by, every node is asked,
+   * and the one whose live sandbox signed it says so (the node's
+   * lookupSandbox, its signing.ts). What it answers is cached by id and
+   * name like any other finding, for the sandbox's other faces.
+   */
+  bySignature(signed: SignedFileLookup): Promise<Found> {
+    return this.find(undefined, { signed }, false);
   }
 
   private async find(

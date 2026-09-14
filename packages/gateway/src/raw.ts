@@ -1,6 +1,6 @@
 import http from 'node:http';
 import type { Duplex } from 'node:stream';
-import { isEnvdFilesForm } from '@dormice/shared';
+import { isEnvdFilesForm, type SignedFileLookup } from '@dormice/shared';
 import type { Logger } from 'pino';
 import {
   type Classified,
@@ -28,13 +28,49 @@ export interface RawFacesDeps {
 export const RETRY_AFTER_SECONDS = 15;
 
 type ProxyFace = Extract<Classified, { face: 'proxy' }>;
+type KeyedFace = Exclude<Classified, { face: 'fastify' }>['face'];
 
-/** What a keyed face learned of a sandbox id: the node to forward to, or the refusal to answer with. */
-type Located = { node: NodeState } | { refusal: RenderedError };
+/** What a keyed face learned of the sandbox it was asked for: the node to forward to (and the id the sandbox goes by), or the refusal to answer with. */
+type Located = { node: NodeState; id: string } | { refusal: RenderedError };
 
 /**
- * The faces Fastify never sees — keyed on a header on any path, judged on
- * the raw request the serverFactory hands over:
+ * What a keyed face is looking for, in the words its refusals use: how
+ * the sentences name it, and what "no node holds it" means on that face.
+ */
+interface Subject {
+  label: string;
+  none: RenderedError;
+}
+
+/** A sandbox id nobody holds: it may have been destroyed — the daemon's own proxy says "not found" for one it lacks. */
+const byId = (id: string): Subject => ({
+  label: `sandbox "${id}"`,
+  none: {
+    status: 502,
+    connectCode: 'unavailable',
+    message: `sandbox "${id}" is on no node — it may have been destroyed`,
+  },
+});
+
+/**
+ * A signature no node's live sandbox signed is exactly what the door
+ * itself calls "invalid signature": a forged one and a destroyed
+ * sandbox's read the same at either door (the node's signing.ts skips
+ * dead rows), and a browser-direct upload must be able to read the
+ * refusal — the door's own 401, its own words.
+ */
+const bySignature: Subject = {
+  label: "the signed URL's sandbox",
+  none: {
+    status: 401,
+    connectCode: 'unauthenticated',
+    message: 'invalid signature',
+  },
+};
+
+/**
+ * The faces Fastify never sees — keyed on a header on any path, or on a
+ * signature — judged on the raw request the serverFactory hands over:
  *   proxy       the sandbox port proxy, keyed by the Host label (E2B's
  *               getHost() URL, classify.ts): the node holding the id is
  *               found and the request goes there whole — Host kept, since
@@ -53,9 +89,17 @@ type Located = { node: NodeState } | { refusal: RenderedError };
  *               own HMAC). Preflights are answered here: the node answers
  *               them without auth, and a preflight that came back 401
  *               without CORS would fail every browser-direct upload.
- *   signedRoot  the bare signed-URL form: no sandbox id anywhere the
- *               gateway can read without the node's signing secret, so an
- *               honest 501.
+ *   signedRoot  the bare signed-URL form, `/files?…signature=…` at the
+ *               root — what the SDK's uploadUrl/downloadUrl mint off the
+ *               API origin they were given, whatever domain is in force,
+ *               and what a browser or a curl then opens with nothing but
+ *               the query. No sandbox id anywhere in it: the signature is
+ *               the identity, and only the secret of the node that minted
+ *               it can read it — so every node is asked whose it is
+ *               (finder.bySignature) and the request goes whole to the one
+ *               whose live sandbox signed it, for its door to judge the
+ *               query again in full. Preflights are answered here, as the
+ *               envd face's are.
  *
  * Nobody has authenticated to the gateway on these faces — the node
  * judges the credential, after the gateway has picked it — so what the
@@ -66,13 +110,14 @@ type Located = { node: NodeState } | { refusal: RenderedError };
  * authenticated faces and listNodes name nodes freely.
  *
  * Each face's refusals wear that face's dialect (errors.ts): connect for
- * envd, and for the proxy the daemon's proxy answer — { message }, 502 —
- * so a caller reads one shape from either door.
+ * envd and the signed form (the node's signed door speaks it), and for
+ * the proxy the daemon's proxy answer — { message }, 502 — so a caller
+ * reads one shape from either door.
  */
 export function createRawFaces({ finder, token, log }: RawFacesDeps) {
-  /** The one sentence per finding for a sandbox id on these faces — generic on purpose (above). */
+  /** The one sentence per finding on these faces — generic on purpose (above). */
   function sentence(
-    id: string,
+    subject: Subject,
     found: Exclude<Found, { kind: 'one' }>,
   ): RenderedError {
     switch (found.kind) {
@@ -80,36 +125,36 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
         return {
           status: 502,
           connectCode: 'unavailable',
-          message: `sandbox "${id}" is held by more than one node — routing resumes once an operator destroys one copy (listNodes and the gateway log name them)`,
+          message: `${subject.label} is held by more than one node — routing resumes once an operator destroys one copy (listNodes and the gateway log name them)`,
         };
       case 'none':
-        return {
-          status: 502,
-          connectCode: 'unavailable',
-          message: `sandbox "${id}" is on no node — it may have been destroyed`,
-        };
+        return subject.none;
       case 'unsure':
         return {
           status: 503,
           connectCode: 'unavailable',
-          message: `sandbox "${id}": a node did not answer, so its whereabouts cannot be settled — retry`,
+          message: `${subject.label}: a node did not answer, so its whereabouts cannot be settled — retry`,
           retryAfterSeconds: RETRY_AFTER_SECONDS,
         };
     }
   }
 
   /**
-   * Finds the id, or the refusal to answer with — the one adjudication
-   * both halves of a keyed face make, each writing a refusal in its own
-   * medium (a response; a status line on an upgrade's socket). A value,
-   * not an exception: the refusal is an answer, not a failure. The lookup
-   * itself failing (not a node's silence — the gateway's own bug) is a
-   * 500 that sends the operator to the log.
+   * Finds the sandbox, or the refusal to answer with — the one
+   * adjudication both halves of a keyed face make, each writing a refusal
+   * in its own medium (a response; a status line on an upgrade's socket).
+   * A value, not an exception: the refusal is an answer, not a failure.
+   * The lookup itself failing (not a node's silence — the gateway's own
+   * bug) is a 500 that sends the operator to the log.
    */
-  async function locate(id: string, what: string): Promise<Located> {
+  async function locate(
+    subject: Subject,
+    find: () => Promise<Found>,
+    what: string,
+  ): Promise<Located> {
     let found: Found;
     try {
-      found = await finder.byId(id);
+      found = await find();
     } catch (error) {
       log.error(error, `${what}: the lookup itself failed`);
       return {
@@ -121,12 +166,12 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
       };
     }
     return found.kind === 'one'
-      ? { node: found.node }
-      : { refusal: sentence(id, found) };
+      ? { node: found.node, id: found.id }
+      : { refusal: sentence(subject, found) };
   }
 
   /**
-   * Finds the id and forwards, or answers the refusal — the one path
+   * Finds the sandbox and forwards, or answers the refusal — the one path
    * every keyed face takes. Nothing here may throw: no framework stands
    * behind a raw face, so an escaped rejection would be the process's,
    * not the request's (errors.ts relay answers instead).
@@ -134,17 +179,18 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
   async function route(
     req: http.IncomingMessage,
     res: http.ServerResponse,
-    id: string,
-    face: 'envd' | 'proxy',
+    face: KeyedFace,
+    subject: Subject,
+    find: () => Promise<Found>,
     cors: boolean,
   ): Promise<void> {
-    const dialect: Dialect = face === 'envd' ? 'connect' : 'native';
-    const located = await locate(id, `${face} face`);
+    const dialect: Dialect = face === 'proxy' ? 'native' : 'connect';
+    const located = await locate(subject, find, `${face} face`);
     if ('refusal' in located) {
       renderError(res, dialect, { ...located.refusal, cors });
       return;
     }
-    const { node } = located;
+    const { node, id } = located;
     await relay(
       res,
       dialect,
@@ -169,7 +215,7 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
         return {
           status: 502,
           connectCode: 'unavailable',
-          message: `sandbox "${id}": its node did not answer (${error.why}) — retry`,
+          message: `${subject.label}: its node did not answer (${error.why}) — retry`,
           cors,
         };
       },
@@ -189,7 +235,11 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
     socket: Duplex,
     head: Buffer,
   ): Promise<void> {
-    const located = await locate(kind.sandboxId, 'proxy face (upgrade)');
+    const located = await locate(
+      byId(kind.sandboxId),
+      () => finder.byId(kind.sandboxId),
+      'proxy face (upgrade)',
+    );
     // The client left while its sandbox was being found (a lookup round
     // is up to two seconds): nothing to dial the node for.
     if (socket.destroyed) return;
@@ -228,7 +278,15 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
             sendPreflight(req, res);
             return;
           }
-          void route(req, res, kind.sandboxId, 'proxy', direct);
+          const { sandboxId } = kind;
+          void route(
+            req,
+            res,
+            'proxy',
+            byId(sandboxId),
+            () => finder.byId(sandboxId),
+            direct,
+          );
           return;
         }
         case 'envd': {
@@ -247,7 +305,7 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
             });
             return;
           }
-          void route(req, res, id, 'envd', true);
+          void route(req, res, 'envd', byId(id), () => finder.byId(id), true);
           return;
         }
         case 'signedRoot': {
@@ -255,13 +313,28 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
             sendPreflight(req, res);
             return;
           }
-          renderError(res, 'connect', {
-            status: 501,
-            connectCode: 'unimplemented',
-            message:
-              'the bare signed-URL form is not routed by the gateway yet — use the sandbox host form, or the node directly',
-            cors: true,
-          });
+          // The door's first rule, applied first here too: without a
+          // signature there is nobody to ask for — every node would say
+          // no — and the answer is the door's own (signing.ts, in
+          // validateSigning order: missing before invalid).
+          const signed = signedFileLookupOf(req);
+          if (signed === null) {
+            renderError(res, 'connect', {
+              status: 401,
+              connectCode: 'unauthenticated',
+              message: 'missing signature query parameter',
+              cors: true,
+            });
+            return;
+          }
+          void route(
+            req,
+            res,
+            'signedRoot',
+            bySignature,
+            () => finder.bySignature(signed),
+            true,
+          );
           return;
         }
       }
@@ -299,6 +372,24 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
       void upgrade(kind, req, socket, head);
     },
   };
+}
+
+/**
+ * The question a bare signed file request turns into — the query as it
+ * arrived, for the node to read beside its own door (the gateway reads
+ * none of it but the one key that says whether there is a question at
+ * all), and the door's operation: GET and HEAD read, POST writes, the
+ * signed door's two routes (the node's signed-files.ts). Null when the
+ * request carries no signature.
+ */
+function signedFileLookupOf(
+  req: http.IncomingMessage,
+): SignedFileLookup | null {
+  const url = req.url ?? '';
+  const q = url.indexOf('?');
+  const query = q === -1 ? '' : url.slice(q + 1);
+  if (!new URLSearchParams(query).has('signature')) return null;
+  return { operation: req.method === 'POST' ? 'write' : 'read', query };
 }
 
 /** A refusal on an upgrade: one status line and a JSON body, before any handshake was replayed (forwardUpgrade's own refusals have the same shape). */

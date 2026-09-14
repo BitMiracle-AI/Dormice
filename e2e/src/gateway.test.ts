@@ -497,19 +497,13 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
     }
   });
 
-  it('envd preflights are answered without a header; the bare signed-URL door is a 501 with CORS', async () => {
+  it('envd preflights are answered without a header; a signed URL the official package mints at the fleet door works at the fleet door — the door asks every node whose signature it is', async () => {
     const preflight = await fetch(`${gateway()}/e2b/envd/files`, {
       method: 'OPTIONS',
       headers: { origin: 'https://app.example' },
     });
     expect(preflight.status).toBe(204);
     expect(preflight.headers.get('access-control-allow-origin')).toBe('*');
-    const bare = await fetch(`${gateway()}/files?signature=x&path=/y`);
-    expect(bare.status).toBe(501);
-    expect(bare.headers.get('access-control-allow-origin')).toBe('*');
-    expect(((await bare.json()) as { code: string }).code).toBe(
-      'unimplemented',
-    );
     const stranger = await fetch(`${gateway()}/e2b/envd/files`, {
       headers: { 'e2b-sandbox-id': randomUUID() },
     });
@@ -517,6 +511,54 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
     expect(((await stranger.json()) as { code: string }).code).toBe(
       'unavailable',
     );
+
+    // The SDK builds uploadUrl/downloadUrl off the sandboxUrl it was
+    // given — `<door>/files?…signature=…`, no sandbox id in it, whatever
+    // domain is in force (pinned here: this is the URL clawsgo's browser
+    // opens). A bare fetch of it at the door must reach the node whose
+    // sandbox signed it.
+    const sbx = await Sandbox.create({
+      apiKey: `e2b_${token()}`,
+      apiUrl: `${gateway()}/e2b/api`,
+      sandboxUrl: `${gateway()}/e2b/envd`,
+      metadata: { name: 'gw-signed' },
+    });
+    try {
+      await sbx.files.write('signed/hello.txt', 'signed at the door\n');
+      const url = await sbx.downloadUrl('signed/hello.txt', {
+        useSignatureExpiration: 300,
+      });
+      expect(url.startsWith(`${gateway()}/files?`)).toBe(true);
+      const res = await fetch(url);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('access-control-allow-origin')).toBe('*');
+      expect(await res.text()).toBe('signed at the door\n');
+
+      const forged = new URL(url);
+      forged.searchParams.set('signature', 'v1_forged');
+      const refused = await fetch(forged);
+      expect(refused.status).toBe(401);
+      expect(refused.headers.get('access-control-allow-origin')).toBe('*');
+      expect(await refused.json()).toEqual({
+        code: 'unauthenticated',
+        message: 'invalid signature',
+      });
+
+      const uploadUrl = await sbx.uploadUrl();
+      const form = new FormData();
+      form.append(
+        'file',
+        new Blob(['uploaded at the door\n']),
+        'signed/up.txt',
+      );
+      const up = await fetch(uploadUrl, { method: 'POST', body: form });
+      expect(up.status).toBe(200);
+      expect(await sbx.files.read('signed/up.txt')).toBe(
+        'uploaded at the door\n',
+      );
+    } finally {
+      await sbx.kill();
+    }
   });
 
   it('a third node joins at its first check-in; when it dies its sandboxes 502 and new names are a 503 naming it, until an operator removes it', async () => {

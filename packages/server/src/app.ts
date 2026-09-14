@@ -20,6 +20,7 @@ import type { Executor } from './executor/executor';
 import type { KeyedQueue } from './keyed-queue';
 import { envdTokenRoutes } from './routes/envd-token';
 import { hostRoutes } from './routes/host';
+import { lookupRoutes } from './routes/lookup';
 import { sandboxRoutes } from './routes/sandboxes';
 import { templateUsersRoutes } from './routes/template-users';
 import { upgradeRoutes } from './routes/upgrade';
@@ -207,6 +208,7 @@ export function buildApp({
       watchers,
       archiver,
     });
+    await api.register(lookupRoutes, { db, locks, envdSigningSecret });
     await api.register(templateUsersRoutes, { db });
     await api.register(hostRoutes, { config, db, executor });
     await api.register(upgradeRoutes, { updater });

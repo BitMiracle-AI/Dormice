@@ -164,12 +164,13 @@ describe('web console over a real daemon', () => {
 describe('browser-side signed download URLs (the Office preview foundation)', () => {
   // The console's preview pane recomputes the file signature in the browser
   // (envd-client.ts signedDownloadUrl) from the token /envdToken
-  // hands it. This pins the whole chain end-to-end — console minting at
-  // the gateway (which asks the sandbox's node), the formula REWRITTEN
-  // here rather than imported (a black box pins the formula itself, not a
-  // shared implementation's self-consistency), and the root /files door,
-  // which is the node's today: the gateway's sandbox-domain face is the
-  // next step of the move (RULES/协议.md「网关」).
+  // hands it, and opens it on its own origin — the gateway's. This pins
+  // the whole chain end-to-end — console minting at the gateway (which
+  // asks the sandbox's node), the formula REWRITTEN here rather than
+  // imported (a black box pins the formula itself, not a shared
+  // implementation's self-consistency), and the root /files door at the
+  // gateway, which asks every node whose signature it is and forwards to
+  // the one that signed it.
   it('a console-minted token signs a working /files URL with the browser formula', async () => {
     // Continue the account story: re-setup with the token so this describe
     // owns known credentials regardless of what ran before it.
@@ -228,7 +229,7 @@ describe('browser-side signed download URLs (the Office preview foundation)', ()
     );
     const signature = `v1_${btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/=+$/, '')}`;
     const url = (extra = '') =>
-      `${inject('dormiceEndpoint')}/files?path=pixel.png${extra}&signature=${encodeURIComponent(signature)}&signature_expiration=${exp}`;
+      `${endpoint()}/files?path=pixel.png${extra}&signature=${encodeURIComponent(signature)}&signature_expiration=${exp}`;
 
     const res = await fetch(url());
     expect(res.status).toBe(200);

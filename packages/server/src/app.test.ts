@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -1879,6 +1880,79 @@ describe('POST /lookupSandbox', () => {
     ).toEqual({ found: false });
     // Neither a name nor an id is not a question.
     expect((await rpc(app, '/lookupSandbox', {})).statusCode).toBe(400);
+  });
+
+  it('by signature: the bare signed file query is read back to the sandbox whose token signed it — identity only, the door judges the rest', async () => {
+    const { app } = testApp();
+    const alice = (await acquire(app, { name: 'alice' })).json();
+    const bob = (await acquire(app, { name: 'bob' })).json();
+    const tokenOf = async (sandboxId: string) =>
+      (
+        (await rpc(app, '/envdToken', { sandboxId })).json() as {
+          envdAccessToken: string;
+        }
+      ).envdAccessToken;
+    // The SDK's formula, rewritten rather than imported: v1_ + base64
+    // (padding stripped) of sha256("path:operation:username:token[:exp]").
+    const sign = (parts: string[]) =>
+      `v1_${createHash('sha256').update(parts.join(':')).digest('base64').replace(/=+$/, '')}`;
+    const aliceRead = sign([
+      'a.txt',
+      'read',
+      '',
+      await tokenOf(alice.sandbox.id),
+    ]);
+    const query = (signature: string, more = '') =>
+      `path=a.txt&signature=${encodeURIComponent(signature)}${more}`;
+
+    const byAlice = await rpc(app, '/lookupSandbox', {
+      signed: { operation: 'read', query: query(aliceRead) },
+    });
+    expect(byAlice.statusCode).toBe(200);
+    expect(byAlice.json()).toEqual({
+      found: true,
+      sandbox: { id: alice.sandbox.id, name: 'alice', state: 'active' },
+    });
+    // The same path signed by bob's token names bob, nobody else.
+    const bobRead = sign(['a.txt', 'read', '', await tokenOf(bob.sandbox.id)]);
+    expect(
+      (
+        await rpc(app, '/lookupSandbox', {
+          signed: { operation: 'read', query: query(bobRead) },
+        })
+      ).json(),
+    ).toMatchObject({ found: true, sandbox: { name: 'bob' } });
+    // A read signature is not a write signature; a forged one is nobody's;
+    // no signature is no sandbox. The expiration is not judged here — an
+    // expired signature still names its sandbox, and the door it is then
+    // forwarded to says "expired" itself.
+    for (const signed of [
+      { operation: 'write', query: query(aliceRead) },
+      { operation: 'read', query: query('v1_forged') },
+      { operation: 'read', query: 'path=a.txt' },
+    ]) {
+      expect((await rpc(app, '/lookupSandbox', { signed })).json()).toEqual({
+        found: false,
+      });
+    }
+    const past = Math.floor(Date.now() / 1000) - 60;
+    const expired = sign([
+      'a.txt',
+      'read',
+      '',
+      await tokenOf(alice.sandbox.id),
+      String(past),
+    ]);
+    expect(
+      (
+        await rpc(app, '/lookupSandbox', {
+          signed: {
+            operation: 'read',
+            query: query(expired, `&signature_expiration=${past}`),
+          },
+        })
+      ).json(),
+    ).toMatchObject({ found: true, sandbox: { name: 'alice' } });
   });
 
   it('a name whose slot is busy waits its turn: asked while an acquire is mid-create, it answers found once the row exists', async () => {
