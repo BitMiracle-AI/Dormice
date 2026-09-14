@@ -16,6 +16,7 @@ import { CONSOLE_HEADER, SESSION_COOKIE } from './auth';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
 import { findById, transition } from './db/ledger';
+import { DiskFullError } from './executor/executor';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
 import { ARCHIVE_DEFAULT_SECONDS } from './policy';
@@ -830,6 +831,28 @@ describe('POST /writeFiles and /readFile', () => {
     expect(big.statusCode).toBe(413);
     expect(big.json().message).toBe(
       `file too large: /home/user/big.bin is ${size} bytes, limit ${FILE_SIZE_LIMIT_BYTES}`,
+    );
+  });
+
+  it('maps a disk-full write onto 507, same as the E2B file route', async () => {
+    // The fake executor never runs out of disk, so the typed error is
+    // injected the same way SlowCreateExecutor injects delay: a thin
+    // FakeExecutor subclass, not a mocking framework.
+    class DiskFullExecutor extends FakeExecutor {
+      async writeFiles(): Promise<void> {
+        throw new DiskFullError('no space left on device: /home/user/big.bin');
+      }
+    }
+    const { app } = testApp(new DiskFullExecutor());
+    await acquire(app, { name: 'alice' });
+
+    const res = await rpc(app, '/writeFiles', {
+      name: 'alice',
+      files: [{ path: 'big.bin', contentBase64: 'eA==' }],
+    });
+    expect(res.statusCode).toBe(507);
+    expect(res.json().message).toBe(
+      'no space left on device: /home/user/big.bin',
     );
   });
 

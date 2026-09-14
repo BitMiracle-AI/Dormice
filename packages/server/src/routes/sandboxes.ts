@@ -75,6 +75,7 @@ import { findTemplate, resolveImage } from '../db/templates';
 import type { WatcherTable } from '../e2b/watcher-table';
 import { startExecHeartbeat } from '../exec-heartbeat';
 import {
+  DiskFullError,
   type Executor,
   FileNotFoundError,
   FileTooLargeError,
@@ -598,6 +599,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     if (error instanceof FileNotFoundError) throw httpError(404, error.message);
     if (error instanceof NotAFileError) throw httpError(400, error.message);
     if (error instanceof FileTooLargeError) throw httpError(413, error.message);
+    if (error instanceof DiskFullError) throw httpError(507, error.message);
     throw error;
   }
 
