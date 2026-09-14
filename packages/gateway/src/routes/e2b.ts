@@ -2,10 +2,14 @@ import type { KeyedQueue } from '@dormice/server/keyed-queue';
 import { sandboxNameSchema } from '@dormice/shared';
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
+import { z } from 'zod';
+import { decodeCursor, encodeCursor, mergePages } from '../cursor';
 import { relay } from '../errors';
 import type { Finder } from '../find';
 import type { Fleet, NodeState } from '../fleet';
 import { forwardStream, replay } from '../forward';
+import type { AskVerb } from '../lookup';
+import { askEach } from '../merge';
 import { type PlacementKnobs, refusalMessage } from '../placement';
 import { RETRY_AFTER_SECONDS } from '../raw';
 import {
@@ -27,7 +31,22 @@ export interface E2bRoutesOptions {
   token: string;
   /** The app's one adjudication of a bare credential (fleet token or a live minted key). */
   isCredential: (bareToken: string) => boolean;
+  /** Asks one node one verb on the gateway's account (lookup.ts httpAsk) — the list. */
+  ask: AskVerb;
 }
+
+/** The daemon's own bounds on a page (e2b/control.ts listQuerySchema), judged here first so every node is asked for the same page. */
+const listLimitSchema = z.coerce
+  .number()
+  .int()
+  .positive()
+  .max(1000)
+  .default(100);
+
+/** What the gateway reads of a node's list item: the two fields the merge orders by. Everything else passes through as the node wrote it. */
+const e2bListItemSchema = z
+  .object({ sandboxID: z.string(), startedAt: z.string() })
+  .loose();
 
 /**
  * The E2B control plane in front of several nodes: what the official SDK
@@ -39,7 +58,7 @@ export interface E2bRoutesOptions {
  */
 export const e2bControlRoutes: FastifyPluginAsyncZod<E2bRoutesOptions> = async (
   app,
-  { fleet, finder, locks, knobs, token, isCredential },
+  { fleet, finder, locks, knobs, token, isCredential, ask },
 ) => {
   app.addContentTypeParser(
     'application/json',
@@ -171,13 +190,77 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bRoutesOptions> = async (
     return create(request, reply, target, null, body, true);
   });
 
-  app.get('/v2/sandboxes', async (_request, reply) =>
-    send(
-      reply,
-      501,
-      'listing sandboxes is not routed by the gateway yet — call the node directly',
-    ),
-  );
+  // The list across nodes: every askable node is asked its own page from
+  // its own offset (cursor.ts carries every node's), the pages are merged
+  // newest first and cut at the caller's limit. A node the answer would
+  // lack is a 503 naming it, not a shorter list: this wire is a bare
+  // array with nowhere to say what is missing, and the SDK's paginator
+  // would take a partial page for the whole fleet. The daemon judges
+  // `state` and `metadata`; the gateway reads only limit and the cursor.
+  app.get('/v2/sandboxes', async (request, reply) => {
+    const url = request.raw.url ?? '';
+    const q = url.indexOf('?');
+    const query = new URLSearchParams(q === -1 ? '' : url.slice(q + 1));
+    const limit = listLimitSchema.safeParse(query.get('limit') ?? undefined);
+    if (!limit.success) {
+      return send(
+        reply,
+        400,
+        `invalid limit: ${limit.error.issues[0]?.message ?? 'refused'}`,
+      );
+    }
+    const token_ = query.get('nextToken');
+    const offsets =
+      token_ === null || token_ === '' ? {} : decodeCursor(token_);
+    if (offsets === null) {
+      return send(
+        reply,
+        400,
+        'invalid nextToken — pass back the x-next-token of the previous page unchanged',
+      );
+    }
+    query.delete('nextToken');
+    query.set('limit', String(limit.data));
+    const { answers, silent } = await askEach(
+      fleet,
+      ask,
+      new Date(),
+      (node) => {
+        const own = new URLSearchParams(query);
+        const offset = offsets[node.id] ?? 0;
+        if (offset > 0) own.set('nextToken', String(offset));
+        return `e2b/api/v2/sandboxes?${own.toString()}`;
+      },
+      undefined,
+      z.array(e2bListItemSchema),
+      { method: 'GET', credential: 'x-api-key' },
+    );
+    if (silent.length > 0) {
+      reply.header('retry-after', String(RETRY_AFTER_SECONDS));
+      return send(
+        reply,
+        503,
+        `the list is incomplete: ${silent
+          .map((s) => `node ${s.nodeId} did not answer (${s.why})`)
+          .join(
+            ', ',
+          )} — retry after Retry-After, or remove the node if it is gone for good`,
+      );
+    }
+    const page = mergePages(
+      answers.map((a) => ({
+        nodeId: a.node.id,
+        items: a.value,
+        more: a.headers.get('x-next-token') !== null,
+      })),
+      offsets,
+      limit.data,
+    );
+    if (page.next !== null) {
+      reply.header('x-next-token', encodeCursor(page.next));
+    }
+    return reply.code(200).send(page.items);
+  });
 
   const byId = async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };

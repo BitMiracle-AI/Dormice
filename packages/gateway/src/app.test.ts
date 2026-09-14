@@ -13,7 +13,7 @@ import { migrateDb, openDb } from './db/db';
 import { ensureSettings } from './db/settings';
 import { Finder } from './find';
 import { Fleet } from './fleet';
-import { httpAskNode } from './lookup';
+import { type AskVerb, httpAsk, httpAskNode } from './lookup';
 import { checkInOf, type reading } from './testing';
 
 const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
@@ -27,10 +27,13 @@ const DOMAIN = DOMAINS[0] as string;
  * verbs the gateway touches, over a real socket. Every sandbox it holds is
  * a row in `sandboxes`; every request it received is in `hits`.
  */
+/** One clock for every fake node's createdAt: a later create is newer wherever it landed, so a merged newest-first page has one right order. */
+let births = 0;
+
 class FakeNode {
   readonly sandboxes = new Map<
     string,
-    { id: string; name: string; files: Map<string, string> }
+    { id: string; name: string; createdAt: string; files: Map<string, string> }
   >();
   readonly hits: Array<{
     path: string;
@@ -43,6 +46,8 @@ class FakeNode {
   endpoint = '';
   /** How long a destroy takes to answer — a slow node holding the name's slot. */
   destroyTakesMs = 0;
+  /** How long the list verbs take to answer — a busy node the merged lists must not wait forever for. */
+  listTakesMs = 0;
   private readonly server: http.Server;
 
   constructor(readonly id: string) {
@@ -186,6 +191,40 @@ class FakeNode {
     if (path.startsWith('/e2b/api/')) {
       if (auth !== `e2b_${TOKEN}`)
         return json(401, { code: 401, message: 'invalid API key' });
+      if (path === '/e2b/api/v2/sandboxes' && req.method === 'GET') {
+        // The daemon's v2 list: newest first, offset in nextToken, the
+        // next offset in the x-next-token header when there is more.
+        const query = new URLSearchParams(url.slice(url.indexOf('?') + 1));
+        const limit = Number(query.get('limit') ?? '100');
+        const offset = Number(query.get('nextToken') ?? '0') || 0;
+        const all = [...this.sandboxes.values()].sort((a, b) =>
+          a.createdAt < b.createdAt ? 1 : -1,
+        );
+        const page = all.slice(offset, offset + limit);
+        const headers: Record<string, string> = {
+          'content-type': 'application/json',
+        };
+        if (offset + limit < all.length) {
+          headers['x-next-token'] = String(offset + limit);
+        }
+        const answer = () => {
+          res.writeHead(200, headers);
+          res.end(
+            JSON.stringify(
+              page.map((s) => ({
+                sandboxID: s.id,
+                clientID: this.id,
+                alias: s.name,
+                state: 'running',
+                startedAt: s.createdAt,
+              })),
+            ),
+          );
+        };
+        if (this.listTakesMs > 0) setTimeout(answer, this.listTakesMs);
+        else answer();
+        return;
+      }
       const m = path.match(/^\/e2b\/api\/sandboxes(?:\/([^/]+))?(\/.*)?$/);
       if (!m) return json(404, { code: 404, message: 'not found' });
       const [, id, rest] = m;
@@ -223,6 +262,44 @@ class FakeNode {
       case '/templateUsers': {
         // This double records no template per sandbox: nothing here uses one.
         return json(200, { sandboxNames: [] });
+      }
+      case '/listSandboxes':
+      case '/listSandboxMetrics':
+      case '/listSandboxImages': {
+        // The daemon's three fleet-wide lists, as the gateway merges them.
+        const all = [...this.sandboxes.values()];
+        const answer = () =>
+          json(
+            200,
+            path === '/listSandboxes'
+              ? { sandboxes: all.map((s) => this.view(s)) }
+              : path === '/listSandboxMetrics'
+                ? {
+                    samples: all.map((s) => ({
+                      sandboxName: s.name,
+                      sandboxId: s.id,
+                      sample: SAMPLE,
+                    })),
+                  }
+                : {
+                    images: all.map((s) => ({
+                      sandboxName: s.name,
+                      sandboxId: s.id,
+                      image: 'img:1',
+                      nextImage: 'img:1',
+                      upgradable: false,
+                    })),
+                  },
+          );
+        if (this.listTakesMs > 0) setTimeout(answer, this.listTakesMs);
+        else answer();
+        return;
+      }
+      case '/getHostMetrics':
+      case '/getHostMetricsHistory': {
+        // A machine's reading, forwarded whole: an echo says which machine
+        // answered and what it was sent.
+        return json(200, { hostOf: this.id, verb: path, body });
       }
       case '/lookupSandbox': {
         const signed = body.signed as { query: string } | undefined;
@@ -298,11 +375,55 @@ class FakeNode {
 
   private create(name: string) {
     this.creates += 1;
-    const sandbox = { id: randomUUID(), name, files: new Map() };
+    births += 1;
+    const sandbox = {
+      id: randomUUID(),
+      name,
+      createdAt: new Date(
+        Date.UTC(2026, 8, 15) + births * 60_000,
+      ).toISOString(),
+      files: new Map(),
+    };
     this.sandboxes.set(name, sandbox);
     return sandbox;
   }
+
+  /** The daemon's sandbox object for one of this double's rows — enough of it to pass the shared schema. */
+  private view(s: { id: string; name: string; createdAt: string }) {
+    return {
+      id: s.id,
+      name: s.name,
+      state: 'active',
+      nodeId: this.id,
+      endpoint: this.endpoint,
+      policy: {
+        freezeAfterSeconds: 300,
+        stopAfterSeconds: null,
+        archiveAfterSeconds: null,
+      },
+      spec: { cpus: 1, memoryGb: 2, diskGb: 10 },
+      template: null,
+      metadata: {},
+      createdAt: s.createdAt,
+      lastActiveAt: s.createdAt,
+      lastExit: null,
+    };
+  }
 }
+
+/** One measurable sandbox's reading, the same for every row of every double. */
+const SAMPLE = {
+  timestamp: '2026-09-15T00:00:00.000Z',
+  cpuCount: 1,
+  cpuUsedPct: 5,
+  memUsedBytes: 100,
+  memTotalBytes: 2048,
+  memCacheBytes: 10,
+  swapUsedBytes: null,
+  swapTotalBytes: null,
+  diskUsedBytes: 1000,
+  diskTotalBytes: 10_000,
+};
 
 interface Harness {
   endpoint: string;
@@ -311,7 +432,10 @@ interface Harness {
   fleet: Fleet;
   checkIn(
     node: FakeNode,
-    over?: Parameters<typeof reading>[0] & { intervalSeconds?: number },
+    over?: Parameters<typeof reading>[0] & {
+      intervalSeconds?: number;
+      configVersion?: number | null;
+    },
   ): Promise<void>;
   close(): Promise<void>;
 }
@@ -329,6 +453,8 @@ async function gateway(
     startedAt?: Date;
     /** Collects the gateway's own log lines (JSON, one per entry) when a test asserts on what it says. */
     logs?: string[];
+    /** How the gateway asks nodes on its own account — a test shortens its patience for the slow-node case. */
+    ask?: AskVerb;
   } = {},
 ): Promise<Harness> {
   const db = openDb(':memory:');
@@ -358,6 +484,7 @@ async function gateway(
         ? false
         : pino({ level: 'info' }, { write: (line: string) => logs.push(line) }),
     build: null,
+    ask: opts.ask,
   });
   await app.listen({ host: '127.0.0.1', port: 0 });
   const endpoint = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
@@ -1088,12 +1215,11 @@ describe('using, destroying, and the cache', () => {
     expect(a.lookups()).toBe(before + 1);
   });
 
-  it('daemon-addressed verbs are an honest 501, a misspelled verb a 404, a body without a name a 400', async () => {
+  it('the upgrade verbs are an honest 501, a misspelled verb a 404, a body without a name a 400', async () => {
     const h = await gateway(['a']);
-    const listed = await rpc(h, '/listSandboxes');
-    expect(listed.status).toBe(501);
-    expect(message(listed)).toContain('call the node directly');
-    expect((await rpc(h, '/getHostMetrics')).status).toBe(501);
+    const upgrade = await rpc(h, '/checkUpgrade');
+    expect(upgrade.status).toBe(501);
+    expect(message(upgrade)).toContain('call the node directly');
     expect((await rpc(h, '/acquireSandbx', { name: 'x' })).status).toBe(404);
     expect((await rpc(h, '/execCommand', { command: 'x' })).status).toBe(400);
     expect(h.nodes[0]?.hits).toEqual([]);
@@ -1186,7 +1312,15 @@ describe('the E2B faces', () => {
     expect(h.cache.getById(anon.sandboxID)?.name).toBeNull();
     expect((await e2b(h, `/sandboxes/${anon.sandboxID}`)).status).toBe(200);
 
-    expect((await e2b(h, '/v2/sandboxes')).status).toBe(501);
+    // The list is answered here now (its own suite below): the named and
+    // the unnamed sandbox both, from whichever node holds each.
+    const listed = await e2b(h, '/v2/sandboxes');
+    expect(listed.status).toBe(200);
+    expect(
+      ((await listed.json()) as Array<{ sandboxID: string }>).map(
+        (s) => s.sandboxID,
+      ),
+    ).toContain(anon.sandboxID);
     const wrongKey = await fetch(`${h.endpoint}/e2b/api/sandboxes`, {
       method: 'POST',
       headers: { 'x-api-key': 'e2b_wrong', 'content-type': 'application/json' },
@@ -1584,5 +1718,271 @@ describe('the bare signed-URL face', () => {
       'unavailable',
     );
     expect((await fetch(`${h.endpoint}/files?${query}`)).status).toBe(200);
+  });
+});
+
+describe('the fleet-wide lists and the by-node readings', () => {
+  const namesOf = (r: { body: unknown }) =>
+    (r.body as { sandboxes: Array<{ name: string; nodeId: string }> })
+      .sandboxes;
+  const silentOf = (r: { body: unknown }) =>
+    (r.body as { silent: Array<{ nodeId: string; why: string }> }).silent;
+
+  async function seeded() {
+    const h = await gateway(['c', 'b']);
+    // Three names: placement alternates (the emptiest by active density,
+    // the in-flight count moving it), so both nodes hold some.
+    for (const name of ['s1', 's2', 's3']) {
+      expect((await rpc(h, '/acquireSandbox', { name })).status).toBe(200);
+    }
+    const [c, b] = h.nodes;
+    if (!c || !b) throw new Error('nodes lost');
+    return { h, b, c };
+  }
+
+  it("listSandboxes is every node's list in node-id order, each asked once, with nobody silent", async () => {
+    const { h, b, c } = await seeded();
+    const listed = await rpc(h, '/listSandboxes');
+    expect(listed.status).toBe(200);
+    const nodesInOrder = namesOf(listed).map((s) => s.nodeId);
+    expect(nodesInOrder).toHaveLength(3);
+    expect(nodesInOrder).toEqual([...nodesInOrder].sort());
+    expect(
+      namesOf(listed)
+        .map((s) => s.name)
+        .sort(),
+    ).toEqual(['s1', 's2', 's3']);
+    expect(silentOf(listed)).toEqual([]);
+    for (const node of [b, c]) {
+      expect(node.hits.filter((x) => x.path === '/listSandboxes')).toHaveLength(
+        1,
+      );
+    }
+  });
+
+  it('a node that is down is not dialled and is named silent with the reason; its sandboxes are not in the list', async () => {
+    const { h, b, c } = await seeded();
+    const down = h.fleet.get('c');
+    if (!down) throw new Error('node lost');
+    down.lastCheckInAt = new Date(Date.now() - 31_000);
+    const listed = await rpc(h, '/listSandboxes');
+    expect(listed.status).toBe(200);
+    expect(namesOf(listed).every((s) => s.nodeId === 'b')).toBe(true);
+    expect(namesOf(listed)).toHaveLength(b.sandboxes.size);
+    expect(silentOf(listed)).toEqual([
+      {
+        nodeId: 'c',
+        why: expect.stringMatching(/has not checked in for 3\ds/),
+      },
+    ]);
+    expect(c.hits.filter((x) => x.path === '/listSandboxes')).toHaveLength(0);
+  });
+
+  it('a node awaiting its first configuration is not dialled: empty, nothing is said; holding sandboxes, it is named as not listening', async () => {
+    const h = await gateway(['b', 'c']);
+    const [b, c] = h.nodes;
+    if (!b || !c) throw new Error('nodes lost');
+    await h.checkIn(c, { configVersion: null, active: 0 });
+    let listed = await rpc(h, '/listSandboxes');
+    expect(silentOf(listed)).toEqual([]);
+    await h.checkIn(c, { configVersion: null, active: 5 });
+    listed = await rpc(h, '/listSandboxes');
+    expect(silentOf(listed)).toEqual([
+      { nodeId: 'c', why: expect.stringMatching(/not listening — it holds 5/) },
+    ]);
+    expect(c.hits.filter((x) => x.path === '/listSandboxes')).toHaveLength(0);
+    expect(b.hits.filter((x) => x.path === '/listSandboxes')).toHaveLength(2);
+  });
+
+  it('a node too slow to answer is silent after the merge timeout, and the rest of the list is answered', async () => {
+    // The gateway's patience shortened to 300ms: the rule, not the wait.
+    const h = await gateway(
+      ['b', 'c'],
+      {},
+      {
+        ask: (node, verb, body, schema, options) =>
+          httpAsk(TOKEN)(node, verb, body, schema, {
+            ...options,
+            timeoutMs: 300,
+          }),
+      },
+    );
+    const [b, c] = h.nodes;
+    if (!b || !c) throw new Error('nodes lost');
+    await rpc(h, '/acquireSandbox', { name: 'quick' });
+    c.listTakesMs = 2_000;
+    const started = Date.now();
+    const listed = await rpc(h, '/listSandboxes');
+    expect(Date.now() - started).toBeLessThan(1_500);
+    expect(listed.status).toBe(200);
+    expect(silentOf(listed)).toEqual([
+      { nodeId: 'c', why: expect.stringMatching(/timeout|abort/i) },
+    ]);
+    expect(namesOf(listed).map((s) => s.nodeId)).toEqual(
+      namesOf(listed).map(() => 'b'),
+    );
+  });
+
+  it('listSandboxMetrics and listSandboxImages merge the same way', async () => {
+    const { h } = await seeded();
+    const metrics = await rpc(h, '/listSandboxMetrics');
+    expect(metrics.status).toBe(200);
+    const samples = metrics.body as {
+      samples: Array<{ sandboxName: string }>;
+      silent: unknown[];
+    };
+    expect(samples.samples.map((s) => s.sandboxName).sort()).toEqual([
+      's1',
+      's2',
+      's3',
+    ]);
+    expect(samples.silent).toEqual([]);
+    const images = await rpc(h, '/listSandboxImages');
+    expect(images.status).toBe(200);
+    const lineage = images.body as {
+      images: Array<{ sandboxName: string; upgradable: boolean }>;
+      silent: unknown[];
+    };
+    expect(lineage.images.map((i) => i.sandboxName).sort()).toEqual([
+      's1',
+      's2',
+      's3',
+    ]);
+    expect(lineage.images.every((i) => i.upgradable === false)).toBe(true);
+    expect(lineage.silent).toEqual([]);
+  });
+
+  it('a host reading names its node: forwarded to it whole; unnamed in a fleet of several it is a 400 naming them; an unknown id is a 404', async () => {
+    const h = await gateway(['b', 'c']);
+    const named = await rpc(h, '/getHostMetrics', { nodeId: 'c' });
+    expect(named.status).toBe(200);
+    expect(named.body).toEqual({
+      hostOf: 'c',
+      verb: '/getHostMetrics',
+      body: { nodeId: 'c' },
+    });
+    const history = await rpc(h, '/getHostMetricsHistory', {
+      nodeId: 'b',
+      start: '2026-09-14T00:00:00.000Z',
+    });
+    expect(history.body).toMatchObject({
+      hostOf: 'b',
+      verb: '/getHostMetricsHistory',
+    });
+    const unnamed = await rpc(h, '/getHostMetrics', {});
+    expect(unnamed.status).toBe(400);
+    expect(message(unnamed)).toContain('the fleet has 2 nodes (b, c)');
+    expect(message(unnamed)).toContain('getFleetMetrics');
+    const unknown = await rpc(h, '/getHostMetrics', { nodeId: 'zzz' });
+    expect(unknown.status).toBe(404);
+    expect(message(unknown)).toContain("no node with id 'zzz'");
+    const malformed = await rpc(h, '/getHostMetrics', { nodeId: 7 });
+    expect(malformed.status).toBe(400);
+  });
+
+  it('a fleet of one needs no name; a fleet of none is a 503 with Retry-After', async () => {
+    const one = await gateway(['b']);
+    const unnamed = await rpc(one, '/getHostMetrics', {});
+    expect(unnamed.status).toBe(200);
+    expect(unnamed.body).toMatchObject({ hostOf: 'b', body: {} });
+    const none = await gateway([]);
+    const refused = await rpc(none, '/getHostMetrics', {});
+    expect(refused.status).toBe(503);
+    expect(refused.headers.get('retry-after')).toBe('15');
+    expect(message(refused)).toContain('no node has checked in yet');
+  });
+
+  it('the upgrade verbs alone are still an honest 501', async () => {
+    const h = await gateway(['b']);
+    for (const verb of ['checkUpgrade', 'applyUpgrade', 'getUpgradeStatus']) {
+      const r = await rpc(h, `/${verb}`, {});
+      expect(r.status).toBe(501);
+      expect(message(r)).toContain('until the upgrade cut');
+    }
+  });
+});
+
+describe('the E2B list across nodes', () => {
+  async function e2bList(h: Harness, query: string) {
+    const res = await fetch(`${h.endpoint}/e2b/api/v2/sandboxes${query}`, {
+      headers: { 'x-api-key': `e2b_${TOKEN}` },
+    });
+    const text = await res.text();
+    return {
+      status: res.status,
+      body: text ? (JSON.parse(text) as unknown) : null,
+      next: res.headers.get('x-next-token'),
+      retryAfter: res.headers.get('retry-after'),
+    };
+  }
+  const ids = (r: { body: unknown }) =>
+    (r.body as Array<{ sandboxID: string; alias: string }>).map((s) => s.alias);
+
+  it('pages newest first across both nodes on one opaque cursor, and the last page carries no cursor', async () => {
+    const h = await gateway(['b', 'c']);
+    for (const name of ['e1', 'e2', 'e3']) {
+      const created = await fetch(`${h.endpoint}/e2b/api/sandboxes`, {
+        method: 'POST',
+        headers: {
+          'x-api-key': `e2b_${TOKEN}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ templateID: 'base', metadata: { name } }),
+      });
+      expect(created.status).toBe(201);
+    }
+    const [b, c] = h.nodes;
+    if (!b || !c) throw new Error('nodes lost');
+    expect(b.sandboxes.size + c.sandboxes.size).toBe(3);
+    expect(Math.min(b.sandboxes.size, c.sandboxes.size)).toBeGreaterThan(0);
+
+    const first = await e2bList(h, '?limit=2');
+    expect(first.status).toBe(200);
+    expect(ids(first)).toEqual(['e3', 'e2']);
+    expect(first.next).not.toBeNull();
+    const second = await e2bList(h, `?limit=2&nextToken=${first.next}`);
+    expect(ids(second)).toEqual(['e1']);
+    expect(second.next).toBeNull();
+
+    // One at a time: three pages, every node asked its own offset.
+    const seen: string[] = [];
+    let token: string | null = null;
+    do {
+      const page = await e2bList(
+        h,
+        `?limit=1${token === null ? '' : `&nextToken=${token}`}`,
+      );
+      seen.push(...ids(page));
+      token = page.next;
+    } while (token !== null);
+    expect(seen).toEqual(['e3', 'e2', 'e1']);
+
+    const whole = await e2bList(h, '');
+    expect(ids(whole)).toEqual(['e3', 'e2', 'e1']);
+    expect(whole.next).toBeNull();
+  });
+
+  it('a cursor it did not mint is a 400; a node the list would lack is a 503 naming it, with Retry-After', async () => {
+    const h = await gateway(['b', 'c']);
+    const bad = await e2bList(h, '?nextToken=garbage');
+    expect(bad.status).toBe(400);
+    expect(bad.body).toMatchObject({
+      code: 400,
+      message: expect.stringMatching(/invalid nextToken/),
+    });
+    const tooMany = await e2bList(h, '?limit=5000');
+    expect(tooMany.status).toBe(400);
+    const down = h.fleet.get('c');
+    if (!down) throw new Error('node lost');
+    down.lastCheckInAt = new Date(Date.now() - 31_000);
+    const refused = await e2bList(h, '');
+    expect(refused.status).toBe(503);
+    expect(refused.retryAfter).toBe('15');
+    expect(refused.body).toMatchObject({
+      code: 503,
+      message: expect.stringMatching(
+        /node c did not answer \(has not checked in for 3\ds\)/,
+      ),
+    });
   });
 });

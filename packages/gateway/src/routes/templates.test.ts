@@ -18,7 +18,11 @@ function templatesGateway(users: Record<string, string[] | 'silent'>) {
     if (answer === undefined || answer === 'silent') {
       return { kind: 'silent', why: 'ECONNREFUSED' };
     }
-    return { kind: 'answer', value: schema.parse({ sandboxNames: answer }) };
+    return {
+      kind: 'answer',
+      value: schema.parse({ sandboxNames: answer }),
+      headers: new Headers(),
+    };
   };
   const { app, db, fleet } = testGateway({}, { askVerb });
   let host = 1;

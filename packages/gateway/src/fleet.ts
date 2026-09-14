@@ -78,6 +78,20 @@ export function awaitingFirstConfig(node: NodeState): boolean {
   return node.reading !== null && node.configVersion === null;
 }
 
+/**
+ * What to say of a node awaiting its first configuration, in place of
+ * asking it: nothing (null) when its reading says it holds no sandbox —
+ * there is nothing an answer would lack — and, when it holds some, the
+ * sentence that names them as there and unreachable until its next
+ * check-in says the port is open.
+ */
+export function awaitingFirstConfigWhy(node: NodeState): string | null {
+  const total = node.reading?.sandboxes.total ?? 0;
+  return total === 0
+    ? null
+    : `not listening — it holds ${total} sandboxes but no configuration copy yet, and its first bundle rides on its next check-in`;
+}
+
 /** What a check-in came to: taken (and whether it joined or moved), or refused with the sentence the node is told (routes/nodes.ts answers 409). */
 export type CheckInOutcome =
   | { node: NodeState; joined: boolean; movedFrom: string | null }

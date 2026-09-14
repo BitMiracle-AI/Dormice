@@ -26,10 +26,9 @@ async function mint(app: TestApp, name: string, expiresAt?: string) {
 }
 
 /**
- * Whether a credential opens the sandbox gate. The verb behind it that
- * needs no node is one of the fleet-wide verbs the gateway does not route
- * yet: its honest 501 is "you are through the door"; a 401 is not. (The
- * next cut merges those verbs and this probe moves to a real answer.)
+ * Whether a credential opens the sandbox gate. The verb behind it needs
+ * no node: listSandboxes over an empty fleet is an empty list with nobody
+ * silent — a real answer, "you are through the door"; a 401 is not.
  */
 const useKey = (app: TestApp, token: string, url = '/listSandboxes') =>
   app.inject({
@@ -38,7 +37,7 @@ const useKey = (app: TestApp, token: string, url = '/listSandboxes') =>
     headers: { authorization: `Bearer ${token}` },
     payload: {},
   });
-const OPENED = 501;
+const OPENED = 200;
 
 describe('API keys on the gateway', () => {
   it('mints a 64-hex token, shown once and never stored in the view', async () => {
@@ -71,7 +70,8 @@ describe('API keys on the gateway', () => {
       url: '/e2b/api/v2/sandboxes',
       headers: { 'x-api-key': `e2b_${token}` },
     });
-    expect(e2b.statusCode).toBe(501);
+    expect(e2b.statusCode).toBe(200);
+    expect(e2b.json()).toEqual([]);
 
     expect((await rpc(app, '/revokeApiKey', { id })).json()).toEqual({
       revoked: true,

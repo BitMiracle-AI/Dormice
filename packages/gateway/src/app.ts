@@ -31,6 +31,7 @@ import { envdTokenRoutes } from './routes/envd-token';
 import { ingressRoutes } from './routes/ingress';
 import { nativeRoutes } from './routes/native';
 import { checkInRoutes, nodeRoutes } from './routes/nodes';
+import { observeRoutes } from './routes/observe';
 import { settingsRoutes } from './routes/settings';
 import { templateRoutes } from './routes/templates';
 import { type BuildInfo, readBuildInfo } from './version';
@@ -63,7 +64,8 @@ export interface GatewayAppDeps {
   probeS3?: SettingsProbe;
   /**
    * How the gateway asks a node a verb on its own account (removeTemplate's
-   * templateUsers). Defaults to HTTP under the fleet token; tests script it.
+   * templateUsers, the merged lists, the E2B list). Defaults to HTTP under
+   * the fleet token; tests script it, or shorten its patience.
    */
   ask?: AskVerb;
   /**
@@ -226,6 +228,7 @@ export function buildGatewayApp({
   );
 
   const knobs = placementKnobs(config);
+  const askVerb = ask ?? httpAsk(token);
 
   // The nodes' gate: the fleet token alone. A key or a session is a
   // caller's credential, and a check-in is not a call — it is a machine
@@ -241,10 +244,13 @@ export function buildGatewayApp({
     await nodesFace.register(checkInRoutes, { fleet, db });
   });
 
-  // The sandbox gate: everything that addresses a sandbox.
+  // The sandbox gate: everything that addresses a sandbox — and the
+  // fleet-wide observation (the merged lists), which every credential
+  // that may address a sandbox may read, as on a node.
   app.register(async (api) => {
     api.addHook('onRequest', apiAuth);
     await api.register(envdTokenRoutes, { finder, token });
+    await api.register(observeRoutes, { fleet, ask: askVerb });
     // Its own sub-scope: the byte-preserving body parser it installs must
     // not reach the gateway's own verbs, which keep Fastify's JSON parsing.
     await api.register(nativeRoutes, { fleet, finder, locks, knobs, token });
@@ -262,11 +268,7 @@ export function buildGatewayApp({
       sources,
       ...(probeS3 ? { probeS3 } : {}),
     });
-    await admin.register(templateRoutes, {
-      db,
-      fleet,
-      ask: ask ?? httpAsk(token),
-    });
+    await admin.register(templateRoutes, { db, fleet, ask: askVerb });
     await admin.register(ingressRoutes, { ingress });
   });
 
@@ -285,6 +287,7 @@ export function buildGatewayApp({
     knobs,
     token,
     isCredential,
+    ask: askVerb,
     prefix: '/e2b/api',
   });
 

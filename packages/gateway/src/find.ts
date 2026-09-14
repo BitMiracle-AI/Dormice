@@ -1,6 +1,11 @@
 import type { SignedFileLookup } from '@dormice/shared';
 import type { CacheEntry, NameCache } from './cache';
-import { awaitingFirstConfig, type Fleet, type NodeState } from './fleet';
+import {
+  awaitingFirstConfig,
+  awaitingFirstConfigWhy,
+  type Fleet,
+  type NodeState,
+} from './fleet';
 import type { AskNode, LookupAnswer, LookupQuery } from './lookup';
 
 /**
@@ -81,14 +86,9 @@ export class Finder {
    */
   private askNode(node: NodeState, query: LookupQuery): Promise<LookupAnswer> {
     if (awaitingFirstConfig(node)) {
-      const total = node.reading?.sandboxes.total ?? 0;
+      const why = awaitingFirstConfigWhy(node);
       return Promise.resolve(
-        total === 0
-          ? { kind: 'absent' }
-          : {
-              kind: 'silent',
-              why: `not listening — it holds ${total} sandboxes but no configuration copy yet, and its first bundle rides on its next check-in`,
-            },
+        why === null ? { kind: 'absent' } : { kind: 'silent', why },
       );
     }
     return this.ask(node, query);

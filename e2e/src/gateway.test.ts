@@ -431,17 +431,47 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
     }
   });
 
-  it('daemon-addressed verbs are an honest 501; a misspelled verb is a 404', async () => {
-    await expect(viaGateway().listSandboxes()).rejects.toMatchObject({
+  it('the upgrade verbs are an honest 501 until their cut; a misspelled verb is a 404', async () => {
+    await expect(viaGateway().checkUpgrade()).rejects.toMatchObject({
       status: 501,
-      message: expect.stringMatching(/call the node directly/),
+      message: expect.stringMatching(/until the upgrade cut/),
     });
-    const e2bList = await fetch(`${gateway()}/e2b/api/v2/sandboxes`, {
-      headers: { 'x-api-key': `e2b_${token()}` },
-    });
-    expect(e2bList.status).toBe(501);
-    expect(((await e2bList.json()) as { code: number }).code).toBe(501);
     expect((await rpc('/acquireSandbx', { name: 'x' })).status).toBe(404);
+  });
+
+  it("listSandboxes at the door is both nodes' lists with nobody silent; the E2B list pages across both nodes through the official package", async () => {
+    const onB = await direct('node-b').acquireSandbox('gw-list-b');
+    const onC = await direct('node-c').acquireSandbox('gw-list-c');
+    try {
+      const listed = await viaGateway().listSandboxes();
+      expect(listed.silent).toEqual([]);
+      const byName = new Map(listed.sandboxes.map((s) => [s.name, s.nodeId]));
+      expect(byName.get('gw-list-b')).toBe('node-b');
+      expect(byName.get('gw-list-c')).toBe('node-c');
+      // A node's own list has nobody to be silent about.
+      expect((await direct('node-b').listSandboxes()).silent).toBeUndefined();
+
+      // apiUrl is not in the list options' type (it is in the create's),
+      // but the paginator's ConnectionConfig reads it all the same — spread
+      // in, past the literal's excess-property check, exactly as a caller
+      // configuring a self-hosted door would.
+      const connection = {
+        apiKey: `e2b_${token()}`,
+        apiUrl: `${gateway()}/e2b/api`,
+      };
+      const seen: string[] = [];
+      const paginator = Sandbox.list({ ...connection, limit: 1 });
+      while (paginator.hasNext) {
+        for (const info of await paginator.nextItems())
+          seen.push(info.sandboxId);
+      }
+      expect(seen).toContain(onB.sandbox.id);
+      expect(seen).toContain(onC.sandbox.id);
+      expect(new Set(seen).size).toBe(seen.length);
+    } finally {
+      await viaGateway().destroySandbox('gw-list-b');
+      await viaGateway().destroySandbox('gw-list-c');
+    }
   });
 
   it('the official e2b package works through the gateway: create, live streaming, files, kill; an unnamed create routes by id', async () => {

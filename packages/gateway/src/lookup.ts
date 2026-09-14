@@ -35,17 +35,28 @@ export type AskNode = (
   query: LookupQuery,
 ) => Promise<LookupAnswer>;
 
-/** A node's answer to any verb asked on the gateway's account: parsed, or silence with the transport's word. */
+/** A node's answer to any verb asked on the gateway's account: parsed (with the answer's headers, for the one verb that pages by one), or silence with the transport's word. */
 export type Asked<T> =
-  | { kind: 'answer'; value: T }
+  | { kind: 'answer'; value: T; headers: Headers }
   | { kind: 'silent'; why: string };
 
-/** Asks one node one verb, validated by the schema of its answer. */
+/** How a verb is asked, where the native default does not fit. */
+export interface AskOptions {
+  /** GET for the E2B control plane's list; POST, the native dialect, by default. */
+  method?: 'GET' | 'POST';
+  /** The fleet token as the native Bearer (default) or as E2B's x-api-key. */
+  credential?: 'bearer' | 'x-api-key';
+  /** LOOKUP_TIMEOUT_MS by default — a ledger read; longer for a verb that reads containers (merge.ts). */
+  timeoutMs?: number;
+}
+
+/** Asks one node one verb, validated by the schema of its answer. `verb` is the path under the node's endpoint, query string included for a GET. */
 export type AskVerb = <T>(
   node: AskedNode,
   verb: string,
   body: unknown,
   schema: z.ZodType<T>,
+  options?: AskOptions,
 ) => Promise<Asked<T>>;
 
 /**
@@ -80,16 +91,19 @@ export function causeOf(error: unknown): string {
  * (9, 22, 25, 6000 …) without dialling — no node's front lives on one.
  */
 export function httpAsk(token: string): AskVerb {
-  return async (node, verb, body, schema) => {
+  return async (node, verb, body, schema, options = {}) => {
+    const method = options.method ?? 'POST';
     try {
       const res = await fetch(`${node.endpoint}/${verb}`, {
-        method: 'POST',
+        method,
         headers: {
-          authorization: `Bearer ${token}`,
-          'content-type': 'application/json',
+          ...(options.credential === 'x-api-key'
+            ? { 'x-api-key': `e2b_${token}` }
+            : { authorization: `Bearer ${token}` }),
+          ...(method === 'POST' ? { 'content-type': 'application/json' } : {}),
         },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
+        body: method === 'POST' ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(options.timeoutMs ?? LOOKUP_TIMEOUT_MS),
         redirect: 'manual',
       });
       if (res.status !== 200) {
@@ -99,7 +113,17 @@ export function httpAsk(token: string): AskVerb {
           why: `${verb} answered ${res.status}: ${text.slice(0, 200)}`,
         };
       }
-      return { kind: 'answer', value: schema.parse(await res.json()) };
+      // A body the schema refuses is a node the gateway cannot read —
+      // a build too far apart, or not a node at all — and is silence
+      // that says so, not a 500 out of the gateway's own serializer.
+      const parsed = schema.safeParse(await res.json());
+      if (!parsed.success) {
+        return {
+          kind: 'silent',
+          why: `${verb} answered a body the gateway cannot read (${parsed.error.issues[0]?.message ?? 'schema mismatch'})`,
+        };
+      }
+      return { kind: 'answer', value: parsed.data, headers: res.headers };
     } catch (error) {
       return { kind: 'silent', why: causeOf(error) };
     }

@@ -7,7 +7,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { relay } from '../errors';
 import type { Finder } from '../find';
-import type { Fleet } from '../fleet';
+import type { Fleet, NodeState } from '../fleet';
 import { forwardStream, replay } from '../forward';
 import { type PlacementKnobs, refusalMessage } from '../placement';
 import { RETRY_AFTER_SECONDS } from '../raw';
@@ -46,21 +46,27 @@ export const NAMED_VERBS = [
 ] as const;
 
 /**
- * The verbs that address the daemon, not a sandbox, and that the gateway
- * cannot answer from its own tables: fleet lists, host readings, the
- * upgrade. Asking every node and merging comes in a later cut; until then
- * each answers an honest 501 naming the alternative, instead of a
- * misleading answer from whichever node the gateway happened to pick.
- * (Keys, settings, templates and ingress left this list with the
- * configuration authority.)
+ * The verbs that address one machine, by its node id: a host reading is
+ * one host's (N nodes' CPU percentages add up to nothing — shared
+ * host.ts has the rule), so the request names its node and is forwarded
+ * there whole. A fleet of one needs no name: the single-machine install
+ * asks as it always has. The figures that do add up are getFleetMetrics
+ * (routes/fleet.ts), from the readings the gateway already holds.
  */
-export const UNNAMED_VERBS = [
-  'listSandboxes',
-  'listSandboxMetrics',
-  'listSandboxImages',
-  'getFleetStateHistory',
+export const BY_NODE_VERBS = [
   'getHostMetrics',
   'getHostMetricsHistory',
+] as const;
+
+/**
+ * The verbs that address the daemon and that the gateway does not route
+ * yet: the upgrade, whose fleet-wide form (the gateway upgrades itself,
+ * then rolls the nodes one at a time) is the fourth cut's. Until then
+ * each answers an honest 501 naming the alternative. (The lists merged
+ * and the host readings went by node in the third cut; keys, settings,
+ * templates and ingress left with the configuration authority.)
+ */
+export const UNNAMED_VERBS = [
   'checkUpgrade',
   'applyUpgrade',
   'getUpgradeStatus',
@@ -90,9 +96,85 @@ export const nativeRoutes: FastifyPluginAsyncZod<NativeRoutesOptions> = async (
   for (const verb of UNNAMED_VERBS) {
     app.post(`/${verb}`, async (_request, reply) =>
       reply.code(501).send({
-        message: `${verb} is not routed by the gateway yet — call the node directly (this version routes only sandbox-addressed verbs)`,
+        message: `${verb} is not routed by the gateway until the upgrade cut — call the node directly`,
       }),
     );
+  }
+
+  for (const verb of BY_NODE_VERBS) {
+    app.post(`/${verb}`, async (request, reply) => {
+      const body = request.body as Buffer | undefined;
+      const parsed = parseJson(body) as { nodeId?: unknown } | undefined;
+      const nodeId = parsed?.nodeId;
+      if (
+        nodeId !== undefined &&
+        (typeof nodeId !== 'string' || nodeId === '')
+      ) {
+        return reply
+          .code(400)
+          .send({ message: 'nodeId must be a non-empty string when given' });
+      }
+      const chosen = nodeFor(nodeId);
+      if ('refusal' in chosen) {
+        if (chosen.retryAfter) {
+          reply.header('retry-after', String(RETRY_AFTER_SECONDS));
+        }
+        return reply.code(chosen.status).send({ message: chosen.refusal });
+      }
+      const { node } = chosen;
+      return forwarded(request, reply, ' — retry', async () => {
+        await forwardStream(request.raw, reply.raw, {
+          target: { endpoint: node.endpoint, token },
+          credential: 'bearer',
+          body,
+        });
+      });
+    });
+  }
+
+  /**
+   * The machine a by-node verb is about. Named: that node, or 404 for an
+   * id the fleet has no row for. Unnamed: the one node of a fleet of one;
+   * a fleet of several is refused (400) rather than have a machine picked
+   * for the caller — the answer would read as the fleet's; a fleet of
+   * none has no machine to read (503, a node joins at its first check-in).
+   * Whether the node answers is the forward's to find out: a node that is
+   * down earns the node-did-not-answer 502 like any forwarded verb.
+   */
+  function nodeFor(
+    nodeId: string | undefined,
+  ):
+    | { node: NodeState }
+    | { status: number; refusal: string; retryAfter?: boolean } {
+    if (nodeId !== undefined) {
+      const node = fleet.get(nodeId);
+      return node !== undefined
+        ? { node }
+        : {
+            status: 404,
+            refusal: `no node with id '${nodeId}' — listNodes shows which exist`,
+          };
+    }
+    const all = fleet.all();
+    const only = all[0];
+    if (all.length === 1 && only !== undefined) return { node: only };
+    if (all.length === 0) {
+      return {
+        status: 503,
+        refusal:
+          "no node has checked in yet — a machine's reading needs a machine, and a node joins the fleet at its first check-in",
+        retryAfter: true,
+      };
+    }
+    return {
+      status: 400,
+      refusal: `the fleet has ${all.length} nodes (${all
+        .map((n) => n.id)
+        .sort()
+        .join(
+          ', ',
+        )}) — name one with nodeId (listNodes lists them); the figures that add up across the fleet are getFleetMetrics`,
+    };
   }
 
   for (const verb of NAMED_VERBS) {
