@@ -23,6 +23,7 @@ import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { m } from '@/paraglide/messages';
 import { useSetIngress } from '../hooks/useIngress';
+import { dnsRecordType } from '../lib/publicIp';
 import { DnsRecordGuide } from './DnsRecordGuide';
 
 /**
@@ -91,7 +92,10 @@ export function BindDomainDialog({
             <DnsRecordGuide
               intro={m.domains_bind_step1()}
               rows={[
-                { label: m.domains_record_type(), value: 'A' },
+                {
+                  label: m.domains_record_type(),
+                  value: publicIp ? dnsRecordType(publicIp) : 'A',
+                },
                 publicIp
                   ? {
                       label: m.domains_record_value(),

@@ -36,6 +36,7 @@ import { useConfig } from '@/features/settings/hooks/useConfig';
 import { useUpdateSettings } from '@/features/settings/hooks/useUpdateSettings';
 import { updateSettings } from '@/lib/api';
 import { m } from '@/paraglide/messages';
+import { dnsRecordType } from '../lib/publicIp';
 import { DnsRecordGuide } from './DnsRecordGuide';
 
 /**
@@ -118,7 +119,10 @@ function DomainDialog({
                   label: m.domains_sandbox_record_host(),
                   value: `*.${domain || m.domains_sandbox_field_placeholder()}`,
                 },
-                { label: m.domains_record_type(), value: 'A' },
+                {
+                  label: m.domains_record_type(),
+                  value: publicIp ? dnsRecordType(publicIp) : 'A',
+                },
                 publicIp
                   ? {
                       label: m.domains_record_value(),

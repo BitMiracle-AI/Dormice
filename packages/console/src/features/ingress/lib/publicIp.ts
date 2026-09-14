@@ -18,3 +18,15 @@ export function detectPublicIp(statuses: IngressDomainStatus[]): string | null {
   );
   return (here ?? ready)?.probe.dnsAddresses[0] ?? null;
 }
+
+/**
+ * detectPublicIp picks one address without keeping track of its family, so
+ * the DNS dialogs cannot just hard-code "A" as the record type: an
+ * IPv6-only probe would then tell the operator to create an A record for a
+ * value Node itself classifies as invalid for that record type. A bare
+ * colon check is enough here, every IPv6 textual form has one and no IPv4
+ * dotted-quad ever does.
+ */
+export function dnsRecordType(ip: string): 'A' | 'AAAA' {
+  return ip.includes(':') ? 'AAAA' : 'A';
+}
