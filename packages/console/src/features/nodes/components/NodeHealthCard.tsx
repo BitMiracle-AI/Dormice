@@ -15,14 +15,13 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Sparkline } from '@/features/overview/components/Sparkline';
+import type { TimelineRangeKey } from '@/features/overview/hooks/useFleetTimeline';
 import { ago } from '@/features/sandboxes/format';
 import { formatBytes, pctOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { m } from '@/paraglide/messages';
-import type { TimelineRangeKey } from '../hooks/useFleetTimeline';
-import { useHostMetrics } from '../hooks/useHostMetrics';
-import { useHostTimeline } from '../hooks/useHostTimeline';
-import { Sparkline } from './Sparkline';
+import { useNodeHostMetrics, useNodeHostTimeline } from '../hooks/useNodes';
 
 function HostRow({
   icon,
@@ -68,30 +67,34 @@ function HostRow({
 }
 
 /**
- * 宿主健康竖卡:主图旁边的机器体征列(对位 openasi 的 ModelStatus 卡)。
- * Swap 和数据盘与 CPU、内存平起平坐,因为在这个平台上它们才是要命的
- * 两个:swap 满了「空闲即免费」就完了,数据盘满了连创建都完了。沙箱
- * 磁盘的账单在页面底部一行 — 这张卡只讲机器本身。
+ * 一台节点的机器体征竖卡(2026-09-15 集群刀 3 从总览搬来:总览在多机
+ * 世界里没有「这台机器」,宿主的事按节点问)。Swap 和数据盘与 CPU、
+ * 内存平起平坐,因为在这个平台上它们才是要命的两个:swap 满了「空闲
+ * 即免费」就完了,数据盘满了连创建都完了。沙箱磁盘的账单在总览 — 这
+ * 张卡只讲机器本身。
  *
- * 每行的数值是即时读数(5s 轮询),行内 sparkline 与 CPU 峰值来自
- * getHostMetricsHistory,跟随页面全局档位 — 即时值答"现在怎么样",
- * 走势答"这个窗口里发生过什么",峰值从原始行来,分桶抹不平它。
+ * 每行的数值是即时读数(5s 轮询,按 nodeId 转到那一台),行内 sparkline
+ * 与 CPU 峰值来自那台的 getHostMetricsHistory,跟随页面档位 — 即时值答
+ * "现在怎么样",走势答"这个窗口里发生过什么",峰值从原始行来,分桶抹
+ * 不平它。
  */
-export function HostHealthCard({
+export function NodeHealthCard({
+  nodeId,
   range,
   className,
 }: {
+  nodeId: string;
   range: TimelineRangeKey;
   className?: string;
 }) {
-  const query = useHostMetrics();
-  const history = useHostTimeline(range);
+  const query = useNodeHostMetrics(nodeId);
+  const history = useNodeHostTimeline(nodeId, range);
 
   return (
     <Card size="sm" className={cn('flex flex-col', className)}>
       <CardHeader>
-        <CardTitle>{m.overview_host_title()}</CardTitle>
-        <CardDescription>{m.overview_host_desc()}</CardDescription>
+        <CardTitle>{m.nodes_host_title()}</CardTitle>
+        <CardDescription>{m.nodes_host_desc()}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col justify-between gap-5">
         <HostHealthRows query={query} history={history} />
@@ -104,8 +107,8 @@ function HostHealthRows({
   query,
   history,
 }: {
-  query: ReturnType<typeof useHostMetrics>;
-  history: ReturnType<typeof useHostTimeline>;
+  query: ReturnType<typeof useNodeHostMetrics>;
+  history: ReturnType<typeof useNodeHostTimeline>;
 }) {
   if (query.isError) {
     return (
@@ -162,8 +165,8 @@ function HostHealthRows({
         }
         hint={
           peak === null
-            ? m.overview_host_cpu_cores({ n: host.cpuCount })
-            : m.overview_host_cpu_peak({
+            ? m.nodes_host_cpu_cores({ n: host.cpuCount })
+            : m.nodes_host_cpu_peak({
                 n: host.cpuCount,
                 pct: Math.round(peak.cpuUsedPct),
                 ago: ago(peak.at),
@@ -174,9 +177,9 @@ function HostHealthRows({
       />
       <HostRow
         icon={RamMemoryIcon}
-        label={m.overview_host_mem_label()}
+        label={m.nodes_host_mem_label()}
         value={formatBytes(memUsed)}
-        hint={m.overview_host_mem_hint({
+        hint={m.nodes_host_mem_hint({
           total: formatBytes(host.memTotalBytes),
           available: formatBytes(host.memAvailableBytes),
         })}
@@ -188,16 +191,16 @@ function HostHealthRows({
           icon={SnowIcon}
           label="Swap"
           value="—"
-          hint={m.overview_host_swap_unreadable()}
+          hint={m.nodes_host_swap_unreadable()}
         />
       ) : host.swap.totalBytes === 0 ? (
         <HostRow
           icon={SnowIcon}
           label="Swap"
-          value={m.overview_host_swap_unconfigured()}
+          value={m.nodes_host_swap_unconfigured()}
           hint={
             <span className="text-amber-600 dark:text-amber-500">
-              {m.overview_host_swap_warning()}
+              {m.nodes_host_swap_warning()}
             </span>
           }
         />
@@ -206,7 +209,7 @@ function HostHealthRows({
           icon={SnowIcon}
           label="Swap"
           value={formatBytes(host.swap.usedBytes)}
-          hint={m.overview_host_swap_hint({
+          hint={m.nodes_host_swap_hint({
             total: formatBytes(host.swap.totalBytes),
           })}
           pct={pctOf(host.swap.usedBytes, host.swap.totalBytes)}
@@ -216,18 +219,18 @@ function HostHealthRows({
       {dataDisk === null ? (
         <HostRow
           icon={HardDriveIcon}
-          label={m.overview_host_disk_label()}
+          label={m.nodes_host_disk_label()}
           value="—"
-          hint={m.overview_host_disk_missing()}
+          hint={m.nodes_host_disk_missing()}
         />
       ) : (
         <HostRow
           icon={HardDriveIcon}
-          label={m.overview_host_disk_label()}
+          label={m.nodes_host_disk_label()}
           value={formatBytes(dataDisk.usedBytes)}
           hint={
             <span title={dataDisk.path}>
-              {m.overview_host_disk_hint({
+              {m.nodes_host_disk_hint({
                 total: formatBytes(dataDisk.totalBytes),
                 available: formatBytes(dataDisk.availableBytes),
               })}

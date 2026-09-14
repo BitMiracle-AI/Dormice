@@ -1,4 +1,5 @@
 import {
+  CloudServerIcon,
   DashboardSquare01Icon,
   GitCommitIcon,
   Globe02Icon,
@@ -44,6 +45,8 @@ export const NAV_GROUPS: Array<{
     id: 'ops',
     label: m.shell_nav_group_ops,
     items: [
+      // 节点页第一(2026-09-15 集群刀 3):运维先看机器,再看钥匙。
+      { to: '/nodes', label: m.shell_nav_nodes, icon: CloudServerIcon },
       { to: '/api-keys', label: m.shell_nav_api_keys, icon: Key01Icon },
       { to: '/domains', label: m.shell_nav_domains, icon: Globe02Icon },
       {

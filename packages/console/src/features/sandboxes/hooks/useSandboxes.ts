@@ -83,9 +83,9 @@ export function useSandboxMetricsHistory(name: string, spanMs: number) {
  * 5 秒一拍与列表的 2 秒分开定:daemon 侧一次 docker stats 读数约一秒,
  * 这口锅比读 SQLite 贵。只在列表页挂载时跑,页面一关轮询即停。
  */
-export function useFleetMetrics() {
+export function useListSandboxMetrics() {
   return useQuery({
-    queryKey: ['fleet-metrics'],
+    queryKey: ['sandbox-metrics-list'],
     queryFn: listSandboxMetrics,
     refetchInterval: 5000,
     retry: false,

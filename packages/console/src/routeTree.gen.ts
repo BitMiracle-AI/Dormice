@@ -20,8 +20,10 @@ import { Route as AppDoctorRouteImport } from './routes/_app/doctor'
 import { Route as AppConnectRouteImport } from './routes/_app/connect'
 import { Route as AppApiKeysRouteImport } from './routes/_app/api-keys'
 import { Route as AppSandboxesIndexRouteImport } from './routes/_app/sandboxes/index'
+import { Route as AppNodesIndexRouteImport } from './routes/_app/nodes/index'
 import { Route as AppTempSplatRouteImport } from './routes/_app/temp.$'
 import { Route as AppSandboxesNameRouteImport } from './routes/_app/sandboxes/$name'
+import { Route as AppNodesIdRouteImport } from './routes/_app/nodes/$id'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -77,6 +79,11 @@ const AppSandboxesIndexRoute = AppSandboxesIndexRouteImport.update({
   path: '/sandboxes/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppNodesIndexRoute = AppNodesIndexRouteImport.update({
+  id: '/nodes/',
+  path: '/nodes/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppTempSplatRoute = AppTempSplatRouteImport.update({
   id: '/temp/$',
   path: '/temp/$',
@@ -85,6 +92,11 @@ const AppTempSplatRoute = AppTempSplatRouteImport.update({
 const AppSandboxesNameRoute = AppSandboxesNameRouteImport.update({
   id: '/sandboxes/$name',
   path: '/sandboxes/$name',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppNodesIdRoute = AppNodesIdRouteImport.update({
+  id: '/nodes/$id',
+  path: '/nodes/$id',
   getParentRoute: () => AppRoute,
 } as any)
 
@@ -98,8 +110,10 @@ export interface FileRoutesByFullPath {
   '/settings': typeof AppSettingsRoute
   '/templates': typeof AppTemplatesRoute
   '/version': typeof AppVersionRoute
+  '/nodes/$id': typeof AppNodesIdRoute
   '/sandboxes/$name': typeof AppSandboxesNameRoute
   '/temp/$': typeof AppTempSplatRoute
+  '/nodes/': typeof AppNodesIndexRoute
   '/sandboxes/': typeof AppSandboxesIndexRoute
 }
 export interface FileRoutesByTo {
@@ -112,8 +126,10 @@ export interface FileRoutesByTo {
   '/templates': typeof AppTemplatesRoute
   '/version': typeof AppVersionRoute
   '/': typeof AppIndexRoute
+  '/nodes/$id': typeof AppNodesIdRoute
   '/sandboxes/$name': typeof AppSandboxesNameRoute
   '/temp/$': typeof AppTempSplatRoute
+  '/nodes': typeof AppNodesIndexRoute
   '/sandboxes': typeof AppSandboxesIndexRoute
 }
 export interface FileRoutesById {
@@ -128,8 +144,10 @@ export interface FileRoutesById {
   '/_app/templates': typeof AppTemplatesRoute
   '/_app/version': typeof AppVersionRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/nodes/$id': typeof AppNodesIdRoute
   '/_app/sandboxes/$name': typeof AppSandboxesNameRoute
   '/_app/temp/$': typeof AppTempSplatRoute
+  '/_app/nodes/': typeof AppNodesIndexRoute
   '/_app/sandboxes/': typeof AppSandboxesIndexRoute
 }
 export interface FileRouteTypes {
@@ -144,8 +162,10 @@ export interface FileRouteTypes {
     | '/settings'
     | '/templates'
     | '/version'
+    | '/nodes/$id'
     | '/sandboxes/$name'
     | '/temp/$'
+    | '/nodes/'
     | '/sandboxes/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -158,8 +178,10 @@ export interface FileRouteTypes {
     | '/templates'
     | '/version'
     | '/'
+    | '/nodes/$id'
     | '/sandboxes/$name'
     | '/temp/$'
+    | '/nodes'
     | '/sandboxes'
   id:
     | '__root__'
@@ -173,8 +195,10 @@ export interface FileRouteTypes {
     | '/_app/templates'
     | '/_app/version'
     | '/_app/'
+    | '/_app/nodes/$id'
     | '/_app/sandboxes/$name'
     | '/_app/temp/$'
+    | '/_app/nodes/'
     | '/_app/sandboxes/'
   fileRoutesById: FileRoutesById
 }
@@ -262,6 +286,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSandboxesIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/nodes/': {
+      id: '/_app/nodes/'
+      path: '/nodes'
+      fullPath: '/nodes/'
+      preLoaderRoute: typeof AppNodesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/temp/$': {
       id: '/_app/temp/$'
       path: '/temp/$'
@@ -276,6 +307,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSandboxesNameRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/nodes/$id': {
+      id: '/_app/nodes/$id'
+      path: '/nodes/$id'
+      fullPath: '/nodes/$id'
+      preLoaderRoute: typeof AppNodesIdRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
@@ -288,8 +326,10 @@ interface AppRouteChildren {
   AppTemplatesRoute: typeof AppTemplatesRoute
   AppVersionRoute: typeof AppVersionRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppNodesIdRoute: typeof AppNodesIdRoute
   AppSandboxesNameRoute: typeof AppSandboxesNameRoute
   AppTempSplatRoute: typeof AppTempSplatRoute
+  AppNodesIndexRoute: typeof AppNodesIndexRoute
   AppSandboxesIndexRoute: typeof AppSandboxesIndexRoute
 }
 
@@ -302,8 +342,10 @@ const AppRouteChildren: AppRouteChildren = {
   AppTemplatesRoute: AppTemplatesRoute,
   AppVersionRoute: AppVersionRoute,
   AppIndexRoute: AppIndexRoute,
+  AppNodesIdRoute: AppNodesIdRoute,
   AppSandboxesNameRoute: AppSandboxesNameRoute,
   AppTempSplatRoute: AppTempSplatRoute,
+  AppNodesIndexRoute: AppNodesIndexRoute,
   AppSandboxesIndexRoute: AppSandboxesIndexRoute,
 }
 

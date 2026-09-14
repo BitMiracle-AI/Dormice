@@ -112,5 +112,6 @@
   "sandboxes_cpu_value": "{v}% (pro einzelner vCPU)",
   "sandboxes_footer_live": "Aktuelle Werte werden alle 5 Sekunden aktualisiert; diese Messung entstand {ago}.",
   "sandboxes_footer_history": "Den Verlauf misst und speichert der Daemon im Hintergrund; eine schlafende Sandbox wird weiter gemessen (Beobachten weckt nie), nach einem Stopp reißt die Kurve ehrlich ab.",
-  "sandboxes_footer_bucketed": "Langes Fenster: aggregiert in {n}-Minuten-Buckets, jeder Punkt ist die Spitze seines Buckets."
+  "sandboxes_footer_bucketed": "Langes Fenster: aggregiert in {n}-Minuten-Buckets, jeder Punkt ist die Spitze seines Buckets.",
+  "sandboxes_silent_nodes": "Knoten {nodes} hat nicht geantwortet; seine Sandboxes fehlen in der Liste"
 }

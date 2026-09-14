@@ -1,12 +1,12 @@
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { m } from '@/paraglide/messages';
 import { fullClock } from '../format';
+import { useFleetMetrics } from '../hooks/useFleetMetrics';
 import {
   TIMELINE_RANGES,
   type TimelineRangeKey,
   useFleetTimeline,
 } from '../hooks/useFleetTimeline';
-import { useHostMetrics } from '../hooks/useHostMetrics';
 import { SandboxDisksCard } from './SandboxDisksCard';
 import { Sparkline } from './Sparkline';
 import { StatCard, StatCardSkeleton } from './StatCard';
@@ -15,12 +15,13 @@ import { StatCard, StatCardSkeleton } from './StatCard';
  * 舰队四卡(openasi 顶排版式,2026-07-16 沙箱磁盘上顶):当前活跃
  * (5 秒一刷的快照 + 窗口内活跃数 sparkline)、窗口峰值、总数、
  * 沙箱磁盘账单。容量上限随讨论稿 #23 删(2026-09-14):账本行数不是
- * 资源,数据盘水位才是——它有自己的卡。当前值来自 /getHostMetrics;峰值与 sparkline 来自
- * /getFleetStateHistory — 网关每次节点报到落一行,峰值由原始行现算,
- * 分桶抹不掉它。档位由页头的全局切换器驱动。
+ * 资源,数据盘水位才是——它有自己的卡。当前值来自 /getFleetMetrics
+ * (2026-09-15 刀 3:网关把每台节点最近一次报到的读数加总,不扇出);
+ * 峰值与 sparkline 来自 /getFleetStateHistory — 网关每次节点报到落一
+ * 行,峰值由原始行现算,分桶抹不掉它。档位由页头的全局切换器驱动。
  */
 export function FleetStatCards({ range }: { range: TimelineRangeKey }) {
-  const host = useHostMetrics();
+  const host = useFleetMetrics();
   const timeline = useFleetTimeline(range);
   const rangeLabel =
     TIMELINE_RANGES.find((r) => r.key === range)?.label() ?? range;

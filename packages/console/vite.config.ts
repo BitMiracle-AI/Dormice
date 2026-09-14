@@ -68,6 +68,7 @@ export default defineConfig({
         '/updateSettings',
         '/getIngress',
         '/setIngress',
+        '/healthz',
         '/listNodes',
         '/removeNode',
         '/updateNodeSettings',

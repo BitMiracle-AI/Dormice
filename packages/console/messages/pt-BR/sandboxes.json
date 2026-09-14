@@ -112,5 +112,6 @@
   "sandboxes_cpu_value": "{v}% (por vCPU)",
   "sandboxes_footer_live": "Os valores ao vivo atualizam a cada 5 segundos; esta leitura é de {ago}.",
   "sandboxes_footer_history": "O histórico é amostrado e gravado pelo daemon em segundo plano; um sandbox adormecido continua sendo medido (observar nunca acorda) e, depois de parar, a curva se interrompe honestamente.",
-  "sandboxes_footer_bucketed": "Janela longa: agregado em blocos de {n} minutos; cada ponto é o pico dentro do seu bloco."
+  "sandboxes_footer_bucketed": "Janela longa: agregado em blocos de {n} minutos; cada ponto é o pico dentro do seu bloco.",
+  "sandboxes_silent_nodes": "O nó {nodes} não respondeu; seus sandboxes não estão na lista"
 }

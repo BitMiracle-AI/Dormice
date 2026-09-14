@@ -25,6 +25,7 @@
       "./messages/{locale}/apikeys.json",
       "./messages/{locale}/templates.json",
       "./messages/{locale}/domains.json",
+      "./messages/{locale}/nodes.json",
       "./messages/{locale}/settings.json",
       "./messages/{locale}/connect.json"
     ]
