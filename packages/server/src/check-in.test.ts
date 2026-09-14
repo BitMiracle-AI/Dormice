@@ -322,14 +322,13 @@ describe('CheckIn', () => {
     });
     const { log } = logSpy();
     let beats = 0;
-    const opts = options(gw.endpoint, log, {
-      beat: () => {
-        beats += 1;
-      },
-    });
+    const beat = () => {
+      beats += 1;
+    };
+    const opts = options(gw.endpoint, log);
     const checkIn = new CheckIn(opts);
     const started = Date.now();
-    await checkIn.untilConfigured();
+    await checkIn.untilConfigured(beat);
     expect(readConfigVersion(opts.db)).toBe(2);
     expect(gw.seen).toHaveLength(3);
     // Two waits of one interval between the three asks.
@@ -338,7 +337,7 @@ describe('CheckIn', () => {
     // node waiting for its gateway is alive, not stalled.
     expect(beats).toBe(3);
     // Holding a copy already: nothing is asked, nothing beats.
-    await checkIn.untilConfigured();
+    await checkIn.untilConfigured(beat);
     expect(gw.seen).toHaveLength(3);
     expect(beats).toBe(3);
   });
@@ -352,7 +351,7 @@ describe('CheckIn', () => {
     await new CheckIn(options(gw.endpoint, bare.log)).once();
     expect(bare.warns).toEqual([
       expect.stringMatching(
-        /^check-in failed; this node holds no configuration copy and does not listen until the gateway answers with one/,
+        /^check-in failed; this node holds no configuration copy and does not listen until it has applied one from the gateway/,
       ),
     ]);
     const holding = logSpy();
@@ -366,17 +365,10 @@ describe('CheckIn', () => {
     ]);
   });
 
-  it('ticks on its interval from start() and stops on stop(); the ticker never beats the watchdog', async () => {
+  it('ticks on its interval from start() and stops on stop()', async () => {
     const gw = await gateway(() => answering(1));
     const { log } = logSpy();
-    let beats = 0;
-    const checkIn = new CheckIn(
-      options(gw.endpoint, log, {
-        beat: () => {
-          beats += 1;
-        },
-      }),
-    );
+    const checkIn = new CheckIn(options(gw.endpoint, log));
     checkIn.start();
     const deadline = Date.now() + 5_000;
     while (gw.seen.length < 2 && Date.now() < deadline) {
@@ -387,7 +379,5 @@ describe('CheckIn', () => {
     const afterStop = gw.seen.length;
     await new Promise((resolve) => setTimeout(resolve, 1_200));
     expect(gw.seen.length).toBe(afterStop);
-    // A ticker's liveness must never reassure the watchdog (main.ts).
-    expect(beats).toBe(0);
   });
 });

@@ -213,10 +213,6 @@ const checkIn = new CheckIn({
   applyConfig: (bundle) =>
     applyConfig(bundle, { db, executor, locks, swap, log, beat }),
   log,
-  // For the wait before listen alone (check-in.ts untilConfigured): the
-  // ticker itself never beats, for the reason the metrics ticker does not
-  // (the watchdog's comment above).
-  beat,
 });
 
 // The daemon's own upgrade window compares the commit baked into this
@@ -281,7 +277,10 @@ if (readConfigVersion(db) === null) {
   log.info(
     `no configuration copy in the ledger — asking gateway ${config.DORMICE_GATEWAY_ENDPOINT} before anything else (retrying every ${config.DORMICE_CHECK_IN_INTERVAL_SECONDS}s until it answers)`,
   );
-  await checkIn.untilConfigured();
+  // The wait beats the watchdog per attempt (check-in.ts untilConfigured);
+  // the ticker started after listen is handed no beat, for the reason the
+  // metrics ticker is not (the watchdog's comment above).
+  await checkIn.untilConfigured(beat);
 }
 {
   const copy = readNodeConfig(db);
