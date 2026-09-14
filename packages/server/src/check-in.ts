@@ -113,9 +113,14 @@ export class CheckIn {
       if (res.status !== 200) {
         const text = await res.text();
         const location = res.headers.get('location');
+        // Whole enough for the gateway's own refusals (its longest, the
+        // 409 naming both endpoints of a shared node id, runs to about 260
+        // characters — cut at 200 it lost its remedy), short enough that
+        // a front's HTML error page does not flood the log.
+        const body = text.slice(0, 400);
         throw new Error(
           location === null
-            ? `gateway answered ${res.status}: ${text.slice(0, 200)}`
+            ? `gateway answered ${res.status}: ${body}`
             : `gateway answered ${res.status} redirecting to ${location} — DORMICE_GATEWAY_ENDPOINT must be the gateway's own address, not a front that redirects`,
         );
       }

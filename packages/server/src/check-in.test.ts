@@ -183,6 +183,20 @@ describe('CheckIn', () => {
     );
   });
 
+  it("a refusal's whole sentence reaches the log — the 409 for a shared node id names two endpoints and a remedy past the 200th character", async () => {
+    const refusal =
+      'node node-7 checked in from http://10.0.0.7:80 3s ago and now from http://10.0.0.8:80 — two daemons share one DORMICE_NODE_ID (give this one its own), or the node just moved (then its next check-in, an interval later, is taken)';
+    const gw = await gateway(() => ({
+      status: 409,
+      body: JSON.stringify({ message: refusal }),
+    }));
+    const { log, details } = logSpy();
+    await new CheckIn(options(gw.endpoint, log)).once();
+    expect((details[0] as { error: string }).error).toBe(
+      `gateway answered 409: ${JSON.stringify({ message: refusal })}`,
+    );
+  });
+
   it('a gateway that is not there is a logged failure, never a throw', async () => {
     const { log, warns } = logSpy();
     const checkIn = new CheckIn(options('http://127.0.0.1:9', log));
