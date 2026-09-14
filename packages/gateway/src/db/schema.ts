@@ -1,24 +1,35 @@
-import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+import {
+  integer,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
 
 /**
  * The gateway's tables are "how the fleet is configured and who may
  * enter" — never a sandbox's state, which lives in the ledger of the node
- * that runs it and is asked for when needed (find.ts). One table today;
- * api_keys, settings, templates and console_account arrive here with the
- * configuration authority.
+ * that runs it and is asked for when needed (find.ts). Five tables: the
+ * nodes that have ever checked in, the fleet-wide settings row, the
+ * templates, the API keys and the console account. The last four moved
+ * here from the daemon with the configuration authority (design record
+ * #22, 2026-09-13): one authority, one edit, every node pulls it at its
+ * next check-in and keeps a copy in its own ledger.
  */
 
 /**
  * Every node that has ever checked in (routes/nodes.ts): its id, the
- * address the gateway forwards to, and when it first appeared. Written by
- * the nodes themselves at their first check-in — there is no registration
- * verb and no nodes file, so "which nodes exist" has exactly one home —
- * and deleted only by an operator's removeNode. Persistent, not memory,
- * for one reason: a node that is down must still be known after a gateway
- * restart, or a name that lives only there would be placed anew elsewhere
- * and come back as a conflict when the node returns. Everything the node
- * last reported (its reading, build, check-in time) is memory: fifteen
- * seconds later it is reported again.
+ * address the gateway forwards to, when it first appeared, and the one
+ * per-node setting — how much swap its daemon manages on its own disk.
+ * Written by the nodes themselves at their first check-in — there is no
+ * registration verb and no nodes file, so "which nodes exist" has exactly
+ * one home — and deleted only by an operator's removeNode. Persistent, not
+ * memory, for one reason: a node that is down must still be known after a
+ * gateway restart, or a name that lives only there would be placed anew
+ * elsewhere and come back as a conflict when the node returns. Everything
+ * the node last reported (its reading, build, check-in time) is memory:
+ * fifteen seconds later it is reported again.
  */
 export const nodes = sqliteTable('nodes', {
   /** DORMICE_NODE_ID as the node states it — the `nodeId` in every sandbox answer. */
@@ -27,6 +38,151 @@ export const nodes = sqliteTable('nodes', {
   endpoint: text('endpoint').notNull(),
   /** ISO 8601 UTC — the first check-in. */
   addedAt: text('added_at').notNull(),
+  /**
+   * Managed swap the node's daemon keeps on its data disk, GiB, on top of
+   * the host's own — the one setting that is a machine's, not the fleet's
+   * (a 29 GB test box and a 243 GB production box want different numbers).
+   * Set by updateNodeSettings; the node applies it at its next check-in.
+   * 0 = manage none, the only value that fits every host at birth.
+   */
+  swapGb: integer('swap_gb').notNull().default(0),
 });
 
 export type NodeRow = typeof nodes.$inferSelect;
+
+/**
+ * The fleet-wide settings: one row, fixed id — the operator knobs whose
+ * change is an operations decision, never a machine's identity (shared
+ * settings.ts draws the line). `version` counts every configuration
+ * change the nodes must hear about — this row, a node's row, the
+ * templates — and rides the check-in wire: a node reports the version it
+ * applied, the gateway answers the current one and, when they differ, the
+ * whole bundle. Two states per optional group (NULL = off), no sentinel:
+ * the row is born whole from the env seeds at the gateway's first start,
+ * never adopted column by column as the daemon's once was.
+ *
+ * s3SecretAccessKey is stored plaintext, like the daemon's own secrets: a
+ * credential presented verbatim to S3 cannot be hashed. It leaves this
+ * table on exactly one path — the check-in bundle to a node, on the
+ * intranet, under the fleet token — and never on the observation wire.
+ */
+export const settings = sqliteTable('settings', {
+  id: integer('id').primaryKey(),
+  version: integer('version').notNull(),
+  sandboxCpus: real('sandbox_cpus').notNull(),
+  sandboxMemoryGb: real('sandbox_memory_gb').notNull(),
+  sandboxDiskGb: real('sandbox_disk_gb').notNull(),
+  defaultFreezeAfterSeconds: integer('default_freeze_after_seconds').notNull(),
+  /** NULL = new sandboxes default to never stopping. */
+  defaultStopAfterSeconds: integer('default_stop_after_seconds'),
+  /** NULL = never archive — forced while the fleet has no store. */
+  defaultArchiveAfterSeconds: integer('default_archive_after_seconds'),
+  /** The S3 archive store; all six NULL = archiving is off. */
+  s3Endpoint: text('s3_endpoint'),
+  s3Bucket: text('s3_bucket'),
+  s3AccessKeyId: text('s3_access_key_id'),
+  s3SecretAccessKey: text('s3_secret_access_key'),
+  s3Region: text('s3_region'),
+  s3ForcePathStyle: integer('s3_force_path_style', { mode: 'boolean' }),
+  /** The canonical sandbox wildcard domain; NULL = the port proxy and domain fields are off. */
+  sandboxDomain: text('sandbox_domain'),
+  /** Inbound-only alias domains, a JSON string array; '[]' = none. */
+  sandboxDomainAliases: text('sandbox_domain_aliases').notNull(),
+  /** The pids cgroup cap on every sandbox container, fleet-wide. */
+  pidsLimit: integer('pids_limit').notNull(),
+  /** Null until the first updateSettings: "still exactly the seed" is information. */
+  updatedAt: text('updated_at'),
+});
+
+export type SettingsRow = typeof settings.$inferSelect;
+
+/**
+ * Templates: a name for an image, fleet-wide. Registered here, carried to
+ * every node in the bundle (a cold wake of a template sandbox resolves
+ * name → image on the node, with or without a gateway present). Removal
+ * asks every node whether a sandbox still uses the name (routes/templates.ts).
+ */
+export const templates = sqliteTable('templates', {
+  name: text('name').primaryKey(),
+  image: text('image').notNull(),
+  createdAt: text('created_at').notNull(),
+  /** Bumped only when the image actually changes — see db/templates.ts. */
+  updatedAt: text('updated_at').notNull(),
+});
+
+export type TemplateRow = typeof templates.$inferSelect;
+
+/**
+ * Gateway-minted API keys: the credentials callers present at the fleet's
+ * one door, peers of DORMICE_API_TOKEN over the sandbox verbs. They exist
+ * so a client's secret can rotate without an env edit and a restart on
+ * every machine of the fleet (design record #20): mint a new key, move the
+ * client over, revoke the old one, a minute's work and no downtime. The
+ * env token itself never lives here — it stays the bootstrap/recovery
+ * credential, checked from config, and the one credential nodes accept.
+ *
+ * keyHash is sha256 of the key material, not scrypt: a key is 256 random
+ * bits, not a human password, so offline brute force is moot and a slow
+ * KDF would only tax every authenticated request. Verification is an
+ * indexed exact-match lookup on the hash.
+ *
+ * Revocation is soft (revokedAt) — the row stays as rotation history and
+ * keeps lastUsedAt readable after the credential dies. "At most one ACTIVE
+ * key per name" is a schema fact via the partial unique index below; a
+ * revoked name is free for reuse.
+ */
+export const apiKeys = sqliteTable(
+  'api_keys',
+  {
+    /** UUID, never an autoincrement — ids must stay unique across machines. */
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    /** sha256 hex of the bare 64-hex key material. The key itself is never stored. */
+    keyHash: text('key_hash').notNull().unique(),
+    /** First 8 hex chars of the key, for display — 32 bits, no meaningful entropy. */
+    prefix: text('prefix').notNull(),
+    createdAt: text('created_at').notNull(),
+    /** Null = never used. Written with 60s granularity, not per request. */
+    lastUsedAt: text('last_used_at'),
+    /**
+     * Null = never expires. Always written through normalizeIso (exact
+     * toISOString shape) so the liveness filter's string comparison against
+     * "now" is chronologically sound — wire input has variable precision.
+     */
+    expiresAt: text('expires_at'),
+    /**
+     * Null = enabled. The reversible half of revocation: set/cleared by
+     * updateApiKey, and the name stays held while disabled — only revoke
+     * frees a name.
+     */
+    disabledAt: text('disabled_at'),
+    /** Null = active. Set once by revokeApiKey; never cleared. */
+    revokedAt: text('revoked_at'),
+  },
+  (table) => [
+    uniqueIndex('api_keys_active_name_idx')
+      .on(table.name)
+      .where(sql`${table.revokedAt} IS NULL`),
+  ],
+);
+
+export type ApiKeyRow = typeof apiKeys.$inferSelect;
+
+/**
+ * The web console's single human account, one row with a fixed id: the
+ * fleet has one console (design record #24) and the console has one
+ * operator. Setup with the env token overwrites the row — creation,
+ * password change and forgot-password are one verb (routes/console.ts).
+ */
+export const consoleAccount = sqliteTable('console_account', {
+  id: integer('id').primaryKey(),
+  username: text('username').notNull(),
+  /** Self-describing scrypt string: scrypt$N$r$p$<salt b64>$<hash b64>. */
+  passwordHash: text('password_hash').notNull(),
+  /** The HMAC key of every session cookie; a new one voids every session. */
+  sessionSecret: text('session_secret').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export type ConsoleAccountRow = typeof consoleAccount.$inferSelect;

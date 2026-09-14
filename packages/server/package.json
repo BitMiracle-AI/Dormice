@@ -29,6 +29,10 @@
     "./shutdown": {
       "types": "./dist/shutdown.d.ts",
       "default": "./dist/shutdown.js"
+    },
+    "./s3-store": {
+      "types": "./dist/archive/s3-store.d.ts",
+      "default": "./dist/archive/s3-store.js"
     }
   },
   "files": [

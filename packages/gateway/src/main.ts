@@ -8,6 +8,7 @@ import { buildGatewayApp } from './app';
 import { NameCache } from './cache';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
+import { ensureSettings } from './db/settings';
 import { Finder } from './find';
 import { Fleet } from './fleet';
 import { httpAskNode } from './lookup';
@@ -55,6 +56,8 @@ if (config.DORMICE_GATEWAY_DB_PATH !== ':memory:') {
 // Migrate on every boot; a fresh install needs no separate setup step.
 const db = openDb(config.DORMICE_GATEWAY_DB_PATH);
 migrateDb(db, fileURLToPath(new URL('../drizzle', import.meta.url)));
+// The fleet's settings row, seeded from the env exactly once (db/settings.ts).
+ensureSettings(db, config);
 
 // The fleet from the nodes table (a node that is down is still a node);
 // the cache and the readings fill in as nodes report and callers ask.

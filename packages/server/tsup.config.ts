@@ -36,6 +36,7 @@ export default defineConfig({
     'src/keyed-queue.ts',
     'src/db/lock.ts',
     'src/shutdown.ts',
+    'src/archive/s3-store.ts',
   ],
   format: ['esm'],
   dts: true,

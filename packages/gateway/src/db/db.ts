@@ -20,6 +20,14 @@ export function openDb(path: string) {
 
 export type Db = ReturnType<typeof openDb>;
 
+/**
+ * What a write-side helper needs of the database — satisfied by the
+ * database itself and by the transaction handle inside db.transaction(),
+ * so a helper can run inside a caller's transaction (db/templates.ts
+ * writes a row and counts the configuration version up as one).
+ */
+export type Writer = Pick<Db, 'select' | 'insert' | 'update' | 'delete'>;
+
 /** Applies pending migrations (drizzle-kit output, committed) at every start. */
 export function migrateDb(db: Db, migrationsFolder: string) {
   migrate(db, { migrationsFolder });

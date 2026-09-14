@@ -73,3 +73,13 @@ export const DEFAULT_LIFECYCLE_POLICY: LifecyclePolicy = {
   stopAfterSeconds: 3 * 24 * 60 * 60,
   archiveAfterSeconds: null,
 };
+
+/**
+ * The default distance from stopped to archived, applied only where an
+ * archive store is actually configured — the shared default above stays
+ * null because a promise nobody can honor is a standing lie. The first-boot
+ * SEED of the fleet's defaultPolicy.archiveAfterSeconds (the gateway's
+ * settings table, and before it the daemon's); the settings value is what
+ * acquires read.
+ */
+export const ARCHIVE_DEFAULT_SECONDS = 7 * 24 * 60 * 60;

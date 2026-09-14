@@ -8,6 +8,13 @@
       "when": 1789328056388,
       "tag": "0000_nodes",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789371415369,
+      "tag": "0001_configuration-authority",
+      "breakpoints": true
     }
   ]
 }
