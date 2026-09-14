@@ -504,12 +504,4 @@ describe('the observability verbs over real HTTP', () => {
     const after = await client.listSandboxMetrics();
     expect(after.filter((s) => s.sandboxName.startsWith('fleet-'))).toEqual([]);
   });
-
-  it('listActivity tells the story just written, newest first', async () => {
-    await client.acquireSandbox('story-sdk');
-    await client.destroySandbox('story-sdk');
-    const log = await client.listActivity({ limit: 10 });
-    const mine = log.filter((e) => e.sandboxName === 'story-sdk');
-    expect(mine.map((e) => e.kind)).toEqual(['destroyed', 'created']);
-  });
 });

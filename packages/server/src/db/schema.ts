@@ -1,8 +1,4 @@
-import {
-  ACTIVITY_KINDS,
-  SANDBOX_STATES,
-  SHELL_EXIT_CAUSES,
-} from '@dormice/shared';
+import { SANDBOX_STATES, SHELL_EXIT_CAUSES } from '@dormice/shared';
 import { sql } from 'drizzle-orm';
 import {
   index,
@@ -106,35 +102,6 @@ export const templates = sqliteTable('templates', {
 });
 
 export type TemplateRow = typeof templates.$inferSelect;
-
-/**
- * The activity ring: the ledger's recent history, one row per lifecycle
- * event (created, cooled, woken, destroyed, repaired). Bounded by count —
- * recordActivity prunes past the newest N — so it answers "what just
- * happened" without ever becoming a second database to babysit. The
- * autoincrement id is the ring position AND the newest-first sort key;
- * unlike sandbox ids it never leaves this machine, so the UUID rule does
- * not apply.
- */
-export const activity = sqliteTable('activity', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  /** ISO 8601 UTC. */
-  at: text('at').notNull(),
-  kind: text('kind', { enum: ACTIVITY_KINDS }).notNull(),
-  /** Null for events with no owning sandbox (orphan sweeps, daemon start). */
-  sandboxName: text('sandbox_name'),
-  sandboxId: text('sandbox_id'),
-  /**
-   * Which credential asked — the closed vocabulary in shared/activity.ts
-   * ('env-token' | 'console' | 'apikey:<id>'). Null = no credential did:
-   * the daemon's own actors, plus rows from before attribution existed
-   * (the ring prunes those away within days).
-   */
-  actor: text('actor'),
-  detail: text('detail').notNull(),
-});
-
-export type ActivityRow = typeof activity.$inferSelect;
 
 /**
  * Per-sandbox metrics history, written by the background sampler every

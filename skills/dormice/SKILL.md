@@ -126,7 +126,7 @@ disable switch; the create response shows the key once, never again;
 these four verbs accept only the env token),
 `getHostMetrics`, `getSandboxMetrics` / `listSandboxMetrics` (live
 resource samples; never wake anything), `listSandboxImages` (who still
-runs an old template image), `listActivity` (recent daemon history),
+runs an old template image),
 `getConfig` (effective config, secrets redacted), `getIngress` /
 `setIngress` (bind domains on the daemon's managed reverse proxy).
 `execCommand` takes

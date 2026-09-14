@@ -152,40 +152,22 @@ export async function scanOnce(
             executor,
             fresh.id,
             archiver?.currentStore() ?? null,
-            { kind: 'expired-killed', cause: 'E2B deadline (kill) reached' },
             watchers,
           );
           result.expiredKilled += 1;
           return;
         }
         if (deadline === 'pause') {
-          await freezeSandbox(
-            db,
-            executor,
-            fresh.id,
-            'E2B deadline reached (pause)',
-          );
+          await freezeSandbox(db, executor, fresh.id);
           result.frozen += 1;
           return;
         }
         const freshDue = dueTransition(fresh, now);
         if (freshDue === 'freeze') {
-          await freezeSandbox(
-            db,
-            executor,
-            fresh.id,
-            `idle ${fresh.freezeAfterSeconds}s reached — memory squeezed into swap (scanner)`,
-          );
+          await freezeSandbox(db, executor, fresh.id);
           result.frozen += 1;
         } else if (freshDue === 'stop') {
-          await stopSandbox(
-            db,
-            executor,
-            fresh.id,
-            `idle ${fresh.stopAfterSeconds}s reached — container torn down, disk kept (scanner)`,
-            undefined,
-            watchers,
-          );
+          await stopSandbox(db, executor, fresh.id, watchers);
           result.stopped += 1;
         }
       });

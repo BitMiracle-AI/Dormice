@@ -102,17 +102,10 @@ editing `/etc/dormice/env`, and it (or a console session) is also the
 only credential the key-management actions themselves accept: keys
 cannot manage keys.
 
-## Activity, domains, settings, and version
+## Domains, settings, and version
 
-Four more pages round out the operator view:
+Three more pages round out the operator view:
 
-- **Activity** — the daemon's recent history (who was created, frozen,
-  destroyed, what the reconciler repaired, which API key was minted or
-  revoked), each event attributed to the credential that asked — an API
-  key by name, the env token, a console session, or "system" for the
-  daemon's own moves. Filterable by event kind, actor, and sandbox
-  name: filtering by a key is how you read a leaked key's blast radius
-  before revoking it. A bounded window, not an audit log.
 - **Domains** — two sections. Console domains bind to the daemon's
   front door (the managed reverse proxy), with a copyable DNS record
   guide and a live per-domain probe that shows DNS and certificate

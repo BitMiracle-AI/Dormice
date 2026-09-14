@@ -3,39 +3,32 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  type ActivityEvent,
   type ConfigEntry,
   getConfigResponseSchema,
   getFleetTimelineResponseSchema,
   getHostMetricsHistoryResponseSchema,
   getSandboxMetricsHistoryResponseSchema,
   getSandboxMetricsResponseSchema,
-  listActivityResponseSchema,
   listSandboxImagesResponseSchema,
   listSandboxMetricsResponseSchema,
 } from '@dormice/shared';
-import { count } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from '../app';
 import { Archiver } from '../archive/archiver';
 import { MemStore } from '../archive/mem-store';
 import { CONFIG_KEYS, type ConfigSources, loadConfig } from '../config';
-import { ACTIVITY_KEEP, recordActivity } from '../db/activity';
 import { migrateDb, openDb } from '../db/db';
 import { insertMetricsTick, MAX_POINTS } from '../db/metrics';
-import { activity } from '../db/schema';
 import { FAKE_BASE_IMAGE, FakeExecutor } from '../executor/fake';
 import { CpuSampler, type HostSample } from '../host-metrics';
 import { KeyedQueue } from '../keyed-queue';
 import { freezeSandbox, stopSandbox } from '../lifecycle';
 import { sampleOnce } from '../metrics-sampler';
 import { ARCHIVE_DEFAULT_SECONDS } from '../policy';
-import { reconcile } from '../reconciler';
-import { scanOnce } from '../scanner';
 
-// The three observability verbs, app-level: getConfig, listActivity,
-// getSandboxMetrics — the console's food, so the tests eat exactly what a
-// browser would.
+// The observability verbs, app-level: getConfig, getSandboxMetrics and
+// the history windows — the console's food, so the tests eat exactly what
+// a browser would.
 
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
@@ -73,12 +66,6 @@ type App = ReturnType<typeof testApp>['app'];
 
 function rpc(app: App, url: string, payload: Record<string, unknown> = {}) {
   return app.inject({ method: 'POST', url, headers: authed, payload });
-}
-
-async function events(app: App): Promise<ActivityEvent[]> {
-  const res = await rpc(app, '/listActivity');
-  expect(res.statusCode).toBe(200);
-  return listActivityResponseSchema.parse(res.json()).events;
 }
 
 // One tick's non-sandbox inputs. A fresh CpuSampler per call is fine: its
@@ -189,92 +176,6 @@ describe('getConfig', () => {
       enabled: true,
       defaultSeconds: ARCHIVE_DEFAULT_SECONDS,
     });
-  });
-});
-
-describe('listActivity', () => {
-  it('records create, wake, cooling and release, newest first', async () => {
-    const { app, db, executor, locks } = testApp();
-    const res = await rpc(app, '/acquireSandbox', {
-      name: 'story',
-      policy: { freezeAfterSeconds: 5, stopAfterSeconds: 10 },
-    });
-    expect(res.statusCode).toBe(200);
-    const created = res.json().sandbox;
-
-    // Cool it two rungs by time travel, then wake it back through acquire.
-    await scanOnce(
-      db,
-      executor,
-      locks,
-      new Date(Date.parse(created.lastActiveAt) + 6_000),
-    );
-    await scanOnce(
-      db,
-      executor,
-      locks,
-      new Date(Date.parse(created.lastActiveAt) + 11_000),
-    );
-    await rpc(app, '/acquireSandbox', { name: 'story' });
-    await rpc(app, '/destroySandbox', { name: 'story' });
-
-    const log = await events(app);
-    expect(log.map((e) => e.kind)).toEqual([
-      'destroyed',
-      'woken',
-      'stopped',
-      'frozen',
-      'created',
-    ]);
-    // Every event names its sandbox, and the scanner names its threshold.
-    expect(new Set(log.map((e) => e.sandboxName))).toEqual(new Set(['story']));
-    expect(log.find((e) => e.kind === 'frozen')?.detail).toContain('scanner');
-    expect(log.find((e) => e.kind === 'created')?.detail).toContain(
-      'acquireSandbox',
-    );
-  });
-
-  it('records what reconciliation repaired', async () => {
-    const { app, db, executor, locks } = testApp();
-    await rpc(app, '/acquireSandbox', { name: 'doomed' });
-    const { sandboxes } = (await rpc(app, '/listSandboxes')).json();
-    // Reality loses both container and disk behind the ledger's back.
-    await executor.destroy(sandboxes[0].id);
-    await reconcile(db, executor, locks);
-
-    const log = await events(app);
-    expect(log[0]).toMatchObject({ kind: 'reconciled', sandboxName: 'doomed' });
-    expect(log[0]?.detail).toContain('row deleted');
-  });
-
-  it('honors the limit and keeps the ring bounded', async () => {
-    const { app, db } = testApp();
-    for (let i = 0; i < ACTIVITY_KEEP + 50; i += 1) {
-      recordActivity(db, { kind: 'daemon-started', detail: `tick ${i}` });
-    }
-    const page = listActivityResponseSchema.parse(
-      (await rpc(app, '/listActivity', { limit: 3 })).json(),
-    ).events;
-    expect(page).toHaveLength(3);
-    expect(page[0]?.detail).toBe(`tick ${ACTIVITY_KEEP + 49}`);
-
-    // The bound must live in the TABLE, not in the page clamp: a missing
-    // prune with limit=1000 would return the same page — count the rows.
-    const total = db.select({ n: count() }).from(activity).get() as {
-      n: number;
-    };
-    expect(total.n).toBe(ACTIVITY_KEEP);
-    const all = listActivityResponseSchema.parse(
-      (await rpc(app, '/listActivity', { limit: 1000 })).json(),
-    ).events;
-    // The oldest 50 fell off the ring.
-    expect(all.at(-1)?.detail).toBe('tick 50');
-  });
-
-  it('rejects an out-of-range limit', async () => {
-    const { app } = testApp();
-    const res = await rpc(app, '/listActivity', { limit: 0 });
-    expect(res.statusCode).toBe(400);
   });
 });
 

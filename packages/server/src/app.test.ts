@@ -511,17 +511,6 @@ describe('acquire finds the shell dead under an active row', () => {
       cause: 'runtime-died',
     });
     expect(again.sandbox.lastExit.at).toMatch(/^\d{4}-/);
-
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string; detail: string }) => [e.kind, e.detail]);
-    expect(kinds).toContainEqual([
-      'reconciled',
-      "container is stopped — state active corrected to stopped (exit 2, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see the sandbox pids cap in settings), found dead at wake",
-    ]);
-    // The restart is its own event, recorded once it has happened — the
-    // death record never claims it ahead of time.
-    expect(kinds[0]).toEqual(['woken', 'cold start from the surviving disk']);
   });
 
   it('lastExit is sticky history: a later idle stop and wake keep the last death readable', async () => {
@@ -1009,13 +998,6 @@ describe('POST /updatePolicy', () => {
     });
     // Adjusting a knob is not activity: the idle countdown keeps running.
     expect(res.json().sandbox.lastActiveAt).toBe(created.sandbox.lastActiveAt);
-
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(events[0]).toMatchObject({
-      kind: 'policy-changed',
-      sandboxName: 'alice',
-      detail: 'freeze 600s -> 120s',
-    });
   });
 
   it('promotes a frozen sandbox to never-stop without waking it', async () => {
@@ -1080,7 +1062,7 @@ describe('POST /updatePolicy', () => {
     expect(res.json().message).toMatch(/acquire it first/);
   });
 
-  it('treats a no-change patch as the goal state and writes no history', async () => {
+  it('treats a no-change patch as the goal state', async () => {
     const { app } = testApp();
     await acquire(app, { name: 'alice' });
     const res = await rpc(app, '/updatePolicy', {
@@ -1090,10 +1072,6 @@ describe('POST /updatePolicy', () => {
       },
     });
     expect(res.statusCode).toBe(200);
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(
-      events.some((e: { kind: string }) => e.kind === 'policy-changed'),
-    ).toBe(false);
   });
 });
 
@@ -1116,16 +1094,9 @@ describe('POST /updateMetadata', () => {
     expect(res.json().sandbox.metadata).toEqual({ app: 'assistant' });
     // Relabeling is not activity: the idle countdown keeps running.
     expect(res.json().sandbox.lastActiveAt).toBe(created.sandbox.lastActiveAt);
-
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(events[0]).toMatchObject({
-      kind: 'metadata-changed',
-      sandboxName: 'alice',
-      detail: 'app=assistant',
-    });
   });
 
-  it('clears every label with {} and says so in the history', async () => {
+  it('clears every label with {}', async () => {
     const { app } = testApp();
     await acquire(app, { name: 'alice', metadata: { app: 'crawler' } });
     const res = await rpc(app, '/updateMetadata', {
@@ -1134,11 +1105,6 @@ describe('POST /updateMetadata', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().sandbox.metadata).toEqual({});
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(events[0]).toMatchObject({
-      kind: 'metadata-changed',
-      detail: 'cleared',
-    });
   });
 
   it('relabels a frozen sandbox without waking it — a pure ledger write', async () => {
@@ -1173,7 +1139,7 @@ describe('POST /updateMetadata', () => {
     expect(res.json().message).toMatch(/acquire it first/);
   });
 
-  it('treats a no-change replacement as the goal state and writes no history', async () => {
+  it('treats a no-change replacement as the goal state', async () => {
     const { app } = testApp();
     await acquire(app, { name: 'alice', metadata: { app: 'crawler' } });
     const res = await rpc(app, '/updateMetadata', {
@@ -1181,15 +1147,11 @@ describe('POST /updateMetadata', () => {
       metadata: { app: 'crawler' },
     });
     expect(res.statusCode).toBe(200);
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(
-      events.some((e: { kind: string }) => e.kind === 'metadata-changed'),
-    ).toBe(false);
   });
 });
 
 describe('POST /updateTemplate', () => {
-  it('re-homes the sandbox, does not refresh the idle clock, and records the move', async () => {
+  it('re-homes the sandbox and does not refresh the idle clock', async () => {
     const { app } = testApp();
     await rpc(app, '/registerTemplate', { name: 'py-a', image: 'img-a' });
     await rpc(app, '/registerTemplate', { name: 'py-b', image: 'img-b' });
@@ -1205,13 +1167,6 @@ describe('POST /updateTemplate', () => {
     expect(res.json().sandbox.template).toBe('py-b');
     // Re-homing is not activity: the idle countdown keeps running.
     expect(res.json().sandbox.lastActiveAt).toBe(created.sandbox.lastActiveAt);
-
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(events[0]).toMatchObject({
-      kind: 'template-changed',
-      sandboxName: 'alice',
-      detail: 'template py-a -> py-b; applies at the next cold wake',
-    });
   });
 
   it('a frozen sandbox stays frozen; the next wake swaps the shell onto the new template, data intact', async () => {
@@ -1274,11 +1229,6 @@ describe('POST /updateTemplate', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().sandbox.template).toBeNull();
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(events[0]).toMatchObject({
-      kind: 'template-changed',
-      detail: 'template py-a -> base image; applies at the next cold wake',
-    });
     // With no rows referencing it, the old template can now be removed —
     // the migration story this verb exists for.
     expect(
@@ -1305,7 +1255,7 @@ describe('POST /updateTemplate', () => {
     expect(nobody.json().message).toMatch(/acquire it first/);
   });
 
-  it('treats a same-template update as the goal state and writes no history', async () => {
+  it('treats a same-template update as the goal state', async () => {
     const { app } = testApp();
     await rpc(app, '/registerTemplate', { name: 'py-a', image: 'img-a' });
     await acquire(app, { name: 'alice', template: 'py-a' });
@@ -1314,10 +1264,6 @@ describe('POST /updateTemplate', () => {
       template: 'py-a',
     });
     expect(res.statusCode).toBe(200);
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(
-      events.some((e: { kind: string }) => e.kind === 'template-changed'),
-    ).toBe(false);
   });
 });
 
@@ -1777,17 +1723,8 @@ describe('cold wakes converge onto the current image', () => {
     expect(Buffer.from(read.json().contentBase64, 'base64').toString()).toBe(
       'survives',
     );
-    // The audit trail names both halves of the move.
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string }) => e.kind);
-    expect(kinds.slice(0, 2)).toEqual(['woken', 'rebuilt']);
-    const rebuilt = (await rpc(app, '/listActivity'))
-      .json()
-      .events.find((e: { kind: string }) => e.kind === 'rebuilt');
-    expect(rebuilt.detail).toBe(
-      'stale shell swapped at wake: img-v1 -> img-v2',
-    );
+    // The old shell was removed — a swap, not a plain unpause.
+    expect(executor.removedShells).toEqual([created.id]);
   });
 
   it('frozen + fresh: a plain unpause, no shell removed', async () => {
@@ -1806,10 +1743,7 @@ describe('cold wakes converge onto the current image', () => {
     const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
     expect(woken.state).toBe('active');
     expect(await executor.imageOf(created.id)).toBe('img-v1');
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string }) => e.kind);
-    expect(kinds).not.toContain('rebuilt');
+    expect(executor.removedShells).toEqual([]);
   });
 
   it('stopped + stale: the same convergence — stop kept the old shell, the wake replaces it', async () => {
@@ -1832,10 +1766,7 @@ describe('cold wakes converge onto the current image', () => {
     const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
     expect(woken.state).toBe('active');
     expect(await executor.imageOf(created.id)).toBe('img-v2');
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string }) => e.kind);
-    expect(kinds.slice(0, 2)).toEqual(['woken', 'rebuilt']);
+    expect(executor.removedShells).toEqual([created.id]);
   });
 
   it('a template-less sandbox is judged against the base image — fresh, so untouched', async () => {
@@ -1851,10 +1782,7 @@ describe('cold wakes converge onto the current image', () => {
     const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
     expect(woken.state).toBe('active');
     expect(await executor.imageOf(created.id)).toBe(executor.baseImage);
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string }) => e.kind);
-    expect(kinds).not.toContain('rebuilt');
+    expect(executor.removedShells).toEqual([]);
   });
 
   it('a vanished shell is not judged stale — the start builds from the current image by itself', async () => {
@@ -1877,10 +1805,7 @@ describe('cold wakes converge onto the current image', () => {
     // Converged all the same, but through start's own rebuild — no shell
     // was removed, so no 'rebuilt' entry claims one was.
     expect(await executor.imageOf(created.id)).toBe('img-v2');
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string }) => e.kind);
-    expect(kinds).not.toContain('rebuilt');
+    expect(executor.removedShells).toEqual([]);
   });
 });
 
@@ -2080,16 +2005,24 @@ describe('API keys', () => {
     expect(second.lastUsedAt).toBe(first.lastUsedAt);
   });
 
-  it('records mint and revoke in the activity ring, token nowhere in sight', async () => {
+  it('a console session passes the admin gate too: a key minted from the console', async () => {
     const { app } = testApp();
-    const { id, token } = await mint(app, 'ci');
-    await rpc(app, '/revokeApiKey', { id });
-
-    const events = (await rpc(app, '/listActivity')).json().events;
-    const kinds = events.map((e: { kind: string }) => e.kind);
-    expect(kinds).toContain('apikey-created');
-    expect(kinds).toContain('apikey-revoked');
-    expect(JSON.stringify(events)).not.toContain(token);
+    const setup = await app.inject({
+      method: 'POST',
+      url: '/console/auth/setup',
+      payload: { token: TOKEN, username: 'operator', password: 'horse pass' },
+    });
+    const cookie = setup.cookies.find((c) => c.name === SESSION_COOKIE);
+    const minted = await app.inject({
+      method: 'POST',
+      url: '/createApiKey',
+      headers: { [CONSOLE_HEADER]: '1' },
+      cookies: { [SESSION_COOKIE]: (cookie as { value: string }).value },
+      payload: { name: 'by-console' },
+    });
+    expect(minted.statusCode).toBe(200);
+    expect(minted.json().apiKey.name).toBe('by-console');
+    expect((await useKey(app, minted.json().token)).statusCode).toBe(200);
   });
 
   it('disable parks the key reversibly: 401 while disabled, 200 again after enable', async () => {
@@ -2114,14 +2047,6 @@ describe('API keys', () => {
     ).json().apiKey;
     expect(enabled.disabledAt).toBeNull();
     expect((await useKey(app, token)).statusCode).toBe(200);
-
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string }) => e.kind);
-    expect(kinds.filter((k: string) => k === 'apikey-disabled')).toHaveLength(
-      1,
-    );
-    expect(kinds.filter((k: string) => k === 'apikey-enabled')).toHaveLength(1);
   });
 
   it('expiry closes the door: a past expiresAt is 401, clearing it reopens', async () => {
@@ -2181,10 +2106,10 @@ describe('API keys', () => {
     expect(edited.json().message).toMatch(/rotation history/);
   });
 
-  it('a no-op patch changes nothing and records nothing', async () => {
+  it('a no-op patch changes nothing', async () => {
     const { app } = testApp();
     const { id } = await mint(app, 'ci');
-    const before = (await rpc(app, '/listActivity')).json().events.length;
+    const before = (await rpc(app, '/listApiKeys')).json().apiKeys;
 
     const res = await rpc(app, '/updateApiKey', {
       id,
@@ -2193,9 +2118,7 @@ describe('API keys', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().apiKey.name).toBe('ci');
-
-    const after = (await rpc(app, '/listActivity')).json().events.length;
-    expect(after).toBe(before);
+    expect((await rpc(app, '/listApiKeys')).json().apiKeys).toEqual(before);
   });
 
   it('carries expiresAt from mint into the list', async () => {
@@ -2266,96 +2189,6 @@ describe('API keys', () => {
       payload: { name: 'from-console' },
     });
     expect(res.statusCode).toBe(200);
-  });
-});
-
-describe('activity attribution', () => {
-  /**
-   * The newest event of this kind (listActivity is newest-first),
-   * optionally narrowed to one sandbox. Actor strings are asserted as
-   * literals on purpose: they are wire vocabulary, and a drifted constant
-   * must fail here, not ride through.
-   */
-  const eventOf = async (
-    app: ReturnType<typeof testApp>['app'],
-    kind: string,
-    sandboxName?: string,
-  ) => {
-    const events = (await rpc(app, '/listActivity')).json().events as Array<{
-      kind: string;
-      sandboxName: string | null;
-      actor: string | null;
-    }>;
-    return events.find(
-      (e) =>
-        e.kind === kind &&
-        (sandboxName === undefined || e.sandboxName === sandboxName),
-    );
-  };
-
-  it('lifecycle verbs name their credential: env token and API key are distinct actors', async () => {
-    const { app } = testApp();
-    const minted = (await rpc(app, '/createApiKey', { name: 'agent' })).json();
-    const asKey = { authorization: `Bearer ${minted.token}` };
-
-    await acquire(app, { name: 'mine' });
-    await acquire(app, { name: 'theirs' }, asKey);
-    expect((await eventOf(app, 'created', 'mine'))?.actor).toBe('env-token');
-    expect((await eventOf(app, 'created', 'theirs'))?.actor).toBe(
-      `apikey:${minted.apiKey.id}`,
-    );
-
-    // The blast-radius question a leak raises: which key destroyed this?
-    await app.inject({
-      method: 'POST',
-      url: '/destroySandbox',
-      headers: asKey,
-      payload: { name: 'mine' },
-    });
-    expect((await eventOf(app, 'destroyed', 'mine'))?.actor).toBe(
-      `apikey:${minted.apiKey.id}`,
-    );
-  });
-
-  it('daemon moves stay null; the wake that follows names its caller', async () => {
-    const { app, db, executor, locks } = testApp();
-    const created = (await acquire(app, { name: 'alice' })).json();
-
-    await scanOnce(
-      db,
-      executor,
-      locks,
-      after(
-        created.sandbox.lastActiveAt,
-        DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
-      ),
-    );
-    // The idle scanner froze it: no credential asked, so no actor.
-    expect((await eventOf(app, 'frozen', 'alice'))?.actor).toBeNull();
-
-    await acquire(app, { name: 'alice' });
-    expect((await eventOf(app, 'woken', 'alice'))?.actor).toBe('env-token');
-  });
-
-  it('apikey management events name the administrator: env token or console, never a key', async () => {
-    const { app } = testApp();
-    await rpc(app, '/createApiKey', { name: 'by-env' });
-    expect((await eventOf(app, 'apikey-created'))?.actor).toBe('env-token');
-
-    const setup = await app.inject({
-      method: 'POST',
-      url: '/console/auth/setup',
-      payload: { token: TOKEN, username: 'operator', password: 'horse pass' },
-    });
-    const cookie = setup.cookies.find((c) => c.name === SESSION_COOKIE);
-    await app.inject({
-      method: 'POST',
-      url: '/createApiKey',
-      headers: { [CONSOLE_HEADER]: '1' },
-      cookies: { [SESSION_COOKIE]: (cookie as { value: string }).value },
-      payload: { name: 'by-console' },
-    });
-    expect((await eventOf(app, 'apikey-created'))?.actor).toBe('console');
   });
 });
 

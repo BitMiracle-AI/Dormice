@@ -4,13 +4,10 @@ import {
   setIngressResponseSchema,
 } from '@dormice/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
-import { recordActivity } from '../db/activity';
-import type { Db } from '../db/db';
 import { httpError } from '../http-error';
 import { type Ingress, UnmanagedIngressFileError } from '../ingress';
 
 export interface IngressRoutesOptions {
-  db: Db;
   /** Present exactly when DORMICE_INGRESS_FILE is set (the archiver precedent). */
   ingress?: Ingress;
 }
@@ -23,7 +20,7 @@ export interface IngressRoutesOptions {
  */
 export const ingressRoutes: FastifyPluginAsyncZod<
   IngressRoutesOptions
-> = async (app, { db, ingress }) => {
+> = async (app, { ingress }) => {
   app.post(
     '/getIngress',
     {
@@ -72,13 +69,12 @@ export const ingressRoutes: FastifyPluginAsyncZod<
           .filter((domain) => !domains.includes(domain))
           .map((domain) => `unbound ${domain}`),
       ];
-      recordActivity(db, {
-        kind: 'ingress-updated',
-        actor: request.actor,
-        detail: `${changes.join(', ') || 'domains unchanged'} — now serving ${
+      request.log.info(
+        { changes, domains },
+        `ingress updated: ${changes.join(', ') || 'domains unchanged'} — now serving ${
           domains.length ? domains.join(', ') : 'plain-HTTP IP access only'
         }`,
-      });
+      );
       return { domains };
     },
   );

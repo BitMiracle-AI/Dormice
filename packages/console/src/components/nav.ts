@@ -1,5 +1,4 @@
 import {
-  Activity01Icon,
   DashboardSquare01Icon,
   GitCommitIcon,
   Globe02Icon,
@@ -45,7 +44,6 @@ export const NAV_GROUPS: Array<{
     id: 'ops',
     label: m.shell_nav_group_ops,
     items: [
-      { to: '/activity', label: m.shell_nav_activity, icon: Activity01Icon },
       { to: '/api-keys', label: m.shell_nav_api_keys, icon: Key01Icon },
       { to: '/domains', label: m.shell_nav_domains, icon: Globe02Icon },
       {

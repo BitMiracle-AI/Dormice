@@ -45,7 +45,7 @@ function view(row: ApiKeyRow): ApiKey {
  * requireAdminAuth (env token or console session; a live key gets an
  * honest 403), because a credential must not manage the credential ledger
  * it lives in. Verification itself lives in db/api-keys.ts and is
- * consulted by buildApp's identifyCredential closure, not here.
+ * consulted by buildApp's isCredential closure, not here.
  */
 export const apiKeyRoutes: FastifyPluginAsyncZod<ApiKeyRoutesOptions> = async (
   app,
@@ -71,7 +71,12 @@ export const apiKeyRoutes: FastifyPluginAsyncZod<ApiKeyRoutesOptions> = async (
           `an active API key named '${name}' already exists — revoke it first or pick another name`,
         );
       }
-      const { row, token } = createApiKey(db, name, expiresAt, request.actor);
+      const { row, token } = createApiKey(db, name, expiresAt);
+      // The token itself never reaches the log.
+      request.log.info(
+        { apiKey: row.id, name, prefix: row.prefix, expiresAt: row.expiresAt },
+        'API key minted',
+      );
       return { apiKey: view(row), token };
     },
   );
@@ -119,7 +124,14 @@ export const apiKeyRoutes: FastifyPluginAsyncZod<ApiKeyRoutesOptions> = async (
           );
         }
       }
-      return { apiKey: view(updateApiKey(db, row, patch, request.actor)) };
+      const updated = updateApiKey(db, row, patch);
+      if (updated !== row) {
+        request.log.info(
+          { apiKey: row.id, name: updated.name, patch },
+          'API key updated',
+        );
+      }
+      return { apiKey: view(updated) };
     },
   );
 
@@ -131,8 +143,12 @@ export const apiKeyRoutes: FastifyPluginAsyncZod<ApiKeyRoutesOptions> = async (
         response: { 200: revokeApiKeyResponseSchema },
       },
     },
-    async (request) => ({
-      revoked: revokeApiKey(db, request.body.id, request.actor),
-    }),
+    async (request) => {
+      const revoked = revokeApiKey(db, request.body.id);
+      if (revoked) {
+        request.log.info({ apiKey: request.body.id }, 'API key revoked');
+      }
+      return { revoked };
+    },
   );
 };

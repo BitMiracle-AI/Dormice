@@ -1,6 +1,5 @@
 import http from 'node:http';
 import nodePath from 'node:path';
-import { apiKeyActor, ENV_TOKEN_ACTOR } from '@dormice/shared';
 import fastifyCookie from '@fastify/cookie';
 import fastify, { type FastifyError, type FastifyServerFactory } from 'fastify';
 import {
@@ -25,7 +24,6 @@ import { WatcherTable } from './e2b/watcher-table';
 import type { Executor } from './executor/executor';
 import type { Ingress } from './ingress';
 import type { KeyedQueue } from './keyed-queue';
-import { activityRoutes } from './routes/activity';
 import { apiKeyRoutes } from './routes/api-keys';
 import { configRoutes } from './routes/config';
 import { consoleRoutes } from './routes/console';
@@ -230,33 +228,22 @@ export function buildApp({
   // cookie on the native routes, the /console surface mints and clears it.
   app.register(fastifyCookie);
 
-  // Attribution rides the request from the auth hook that admitted it into
-  // every recordActivity the handler reaches. Declared once so the property
-  // shape is stable; null is what unauthenticated surfaces keep.
-  app.decorateRequest('actor', null);
-
-  // The one adjudication of "does this bare credential open the door" —
-  // and of who it is (the two are the same act, so identity is captured
-  // here, not re-derived later): the env token (constant-time compare —
-  // the bootstrap credential, always valid) or any active ledger API key
-  // (sha256 indexed lookup, judged per request so a mint or revoke takes
-  // effect on the very next call). Both faces — the native Bearer header
-  // and the E2B X-API-KEY hook — feed this same closure: one truth, two
-  // dialects.
-  const identifyCredential = (bare: string): string | null => {
-    if (tokensEqual(bare, config.DORMICE_API_TOKEN)) {
-      return ENV_TOKEN_ACTOR;
-    }
-    const keyId = verifyApiKeyToken(db, bare);
-    return keyId === null ? null : apiKeyActor(keyId);
-  };
+  // The one adjudication of "does this bare credential open the door":
+  // the env token (constant-time compare — the bootstrap credential,
+  // always valid) or any active ledger API key (sha256 indexed lookup,
+  // judged per request so a mint or revoke takes effect on the very next
+  // call). Both faces — the native Bearer header and the E2B X-API-KEY
+  // hook — feed this same closure: one truth, two dialects.
+  const isCredential = (bare: string): boolean =>
+    tokensEqual(bare, config.DORMICE_API_TOKEN) ||
+    verifyApiKeyToken(db, bare) !== null;
 
   // Built once, used by every guarded surface. The secret getter reads the
   // ledger per request because setup can replace the account (and void its
   // sessions) while the daemon runs — a captured value would keep dead
   // sessions alive until restart.
   const apiAuth = requireApiAuth(
-    identifyCredential,
+    isCredential,
     () => getConsoleAccount(db)?.sessionSecret ?? null,
   );
 
@@ -287,15 +274,14 @@ export function buildApp({
     });
     await api.register(templateRoutes, { db });
     await api.register(hostRoutes, { config, db, executor });
-    await api.register(activityRoutes, { db });
-    await api.register(ingressRoutes, { db, ingress });
+    await api.register(ingressRoutes, { ingress });
     await api.register(configRoutes, {
       config,
       db,
       sources,
       swap,
     });
-    await api.register(upgradeRoutes, { updater, db });
+    await api.register(upgradeRoutes, { updater });
   });
 
   // The apiKey management verbs and updateSettings sit behind the stricter
@@ -340,7 +326,7 @@ export function buildApp({
       watchers,
       archiver,
       envdSigningSecret,
-      identifyCredential,
+      isCredential,
     });
   });
 

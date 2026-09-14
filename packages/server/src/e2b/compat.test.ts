@@ -339,20 +339,6 @@ describe('E2B control plane', () => {
       payload: {},
     });
     expect(created.statusCode).toBe(201);
-
-    // Both faces feed the same identity closure, so the created event names
-    // the key — the same attribution the native Bearer face gets.
-    const events = (
-      await t.app.inject({
-        method: 'POST',
-        url: '/listActivity',
-        headers: { authorization: `Bearer ${TOKEN}` },
-        payload: {},
-      })
-    ).json().events as Array<{ kind: string; actor: string | null }>;
-    expect(events.find((e) => e.kind === 'created')?.actor).toBe(
-      `apikey:${minted.apiKey.id}`,
-    );
   });
 
   it('creates a fresh sandbox per call — E2B semantics, no key given', async () => {

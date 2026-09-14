@@ -76,14 +76,12 @@ Out-of-memory *inside* the sandbox takes down the whole gVisor container
 next acquire revives the sandbox. Raise the limit if the workload
 honestly needs more.
 
-The activity feed (`listActivity`, or the console's activity page) says
-which it was: the `reconciled` event that recorded the death carries the
-exit code and whether the kernel's memory cgroup OOM-killed the
-container. `OOM-killed` is the kernel's verdict; a plain `exit 137` is a
-SIGKILL from elsewhere. The same verdict rides on the sandbox object as
-[`lastExit`](/docs/http-api#the-sandbox-object) — `cause: "oom-killed"`
-here — so a client that saw its stream end can read it straight from
-the `acquireSandbox` that revives the sandbox.
+The sandbox object says which it was:
+[`lastExit`](/docs/http-api#the-sandbox-object) carries the exit code
+and whether the kernel's memory cgroup OOM-killed the container —
+`cause: "oom-killed"` is the kernel's verdict; a plain `exit 137` is a
+SIGKILL from elsewhere — so a client that saw its stream end can read it
+straight from the `acquireSandbox` that revives the sandbox.
 
 The verdict is read two ways, and one of them depends on the host. A
 wake that arrives while the container's cgroup still exists reads the
@@ -114,9 +112,8 @@ The sandbox hit its pids cap (the `pidsLimit` setting;
 that cap bounds the sandbox's host-side threads and processes, not a
 count the sandbox can see — so nothing inside gets an error; the
 sandbox's kernel simply dies, exit 2, and the host's own kernel log
-shows one line: `fork rejected by pids controller`. The `reconciled`
-activity event names this signature, and the sandbox object's
-[`lastExit`](/docs/http-api#the-sandbox-object) reads
+shows one line: `fork rejected by pids controller`. The sandbox object's
+[`lastExit`](/docs/http-api#the-sandbox-object) names this signature:
 `cause: "runtime-died"`. The disk survives and the next acquire revives
 the sandbox — immediately, even inside the heartbeat's blind spot (see
 the entry above). The default is 4096 (it was 512, runc's

@@ -1,6 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, desc, eq, gt, isNull, lt, or, sql } from 'drizzle-orm';
-import { recordActivity } from './activity';
 import type { Db } from './db';
 import { type ApiKeyRow, apiKeys } from './schema';
 
@@ -43,7 +42,6 @@ export function createApiKey(
   db: Db,
   name: string,
   expiresAt: string | undefined,
-  actor: string | null,
 ): { row: ApiKeyRow; token: string } {
   const token = randomBytes(32).toString('hex');
   const row: ApiKeyRow = {
@@ -58,15 +56,6 @@ export function createApiKey(
     revokedAt: null,
   };
   db.insert(apiKeys).values(row).run();
-  recordActivity(db, {
-    kind: 'apikey-created',
-    // The admin gate means this actor can only be env-token or console —
-    // a key can never appear as the minter of another key.
-    actor,
-    detail:
-      `API key "${name}" (prefix ${row.prefix}) minted` +
-      (row.expiresAt ? `, expires ${row.expiresAt}` : ''),
-  });
   return { row, token };
 }
 
@@ -105,11 +94,7 @@ export function listApiKeys(db: Db): ApiKeyRow[] {
  * or is already revoked — the desired end state was already true. The row
  * survives as history; the name is immediately free for a new key.
  */
-export function revokeApiKey(
-  db: Db,
-  id: string,
-  actor: string | null,
-): boolean {
+export function revokeApiKey(db: Db, id: string): boolean {
   const row = findApiKeyById(db, id);
   if (!row || row.revokedAt !== null) {
     return false;
@@ -118,11 +103,6 @@ export function revokeApiKey(
     .set({ revokedAt: new Date().toISOString() })
     .where(eq(apiKeys.id, id))
     .run();
-  recordActivity(db, {
-    kind: 'apikey-revoked',
-    actor,
-    detail: `API key "${row.name}" revoked`,
-  });
   return true;
 }
 
@@ -132,62 +112,35 @@ export function revokeApiKey(
  * only computes the changed-field set against the row it was handed and
  * writes once. A field equal to its current value is not a change (the
  * updatePolicy idiom: a no-op patch is the goal state, not an error), so
- * disabling an already-disabled key keeps its original disabledAt and
- * records nothing. One request can still yield two activity events — a
- * disable that also renames is two facts, each separately filterable.
+ * disabling an already-disabled key keeps its original disabledAt. The
+ * returned row carries what changed; the route logs it.
  */
 export function updateApiKey(
   db: Db,
   row: ApiKeyRow,
   patch: { name?: string; expiresAt?: string | null; disabled?: boolean },
-  actor: string | null,
 ): ApiKeyRow {
   const changes: Partial<ApiKeyRow> = {};
-  const facts: {
-    kind: 'apikey-updated' | 'apikey-disabled' | 'apikey-enabled';
-    detail: string;
-  }[] = [];
-  const updated: string[] = [];
-
   if (patch.name !== undefined && patch.name !== row.name) {
     changes.name = patch.name;
-    updated.push(`renamed to "${patch.name}"`);
   }
   if (patch.expiresAt !== undefined) {
     const next =
       patch.expiresAt === null ? null : normalizeIso(patch.expiresAt);
     if (next !== row.expiresAt) {
       changes.expiresAt = next;
-      updated.push(`expires ${row.expiresAt ?? 'never'} -> ${next ?? 'never'}`);
     }
-  }
-  if (updated.length > 0) {
-    facts.push({
-      kind: 'apikey-updated',
-      detail: `API key "${row.name}" ${updated.join(', ')}`,
-    });
   }
   if (patch.disabled === true && row.disabledAt === null) {
     changes.disabledAt = new Date().toISOString();
-    facts.push({
-      kind: 'apikey-disabled',
-      detail: `API key "${row.name}" disabled`,
-    });
   } else if (patch.disabled === false && row.disabledAt !== null) {
     changes.disabledAt = null;
-    facts.push({
-      kind: 'apikey-enabled',
-      detail: `API key "${row.name}" enabled`,
-    });
   }
 
   if (Object.keys(changes).length === 0) {
     return row;
   }
   db.update(apiKeys).set(changes).where(eq(apiKeys.id, row.id)).run();
-  for (const fact of facts) {
-    recordActivity(db, { ...fact, actor });
-  }
   return { ...row, ...changes };
 }
 
@@ -232,10 +185,8 @@ export function isLiveApiKey(db: Db, bareToken: string): boolean {
  * sha256(key), which preimage resistance makes worthless to an attacker
  * (the argument GitHub token storage rests on).
  *
- * A hit answers the key's id (attribution's raw material — the auth hook
- * dresses it as an actor and rides it on the request) and stamps lastUsedAt
- * — only a hit: verification is the one moment a credential was actually
- * honored. Throttled to LAST_USED_GRANULARITY_MS so a polling client does
+ * A hit answers the key's id and stamps lastUsedAt — only a hit:
+ * verification is the one moment a credential was actually honored. Throttled to LAST_USED_GRANULARITY_MS so a polling client does
  * not write the ledger per request. ISO strings compare lexicographically
  * as timestamps, so the cutoff is a plain string <.
  */

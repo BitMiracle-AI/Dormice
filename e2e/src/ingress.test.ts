@@ -91,17 +91,4 @@ describe('ingress domain binding over a real daemon', () => {
     writeFileSync(file, ours);
     expect((await client().getIngress()).domains).toEqual([]);
   });
-
-  it('records binds in the activity window', async () => {
-    await client().setIngress(['activity.dormice-e2e.test']);
-    await client().setIngress([]);
-    const events = await client().listActivity();
-    const details = events
-      .filter((event) => event.kind === 'ingress-updated')
-      .map((event) => event.detail);
-    expect(details.length).toBeGreaterThanOrEqual(2);
-    expect(details.some((d) => d.includes('activity.dormice-e2e.test'))).toBe(
-      true,
-    );
-  });
 });

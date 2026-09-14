@@ -248,6 +248,13 @@ export class FakeExecutor implements Executor {
   private readonly containers = new Map<string, ContainerState>();
   private readonly disks = new Set<string>();
   /**
+   * Every removeContainer, in order: the shell swaps a wake made (the one
+   * way a live sandbox loses its container but keeps its disk). Public so
+   * a test can assert a rebuild happened — or, on the fast path, that
+   * none did — now that no activity ring records it.
+   */
+  readonly removedShells: string[] = [];
+  /**
    * The image each shell was born from. Keyed like containers, not disks:
    * an image is a property of the shell, set at its birth and gone with it
    * — that is what lets a rebuilt shell boot a different image over the
@@ -490,6 +497,7 @@ export class FakeExecutor implements Executor {
     if (!hadContainer && !this.disks.has(sandboxId)) {
       throw new Error(`container ${sandboxId} is absent, cannot remove`);
     }
+    this.removedShells.push(sandboxId);
     this.images.delete(sandboxId);
     this.limits.delete(sandboxId);
     this.exits.delete(sandboxId);

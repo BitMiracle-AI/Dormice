@@ -147,7 +147,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
     const before = liveRow(parsed.sandboxId);
     const row = await locks.run(before.name, async () => {
       const fresh = liveRow(parsed.sandboxId);
-      const awake = await wakeSandbox(db, executor, fresh, undefined, watchers);
+      const awake = await wakeSandbox(db, executor, fresh, watchers);
       return touch(db, awake.id);
     });
     const target = await executor.resolvePortTarget(row.id, parsed.port);

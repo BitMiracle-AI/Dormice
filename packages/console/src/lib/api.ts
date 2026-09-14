@@ -14,7 +14,6 @@ import type {
   GetUpgradeStatusResponse,
   HostMetricsResponse,
   LifecyclePolicyOverride,
-  ListActivityResponse,
   ListSandboxImagesResponse,
   ListSandboxMetricsResponse,
   RegisterTemplateResponse,
@@ -189,11 +188,6 @@ export const getHostMetricsHistory = (start: string, end: string) =>
 // old image?" after a template upgrade.
 export const listSandboxImages = () =>
   rpc<ListSandboxImagesResponse>('/listSandboxImages');
-
-// The ledger's recent history, newest first — a bounded ring, not an audit
-// log. The daemon records at the moves themselves; this only reads.
-export const listActivity = (limit?: number) =>
-  rpc<ListActivityResponse>('/listActivity', limit ? { limit } : {});
 
 // Effective configuration. Secrets come back as "set", never as their
 // value; archive.enabled is the daemon's own adjudication. The env entries

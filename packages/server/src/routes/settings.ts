@@ -6,7 +6,6 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { probeS3 as defaultProbeS3, S3ProbeError } from '../archive/probe';
 import type { S3Settings } from '../archive/s3-store';
-import { recordActivity } from '../db/activity';
 import type { Db } from '../db/db';
 import { countByState, listSandboxes } from '../db/ledger';
 import {
@@ -190,10 +189,9 @@ export const settingsRoutes: FastifyPluginAsyncZod<
         }
       }
       const settings = writeRuntimeSettings(db, patch, new Date());
-      recordActivity(db, {
-        kind: 'settings-updated',
-        actor: request.actor,
-        detail: [
+      request.log.info(
+        { settings },
+        `runtime settings updated: ${[
           ...(patch.maxSandboxes !== undefined
             ? [`maxSandboxes=${patch.maxSandboxes}`]
             : []),
@@ -208,8 +206,8 @@ export const settingsRoutes: FastifyPluginAsyncZod<
               ]
             : []),
           ...(patch.swapGb !== undefined ? [`swapGb=${patch.swapGb}`] : []),
-          // Endpoint and bucket only — the keys never reach the activity
-          // feed, the same "value never crosses" rule as the wire's.
+          // Endpoint and bucket only — the keys never reach the log, the
+          // same "value never crosses" rule as the wire's.
           ...(patch.s3 !== undefined
             ? [
                 patch.s3 === null
@@ -231,8 +229,8 @@ export const settingsRoutes: FastifyPluginAsyncZod<
           ...(patch.pidsLimit !== undefined
             ? [`pidsLimit=${patch.pidsLimit}`]
             : []),
-        ].join(', '),
-      });
+        ].join(', ')}`,
+      );
       // Reconcile the host after the write — each knob with a reality out
       // there on its own, neither's failure sparing the other: the ledger
       // holds both targets now, and a swapfile that would not grow says

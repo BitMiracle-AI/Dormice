@@ -7,7 +7,6 @@ import { Archiver } from './archive/archiver';
 import { LedgerArchiveStore } from './archive/ledger-store';
 import { CheckIn, readNodeReading } from './check-in';
 import { type Config, loadConfig } from './config';
-import { recordActivity } from './db/activity';
 import { migrateDb, openDb } from './db/db';
 import { listSandboxes } from './db/ledger';
 import { acquireSingleWriterLock } from './db/lock';
@@ -298,17 +297,15 @@ app.log.info(repaired, 'startup reconcile');
 // for their next wake would have cost each of them one more death.
 const swept = await sweepPidsLimit(db, executor, locks, beat);
 app.log.info(swept, 'startup pids cap sweep');
-recordActivity(db, {
-  kind: 'daemon-started',
-  detail:
-    `executor ${config.DORMICE_EXECUTOR}; startup reconcile: ` +
-    `${repaired.repairedStates} states repaired, ${repaired.deletedRows} rows deleted, ` +
-    `${repaired.destroyedOrphans} orphan containers destroyed, ${repaired.removedDisks} disks removed; ` +
-    `pids cap: ${swept.updated} running shells brought to ${readRuntimeSettings(db).pidsLimit}` +
-    (swept.failures.length > 0
-      ? `, ${swept.failures.length} refused (daemon log has the names)`
-      : ''),
-});
+app.log.info(
+  {
+    executor: config.DORMICE_EXECUTOR,
+    reconcile: repaired,
+    pidsLimit: readRuntimeSettings(db).pidsLimit,
+    pidsSweep: { updated: swept.updated, refused: swept.failures.length },
+  },
+  'daemon started',
+);
 
 // Red line: the daemon binds to loopback only, and the host is deliberately
 // not configurable — a knob would be one typo away from 0.0.0.0. Exposing
@@ -494,12 +491,10 @@ async function metricsTick() {
     // itself stays pure observation.
     const growth = await diskGrower?.check();
     if (growth?.outcome === 'grown') {
-      recordActivity(db, {
-        kind: 'host-disk-grown',
-        detail:
-          `data disk device grew; filesystem resized ` +
-          `${gib(growth.fromBytes)} GiB -> ${gib(growth.toBytes)} GiB`,
-      });
+      app.log.info(
+        { fromGib: gib(growth.fromBytes), toGib: gib(growth.toBytes) },
+        'data disk device grew; filesystem resized to fill it',
+      );
     }
   } catch (error) {
     app.log.error(error, 'metrics sampler tick failed');

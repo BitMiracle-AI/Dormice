@@ -19,7 +19,6 @@ import { Route as AppDomainsRouteImport } from './routes/_app/domains'
 import { Route as AppDoctorRouteImport } from './routes/_app/doctor'
 import { Route as AppConnectRouteImport } from './routes/_app/connect'
 import { Route as AppApiKeysRouteImport } from './routes/_app/api-keys'
-import { Route as AppActivityRouteImport } from './routes/_app/activity'
 import { Route as AppSandboxesIndexRouteImport } from './routes/_app/sandboxes/index'
 import { Route as AppTempSplatRouteImport } from './routes/_app/temp.$'
 import { Route as AppSandboxesNameRouteImport } from './routes/_app/sandboxes/$name'
@@ -73,11 +72,6 @@ const AppApiKeysRoute = AppApiKeysRouteImport.update({
   path: '/api-keys',
   getParentRoute: () => AppRoute,
 } as any)
-const AppActivityRoute = AppActivityRouteImport.update({
-  id: '/activity',
-  path: '/activity',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppSandboxesIndexRoute = AppSandboxesIndexRouteImport.update({
   id: '/sandboxes/',
   path: '/sandboxes/',
@@ -97,7 +91,6 @@ const AppSandboxesNameRoute = AppSandboxesNameRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
-  '/activity': typeof AppActivityRoute
   '/api-keys': typeof AppApiKeysRoute
   '/connect': typeof AppConnectRoute
   '/doctor': typeof AppDoctorRoute
@@ -111,7 +104,6 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
-  '/activity': typeof AppActivityRoute
   '/api-keys': typeof AppApiKeysRoute
   '/connect': typeof AppConnectRoute
   '/doctor': typeof AppDoctorRoute
@@ -128,7 +120,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
-  '/_app/activity': typeof AppActivityRoute
   '/_app/api-keys': typeof AppApiKeysRoute
   '/_app/connect': typeof AppConnectRoute
   '/_app/doctor': typeof AppDoctorRoute
@@ -146,7 +137,6 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/login'
-    | '/activity'
     | '/api-keys'
     | '/connect'
     | '/doctor'
@@ -160,7 +150,6 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
-    | '/activity'
     | '/api-keys'
     | '/connect'
     | '/doctor'
@@ -176,7 +165,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/login'
-    | '/_app/activity'
     | '/_app/api-keys'
     | '/_app/connect'
     | '/_app/doctor'
@@ -267,13 +255,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppApiKeysRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/activity': {
-      id: '/_app/activity'
-      path: '/activity'
-      fullPath: '/activity'
-      preLoaderRoute: typeof AppActivityRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/sandboxes/': {
       id: '/_app/sandboxes/'
       path: '/sandboxes'
@@ -299,7 +280,6 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
-  AppActivityRoute: typeof AppActivityRoute
   AppApiKeysRoute: typeof AppApiKeysRoute
   AppConnectRoute: typeof AppConnectRoute
   AppDoctorRoute: typeof AppDoctorRoute
@@ -314,7 +294,6 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
-  AppActivityRoute: AppActivityRoute,
   AppApiKeysRoute: AppApiKeysRoute,
   AppConnectRoute: AppConnectRoute,
   AppDoctorRoute: AppDoctorRoute,

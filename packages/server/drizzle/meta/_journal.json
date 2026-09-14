@@ -162,6 +162,13 @@
       "when": 1788964773753,
       "tag": "0022_sandbox-swap",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1789370106697,
+      "tag": "0023_drop-activity",
+      "breakpoints": true
     }
   ]
 }

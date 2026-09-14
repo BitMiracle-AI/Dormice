@@ -56,7 +56,6 @@ export default defineConfig({
       '/listSandboxMetrics': 'http://127.0.0.1:3676',
       '/listSandboxImages': 'http://127.0.0.1:3676',
       '/getFleetTimeline': 'http://127.0.0.1:3676',
-      '/listActivity': 'http://127.0.0.1:3676',
       '/getConfig': 'http://127.0.0.1:3676',
       '/checkUpgrade': 'http://127.0.0.1:3676',
       '/applyUpgrade': 'http://127.0.0.1:3676',

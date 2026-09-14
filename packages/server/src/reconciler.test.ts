@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
-import { listActivityEvents } from './db/activity';
 import { type Db, migrateDb, openDb } from './db/db';
 import { createSandbox, findByName, transition } from './db/ledger';
 import type { SandboxRow } from './db/schema';
@@ -88,19 +87,8 @@ describe('startup reconcile', () => {
 
     const result = await reconcile(db, executor, locks);
     expect(result).toEqual({ ...NONE, repairedStates: 2 });
-    const details = listActivityEvents(db, 10)
-      .filter((e) => e.kind === 'reconciled')
-      .map((e) => [e.sandboxName, e.detail]);
-    expect(details).toContainEqual([
-      'alice',
-      "container is stopped — state active corrected to stopped (exit 137, OOM-killed by the kernel's memory cgroup)",
-    ]);
-    expect(details).toContainEqual([
-      'bob',
-      "container is stopped — state active corrected to stopped (exit 2, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see the sandbox pids cap in settings)",
-    ]);
-    // The same verdict lands on the row as lastExit — the wire's copy of
-    // the death, for the client whose stream just ended in EOF.
+    // The verdict lands on the row as lastExit — the wire's copy of the
+    // death, for the client whose stream just ended in EOF.
     expect(findByName(db, 'alice')).toMatchObject({
       state: 'stopped',
       lastExitCode: 137,
@@ -149,9 +137,11 @@ describe('startup reconcile', () => {
     await executor.stop(row.id);
 
     await reconcile(db, executor, locks);
-    expect(listActivityEvents(db, 1)[0]?.detail).toBe(
-      'container is stopped — state frozen corrected to stopped (exit 137, not an OOM kill)',
-    );
+    expect(findByName(db, 'alice')).toMatchObject({
+      state: 'stopped',
+      lastExitCode: 137,
+      lastExitCause: 'exited',
+    });
   });
 
   it('repairs across rungs and drops ownership when reality is stopped', async () => {

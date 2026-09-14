@@ -243,20 +243,6 @@ describe('ingress routes', () => {
     const cleared = await rpc(app, '/setIngress', { domains: [] });
     expect(cleared.statusCode).toBe(200);
     expect(cleared.json()).toEqual({ domains: [] });
-
-    const activity = await rpc(app, '/listActivity');
-    const details = (
-      activity.json().events as Array<{ kind: string; detail: string }>
-    )
-      .filter((event) => event.kind === 'ingress-updated')
-      .map((event) => event.detail);
-    // Newest first: clear, drop, the double bind.
-    expect(details).toHaveLength(3);
-    expect(details[2]).toContain('bound console.example.com');
-    expect(details[2]).toContain('bound api.example.com');
-    expect(details[1]).toContain('unbound console.example.com');
-    expect(details[1]).toContain('now serving api.example.com');
-    expect(details[0]).toContain('plain-HTTP IP access only');
   });
 
   it('rejects a domain with a scheme at the schema gate', async () => {

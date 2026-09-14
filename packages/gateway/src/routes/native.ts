@@ -57,7 +57,6 @@ export const UNNAMED_VERBS = [
   'listSandboxes',
   'listSandboxMetrics',
   'listSandboxImages',
-  'listActivity',
   'getFleetTimeline',
   'getHostMetrics',
   'getHostMetricsHistory',

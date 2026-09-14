@@ -1,6 +1,5 @@
 import {
   type AcquireResponse,
-  type ActivityEvent,
   type ApiKey,
   type ApplyUpgradeResponse,
   acquireResponseSchema,
@@ -34,7 +33,6 @@ import {
   type LifecyclePolicyOverride,
   type ListSandboxImagesResponse,
   type ListSandboxMetricsResponse,
-  listActivityResponseSchema,
   listApiKeysResponseSchema,
   listSandboxesResponseSchema,
   listSandboxImagesResponseSchema,
@@ -301,18 +299,6 @@ export class Dormice {
   async listSandboxImages(): Promise<ListSandboxImagesResponse['images']> {
     const data = await this.rpc('listSandboxImages', {});
     return listSandboxImagesResponseSchema.parse(data).images;
-  }
-
-  /**
-   * The daemon's recent history, newest first: who was created, cooled,
-   * woken, destroyed, and what reconciliation repaired. A bounded ring —
-   * an explanation window, not an audit log.
-   */
-  async listActivity(options?: { limit?: number }): Promise<ActivityEvent[]> {
-    const data = await this.rpc('listActivity', {
-      limit: options?.limit,
-    });
-    return listActivityResponseSchema.parse(data).events;
   }
 
   /**

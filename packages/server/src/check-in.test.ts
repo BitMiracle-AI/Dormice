@@ -135,7 +135,6 @@ describe('CheckIn', () => {
         template: null,
         metadata: null,
         spec: undefined,
-        actor: null,
       });
     }
     const reading = await readNodeReading(db, new CpuSampler(), '/tmp');

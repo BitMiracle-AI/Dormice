@@ -2,7 +2,6 @@ import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_LIFECYCLE_POLICY,
   getConfigResponseSchema,
-  listActivityResponseSchema,
   updateSettingsResponseSchema,
 } from '@dormice/shared';
 import { sql } from 'drizzle-orm';
@@ -278,16 +277,8 @@ describe('updateSettings', () => {
     expect(
       (await rpc(app, '/updateSettings', { pidsLimit: 0 })).statusCode,
     ).toBe(400);
-
-    const events = listActivityResponseSchema.parse(
-      (await rpc(app, '/listActivity')).json(),
-    ).events;
-    expect(events[0]).toMatchObject({
-      kind: 'settings-updated',
-      detail: 'pidsLimit=256',
-    });
   });
-  it('sets the pids cap live, floors it, and records the change', async () => {
+  it('sets the pids cap live and floors it', async () => {
     const app = appOn(freshDb());
     const set = await rpc(app, '/updateSettings', { pidsLimit: 8192 });
     expect(set.statusCode).toBe(200);
@@ -295,13 +286,6 @@ describe('updateSettings', () => {
       updateSettingsResponseSchema.parse(set.json()).settings.pidsLimit,
     ).toBe(8192);
     expect((await settingsOf(app)).pidsLimit).toBe(8192);
-    const events = listActivityResponseSchema.parse(
-      (await rpc(app, '/listActivity')).json(),
-    ).events;
-    expect(events[0]).toMatchObject({
-      kind: 'settings-updated',
-      detail: 'pidsLimit=8192',
-    });
 
     // Below the floor a sandbox cannot boot its own runtime — refused, and
     // the ledger keeps the value in force. "Unlimited" has no spelling.
@@ -331,10 +315,6 @@ describe('updateSettings', () => {
     expect(
       updateSettingsResponseSchema.parse(raised.json()).settings.pidsLimit,
     ).toBe(4096);
-    const events = listActivityResponseSchema.parse(
-      (await rpc(upgraded, '/listActivity')).json(),
-    ).events;
-    expect(events[0]?.detail).toBe('pidsLimit=4096');
 
     // The ledger has spoken: a later env edit is ignored.
     const later = appOn(db, { DORMICE_SANDBOX_PIDS_LIMIT: '999' });
@@ -540,14 +520,6 @@ describe('updateSettings', () => {
     expect(tooLow.statusCode).toBe(400);
     expect(tooLow.json().message).toMatch(/at least 256/);
     expect((await settingsOf(app)).pidsLimit).toBe(4096);
-
-    const events = listActivityResponseSchema.parse(
-      (await rpc(app, '/listActivity')).json(),
-    ).events;
-    expect(events[0]).toMatchObject({
-      kind: 'settings-updated',
-      detail: 'pidsLimit=4096',
-    });
   });
 
   it('pidsLimit: running sandboxes follow the write in place, frozen ones at their wake', async () => {
@@ -626,19 +598,6 @@ describe('updateSettings', () => {
     const saved = await settingsOf(app);
     expect(saved.swapGb).toBe(512);
     expect(saved.pidsLimit).toBe(2048);
-  });
-
-  it('records the change in the activity ring with its actor', async () => {
-    const app = appOn(freshDb());
-    await rpc(app, '/updateSettings', { maxSandboxes: 3 });
-    const events = listActivityResponseSchema.parse(
-      (await rpc(app, '/listActivity')).json(),
-    ).events;
-    expect(events[0]).toMatchObject({
-      kind: 'settings-updated',
-      actor: 'env-token',
-      detail: 'maxSandboxes=3',
-    });
   });
 
   it('is admin-only: an API key gets an honest 403', async () => {
@@ -792,20 +751,10 @@ describe('updateSettings: the S3 archive store', () => {
     expect((await settingsOf(app)).s3?.bucket).toBe('patched-bucket');
   });
 
-  it('names the store, never the keys, in the activity ring', async () => {
+  it('never echoes the keys: the write answers with the view shape', async () => {
     const app = appOn(freshDb());
-    await rpc(app, '/updateSettings', { s3: S3_PATCH });
-    await rpc(app, '/updateSettings', { s3: null });
-    const res = await rpc(app, '/listActivity');
-    const events = listActivityResponseSchema.parse(res.json()).events;
-    expect(events[0]).toMatchObject({
-      kind: 'settings-updated',
-      detail: 's3=cleared',
-    });
-    expect(events[1]).toMatchObject({
-      kind: 'settings-updated',
-      detail: 's3=http://127.0.0.1:9000/patched-bucket',
-    });
+    const res = await rpc(app, '/updateSettings', { s3: S3_PATCH });
+    expect(res.statusCode).toBe(200);
     expect(res.body).not.toContain('patch-secret-never-on-the-wire');
     expect(res.body).not.toContain('patch-key');
   });
@@ -826,12 +775,6 @@ describe('updateSettings: the sandbox domain', () => {
     const cleared = await rpc(app, '/updateSettings', { sandboxDomain: null });
     expect(cleared.statusCode).toBe(200);
     expect((await settingsOf(app)).sandboxDomain).toBeNull();
-
-    const events = listActivityResponseSchema.parse(
-      (await rpc(app, '/listActivity')).json(),
-    ).events;
-    expect(events[0]?.detail).toBe('sandboxDomain=cleared');
-    expect(events[1]?.detail).toBe('sandboxDomain=sbx.example.com');
   });
 
   it('refuses anything but a bare hostname', async () => {
@@ -874,14 +817,6 @@ describe('updateSettings: the sandbox domain', () => {
     });
     expect(cleared.statusCode).toBe(200);
     expect((await settingsOf(app)).sandboxDomainAliases).toEqual([]);
-
-    const events = listActivityResponseSchema.parse(
-      (await rpc(app, '/listActivity')).json(),
-    ).events;
-    expect(events[0]?.detail).toBe('sandboxDomainAliases=cleared');
-    expect(events[1]?.detail).toBe(
-      'sandboxDomainAliases=a.example.com/b.example.com',
-    );
   });
 
   it('refuses alias lists that contradict the post-patch state, honestly', async () => {
