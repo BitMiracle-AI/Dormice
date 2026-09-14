@@ -43,6 +43,7 @@
     "commander": "^14.0.0"
   },
   "devDependencies": {
+    "@dormice/gateway": "workspace:*",
     "@dormice/server": "workspace:*"
   }
 }

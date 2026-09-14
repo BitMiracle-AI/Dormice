@@ -57,7 +57,9 @@ function isEnvdFilesRequest(req: http.IncomingMessage): boolean {
  * the proxy's per-request getter and the signed-URL host pin both call
  * this instead of deciding it themselves.
  */
-export function sandboxDomainsInForce(settings: RuntimeSettings): string[] {
+export function sandboxDomainsInForce(
+  settings: Pick<RuntimeSettings, 'sandboxDomain' | 'sandboxDomainAliases'>,
+): string[] {
   return settings.sandboxDomain
     ? [settings.sandboxDomain, ...settings.sandboxDomainAliases]
     : [];

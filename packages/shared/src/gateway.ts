@@ -4,6 +4,14 @@ import {
   hostReadingSchema,
   sandboxStateCountsSchema,
 } from './host';
+import { lifecyclePolicySchema } from './policy';
+import {
+  bareHostnameRegex,
+  PIDS_LIMIT_MIN,
+  s3ArchiveSettingsSchema,
+  sandboxResourceDefaultsSchema,
+} from './settings';
+import { templateSchema } from './templates';
 
 /**
  * The gateway's wire: the verbs between a node and the gateway that fronts
@@ -73,6 +81,16 @@ export const nodeReadingSchema = z.object({
     total: z.number().int(),
     byState: sandboxStateCountsSchema,
   }),
+  /**
+   * The daemon-managed swap on this node's data disk (server/swap.ts):
+   * what is mounted right now. Null where the daemon cannot manage swap
+   * at all — a non-Linux host, the fake executor — so the gateway refuses
+   * a target for this node (updateNodeSettings) instead of storing one
+   * nothing will ever reconcile.
+   */
+  managedSwap: z
+    .object({ activeGb: z.number().int().nonnegative() })
+    .nullable(),
 });
 
 export type NodeReading = z.infer<typeof nodeReadingSchema>;
@@ -97,12 +115,59 @@ export const checkInRequestSchema = z.object({
   intervalSeconds: z.number().int().positive(),
   build: buildInfoSchema.nullable(),
   reading: nodeReadingSchema,
+  /**
+   * The configuration version this node runs — its copy's
+   * (nodeConfigBundleSchema); null while it holds no copy. The gateway
+   * compares it with its own and answers the whole bundle when the two
+   * differ: the check-in IS the pull, there is no second verb and nothing
+   * the gateway has to remember about who was told what.
+   */
+  configVersion: z.number().int().nullable(),
 });
 
 export type CheckInRequest = z.infer<typeof checkInRequestSchema>;
 
-/** Nothing yet: the configuration version the gateway will answer with arrives with the configuration authority. */
-export const checkInResponseSchema = z.object({});
+/**
+ * The configuration a node runs, whole (design record #22: the gateway
+ * holds the fleet's configuration, every node keeps a copy). The fleet
+ * settings — the archive store WITH its keys, since the node must present
+ * them to S3 verbatim; this bundle crosses only the gateway→node wire
+ * under the fleet token and is never an observation answer — this node's
+ * own row (its managed-swap target) and every template. Whole on purpose,
+ * not a diff: the node applies it in one transaction and then holds
+ * exactly what the gateway holds under that version, nothing to merge and
+ * nothing to miss. It rides on the check-in response whenever the node's
+ * version differs from the gateway's — a fresh node's null, a node that
+ * missed an edit while its gateway was away, an operator's change a
+ * second ago — and the node keeps it: a node whose gateway is down still
+ * knows its settings and its templates, and serves.
+ */
+export const nodeConfigBundleSchema = z.object({
+  version: z.number().int().positive(),
+  settings: z.object({
+    sandboxDefaults: sandboxResourceDefaultsSchema,
+    defaultPolicy: lifecyclePolicySchema,
+    /** Write shape, keys included — see above. Null = archiving off. */
+    s3: s3ArchiveSettingsSchema.nullable(),
+    sandboxDomain: z.string().regex(bareHostnameRegex).nullable(),
+    sandboxDomainAliases: z.array(z.string().regex(bareHostnameRegex)),
+    pidsLimit: z.number().int().min(PIDS_LIMIT_MIN),
+  }),
+  node: z.object({
+    /** This node's managed-swap target, GiB (updateNodeSettings). */
+    swapGb: z.number().int().nonnegative(),
+  }),
+  templates: z.array(templateSchema),
+});
+
+export type NodeConfigBundle = z.infer<typeof nodeConfigBundleSchema>;
+
+export const checkInResponseSchema = z.object({
+  /** The gateway's current configuration version — what the node reports back at its next check-in. */
+  configVersion: z.number().int().positive(),
+  /** Present exactly when the node's reported version differs from the gateway's: the whole bundle to apply. */
+  config: nodeConfigBundleSchema.optional(),
+});
 
 export type CheckInResponse = z.infer<typeof checkInResponseSchema>;
 

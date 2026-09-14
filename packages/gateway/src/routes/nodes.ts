@@ -11,15 +11,20 @@ import {
 } from '@dormice/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import type { NameCache } from '../cache';
+import type { Db } from '../db/db';
+import { readNodeConfig } from '../db/node-config';
+import { readConfigVersion } from '../db/settings';
 import {
   downReason,
   type Fleet,
   type NodeState,
   STARTUP_GRACE_MS,
 } from '../fleet';
+import { RETRY_AFTER_SECONDS } from '../raw';
 
 export interface CheckInRoutesOptions {
   fleet: Fleet;
+  db: Db;
 }
 
 export interface NodeRoutesOptions {
@@ -34,11 +39,15 @@ function refusal(statusCode: number, message: string): Error {
 
 /**
  * The check-in the nodes send (RULES/协议.md「网关」) — behind the nodes'
- * own gate in app.ts: the fleet token and nothing else.
+ * own gate in app.ts: the fleet token and nothing else. The answer is the
+ * configuration version, and the whole bundle when the node's differs
+ * (design record #22, shared nodeConfigBundleSchema): the check-in is the
+ * pull. No record is kept of who was told what — the node states what it
+ * runs at every check-in, and the comparison is the whole protocol.
  */
 export const checkInRoutes: FastifyPluginAsyncZod<
   CheckInRoutesOptions
-> = async (app, { fleet }) => {
+> = async (app, { fleet, db }) => {
   /**
    * Per node, the ids it was last reported to share an endpoint with
    * (sorted, joined) — so the warning below is said when the situation
@@ -109,7 +118,17 @@ export const checkInRoutes: FastifyPluginAsyncZod<
           'the node no longer shares its endpoint with another',
         );
       }
-      return {};
+      const version = readConfigVersion(db);
+      if (request.body.configVersion === version) {
+        return { configVersion: version };
+      }
+      request.log.info(
+        { nodeId: node.id, runs: request.body.configVersion, current: version },
+        request.body.configVersion === null
+          ? 'a node with no configuration copy checked in; the bundle rides on this answer'
+          : 'a node runs another configuration version; the bundle rides on this answer',
+      );
+      return { configVersion: version, config: readNodeConfig(db, node) };
     },
   );
 };
@@ -145,16 +164,35 @@ export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
         response: { 200: updateNodeSettingsResponseSchema },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const { id, swapGb } = request.body;
-      if (!fleet.setSwapGb(id, swapGb)) {
+      const node = fleet.get(id);
+      if (node === undefined) {
         throw refusal(
           404,
           `no node with id '${id}' — listNodes shows which exist`,
         );
       }
-      const node = fleet.get(id);
-      if (node === undefined) throw refusal(404, `no node with id '${id}'`);
+      // Whether this node's daemon can manage swap at all is the node's
+      // word, carried in its reading (shared nodeReadingSchema managedSwap):
+      // a target for a daemon that cannot honor it would sit in the row
+      // forever, applied by nothing and shown by listNodes as if it were
+      // real. Unknown (the node has not reported since this gateway
+      // started) is unknown, not a guess either way.
+      if (node.reading === null) {
+        reply.header('retry-after', String(RETRY_AFTER_SECONDS));
+        throw refusal(
+          503,
+          `node ${id} has not checked in since the gateway started, so whether its daemon manages swap is unknown — retry after its next check-in`,
+        );
+      }
+      if (node.reading.managedSwap === null) {
+        throw refusal(
+          400,
+          `node ${id} cannot manage swap: its daemon reports no managed-swap capability (a Linux host running the docker executor has it) — a target there would never be applied, so none is stored`,
+        );
+      }
+      fleet.setSwapGb(id, swapGb);
       request.log.info(
         { nodeId: id, swapGb },
         'node swap target set; the node applies it at its next check-in',

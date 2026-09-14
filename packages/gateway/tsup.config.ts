@@ -22,11 +22,14 @@ function git(args: string): string {
 const commitTime = git('log -1 --format=%cI');
 
 export default defineConfig({
-  // A service, not a library: main.ts is the one entry and nothing imports
-  // the package (e2e boots dist/main.js as a process), so no index and no
-  // declarations.
-  entry: ['src/main.ts'],
+  // A service first: main.ts is the entry e2e boots as a process. The
+  // index is the library surface the SDK's and the CLI's suites embed a
+  // gateway through (the verbs they test for keys, settings and templates
+  // answer at the gateway), so it ships with declarations like the
+  // daemon's.
+  entry: ['src/main.ts', 'src/index.ts'],
   format: ['esm'],
+  dts: true,
   clean: true,
   env: {
     DORMICE_BUILD_COMMIT: git('rev-parse --short HEAD'),

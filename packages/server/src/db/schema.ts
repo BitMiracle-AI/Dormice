@@ -88,10 +88,16 @@ export const sandboxes = sqliteTable('sandboxes', {
 export type SandboxRow = typeof sandboxes.$inferSelect;
 
 /**
- * Registered templates: a name for a Docker image that lives on this host.
- * The host's Docker daemon is the image store; this table only records which
- * name points where. Sandboxes reference templates by name (column above),
- * so re-pointing a name upgrades every future shell built for it.
+ * Templates: a name for a Docker image that lives on this host. The host's
+ * Docker daemon is the image store; this table only records which name
+ * points where. Sandboxes reference templates by name (column above), so
+ * re-pointing a name upgrades every future shell built for it.
+ *
+ * Since the configuration moved to the gateway (2026-09-14) this table is
+ * the node's copy: registered and removed there, written here whole with
+ * every configuration bundle (db/settings.ts applyNodeConfig) and read at
+ * every birth and wake — so a node whose gateway is away still resolves
+ * its names.
  */
 export const templates = sqliteTable('templates', {
   name: text('name').primaryKey(),
@@ -210,15 +216,13 @@ export const hostMetricsSamples = sqliteTable('host_metrics_samples', {
 export type HostMetricsSampleRow = typeof hostMetricsSamples.$inferSelect;
 
 /**
- * The console's one human account (the fixed id makes "at most one row" a
- * schema fact, not a convention). The API token stays the root of trust:
- * presenting it (re)creates this row — that IS the forgot-password path —
- * while day-to-day console logins are username + password.
- *
- * sessionSecret is the HMAC key for session cookies. It lives here and not
- * in the token so the two credentials rotate independently: re-running
- * setup regenerates it (every session out — correct for a password reset),
- * rotating the API token leaves console sessions alone.
+ * The console's one human account — the gateway's table since 2026-09-14
+ * (the console is served there; packages/gateway/src/db/schema.ts has the
+ * living definition). Kept in the node's ledger, unread and unwritten,
+ * until the one-time import of a single machine's old tables into the
+ * gateway (cut 4) has run; it is dropped then, not before — a migration
+ * that dropped it now would delete the operator's account ahead of the
+ * step that moves it.
  */
 export const consoleAccount = sqliteTable('console_account', {
   id: integer('id').primaryKey(),
@@ -253,21 +257,30 @@ export const daemonSecrets = sqliteTable('daemon_secrets', {
 export type DaemonSecretsRow = typeof daemonSecrets.$inferSelect;
 
 /**
- * Runtime settings — the operator knobs that must be changeable from the
- * console without shell access and a restart (shared/settings.ts draws the
- * line). One row, fixed id — the console_account singleton pattern. Born at
- * first boot, seeded from the env variables of the same names; from then on
- * the ledger is the single truth and env edits to those knobs are ignored
- * (two live sources for one knob is a standing ambiguity). The discipline
- * is per knob, not per row: a column added by a later migration gets its
- * one env consultation on the first boot that sees it NULL (see
- * ensureRuntimeSettings' adopt step).
+ * Runtime settings — this node's copy of the fleet configuration (design
+ * record #22, 2026-09-14): the gateway holds the settings and every node
+ * keeps a copy, so a node whose gateway is away still knows what a new
+ * sandbox gets and where its archives live. One row, fixed id — the
+ * console_account singleton pattern — written whole by applyNodeConfig
+ * (db/settings.ts) with every bundle the check-in brings, never edited
+ * here: there is no verb on the node that changes a knob.
+ *
+ * config_version says which bundle the row is. NULL means the row is not
+ * a copy at all: the daemon's own settings from before the move (seeded
+ * from the env, edited from the console), kept for the one-time import
+ * into the gateway (cut 4) and never read by the node again — the node
+ * reports "no copy" and takes the gateway's bundle at its first check-in,
+ * which overwrites every column.
  *
  * Typed columns, not a JSON blob: the schema IS the vocabulary, and a knob
  * that exists but is invisible to migrations would drift silently.
  */
 export const runtimeSettings = sqliteTable('runtime_settings', {
   id: integer('id').primaryKey(),
+  /** The bundle's version (shared nodeConfigBundleSchema); NULL = not a copy, see above. */
+  configVersion: integer('config_version'),
+  /** ISO 8601 UTC — when this copy was applied; the boot log's "how old is what I run". */
+  configAppliedAt: text('config_applied_at'),
   sandboxCpus: real('sandbox_cpus').notNull(),
   sandboxMemoryGb: real('sandbox_memory_gb').notNull(),
   sandboxDiskGb: real('sandbox_disk_gb').notNull(),
@@ -276,21 +289,20 @@ export const runtimeSettings = sqliteTable('runtime_settings', {
   defaultStopAfterSeconds: integer('default_stop_after_seconds'),
   /** NULL = never archive — forced when the daemon has no archiver. */
   defaultArchiveAfterSeconds: integer('default_archive_after_seconds'),
-  /** Daemon-managed swap target, GiB (see swap.ts); 0 = manage none. */
+  /** This node's managed-swap target, GiB (swap.ts) — its own row at the gateway (updateNodeSettings); 0 = manage none. */
   swapGb: integer('swap_gb').notNull().default(0),
   /**
-   * The S3 archive store and the sandbox domain (added 2026-07-26). These
-   * columns are per-knob three-state: NULL = the column is younger than
-   * this row and has never been adjudicated (alive only between the
-   * migration and the next boot's ensureRuntimeSettings, which adopts the
-   * env value once); '' on the two decider columns (s3Endpoint,
-   * sandboxDomain) = explicitly off. The sentinel never leaves
-   * db/settings.ts — toView maps '' back to the wire's null.
+   * The S3 archive store and the sandbox domain. In a copy the two
+   * decider columns (s3Endpoint, sandboxDomain) are two-state: a value,
+   * or NULL = off. Rows from before the move used '' for off and NULL for
+   * "never adjudicated"; a copy never writes '' and the readers never see
+   * one — they refuse a row without config_version (db/settings.ts).
    *
    * s3SecretAccessKey is stored plaintext, like envdSigningSecret and
    * sessionSecret above: a credential the daemon must present verbatim to
-   * S3 cannot be hashed. It never crosses the wire (shared/settings.ts
-   * s3ArchiveViewSchema withholds both keys).
+   * S3 cannot be hashed. It never crosses the node's wire (shared
+   * s3ArchiveViewSchema withholds both keys); it arrives with the bundle
+   * over the gateway→node wire under the fleet token.
    */
   s3Endpoint: text('s3_endpoint'),
   s3Bucket: text('s3_bucket'),
@@ -299,46 +311,28 @@ export const runtimeSettings = sqliteTable('runtime_settings', {
   s3Region: text('s3_region'),
   s3ForcePathStyle: integer('s3_force_path_style', { mode: 'boolean' }),
   sandboxDomain: text('sandbox_domain'),
-  /**
-   * Inbound-only alias domains (added 2026-08-31), a JSON string array.
-   * Same NULL-until-adopted three-state as above, but no '' sentinel —
-   * '[]' already says "no aliases", and the adopt step always writes '[]'
-   * without consulting the env: the alias list is console-era operations
-   * editing, not a first-boot identity, so it deliberately has no env
-   * variable.
-   */
+  /** Inbound-only alias domains, a JSON string array ('[]' = none). Nullable only for rows from before the move. */
   sandboxDomainAliases: text('sandbox_domain_aliases'),
   /**
-   * The pids cgroup cap on every sandbox container (added 2026-09-08).
-   * Same NULL-until-adopted three-state; the adopt step consults
-   * DORMICE_SANDBOX_PIDS_LIMIT once, so an upgraded daemon keeps the value
-   * its env has been running with. Never '' — there is no "off": a cap
-   * always exists (shared/settings.ts enforces the floor).
+   * The pids cgroup cap on every sandbox container. Never "off": a cap
+   * always exists (shared/settings.ts enforces the floor). Nullable only
+   * for rows from before the move.
    */
   pidsLimit: integer('pids_limit'),
-  /** Null until the first updateSettings: "still exactly the seed" is information. */
+  /** The old single-machine row's last edit — the gateway's timestamp now; kept for the cut-4 import, never written by the node. */
   updatedAt: text('updated_at'),
 });
 
 export type RuntimeSettingsRow = typeof runtimeSettings.$inferSelect;
 
 /**
- * Ledger-minted API keys: full-power peers of DORMICE_API_TOKEN that exist
- * so credentials can rotate without an env edit and a restart. The env
- * token itself never lives here — it stays the bootstrap/recovery
- * credential, checked from config.
- *
- * keyHash is sha256 of the key material, not scrypt: a key is 256 random
- * bits, not a human password, so offline brute force is moot and a slow
- * KDF would only tax every authenticated request. Verification is an
- * indexed exact-match lookup on the hash; the timing of that comparison
- * can at worst leak sha256(key) bytes, which preimage resistance makes
- * worthless (the same argument GitHub tokens rest on).
- *
- * Revocation is soft (revokedAt) — the row stays as rotation history and
- * keeps lastUsedAt readable after the credential dies. "At most one ACTIVE
- * key per name" is a schema fact via the partial unique index below (the
- * console_account fixed-id philosophy); a revoked name is free for reuse.
+ * API keys — the gateway's table since 2026-09-14: keys are minted and
+ * judged at the fleet's one door (packages/gateway/src/db/schema.ts has
+ * the living definition), and toward a node the gateway speaks the fleet
+ * token alone. Kept in the node's ledger, unread and unwritten, until the
+ * cut-4 import into the gateway has run — the same reasoning as
+ * console_account above: a key an operator's automation still holds must
+ * move, not vanish.
  */
 export const apiKeys = sqliteTable(
   'api_keys',

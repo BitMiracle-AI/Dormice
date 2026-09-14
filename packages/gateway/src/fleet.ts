@@ -180,6 +180,7 @@ export class Fleet {
     node.intervalSeconds = report.intervalSeconds;
     node.build = report.build;
     node.reading = report.reading;
+    node.configVersion = report.configVersion;
     node.placedSinceCheckIn = 0;
     node.placedIds.clear();
     return { node, joined, movedFrom };

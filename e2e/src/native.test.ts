@@ -1,11 +1,28 @@
 import { spawn } from 'node:child_process';
 import { DEFAULT_LIFECYCLE_POLICY, Dormice } from '@dormice/sdk';
 import { describe, expect, inject, it } from 'vitest';
+import { door, settled } from './helpers';
 
 // One daemon serves the whole run, so every test uses its own sandbox name to
 // stay independent of the others.
 function client(token = inject('dormiceToken')) {
   return new Dormice({ endpoint: inject('dormiceEndpoint'), token });
+}
+
+/**
+ * The fleet's door — node A's own gateway, a fleet of one. Templates,
+ * keys and settings are registered there (design record #22); the node
+ * takes them from its next check-in, so a write here is followed by
+ * settled() before the node is asked to act on it.
+ */
+function viaDoor(token = inject('dormiceToken')) {
+  return new Dormice({ endpoint: door(), token });
+}
+
+/** registerTemplate at the door, then the wait for node A to hold it. */
+async function registerTemplate(name: string, image: string) {
+  await viaDoor().registerTemplate(name, image);
+  await settled();
 }
 
 function sleep(seconds: number) {
@@ -489,7 +506,7 @@ describe('native API over a real daemon', () => {
     // config; the fake plays any name. The daemon's own base image serves
     // both: a real boot there, an arbitrary string here.
     const image = process.env.DORMICE_BASE_IMAGE ?? 'img:native';
-    await client().registerTemplate('native-tpl', image);
+    await registerTemplate('native-tpl', image);
     const created = await client().acquireSandbox('tpl-key', {
       template: 'native-tpl',
     });
@@ -499,44 +516,47 @@ describe('native API over a real daemon', () => {
     );
     expect(listed?.template).toBe('native-tpl');
 
-    await expect(client().removeTemplate('native-tpl')).rejects.toMatchObject({
+    // Removal is the gateway's verb, and it asks node A first.
+    await expect(viaDoor().removeTemplate('native-tpl')).rejects.toMatchObject({
       name: 'DormiceApiError',
       status: 409,
-      message: expect.stringMatching(/tpl-key/),
+      message: expect.stringMatching(/tpl-key on node node-1/),
     });
 
     // The migration story: re-home the sandbox onto a successor template,
     // and the old name — no longer referenced — becomes removable without
     // destroying anything. An unknown target is refused, never stored.
-    await client().registerTemplate('native-tpl-v2', image);
+    await registerTemplate('native-tpl-v2', image);
     await expect(
       client().updateTemplate('tpl-key', 'ghost-tpl'),
     ).rejects.toMatchObject({ status: 400 });
     const moved = await client().updateTemplate('tpl-key', 'native-tpl-v2');
     expect(moved.sandbox.template).toBe('native-tpl-v2');
-    expect(await client().removeTemplate('native-tpl')).toEqual({
+    expect(await viaDoor().removeTemplate('native-tpl')).toEqual({
       removed: true,
     });
 
     await client().destroySandbox('tpl-key');
-    expect(await client().removeTemplate('native-tpl-v2')).toEqual({
+    expect(await viaDoor().removeTemplate('native-tpl-v2')).toEqual({
       removed: true,
     });
   });
 
-  it('API keys: the rolling-rotation story — mint, work, park, revoke, the env token survives', async () => {
-    const { apiKey, token } = await client().createApiKey('rotation');
+  it('API keys: the rolling-rotation story at the door — mint, work, park, revoke, the fleet token survives; a node knows only the fleet token', async () => {
+    const { apiKey, token } = await viaDoor().createApiKey('rotation');
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     expect(apiKey.prefix).toBe(token.slice(0, 8));
 
-    // A fresh client on the minted key does real work — rotation means the
-    // new credential is live before the old one dies.
-    const keyed = client(token);
+    // A fresh client on the minted key does real work through the door —
+    // placed on node A under the fleet token; rotation means the new
+    // credential is live before the old one dies.
+    const keyed = viaDoor(token);
     const created = await keyed.acquireSandbox('rotation-key');
     expect(created.sandbox.name).toBe('rotation-key');
+    expect(created.sandbox.nodeId).toBe('node-1');
     await keyed.destroySandbox('rotation-key');
 
-    const listed = await client().listApiKeys();
+    const listed = await viaDoor().listApiKeys();
     const mine = listed.find((k) => k.name === 'rotation');
     expect(mine?.lastUsedAt).not.toBeNull();
 
@@ -551,20 +571,32 @@ describe('native API over a real daemon', () => {
       status: 403,
     });
 
-    // Disable is the reversible hold: 401 while parked, alive again after.
-    await client().updateApiKey(apiKey.id, { disabled: true });
-    await expect(keyed.listSandboxes()).rejects.toMatchObject({ status: 401 });
-    await client().updateApiKey(apiKey.id, { disabled: false });
-    expect(await keyed.listSandboxes()).toBeDefined();
+    // The node judges one credential, the fleet token: a minted key is a
+    // stranger there, however live it is at the door.
+    await expect(client(token).listSandboxes()).rejects.toMatchObject({
+      status: 401,
+    });
 
-    expect(await client().revokeApiKey(apiKey.id)).toEqual({ revoked: true });
-    await expect(keyed.listSandboxes()).rejects.toMatchObject({
+    // Disable is the reversible hold: 401 while parked, alive again after.
+    // The probe is a destroy of a name nobody holds — a named verb the
+    // door answers itself once the key is through.
+    await viaDoor().updateApiKey(apiKey.id, { disabled: true });
+    await expect(keyed.destroySandbox('rotation-probe')).rejects.toMatchObject({
+      status: 401,
+    });
+    await viaDoor().updateApiKey(apiKey.id, { disabled: false });
+    expect(await keyed.destroySandbox('rotation-probe')).toEqual({
+      destroyed: false,
+    });
+
+    expect(await viaDoor().revokeApiKey(apiKey.id)).toEqual({ revoked: true });
+    await expect(keyed.destroySandbox('rotation-probe')).rejects.toMatchObject({
       name: 'DormiceApiError',
       status: 401,
     });
-    // The env token is the bootstrap credential: revocation never touches it.
+    // The fleet token is the bootstrap credential: revocation never touches it.
     expect(await client().listSandboxes()).toBeDefined();
-    expect(await client().revokeApiKey(apiKey.id)).toEqual({
+    expect(await viaDoor().revokeApiKey(apiKey.id)).toEqual({
       revoked: false,
     });
   });
@@ -575,7 +607,7 @@ describe('native API over a real daemon', () => {
     // at an unbuilt image on purpose: registration is config and observation
     // never boots anything, so no engine ever has to pull it.
     const image = process.env.DORMICE_BASE_IMAGE ?? 'img:lineage-v1';
-    await client().registerTemplate('lineage-tpl', image);
+    await registerTemplate('lineage-tpl', image);
     const created = await client().acquireSandbox('lineage-key', {
       template: 'lineage-tpl',
     });
@@ -594,7 +626,7 @@ describe('native API over a real daemon', () => {
     });
 
     // Re-registering moves nextImage; the live shell honestly stays behind.
-    await client().registerTemplate('lineage-tpl', 'img:lineage-v2');
+    await registerTemplate('lineage-tpl', 'img:lineage-v2');
     expect(await mine()).toMatchObject({
       image,
       nextImage: 'img:lineage-v2',
@@ -603,7 +635,7 @@ describe('native API over a real daemon', () => {
 
     // Point the name back and rebuild: no shell means no image and nothing
     // to upgrade; the wake boots the template's current image, in sync.
-    await client().registerTemplate('lineage-tpl', image);
+    await registerTemplate('lineage-tpl', image);
     await client().rebuildSandbox('lineage-key');
     expect(await mine()).toMatchObject({
       image: null,
@@ -618,7 +650,7 @@ describe('native API over a real daemon', () => {
     });
 
     await client().destroySandbox('lineage-key');
-    expect(await client().removeTemplate('lineage-tpl')).toEqual({
+    expect(await viaDoor().removeTemplate('lineage-tpl')).toEqual({
       removed: true,
     });
   });
@@ -631,7 +663,7 @@ describe('native API over a real daemon', () => {
   it.skipIf(process.env.DORMICE_EXECUTOR === 'docker')(
     'a template upgrade reaches a frozen sandbox on its next touch: shell swapped, data kept, audited',
     async () => {
-      await client().registerTemplate('swap-tpl', 'img:swap-v1');
+      await registerTemplate('swap-tpl', 'img:swap-v1');
       await client().acquireSandbox('swap-key', {
         template: 'swap-tpl',
         policy: {
@@ -659,7 +691,7 @@ describe('native API over a real daemon', () => {
       }
 
       // Operator re-points the template; the frozen shell is now stale.
-      await client().registerTemplate('swap-tpl', 'img:swap-v2');
+      await registerTemplate('swap-tpl', 'img:swap-v2');
 
       // The touch is an ordinary use verb — every wake entry (native, envd,
       // port proxy) funnels into the same wakeSandbox, and the read itself
@@ -676,7 +708,7 @@ describe('native API over a real daemon', () => {
       ).toMatchObject({ image: 'img:swap-v2', upgradable: false });
 
       await client().destroySandbox('swap-key');
-      await client().removeTemplate('swap-tpl');
+      await viaDoor().removeTemplate('swap-tpl');
     },
   );
 
@@ -685,7 +717,7 @@ describe('native API over a real daemon', () => {
   it.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
     'a template whose image is missing fails create with a named, honest error',
     async () => {
-      await client().registerTemplate('hollow-tpl', 'img:does-not-exist');
+      await registerTemplate('hollow-tpl', 'img:does-not-exist');
       await expect(
         client().acquireSandbox('hollow-key', { template: 'hollow-tpl' }),
       ).rejects.toMatchObject({
@@ -699,7 +731,7 @@ describe('native API over a real daemon', () => {
       expect(await client().destroySandbox('hollow-key')).toEqual({
         destroyed: false,
       });
-      expect(await client().removeTemplate('hollow-tpl')).toEqual({
+      expect(await viaDoor().removeTemplate('hollow-tpl')).toEqual({
         removed: true,
       });
     },
@@ -759,32 +791,37 @@ describe('native API over a real daemon', () => {
 });
 
 describe('the observability verbs over a real daemon', () => {
-  it('getConfig reports effective knobs and never leaks the token', async () => {
-    const config = await client().getConfig();
+  it('getConfig at the door reports effective knobs and never leaks the token', async () => {
+    const config = await viaDoor().getConfig();
     const token = config.entries.find((e) => e.key === 'DORMICE_API_TOKEN');
     expect(token).toMatchObject({ value: null, redacted: true });
     // Black-box secrecy: the real token appears nowhere in the response.
     expect(JSON.stringify(config)).not.toContain(inject('dormiceToken'));
-    // The exam daemon runs with miniS3 configured, so the daemon's own
+    // The exam's gateway is seeded with miniS3, so the fleet's own
     // adjudication says archiving is live, with the one-week default.
     expect(config.archive).toEqual({
       enabled: true,
       defaultSeconds: 7 * 24 * 60 * 60,
     });
+    expect(config.configVersion).toBeGreaterThanOrEqual(1);
+    // The node answers no configuration verb of its own anymore.
+    await expect(client().getConfig()).rejects.toMatchObject({ status: 404 });
   });
 
-  it('updateSettings moves a ledger knob with immediate effect', async () => {
-    const before = (await client().getConfig()).settings;
-    const { settings } = await client().updateSettings({
-      pidsLimit: before.pidsLimit + 1,
+  it('updateSettings at the door moves a fleet knob; the version counts up and node A runs it within a check-in', async () => {
+    const before = await viaDoor().getConfig();
+    const { settings } = await viaDoor().updateSettings({
+      pidsLimit: before.settings.pidsLimit + 1,
     });
-    expect(settings.pidsLimit).toBe(before.pidsLimit + 1);
+    expect(settings.pidsLimit).toBe(before.settings.pidsLimit + 1);
     expect(settings.updatedAt).not.toBeNull();
-    expect((await client().getConfig()).settings.pidsLimit).toBe(
-      before.pidsLimit + 1,
-    );
-    // Restore: the exam daemon is shared by every suite in this run.
-    await client().updateSettings({ pidsLimit: before.pidsLimit });
+    const after = await viaDoor().getConfig();
+    expect(after.settings.pidsLimit).toBe(before.settings.pidsLimit + 1);
+    expect(after.configVersion).toBe(before.configVersion + 1);
+    expect(await settled()).toBe(after.configVersion);
+    // Restore: the exam's gateway is shared by every suite in this run.
+    await viaDoor().updateSettings({ pidsLimit: before.settings.pidsLimit });
+    await settled();
   });
 
   it('getSandboxMetrics samples a live sandbox and 404s after destroy', async () => {

@@ -176,6 +176,13 @@
       "when": 1789370887387,
       "tag": "0024_drop-max-sandboxes",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1789375849689,
+      "tag": "0025_config-copy",
+      "breakpoints": true
     }
   ]
 }

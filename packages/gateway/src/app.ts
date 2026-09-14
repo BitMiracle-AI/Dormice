@@ -229,7 +229,7 @@ export function buildGatewayApp({
         await reply.code(401).send({ message: 'missing or invalid API token' });
       }
     });
-    await nodesFace.register(checkInRoutes, { fleet });
+    await nodesFace.register(checkInRoutes, { fleet, db });
   });
 
   // The sandbox gate: everything that addresses a sandbox.

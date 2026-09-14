@@ -1,17 +1,22 @@
 import { isAbsolute } from 'node:path';
-import {
-  bareHostnameRegex,
-  isOriginUrl,
-  PIDS_LIMIT_MIN,
-} from '@dormice/shared';
+import { isOriginUrl } from '@dormice/shared';
 import { z } from 'zod';
-import type { S3Settings } from './archive/s3-store';
 
 /**
  * All configuration comes from environment variables, validated once at
  * startup — a bad value fails loudly here instead of surfacing later as a
  * confusing runtime error. Everything has a default except the API token
  * and, when the docker executor is selected, the base image.
+ *
+ * What is here is the node's identity and its machine: port, ledger, data
+ * dir, executor, token, the gateway it belongs to, its tickers. The
+ * fleet's operator knobs — new-sandbox defaults, the pids cap, the S3
+ * store, the sandbox domain, the managed front door — are not: since the
+ * configuration moved to the gateway (2026-09-14, design record #22) they
+ * are the gateway's env seeds and its console's knobs, and reach this
+ * node as a bundle with its check-in (db/settings.ts). Their old variable
+ * names are still recognised here for one purpose: to say at boot that
+ * they do nothing (MOVED_TO_GATEWAY below).
  *
  * Variables are prefixed DORMICE_ because the environment is a global
  * namespace — bare names like PORT collide with whatever else the operator
@@ -68,118 +73,24 @@ const envSchema = z.object({
   DORMICE_BASE_IMAGE: z.string().optional(),
   /** Sandbox disk images and their mount points live here (docker executor only). */
   DORMICE_DATA_DIR: z.string().default('/var/lib/dormice'),
-  DORMICE_SANDBOX_DISK_GB: z.coerce.number().positive().default(10),
-  DORMICE_SANDBOX_CPUS: z.coerce.number().positive().default(1),
-  DORMICE_SANDBOX_MEMORY_GB: z.coerce.number().positive().default(2),
-  /**
-   * The pids cgroup cap on each sandbox's container. Under gVisor this is
-   * NOT "how many processes the sandbox may run": the guest never sees it.
-   * It caps the sandbox's host-side footprint — the sentry's threads, the
-   * gofer, and one stub process per guest process (systrap) — and when the
-   * cap is hit the Go runtime cannot create a thread and the whole sandbox
-   * dies (exit 2, no OOM flag; measured 2026-09-08). 512 was runc's
-   * fork-bomb number and killed real 16 GB agent sandboxes running a browser
-   * plus several node/claude sessions (a production fleet: 13 deaths in 10 days,
-   * observed peak 470). 4096 is ~8x that peak; the cap still exists so a
-   * fork bomb takes down its own sandbox and nothing else. A first-boot
-   * seed since the same day (runtime_settings.pids_limit, edited from the
-   * console settings page): the incident that earned the new default was
-   * exactly an operator needing to move this without shell access and a
-   * restart. Existing containers converge at their next wake (docker
-   * update, no rebuild). Floored at the wire's PIDS_LIMIT_MIN: the settings
-   * view promises that floor, so a lower seed adopted into the ledger would
-   * leave getConfig unable to serialize its own settings (measured: HTTP
-   * 500 on every call) — refused here, at boot, with the variable named.
-   */
-  DORMICE_SANDBOX_PIDS_LIMIT: z.coerce
-    .number()
-    .int()
-    .min(PIDS_LIMIT_MIN, {
-      error: `DORMICE_SANDBOX_PIDS_LIMIT must be at least ${PIDS_LIMIT_MIN} — below that a sandbox cannot boot its own runtime`,
-    })
-    .default(4096),
   DORMICE_RECLAIM_TIMEOUT_SECONDS: z.coerce
     .number()
     .int()
     .positive()
     .default(45),
   /**
-   * The sandbox wildcard domain behind getHost() — first-boot seed only
-   * since 2026-07-26: the value in force lives in the ledger
-   * (runtime_settings.sandbox_domain, edited from the console domains
-   * page), and once that column holds a value this variable is
-   * deliberately ignored. With a domain in force, create and connect
-   * responses carry `domain`, the SDK builds `<port>-<sandboxId>.<domain>`
-   * hosts, and requests arriving with such a Host header are proxied into
-   * that sandbox's port (frozen sandboxes wake on traffic). The operator
-   * points `*.<domain>` DNS plus a TLS-terminating reverse proxy at the
-   * daemon. A bare hostname: no scheme, no port, no leading or trailing
-   * dot — the same regex the wire validates against (shared/settings.ts).
-   */
-  DORMICE_SANDBOX_DOMAIN: z
-    .string()
-    .regex(bareHostnameRegex, {
-      error:
-        'DORMICE_SANDBOX_DOMAIN must be a bare hostname like sbx.example.com — no scheme, no port, no leading/trailing dots',
-    })
-    .optional(),
-  /**
-   * The Caddy config file the daemon owns — the switch for web-based domain
-   * binding (setIngress rewrites the file, reloads Caddy, Caddy handles the
-   * certificate). install.sh sets it when it installs Caddy. Unset, the
-   * daemon never touches any proxy config and setIngress is refused — the
-   * feature is honestly absent (the SANDBOX_DOMAIN precedent). Absolute:
-   * a system file must not move with the start directory.
-   */
-  DORMICE_INGRESS_FILE: z
-    .string()
-    .refine(isAbsolute, {
-      error:
-        'DORMICE_INGRESS_FILE must be an absolute path, e.g. /etc/caddy/Caddyfile',
-    })
-    .optional(),
-  /**
-   * How the daemon tells the running proxy to re-read its config after a
-   * bind. Defaults to `caddy reload --config <DORMICE_INGRESS_FILE>` —
-   * right when the daemon owns the whole Caddyfile; an operator whose own
-   * Caddyfile imports a Dormice-owned fragment points this at the outer
-   * file instead.
-   */
-  DORMICE_INGRESS_RELOAD_CMD: z.string().min(1).optional(),
-  /**
-   * The S3-compatible object store behind the archiver (AWS, R2, MinIO,
-   * OSS in S3-compat mode) — first-boot seeds only since 2026-07-26: the
-   * store in force lives in the ledger (runtime_settings.s3_*, edited from
-   * the console settings page), and once those columns hold a value these
-   * variables are deliberately ignored. The four core variables still come
-   * as a set (a half-configured seed refuses to boot, same as ever); with
-   * none of them, the seed is "archiving off" — the console can turn it on
-   * at any time. Endpoint is a full URL including scheme (MinIO speaks
-   * http, the clouds https).
-   */
-  DORMICE_S3_ENDPOINT: z
-    .url({
-      protocol: /^https?$/,
-      error:
-        'DORMICE_S3_ENDPOINT must be a full http(s) URL, e.g. https://s3.example.com or http://127.0.0.1:9000',
-    })
-    .optional(),
-  DORMICE_S3_BUCKET: z.string().min(1).optional(),
-  DORMICE_S3_ACCESS_KEY_ID: z.string().min(1).optional(),
-  DORMICE_S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
-  DORMICE_S3_REGION: z.string().default('us-east-1'),
-  /** Path-style addressing: MinIO needs true; the clouds route by subdomain. */
-  DORMICE_S3_FORCE_PATH_STYLE: z.stringbool().default(false),
-  /**
    * The gateway this daemon is a node of — its intranet address, e.g.
-   * http://10.0.0.5:3677. Set, the daemon checks in with it every
+   * http://10.0.0.5:3677. The daemon checks in with it every
    * DORMICE_CHECK_IN_INTERVAL_SECONDS (check-in.ts): its readings, its
-   * build, and where it can be reached. That check-in is the gateway's
-   * only source of "which nodes exist and how full are they" — no
-   * registration, no nodes file. Unset, the daemon is the whole platform
-   * by itself, as it always was, and checks in with nobody. The token it
-   * presents is DORMICE_API_TOKEN: gateway and nodes share one, and the
-   * gateway speaks to every node with the same one.
+   * build, where it can be reached, and which configuration version it
+   * runs — and takes the fleet's configuration from the answer. That
+   * check-in is the gateway's only source of "which nodes exist and how
+   * full are they" — no registration, no nodes file — and the node's only
+   * source of its settings and templates. Every daemon is a node of a
+   * gateway (design record #22: a single machine is a fleet of one); the
+   * default is the gateway install.sh puts beside the daemon. The token
+   * it presents is DORMICE_API_TOKEN: gateway and nodes share one, and
+   * the gateway speaks to every node with the same one.
    */
   DORMICE_GATEWAY_ENDPOINT: z
     .url({
@@ -188,7 +99,7 @@ const envSchema = z.object({
         'DORMICE_GATEWAY_ENDPOINT must be a full http(s) URL, e.g. http://10.0.0.5:3677',
     })
     .transform((url) => url.replace(/\/+$/, ''))
-    .optional(),
+    .default('http://127.0.0.1:3677'),
   /**
    * Where the gateway reaches this node — the address it forwards to.
    * Default: this daemon's own loopback address, right when gateway and
@@ -289,7 +200,6 @@ const checkedSchema = envSchema
   // explicit value is the operator's word and is taken as written.
   .refine(
     (cfg) =>
-      cfg.DORMICE_GATEWAY_ENDPOINT === undefined ||
       isLoopbackUrl(cfg.DORMICE_GATEWAY_ENDPOINT) !== false ||
       cfg.DORMICE_NODE_ENDPOINT !== undefined,
     {
@@ -306,7 +216,6 @@ const checkedSchema = envSchema
   // elsewhere. Refused here, at boot, where the operator is looking.
   .refine(
     (cfg) =>
-      cfg.DORMICE_GATEWAY_ENDPOINT === undefined ||
       isLoopbackUrl(cfg.DORMICE_GATEWAY_ENDPOINT) !== false ||
       cfg.DORMICE_NODE_ID !== 'node-1',
     {
@@ -314,26 +223,7 @@ const checkedSchema = envSchema
         'DORMICE_NODE_ID is required when DORMICE_GATEWAY_ENDPOINT is not loopback: the gateway tells nodes apart by it, and node-1 (the default) is what every other unconfigured node says — the second to check in is refused as a twin. Give this node a name of its own, e.g. its hostname',
       path: ['DORMICE_NODE_ID'],
     },
-  )
-  // All-or-none: a half-configured store would make the archiver's
-  // existence ambiguous, and ambiguity here decides real policy defaults.
-  .superRefine((cfg, ctx) => {
-    const wanted = [
-      'DORMICE_S3_ENDPOINT',
-      'DORMICE_S3_BUCKET',
-      'DORMICE_S3_ACCESS_KEY_ID',
-      'DORMICE_S3_SECRET_ACCESS_KEY',
-    ] as const;
-    const missing = wanted.filter((name) => cfg[name] === undefined);
-    const first = missing[0];
-    if (first !== undefined && missing.length < wanted.length) {
-      ctx.addIssue({
-        code: 'custom',
-        message: `the DORMICE_S3_* variables come as a set: ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing — set all four to enable the archiver, or none to disable it`,
-        path: [first],
-      });
-    }
-  });
+  );
 
 export type Config = z.infer<typeof envSchema>;
 
@@ -342,84 +232,31 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 }
 
 /**
- * Every knob the daemon has, in display order, with its secrecy flag — the
- * single adjudication of "what getConfig reports". A Record over keyof
- * Config so the compiler refuses a new env variable until it is listed
- * here too: a knob that exists but is invisible would be a silent lie.
+ * The fleet's operator knobs, by their old daemon names — variables this
+ * process reads nothing from since the configuration moved to the gateway
+ * (2026-09-14). They live on the gateway's side now: as its env seeds at
+ * first start (same names), then in its settings table, edited from the
+ * console. A node that still carries them in its env file is a machine
+ * upgraded across the move; main.ts says so once at boot, naming them,
+ * instead of silently doing something else than the operator wrote.
  */
-export const CONFIG_KEYS: Record<keyof Config, { sensitive: boolean }> = {
-  DORMICE_PORT: { sensitive: false },
-  DORMICE_DB_PATH: { sensitive: false },
-  DORMICE_NODE_ID: { sensitive: false },
-  DORMICE_API_TOKEN: { sensitive: true },
-  DORMICE_EXECUTOR: { sensitive: false },
-  DORMICE_BASE_IMAGE: { sensitive: false },
-  DORMICE_DATA_DIR: { sensitive: false },
-  DORMICE_SCAN_INTERVAL_SECONDS: { sensitive: false },
-  DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS: { sensitive: false },
-  DORMICE_METRICS_RETENTION_HOURS: { sensitive: false },
-  DORMICE_SANDBOX_DISK_GB: { sensitive: false },
-  DORMICE_SANDBOX_CPUS: { sensitive: false },
-  DORMICE_SANDBOX_MEMORY_GB: { sensitive: false },
-  DORMICE_SANDBOX_PIDS_LIMIT: { sensitive: false },
-  DORMICE_RECLAIM_TIMEOUT_SECONDS: { sensitive: false },
-  DORMICE_SANDBOX_DOMAIN: { sensitive: false },
-  DORMICE_INGRESS_FILE: { sensitive: false },
-  DORMICE_INGRESS_RELOAD_CMD: { sensitive: false },
-  DORMICE_S3_ENDPOINT: { sensitive: false },
-  DORMICE_S3_BUCKET: { sensitive: false },
-  DORMICE_S3_ACCESS_KEY_ID: { sensitive: true },
-  DORMICE_S3_SECRET_ACCESS_KEY: { sensitive: true },
-  DORMICE_S3_REGION: { sensitive: false },
-  DORMICE_S3_FORCE_PATH_STYLE: { sensitive: false },
-  DORMICE_GATEWAY_ENDPOINT: { sensitive: false },
-  DORMICE_NODE_ENDPOINT: { sensitive: false },
-  DORMICE_CHECK_IN_INTERVAL_SECONDS: { sensitive: false },
-};
+export const MOVED_TO_GATEWAY = [
+  'DORMICE_SANDBOX_DISK_GB',
+  'DORMICE_SANDBOX_CPUS',
+  'DORMICE_SANDBOX_MEMORY_GB',
+  'DORMICE_SANDBOX_PIDS_LIMIT',
+  'DORMICE_SANDBOX_DOMAIN',
+  'DORMICE_INGRESS_FILE',
+  'DORMICE_INGRESS_RELOAD_CMD',
+  'DORMICE_S3_ENDPOINT',
+  'DORMICE_S3_BUCKET',
+  'DORMICE_S3_ACCESS_KEY_ID',
+  'DORMICE_S3_SECRET_ACCESS_KEY',
+  'DORMICE_S3_REGION',
+  'DORMICE_S3_FORCE_PATH_STYLE',
+] as const;
 
-export type ConfigSources = Record<keyof Config, 'env' | 'default'>;
-
-/**
- * Which knobs the operator set explicitly versus which fell back to
- * defaults. Read off the raw environment at load time — the parsed config
- * cannot tell the two apart once defaults are applied.
- */
-export function configSources(
-  env: NodeJS.ProcessEnv = process.env,
-): ConfigSources {
-  return Object.fromEntries(
-    (Object.keys(CONFIG_KEYS) as Array<keyof Config>).map((key) => [
-      key,
-      env[key] !== undefined ? 'env' : 'default',
-    ]),
-  ) as ConfigSources;
-}
-
-/**
- * The one adjudicator of the S3 first-boot seed: null unless the whole
- * DORMICE_S3_* set is present (a partial set never gets past the schema).
- * Since 2026-07-26 this decides only what ensureRuntimeSettings seeds a
- * virgin ledger with — the store in force is the ledger's
- * (db/settings.ts readS3Settings), and everything that used to hang off
- * this answer (whether the Archiver has a store, whether new sandboxes
- * default to archiving, whether archive-asking policies are accepted)
- * reads the ledger live.
- */
-export function s3Settings(config: Config): S3Settings | null {
-  if (
-    config.DORMICE_S3_ENDPOINT === undefined ||
-    config.DORMICE_S3_BUCKET === undefined ||
-    config.DORMICE_S3_ACCESS_KEY_ID === undefined ||
-    config.DORMICE_S3_SECRET_ACCESS_KEY === undefined
-  ) {
-    return null;
-  }
-  return {
-    endpoint: config.DORMICE_S3_ENDPOINT,
-    bucket: config.DORMICE_S3_BUCKET,
-    accessKeyId: config.DORMICE_S3_ACCESS_KEY_ID,
-    secretAccessKey: config.DORMICE_S3_SECRET_ACCESS_KEY,
-    region: config.DORMICE_S3_REGION,
-    forcePathStyle: config.DORMICE_S3_FORCE_PATH_STYLE,
-  };
+/** Which of MOVED_TO_GATEWAY the environment still sets, for the boot line. */
+export function ignoredEnvKeys(env: NodeJS.ProcessEnv = process.env): string[] {
+  return MOVED_TO_GATEWAY.filter((key) => env[key] !== undefined);
 }

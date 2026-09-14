@@ -129,6 +129,10 @@ class FakeNode {
           envdAccessToken: `envd-${this.id}-${String(body.sandboxId)}`,
         });
       }
+      case '/templateUsers': {
+        // This double records no template per sandbox: nothing here uses one.
+        return json(200, { sandboxNames: [] });
+      }
       case '/lookupSandbox': {
         const sandbox = 'id' in body ? this.byId(body.id as string) : found;
         return json(

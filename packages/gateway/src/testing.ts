@@ -12,10 +12,12 @@ import type { Ingress } from './ingress';
 import { type AskNode, type AskVerb, httpAskNode } from './lookup';
 
 /**
- * Test scaffolding shared by the gateway's suites: a node's reading and
- * check-in with a few knobs turned, and a gateway app over an in-memory
- * database for the suites about the gateway's own tables and gates. Not
- * shipped — nothing under src/ but main.ts is bundled (tsup.config.ts).
+ * Test scaffolding shared by the gateway's suites — and, through index.ts,
+ * by the SDK's and the CLI's, which embed a gateway on an ephemeral port
+ * for the verbs that answer here: a node's reading and check-in with a few
+ * knobs turned, and a gateway app over an in-memory database for the
+ * suites about the gateway's own tables and gates. Never part of a
+ * running gateway: main.ts imports none of it.
  */
 export const TEST_TOKEN = 'fleet-token-fleet-token-fleet-token-fleet';
 
@@ -31,6 +33,8 @@ export function reading(
     restoring?: number;
     memAvail?: number;
     diskAvail?: number | null;
+    /** Null = a daemon that cannot manage swap (the fake executor's word). */
+    managedSwap?: { activeGb: number } | null;
   } = {},
 ): NodeReading {
   const frozen = over.frozen ?? 0;
@@ -58,18 +62,26 @@ export function reading(
       total: active + frozen + archived + restoring,
       byState: { active, frozen, stopped: 0, archived, restoring },
     },
+    managedSwap:
+      over.managedSwap === undefined ? { activeGb: 0 } : over.managedSwap,
   };
 }
 
 export function checkInOf(
   nodeId: string,
   endpoint: string,
-  over: Parameters<typeof reading>[0] & { intervalSeconds?: number } = {},
+  over: Parameters<typeof reading>[0] & {
+    intervalSeconds?: number;
+    configVersion?: number | null;
+  } = {},
 ): CheckInRequest {
   return {
     nodeId,
     endpoint,
     intervalSeconds: over.intervalSeconds ?? 15,
+    // A configured node by default: placement refuses one without a copy,
+    // and most suites are about nodes that run one.
+    configVersion: over.configVersion === undefined ? 1 : over.configVersion,
     build: {
       commit: 'abc1234',
       title: 'a commit',
@@ -107,10 +119,13 @@ export function testGateway(
   const config = loadConfig(rawEnv);
   ensureSettings(db, config);
   const fleet = new Fleet(db);
+  // Under the fleet token the config carries: a suite that embeds a real
+  // node beside this gateway (the SDK's) gives both the same token, and
+  // the lookups must present it, not the scaffolding's default.
   const finder = new Finder(
     fleet,
     new NameCache(),
-    opts.ask ?? httpAskNode(TEST_TOKEN),
+    opts.ask ?? httpAskNode(config.DORMICE_API_TOKEN),
     { warn: () => {} },
   );
   const app = buildGatewayApp({

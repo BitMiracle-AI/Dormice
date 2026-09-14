@@ -44,6 +44,14 @@ export const getConfigResponseSchema = z.object({
   }),
   /** The ledger-resident operator knobs actually in force — see settings.ts. */
   settings: runtimeSettingsSchema,
+  /**
+   * The fleet configuration's version (gateway.ts nodeConfigBundleSchema):
+   * counted up by every settings, template or node-settings write. Beside
+   * listNodes' per-node `configVersion` it answers "has my change reached
+   * every node yet" — a node reporting this number runs exactly this
+   * configuration.
+   */
+  configVersion: z.number().int().positive(),
 });
 
 export type GetConfigResponse = z.infer<typeof getConfigResponseSchema>;

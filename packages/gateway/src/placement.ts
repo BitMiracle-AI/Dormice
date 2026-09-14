@@ -59,7 +59,10 @@ export interface Placement {
  * node with room per core and little memory left is still chosen, and
  * memory pressure is judged where it is felt, by the node's own admission
  * (design record #27, after the cluster), not guessed from a
- * fifteen-second-old figure the picks do not move.
+ * fifteen-second-old figure the picks do not move. And a node whose last
+ * check-in reported no configuration copy is refused: a daemon booting
+ * without one fetches it before it listens, and until its next check-in
+ * says otherwise the gateway must assume the port is still shut.
  */
 export function pick(
   nodes: readonly NodeState[],
@@ -84,6 +87,16 @@ export function pick(
     const reading = node.reading;
     if (reading === null) {
       refuse('has not reported a reading');
+      continue;
+    }
+    // A node that reported no configuration copy has no defaults to build
+    // a sandbox from — and is not listening yet: the daemon fetches its
+    // first bundle before it opens its port (server/main.ts), and a create
+    // sent there would be refused at the socket.
+    if (node.configVersion === null) {
+      refuse(
+        'holds no configuration copy yet — its first bundle rides on its next check-in',
+      );
       continue;
     }
     const cpuUsedPct = reading.host.cpuUsedPct;

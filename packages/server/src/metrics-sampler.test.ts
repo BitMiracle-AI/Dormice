@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { count } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app';
-import { CONFIG_KEYS, type ConfigSources, loadConfig } from './config';
+import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
 import { FLEET_SNAPSHOT_KEEP_DAYS, insertMetricsTick } from './db/metrics';
 import {
@@ -15,6 +15,7 @@ import { CpuSampler, type HostSample } from './host-metrics';
 import { KeyedQueue } from './keyed-queue';
 import { freezeSandbox, stopSandbox } from './lifecycle';
 import { sampleOnce } from './metrics-sampler';
+import { configureNode } from './testing';
 
 // The sampler, unit-level: one tick's writes, the measurable-states gate,
 // the vanished-container skip, retention pruning and the destroy cascade.
@@ -47,13 +48,6 @@ const HOST: HostSample = {
   diskAvailableBytes: null,
 };
 
-function fixedSources(): ConfigSources {
-  const all = Object.fromEntries(
-    Object.keys(CONFIG_KEYS).map((key) => [key, 'default']),
-  ) as ConfigSources;
-  return { ...all, DORMICE_API_TOKEN: 'env' };
-}
-
 function harness() {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
@@ -61,16 +55,10 @@ function harness() {
     DORMICE_DB_PATH: ':memory:',
     DORMICE_API_TOKEN: TOKEN,
   });
+  configureNode(db);
   const executor = new FakeExecutor();
   const locks = new KeyedQueue();
-  const app = buildApp({
-    config,
-    db,
-    executor,
-    locks,
-    logger: false,
-    sources: fixedSources(),
-  });
+  const app = buildApp({ config, db, executor, locks, logger: false });
   return { app, db, executor, locks };
 }
 

@@ -8,7 +8,12 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { CONFIG_KEYS, type Config, type ConfigSources } from '../config';
 import type { Db } from '../db/db';
-import { readS3Settings, readSettings, writeSettings } from '../db/settings';
+import {
+  readConfigVersion,
+  readS3Settings,
+  readSettings,
+  writeSettings,
+} from '../db/settings';
 import type { Fleet } from '../fleet';
 import { probeS3 as defaultProbeS3, S3ProbeError } from '../probe';
 
@@ -74,6 +79,7 @@ export const settingsRoutes: FastifyPluginAsyncZod<
             : null,
         },
         settings,
+        configVersion: readConfigVersion(db),
       };
     },
   );

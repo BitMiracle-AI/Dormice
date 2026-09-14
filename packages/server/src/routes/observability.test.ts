@@ -1,10 +1,5 @@
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  type ConfigEntry,
-  getConfigResponseSchema,
   getFleetTimelineResponseSchema,
   getHostMetricsHistoryResponseSchema,
   getSandboxMetricsHistoryResponseSchema,
@@ -14,9 +9,7 @@ import {
 } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from '../app';
-import { Archiver } from '../archive/archiver';
-import { MemStore } from '../archive/mem-store';
-import { CONFIG_KEYS, type ConfigSources, loadConfig } from '../config';
+import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
 import { insertMetricsTick, MAX_POINTS } from '../db/metrics';
 import { FAKE_BASE_IMAGE, FakeExecutor } from '../executor/fake';
@@ -24,41 +17,28 @@ import { CpuSampler, type HostSample } from '../host-metrics';
 import { KeyedQueue } from '../keyed-queue';
 import { freezeSandbox, stopSandbox } from '../lifecycle';
 import { sampleOnce } from '../metrics-sampler';
-import { ARCHIVE_DEFAULT_SECONDS } from '../policy';
+import { configureNode, registerTestTemplate } from '../testing';
 
-// The observability verbs, app-level: getConfig, getSandboxMetrics and
-// the history windows — the console's food, so the tests eat exactly what
-// a browser would.
+// The observability verbs, app-level: getSandboxMetrics, the history
+// windows and the image lineage — the console's food, so the tests eat
+// exactly what a browser would.
 
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
 const authed = { authorization: `Bearer ${TOKEN}` };
 
-/** All-defaults source map; tests override the keys they assert on. */
-function fixedSources(overrides: Partial<ConfigSources> = {}): ConfigSources {
-  const all = Object.fromEntries(
-    Object.keys(CONFIG_KEYS).map((key) => [key, 'default']),
-  ) as ConfigSources;
-  return { ...all, ...overrides, DORMICE_API_TOKEN: 'env' };
-}
-
-function testApp(env: Record<string, string> = {}) {
+function testApp() {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
   const config = loadConfig({
     DORMICE_DB_PATH: ':memory:',
     DORMICE_NODE_ID: 'node-test',
     DORMICE_API_TOKEN: TOKEN,
-    ...env,
   });
+  configureNode(db);
   const executor = new FakeExecutor();
   const locks = new KeyedQueue();
-  const sources = fixedSources(
-    Object.fromEntries(
-      Object.keys(env).map((key) => [key, 'env']),
-    ) as Partial<ConfigSources>,
-  );
-  const app = buildApp({ config, db, executor, locks, logger: false, sources });
+  const app = buildApp({ config, db, executor, locks, logger: false });
   return { app, db, executor, locks };
 }
 
@@ -95,89 +75,6 @@ function hostReading(cpuUsedPct: number | null): HostSample {
     diskAvailableBytes: null,
   };
 }
-
-describe('getConfig', () => {
-  it('reports every knob with value and source, and validates', async () => {
-    const { app } = testApp({ DORMICE_SANDBOX_DISK_GB: '7' });
-    const res = await rpc(app, '/getConfig');
-    expect(res.statusCode).toBe(200);
-    const body = getConfigResponseSchema.parse(res.json());
-
-    const byKey = new Map(body.entries.map((e: ConfigEntry) => [e.key, e]));
-    // Complete: one entry per knob the config schema knows.
-    expect(body.entries).toHaveLength(Object.keys(CONFIG_KEYS).length);
-    expect(byKey.get('DORMICE_SANDBOX_DISK_GB')).toMatchObject({
-      value: '7',
-      source: 'env',
-    });
-    expect(byKey.get('DORMICE_PORT')).toMatchObject({
-      value: '3676',
-      source: 'default',
-    });
-    // Optional and unset: honestly null, not invented.
-    expect(byKey.get('DORMICE_SANDBOX_DOMAIN')).toMatchObject({ value: null });
-  });
-
-  it('withholds secrets, reporting only their presence', async () => {
-    const { app } = testApp();
-    const body = getConfigResponseSchema.parse(
-      (await rpc(app, '/getConfig')).json(),
-    );
-    const token = body.entries.find(
-      (e: ConfigEntry) => e.key === 'DORMICE_API_TOKEN',
-    );
-    expect(token).toMatchObject({ value: null, redacted: true });
-    // The raw token must appear nowhere in the whole response.
-    expect(JSON.stringify(body)).not.toContain(TOKEN);
-  });
-
-  it('adjudicates archive availability: off without an archiver', async () => {
-    const { app } = testApp();
-    const body = getConfigResponseSchema.parse(
-      (await rpc(app, '/getConfig')).json(),
-    );
-    expect(body.archive).toEqual({ enabled: false, defaultSeconds: null });
-  });
-
-  it('reports the archive default when an S3 store is configured', async () => {
-    // The adjudication is the ledger's, seeded here from the env S3 set.
-    const db = openDb(':memory:');
-    migrateDb(db, MIGRATIONS);
-    const executor = new FakeExecutor();
-    const locks = new KeyedQueue();
-    const config = loadConfig({
-      DORMICE_DB_PATH: ':memory:',
-      DORMICE_API_TOKEN: TOKEN,
-      DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
-      DORMICE_S3_BUCKET: 'exam',
-      DORMICE_S3_ACCESS_KEY_ID: 'exam-key',
-      DORMICE_S3_SECRET_ACCESS_KEY: 'exam-secret',
-    });
-    const archiver = new Archiver({
-      db,
-      executor,
-      locks,
-      store: new MemStore(),
-      tmpDir: mkdtempSync(path.join(tmpdir(), 'dormice-obs-')),
-    });
-    const app = buildApp({
-      config,
-      db,
-      executor,
-      locks,
-      logger: false,
-      sources: fixedSources(),
-      archiver,
-    });
-    const body = getConfigResponseSchema.parse(
-      (await rpc(app, '/getConfig')).json(),
-    );
-    expect(body.archive).toEqual({
-      enabled: true,
-      defaultSeconds: ARCHIVE_DEFAULT_SECONDS,
-    });
-  });
-});
 
 describe('getSandboxMetrics', () => {
   it('answers a single sample for a running sandbox', async () => {
@@ -619,8 +516,8 @@ describe('listSandboxImages', () => {
   }
 
   it('walks a template upgrade: in sync, left behind, rebuilt, in sync again', async () => {
-    const { app } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const { app, db } = testApp();
+    registerTestTemplate(db, 'py', 'img-v1');
     const created = (
       await rpc(app, '/acquireSandbox', { name: 'alice', template: 'py' })
     ).json().sandbox;
@@ -636,8 +533,9 @@ describe('listSandboxImages', () => {
       },
     ]);
 
-    // Re-registering moves nextImage; the live shell honestly stays behind.
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+    // Re-pointing the template (the gateway's registerTemplate, arriving
+    // with the next bundle) moves nextImage; the live shell stays behind.
+    registerTestTemplate(db, 'py', 'img-v2');
     expect(await images(app)).toMatchObject([
       { image: 'img-v1', nextImage: 'img-v2', upgradable: true },
     ]);
@@ -666,13 +564,13 @@ describe('listSandboxImages', () => {
 
   it('answers every row: a stopped shell keeps its old image, honestly upgradable', async () => {
     const { app, db, executor } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    registerTestTemplate(db, 'py', 'img-v1');
     const created = (
       await rpc(app, '/acquireSandbox', { name: 'cold', template: 'py' })
     ).json().sandbox;
     await freezeSandbox(db, executor, created.id);
     await stopSandbox(db, executor, created.id);
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+    registerTestTemplate(db, 'py', 'img-v2');
 
     // The exited container is still the shell: waking it would boot the old
     // image, so the row is honestly reported as upgradable.

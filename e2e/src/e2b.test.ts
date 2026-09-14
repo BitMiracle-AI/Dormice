@@ -2,6 +2,7 @@ import http from 'node:http';
 import { Dormice } from '@dormice/sdk';
 import { CommandExitError, Sandbox } from 'e2b';
 import { describe, expect, inject, it } from 'vitest';
+import { door, settled } from './helpers';
 
 // The compatibility promise, verified with the promise's own artifact: the
 // OFFICIAL e2b package, pointed at the daemon by exactly two URLs (plus its
@@ -72,18 +73,26 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
-  it('a ledger API key drives the official SDK exactly like the env token', async () => {
-    // Minted over the native face; the E2B face accepts it as e2b_<key> —
-    // pure hex by construction, so even the Python SDK's client-side
-    // e2b_[0-9a-f]+ validation would let it through.
+  it('a minted API key drives the official SDK through the door exactly like the fleet token', async () => {
+    // Minted at the gateway over the native face; the gateway's E2B face
+    // accepts it as e2b_<key> — pure hex by construction, so even the
+    // Python SDK's client-side e2b_[0-9a-f]+ validation would let it
+    // through. A node knows only the fleet token, so the keyed SDK is
+    // pointed at the door: the E2B control plane there places on node A
+    // and forwards by id.
     const dormice = new Dormice({
-      endpoint: inject('dormiceEndpoint'),
+      endpoint: door(),
       token: inject('dormiceToken'),
     });
     const { apiKey, token } = await dormice.createApiKey('e2b-face');
+    const atDoor = {
+      apiUrl: `${door()}/e2b/api`,
+      sandboxUrl: `${door()}/e2b/envd`,
+    };
     try {
       const sbx = await Sandbox.create({
         ...connection(),
+        ...atDoor,
         apiKey: `e2b_${token}`,
       });
       try {
@@ -97,7 +106,7 @@ describe('official e2b SDK against the daemon', () => {
     }
     // Revoked: the same key is refused at the control-plane door.
     await expect(
-      Sandbox.create({ ...connection(), apiKey: `e2b_${token}` }),
+      Sandbox.create({ ...connection(), ...atDoor, apiKey: `e2b_${token}` }),
     ).rejects.toThrow(/invalid API key/);
   });
 
@@ -718,13 +727,15 @@ describe('official e2b SDK against the daemon', () => {
     // consumes the name as its templateID — aliases are the same wire.
     // The image must exist in docker mode; the base image serves both.
     const dormice = new Dormice({
-      endpoint: inject('dormiceEndpoint'),
+      endpoint: door(),
       token: inject('dormiceToken'),
     });
     await dormice.registerTemplate(
       'e2e-tpl',
       process.env.DORMICE_BASE_IMAGE ?? 'img:e2e-tpl',
     );
+    // Registered at the door; node A holds it after its next check-in.
+    await settled();
     const sbx = await Sandbox.create('e2e-tpl', connection());
     try {
       const info = await sbx.getInfo();
@@ -939,10 +950,11 @@ describe.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
       const image = process.env.DORMICE_BASE_IMAGE;
       if (!image) throw new Error('docker e2e requires DORMICE_BASE_IMAGE');
       const dormice = new Dormice({
-        endpoint: inject('dormiceEndpoint'),
+        endpoint: door(),
         token: inject('dormiceToken'),
       });
       await dormice.registerTemplate('e2e-real-tpl', image);
+      await settled();
       const sbx = await Sandbox.create('e2e-real-tpl', connection());
       try {
         expect((await sbx.getInfo()).templateId).toBe('e2e-real-tpl');

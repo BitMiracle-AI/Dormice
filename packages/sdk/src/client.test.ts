@@ -1,13 +1,16 @@
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { checkInOf, testGateway } from '@dormice/gateway';
 import {
   buildApp,
+  configureNode,
   type Db,
   FakeExecutor,
   KeyedQueue,
   loadConfig,
   migrateDb,
   openDb,
+  registerTestTemplate,
   scanOnce,
 } from '@dormice/server';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
@@ -33,6 +36,23 @@ let endpoint: string;
 let db: Db;
 let executor: FakeExecutor;
 let locks: KeyedQueue;
+// The fleet's door, embedded like the daemon: the verbs that configure the
+// fleet — keys, settings, templates — answer there (design record #22),
+// and the SDK speaks the same wire to either. The embedded daemon is its
+// one node, joined by a check-in the harness plays (joinNode): the
+// gateway then places on it and asks it over real HTTP, under the one
+// token both share.
+let gateway: ReturnType<typeof testGateway>;
+let gatewayClient: Dormice;
+let gatewayEndpoint: string;
+
+/** The daemon reports for duty — fresh, so the fleet's "down" clock never starts on a long suite. */
+function joinNode() {
+  const outcome = gateway.fleet.checkIn(
+    checkInOf('node-test', endpoint, { active: 0 }),
+  );
+  if ('refused' in outcome) throw new Error(outcome.refused);
+}
 
 beforeAll(async () => {
   db = openDb(':memory:');
@@ -46,6 +66,8 @@ beforeAll(async () => {
     DORMICE_NODE_ID: 'node-test',
     DORMICE_API_TOKEN: TOKEN,
   });
+  // The configuration copy a check-in would have applied.
+  configureNode(db);
   app = buildApp({ config, db, executor, locks, logger: false });
   // Port 0: the OS hands out a free ephemeral port, so tests never collide
   // with a locally running daemon.
@@ -56,10 +78,20 @@ beforeAll(async () => {
   }
   endpoint = `http://127.0.0.1:${address.port}`;
   client = new Dormice({ endpoint, token: TOKEN });
+
+  gateway = testGateway({ DORMICE_API_TOKEN: TOKEN });
+  await gateway.app.listen({ host: '127.0.0.1', port: 0 });
+  const gatewayAddress = gateway.app.server.address();
+  if (typeof gatewayAddress !== 'object' || gatewayAddress === null) {
+    throw new Error('expected a TCP address');
+  }
+  gatewayEndpoint = `http://127.0.0.1:${gatewayAddress.port}`;
+  gatewayClient = new Dormice({ endpoint: gatewayEndpoint, token: TOKEN });
 });
 
 afterAll(async () => {
   await app.close();
+  await gateway.app.close();
 });
 
 describe('Dormice.acquireSandbox over real HTTP', () => {
@@ -324,28 +356,37 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
 });
 
 describe('templates over real HTTP', () => {
-  it('registers, lists, applies at acquire, and removes through the full life', async () => {
-    await client.registerTemplate('tpl-sdk', 'img-sdk');
-    expect(await client.listTemplates()).toMatchObject([
+  it('registers, lists and removes at the gateway; the node it asks over the wire makes removal a 409 naming the sandbox', async () => {
+    joinNode();
+    await gatewayClient.registerTemplate('tpl-sdk', 'img-sdk');
+    expect(await gatewayClient.listTemplates()).toMatchObject([
       { name: 'tpl-sdk', image: 'img-sdk' },
     ]);
 
+    // The bundle's arrival, played on the node's copy; a sandbox built
+    // from the template lives on the node.
+    registerTestTemplate(db, 'tpl-sdk', 'img-sdk');
     const res = await client.acquireSandbox('tpl-user', {
       template: 'tpl-sdk',
     });
     expect(res.sandbox.template).toBe('tpl-sdk');
     expect(await executor.imageOf(res.sandbox.id)).toBe('img-sdk');
 
-    // In use: removal is refused, naming the key that holds it.
-    await expect(client.removeTemplate('tpl-sdk')).rejects.toMatchObject({
-      name: 'DormiceApiError',
-      status: 409,
-      message: expect.stringMatching(/tpl-user/),
-    });
-
+    // The gateway asks its node templateUsers over real HTTP, then refuses.
+    await expect(gatewayClient.removeTemplate('tpl-sdk')).rejects.toMatchObject(
+      {
+        name: 'DormiceApiError',
+        status: 409,
+        message: expect.stringMatching(/tpl-user on node node-test/),
+      },
+    );
     await client.destroySandbox('tpl-user');
-    expect(await client.removeTemplate('tpl-sdk')).toEqual({ removed: true });
-    expect(await client.removeTemplate('tpl-sdk')).toEqual({ removed: false });
+    expect(await gatewayClient.removeTemplate('tpl-sdk')).toEqual({
+      removed: true,
+    });
+    expect(await gatewayClient.removeTemplate('tpl-sdk')).toEqual({
+      removed: false,
+    });
   });
 
   it("surfaces the server's 400 for an unknown template", async () => {
@@ -359,54 +400,68 @@ describe('templates over real HTTP', () => {
 });
 
 describe('API keys over real HTTP', () => {
+  /** A minted key does real work through the gateway: placed on the node under the fleet token, destroyed the same way. */
+  const opens = async (keyed: Dormice) => {
+    const created = await keyed.acquireSandbox('keyed-user');
+    expect(created.sandbox.nodeId).toBe('node-test');
+    await keyed.destroySandbox('keyed-user');
+  };
+
   it('mints a key a fresh client can use, revokes it, and the door closes', async () => {
-    const { apiKey, token } = await client.createApiKey('sdk-rotation');
+    joinNode();
+    const { apiKey, token } = await gatewayClient.createApiKey('sdk-rotation');
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     expect(apiKey.prefix).toBe(token.slice(0, 8));
 
     // The rotation story: a new client on the minted key does real work.
-    const keyed = new Dormice({ endpoint, token });
-    await keyed.acquireSandbox('keyed-user');
-    await keyed.destroySandbox('keyed-user');
+    const keyed = new Dormice({ endpoint: gatewayEndpoint, token });
+    await opens(keyed);
 
-    const listed = await client.listApiKeys();
+    const listed = await gatewayClient.listApiKeys();
     const mine = listed.find((k) => k.name === 'sdk-rotation');
     expect(mine?.lastUsedAt).not.toBeNull();
 
-    expect(await client.revokeApiKey(apiKey.id)).toEqual({
+    expect(await gatewayClient.revokeApiKey(apiKey.id)).toEqual({
       revoked: true,
     });
-    await expect(keyed.listSandboxes()).rejects.toMatchObject({ status: 401 });
-    expect(await client.revokeApiKey(apiKey.id)).toEqual({
+    await expect(keyed.acquireSandbox('keyed-user')).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(await gatewayClient.revokeApiKey(apiKey.id)).toEqual({
       revoked: false,
     });
   });
 
   it("surfaces the server's 409 for a duplicate active name", async () => {
-    const { apiKey } = await client.createApiKey('sdk-dup');
-    await expect(client.createApiKey('sdk-dup')).rejects.toMatchObject({
+    const { apiKey } = await gatewayClient.createApiKey('sdk-dup');
+    await expect(gatewayClient.createApiKey('sdk-dup')).rejects.toMatchObject({
       status: 409,
       message: expect.stringMatching(/sdk-dup/),
     });
-    await client.revokeApiKey(apiKey.id);
+    await gatewayClient.revokeApiKey(apiKey.id);
   });
 
   it('updateApiKey renames, parks and expires a key in place', async () => {
+    joinNode();
     const future = new Date(Date.now() + 3600_000).toISOString();
-    const { apiKey, token } = await client.createApiKey('sdk-edit', {
+    const { apiKey, token } = await gatewayClient.createApiKey('sdk-edit', {
       expiresAt: future,
     });
     expect(apiKey.expiresAt).toBe(future);
 
-    const keyed = new Dormice({ endpoint, token });
-    await keyed.listSandboxes();
+    const keyed = new Dormice({ endpoint: gatewayEndpoint, token });
+    await opens(keyed);
 
     // Park it: the credential dies on the next request, reversibly.
-    const parked = await client.updateApiKey(apiKey.id, { disabled: true });
+    const parked = await gatewayClient.updateApiKey(apiKey.id, {
+      disabled: true,
+    });
     expect(parked.apiKey.disabledAt).not.toBeNull();
-    await expect(keyed.listSandboxes()).rejects.toMatchObject({ status: 401 });
+    await expect(keyed.acquireSandbox('keyed-user')).rejects.toMatchObject({
+      status: 401,
+    });
 
-    const resumed = await client.updateApiKey(apiKey.id, {
+    const resumed = await gatewayClient.updateApiKey(apiKey.id, {
       disabled: false,
       name: 'sdk-edit-2',
       expiresAt: null,
@@ -416,59 +471,68 @@ describe('API keys over real HTTP', () => {
       disabledAt: null,
       expiresAt: null,
     });
-    await keyed.listSandboxes();
+    await opens(keyed);
 
-    await client.revokeApiKey(apiKey.id);
+    await gatewayClient.revokeApiKey(apiKey.id);
   });
 
-  it('a ledger key gets the honest 403 on the management verbs', async () => {
-    const { apiKey, token } = await client.createApiKey('sdk-not-admin');
-    const keyed = new Dormice({ endpoint, token });
+  it('a minted key gets the honest 403 on the management verbs', async () => {
+    const { apiKey, token } = await gatewayClient.createApiKey('sdk-not-admin');
+    const keyed = new Dormice({ endpoint: gatewayEndpoint, token });
     await expect(keyed.listApiKeys()).rejects.toMatchObject({
       status: 403,
       message: expect.stringMatching(/cannot manage API keys/),
     });
-    await client.revokeApiKey(apiKey.id);
+    await gatewayClient.revokeApiKey(apiKey.id);
+  });
+
+  it('a node knows only the fleet token: a minted key is a 401 there', async () => {
+    const { apiKey, token } = await gatewayClient.createApiKey('sdk-at-node');
+    const keyed = new Dormice({ endpoint, token });
+    await expect(keyed.listSandboxes()).rejects.toMatchObject({ status: 401 });
+    await gatewayClient.revokeApiKey(apiKey.id);
   });
 });
 
-describe('runtime settings over real HTTP', () => {
-  it('updates a knob and reads it back through getConfig', async () => {
-    const before = (await client.getConfig()).settings;
-    const { settings } = await client.updateSettings({
-      pidsLimit: before.pidsLimit + 1,
+describe('fleet settings over real HTTP', () => {
+  it('updates a knob and reads it back through getConfig, the version counting up', async () => {
+    const before = await gatewayClient.getConfig();
+    const { settings } = await gatewayClient.updateSettings({
+      pidsLimit: before.settings.pidsLimit + 1,
     });
-    expect(settings.pidsLimit).toBe(before.pidsLimit + 1);
+    expect(settings.pidsLimit).toBe(before.settings.pidsLimit + 1);
     expect(settings.updatedAt).not.toBeNull();
-    expect((await client.getConfig()).settings.pidsLimit).toBe(
-      before.pidsLimit + 1,
-    );
-    // Restore: other suites share this daemon's ledger.
-    await client.updateSettings({ pidsLimit: before.pidsLimit });
+    const after = await gatewayClient.getConfig();
+    expect(after.settings.pidsLimit).toBe(before.settings.pidsLimit + 1);
+    expect(after.configVersion).toBe(before.configVersion + 1);
+    // Restore: other suites share this gateway's tables.
+    await gatewayClient.updateSettings({
+      pidsLimit: before.settings.pidsLimit,
+    });
   });
 
   it('is admin-only, like the apiKey verbs', async () => {
-    const { apiKey, token } = await client.createApiKey('sdk-settings');
-    const keyed = new Dormice({ endpoint, token });
+    const { apiKey, token } = await gatewayClient.createApiKey('sdk-settings');
+    const keyed = new Dormice({ endpoint: gatewayEndpoint, token });
     await expect(
       keyed.updateSettings({ pidsLimit: 12345 }),
     ).rejects.toMatchObject({
       status: 403,
-      message: expect.stringMatching(/cannot manage API keys or settings/),
+      message: expect.stringMatching(/cannot manage API keys/),
     });
-    await client.revokeApiKey(apiKey.id);
+    await gatewayClient.revokeApiKey(apiKey.id);
   });
 });
 
 describe('the observability verbs over real HTTP', () => {
   it('getConfig reports the knobs and withholds the token', async () => {
-    // Source attribution is asserted server-side with injected sources;
-    // this test app reads the real process.env, which proves nothing here.
-    const config = await client.getConfig();
+    // Source attribution is asserted gateway-side with injected sources;
+    // here the gateway's env is the harness's, which proves nothing more.
+    const config = await gatewayClient.getConfig();
     const token = config.entries.find((e) => e.key === 'DORMICE_API_TOKEN');
     expect(token).toMatchObject({ value: null, redacted: true });
-    const port = config.entries.find((e) => e.key === 'DORMICE_PORT');
-    expect(port).toMatchObject({ value: '3676' });
+    const port = config.entries.find((e) => e.key === 'DORMICE_GATEWAY_PORT');
+    expect(port).toMatchObject({ value: '3677' });
     expect(config.archive.enabled).toBe(false);
   });
 

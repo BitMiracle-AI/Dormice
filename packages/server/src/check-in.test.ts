@@ -1,12 +1,14 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { checkInRequestSchema } from '@dormice/shared';
+import { checkInRequestSchema, type NodeConfigBundle } from '@dormice/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CheckIn, type CheckInOptions, readNodeReading } from './check-in';
 import { migrateDb, openDb } from './db/db';
 import { createSandbox } from './db/ledger';
+import { applyNodeConfig, readConfigVersion } from './db/settings';
 import { CpuSampler } from './host-metrics';
+import { testBundle } from './testing';
 
 const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
 const TOKEN = 'shared-token-shared-token-shared-token';
@@ -70,15 +72,27 @@ function logSpy() {
   };
 }
 
+/** A gateway answer: the current version, and the bundle when the node's differs. */
+function answering(version: number, bundle?: NodeConfigBundle) {
+  return {
+    status: 200,
+    body: JSON.stringify({
+      configVersion: version,
+      ...(bundle === undefined ? {} : { config: bundle }),
+    }),
+  };
+}
+
 function options(
   gatewayEndpoint: string,
   log: CheckInOptions['log'],
   over: Partial<CheckInOptions> = {},
-): CheckInOptions {
+): CheckInOptions & { db: ReturnType<typeof openDb> } {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
   const cpu = new CpuSampler();
   return {
+    db,
     gateway: gatewayEndpoint,
     token: TOKEN,
     nodeId: 'node-7',
@@ -90,6 +104,10 @@ function options(
       committedAt: '2026-09-14T00:00:00.000Z',
     },
     readReading: () => readNodeReading(db, cpu, '/nonexistent-data-dir'),
+    // The daemon's wiring in miniature: the copy is the ledger's, applied
+    // by the pure write (node-config.ts's hooks are its own suite).
+    configVersion: () => readConfigVersion(db),
+    applyConfig: async (bundle) => applyNodeConfig(db, bundle),
     log,
     ...over,
   };
@@ -97,7 +115,7 @@ function options(
 
 describe('CheckIn', () => {
   it('posts a check-in the gateway can parse: shared token, id, endpoint, interval, build, reading', async () => {
-    const gw = await gateway(() => ({ status: 200, body: '{}' }));
+    const gw = await gateway(() => answering(1));
     const { log, warns } = logSpy();
     await new CheckIn(options(gw.endpoint, log)).once();
     expect(warns).toEqual([]);
@@ -117,6 +135,19 @@ describe('CheckIn', () => {
       total: 0,
       byState: { active: 0, frozen: 0, stopped: 0, archived: 0, restoring: 0 },
     });
+    // No swap manager here: honestly "cannot manage swap", and no copy yet.
+    expect(body.reading.managedSwap).toBeNull();
+    expect(body.configVersion).toBeNull();
+  });
+
+  it('the reading carries the managed swap when the daemon has one', async () => {
+    const db = openDb(':memory:');
+    migrateDb(db, MIGRATIONS);
+    const reading = await readNodeReading(db, new CpuSampler(), '/tmp', {
+      status: async () => ({ activeGb: 16, blocks: [] }),
+      reconcile: async () => ({ activeGb: 16, blocks: [] }),
+    });
+    expect(reading.managedSwap).toEqual({ activeGb: 16 });
   });
 
   it('the reading counts the ledger by state', async () => {
@@ -145,7 +176,9 @@ describe('CheckIn', () => {
 
   it('logs a failing gateway once, and its recovery once — not every tick', async () => {
     let status = 500;
-    const gw = await gateway(() => ({ status, body: '{"message":"boom"}' }));
+    const gw = await gateway(() =>
+      status === 200 ? answering(1) : { status, body: '{"message":"boom"}' },
+    );
     const { log, warns, infos } = logSpy();
     const checkIn = new CheckIn(options(gw.endpoint, log));
     await checkIn.once();
@@ -234,8 +267,75 @@ describe('CheckIn', () => {
     );
   });
 
+  it('a bundle in the answer is applied and the next check-in reports its version; a matching version gets no bundle', async () => {
+    const bundle = testBundle(
+      { sandboxDomain: 'sbx.example.com', pidsLimit: 512 },
+      7,
+    );
+    let sent = 0;
+    const gw = await gateway(() => {
+      sent += 1;
+      return sent === 1 ? answering(7, bundle) : answering(7);
+    });
+    const { log, warns, infos } = logSpy();
+    const opts = options(gw.endpoint, log);
+    const checkIn = new CheckIn(opts);
+    await checkIn.once();
+    expect(warns).toEqual([]);
+    expect(readConfigVersion(opts.db)).toBe(7);
+    await checkIn.once();
+    expect(checkInRequestSchema.parse(gw.seen[1]?.body).configVersion).toBe(7);
+    expect(infos).toEqual([]);
+  });
+
+  it("a bundle that cannot be applied is this tick's failure, and the version stays so the gateway sends it again", async () => {
+    const bundle = testBundle({}, 3);
+    const gw = await gateway(() => answering(3, bundle));
+    const { log, warns, details } = logSpy();
+    const opts = options(gw.endpoint, log, {
+      applyConfig: async () => {
+        throw new Error('disk full');
+      },
+    });
+    const checkIn = new CheckIn(opts);
+    await checkIn.once();
+    expect(warns).toHaveLength(1);
+    expect((details[0] as { error: string }).error).toMatch(
+      /configuration v3 from the gateway could not be applied: disk full/,
+    );
+    expect(readConfigVersion(opts.db)).toBeNull();
+    // The next check-in still says "no copy" — the gateway's cue to resend.
+    await checkIn.once();
+    expect(
+      checkInRequestSchema.parse(gw.seen[1]?.body).configVersion,
+    ).toBeNull();
+  });
+
+  it('untilConfigured() asks until a bundle lands, on the interval, and returns at once when a copy exists', async () => {
+    let sent = 0;
+    const gw = await gateway(() => {
+      sent += 1;
+      // The gateway is down for the first two asks, then answers with the bundle.
+      return sent < 3
+        ? { status: 503, body: '{"message":"starting"}' }
+        : answering(2, testBundle({}, 2));
+    });
+    const { log } = logSpy();
+    const opts = options(gw.endpoint, log);
+    const checkIn = new CheckIn(opts);
+    const started = Date.now();
+    await checkIn.untilConfigured();
+    expect(readConfigVersion(opts.db)).toBe(2);
+    expect(gw.seen).toHaveLength(3);
+    // Two waits of one interval between the three asks.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1_900);
+    // Holding a copy already: nothing is asked.
+    await checkIn.untilConfigured();
+    expect(gw.seen).toHaveLength(3);
+  });
+
   it('ticks on its interval from start() and stops on stop()', async () => {
-    const gw = await gateway(() => ({ status: 200, body: '{}' }));
+    const gw = await gateway(() => answering(1));
     const { log } = logSpy();
     const checkIn = new CheckIn(options(gw.endpoint, log));
     checkIn.start();

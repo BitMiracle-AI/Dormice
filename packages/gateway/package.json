@@ -5,6 +5,12 @@
   "description": "Dormice gateway: the fleet's one door — places new sandboxes across nodes, finds existing ones by asking, forwards everything else",
   "license": "Apache-2.0",
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "files": [
     "dist",
     "drizzle"

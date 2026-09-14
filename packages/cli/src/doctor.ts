@@ -604,10 +604,13 @@ const CHECKS: DoctorCheck[] = [
     id: 's3-config',
     title: 'S3 archive configuration',
     run: async (ctx) => {
-      // Since the settings moved into the ledger these variables are
-      // first-boot seeds; doctor stays an offline preflight (env, files,
-      // commands — never the daemon), so it reports on the seed and points
-      // at the console for the value in force.
+      // The S3 variables are the gateway's first-boot seeds now (the
+      // fleet's settings live in the gateway's table, edited from the
+      // console; a node takes them from its check-in). Doctor stays an
+      // offline preflight (env, files, commands — never a process), so it
+      // reports on the seed in the environment it was given — the
+      // gateway's env file on the machine that runs the gateway — and
+      // points at the console for the value in force.
       const wanted = [
         'DORMICE_S3_ENDPOINT',
         'DORMICE_S3_BUCKET',
@@ -617,19 +620,19 @@ const CHECKS: DoctorCheck[] = [
       const missing = wanted.filter((name) => !ctx.env[name]);
       if (missing.length === wanted.length) {
         return skip(
-          'DORMICE_S3_* not set — no first-boot seed; archiving can be switched on from the console settings at any time',
+          "DORMICE_S3_* not set in this environment — no first-boot seed for the gateway; archiving can be switched on from the console settings at any time (a node never reads these: they are the gateway's)",
         );
       }
       if (missing.length > 0) {
         // The daemon's config schema refuses this too; naming it here saves
         // one failed boot.
         return fail(
-          `partial S3 set: ${missing.join(', ')} missing — the daemon refuses a half-configured seed`,
-          'set all four DORMICE_S3_* variables (endpoint, bucket, key id, secret) or none',
+          `partial S3 set: ${missing.join(', ')} missing — the gateway refuses a half-configured seed`,
+          'set all four DORMICE_S3_* variables (endpoint, bucket, key id, secret) in the gateway env, or none',
         );
       }
       return pass(
-        'all four DORMICE_S3_* variables set — a first-boot seed; once the daemon has booted, the ledger (console settings) rules',
+        "all four DORMICE_S3_* variables set — the gateway's first-boot seed; once it has started, its settings table (console settings) rules",
       );
     },
   },
@@ -668,7 +671,7 @@ const CHECKS: DoctorCheck[] = [
       const file = ctx.env.DORMICE_INGRESS_FILE;
       if (!file) {
         return skip(
-          'DORMICE_INGRESS_FILE not set — the daemon manages no reverse proxy; bind domains by editing your proxy config directly',
+          "DORMICE_INGRESS_FILE not set in this environment — no managed reverse proxy; it is the gateway's variable (the gateway rewrites the file on setIngress), bind domains by editing your proxy config directly",
         );
       }
       const caddy = await ctx.run('caddy', ['version']);
@@ -681,7 +684,7 @@ const CHECKS: DoctorCheck[] = [
       const active = await ctx.run('systemctl', ['is-active', 'caddy']);
       if (!active.ok) {
         return fail(
-          'the caddy service is not active — nothing proxies the outside world to the daemon',
+          'the caddy service is not active — nothing proxies the outside world to the gateway',
           'systemctl start caddy (and `journalctl -u caddy` for why it stopped)',
         );
       }
@@ -693,7 +696,7 @@ const CHECKS: DoctorCheck[] = [
       if (!content.includes('Managed by Dormice')) {
         return warn(
           `${file} was not written by Dormice — setIngress refuses to overwrite it, so web domain binding is effectively off`,
-          'move your config elsewhere and re-run install.sh, or point DORMICE_INGRESS_FILE at a file the daemon may own',
+          'move your config elsewhere and re-run install.sh, or point DORMICE_INGRESS_FILE at a file the gateway may own',
         );
       }
       // The generated shape puts site addresses at column 0; every

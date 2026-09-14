@@ -13,6 +13,7 @@ import { readRuntimeSettings } from '../db/settings';
 import { FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
 import { scanOnce } from '../scanner';
+import { configureNode, TEST_S3, type TestConfig } from '../testing';
 
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
@@ -26,7 +27,7 @@ const TOKEN = 'test-token-test-token-test-token';
  */
 function testApp(
   executor: FakeExecutor = new FakeExecutor(),
-  env: Record<string, string> = {},
+  configured: TestConfig = {},
 ) {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
@@ -34,8 +35,8 @@ function testApp(
     DORMICE_DB_PATH: ':memory:',
     DORMICE_NODE_ID: 'node-test',
     DORMICE_API_TOKEN: TOKEN,
-    ...env,
   });
+  configureNode(db, configured);
   const locks = new KeyedQueue();
   const app = buildApp({ config, db, executor, locks, logger: false });
   return { app, db, executor, locks };
@@ -49,11 +50,8 @@ function archiverTestApp(executor: FakeExecutor = new FakeExecutor()) {
     DORMICE_DB_PATH: ':memory:',
     DORMICE_NODE_ID: 'node-test',
     DORMICE_API_TOKEN: TOKEN,
-    DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
-    DORMICE_S3_BUCKET: 'exam',
-    DORMICE_S3_ACCESS_KEY_ID: 'exam-key',
-    DORMICE_S3_SECRET_ACCESS_KEY: 'exam-secret',
   });
+  configureNode(db, { s3: TEST_S3 });
   const locks = new KeyedQueue();
   const store = new MemStore();
   const archiver = new Archiver({
@@ -258,6 +256,7 @@ describe('a global default edit through the cold-wake convergence', () => {
         memoryGb: sandboxDefaults.memoryGb,
       };
     });
+    configureNode(db);
     const config = loadConfig({
       DORMICE_DB_PATH: ':memory:',
       DORMICE_NODE_ID: 'node-test',
@@ -279,11 +278,10 @@ describe('a global default edit through the cold-wake convergence', () => {
       memoryBytes: 2 * 1024 ** 3,
     });
 
-    // The fleet-wide knob moves; alice is unpinned (all columns NULL), so
-    // her next cold wake owes a rebuild onto the new limits.
-    await rpc(app, '/updateSettings', {
-      sandboxDefaults: { cpus: 2, memoryGb: 4, diskGb: 10 },
-    });
+    // The fleet-wide knob moves (at the gateway; the bundle brings it
+    // here); alice is unpinned (all columns NULL), so her next cold wake
+    // owes a rebuild onto the new limits.
+    configureNode(db, { cpus: 2, memoryGb: 4, diskGb: 10 });
     const { lastActiveAt } = (await rpc(app, '/listSandboxes')).json()
       .sandboxes[0];
     await scanOnce(db, executor, locks, after(lastActiveAt, 1));

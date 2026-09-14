@@ -1,145 +1,139 @@
-import {
-  DEFAULT_LIFECYCLE_POLICY,
-  type RuntimeSettings,
-  type UpdateSettingsRequest,
-} from '@dormice/shared';
-import { and, eq, isNull } from 'drizzle-orm';
+import type { NodeConfigBundle, RuntimeSettings } from '@dormice/shared';
+import { eq } from 'drizzle-orm';
 import type { S3Settings } from '../archive/s3-store';
-import { type Config, s3Settings } from '../config';
-import { ARCHIVE_DEFAULT_SECONDS } from '../policy';
 import type { Db } from './db';
-import { type RuntimeSettingsRow, runtimeSettings } from './schema';
+import { type RuntimeSettingsRow, runtimeSettings, templates } from './schema';
 
 /** The console_account fixed-id pattern: "at most one row" as a schema fact. */
 const SETTINGS_ROW_ID = 1;
 
 /**
- * The per-knob three-state (see schema.ts): NULL = never adjudicated, '' =
- * explicitly off. '' is a storage sentinel and never leaves this file.
+ * The fleet settings as this node runs them: the wire's read shape (keys
+ * withheld — readS3Settings has them, for the one consumer that presents
+ * them to S3) minus the gateway's edit timestamp, which is the gateway's
+ * to answer.
  */
-const OFF = '';
+export type NodeSettings = Omit<RuntimeSettings, 'updatedAt'>;
 
 /**
- * Get-or-seed, run at every boot before anything reads a knob, in two
- * idempotent steps:
- *
- * 1. Insert-or-nothing — a fresh install seeds every column from the env
- *    variables (and the shared zero-config defaults). The archive default
- *    is adjudicated right here: an S3 seed present means new sandboxes
- *    archive after a week, absent means never — the same semantics the
- *    boot-time archiver adjudication used to produce.
- * 2. Adopt-if-virgin — a daemon upgraded onto a schema with new columns
- *    finds them NULL on its existing row; each such column gets its one
- *    env consultation now (the knob's ledger life begins at its first
- *    value). The adopt step never touches defaultArchiveAfterSeconds: an
- *    existing row's default policy is the operator's property, and one
- *    group's seed must not rewrite another group (the update doctrine).
- *
- * After the first boot both steps match zero rows. "The env is ignored
- * once the ledger speaks" is per knob: a console clear writes '' (not
- * NULL), so a restart never resurrects the env value.
+ * Thrown by every reader while the node holds no configuration copy. A
+ * wiring guard, not a runtime state: main.ts blocks before listen until
+ * the first bundle has been applied, so no request can observe it —
+ * reaching it means something read a knob before boot finished.
  */
-export function ensureRuntimeSettings(db: Db, config: Config): void {
-  const s3Seed = s3Settings(config);
-  db.insert(runtimeSettings)
-    .values({
-      id: SETTINGS_ROW_ID,
-      sandboxCpus: config.DORMICE_SANDBOX_CPUS,
-      sandboxMemoryGb: config.DORMICE_SANDBOX_MEMORY_GB,
-      sandboxDiskGb: config.DORMICE_SANDBOX_DISK_GB,
-      defaultFreezeAfterSeconds: DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
-      defaultStopAfterSeconds: DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds,
-      defaultArchiveAfterSeconds: s3Seed ? ARCHIVE_DEFAULT_SECONDS : null,
-      // No env seed: managed swap is born from the console, not the env —
-      // install.sh's base swapfile already covers "a host needs swap".
-      swapGb: 0,
-      ...s3Columns(s3Seed),
-      sandboxDomain: config.DORMICE_SANDBOX_DOMAIN ?? OFF,
-      // Aliases are console-era operations editing with deliberately no
-      // env variable — every install starts with none.
-      sandboxDomainAliases: '[]',
-      pidsLimit: config.DORMICE_SANDBOX_PIDS_LIMIT,
-      updatedAt: null,
-    })
-    .onConflictDoNothing()
-    .run();
-  // Adopt from the env, not a constant: an upgraded daemon has been
-  // running its fleet at whatever its env says, and the ledger's first
-  // value must be that — not a default that silently moves the cap.
-  db.update(runtimeSettings)
-    .set({ pidsLimit: config.DORMICE_SANDBOX_PIDS_LIMIT })
-    .where(
-      and(
-        eq(runtimeSettings.id, SETTINGS_ROW_ID),
-        isNull(runtimeSettings.pidsLimit),
-      ),
-    )
-    .run();
-  db.update(runtimeSettings)
-    .set(s3Columns(s3Seed))
-    .where(
-      and(
-        eq(runtimeSettings.id, SETTINGS_ROW_ID),
-        isNull(runtimeSettings.s3Endpoint),
-      ),
-    )
-    .run();
-  db.update(runtimeSettings)
-    .set({ sandboxDomain: config.DORMICE_SANDBOX_DOMAIN ?? OFF })
-    .where(
-      and(
-        eq(runtimeSettings.id, SETTINGS_ROW_ID),
-        isNull(runtimeSettings.sandboxDomain),
-      ),
-    )
-    .run();
-  // Its own adopt, not a rider on sandboxDomain's: an upgraded row has
-  // that column decided while this one is still NULL. No env to consult.
-  db.update(runtimeSettings)
-    .set({ sandboxDomainAliases: '[]' })
-    .where(
-      and(
-        eq(runtimeSettings.id, SETTINGS_ROW_ID),
-        isNull(runtimeSettings.sandboxDomainAliases),
-      ),
-    )
-    .run();
+export class NoConfigError extends Error {
+  constructor() {
+    super(
+      'this node holds no configuration copy yet — it is applied at the first check-in with the gateway, before the daemon listens',
+    );
+    this.name = 'NoConfigError';
+  }
 }
 
-/** The six S3 columns as one unit: a store, or the '' decider + NULL rest. */
-function s3Columns(s3: S3Settings | null) {
-  return s3
-    ? {
-        s3Endpoint: s3.endpoint,
-        s3Bucket: s3.bucket,
-        s3AccessKeyId: s3.accessKeyId,
-        s3SecretAccessKey: s3.secretAccessKey,
-        s3Region: s3.region,
-        s3ForcePathStyle: s3.forcePathStyle,
-      }
-    : {
-        s3Endpoint: OFF,
-        s3Bucket: null,
-        s3AccessKeyId: null,
-        s3SecretAccessKey: null,
-        s3Region: null,
-        s3ForcePathStyle: null,
-      };
-}
-
-function virginError(column: string): Error {
-  return new Error(
-    `runtime settings column ${column} was never adjudicated — ensureRuntimeSettings must run at boot`,
+/**
+ * The version of the copy this node runs, or null when it holds none: no
+ * row, or a row from before the configuration moved to the gateway
+ * (schema.ts runtimeSettings has the story). The check-in reports it, and
+ * the gateway answers the whole bundle whenever it differs from its own.
+ */
+export function readConfigVersion(db: Db): number | null {
+  return (
+    db
+      .select({ version: runtimeSettings.configVersion })
+      .from(runtimeSettings)
+      .where(eq(runtimeSettings.id, SETTINGS_ROW_ID))
+      .get()?.version ?? null
   );
 }
 
-function toView(row: RuntimeSettingsRow): RuntimeSettings {
-  if (row.s3Endpoint === null) throw virginError('s3_endpoint');
-  if (row.sandboxDomain === null) throw virginError('sandbox_domain');
-  if (row.sandboxDomainAliases === null) {
-    throw virginError('sandbox_domain_aliases');
-  }
-  if (row.pidsLimit === null) throw virginError('pids_limit');
+/** When the copy this node runs was applied (ISO 8601), for the boot log. */
+export function readConfigAppliedAt(db: Db): string | null {
+  return readRow(db).configAppliedAt;
+}
+
+/**
+ * Writes a bundle whole: the settings row (every column — an old
+ * single-machine row is overwritten, not merged) and the templates table
+ * (delete-all, insert-all) in one transaction, so no reader ever sees the
+ * new version with the old content, or a settings row from one version
+ * beside templates from another. The pure write; the two knobs with a
+ * reality on the host that a write does not move (the pids cap on running
+ * shells, the managed swap) are node-config.ts's to reconcile afterwards.
+ */
+export function applyNodeConfig(
+  db: Db,
+  bundle: NodeConfigBundle,
+  now = new Date(),
+): void {
+  const { settings, node } = bundle;
+  const row = {
+    id: SETTINGS_ROW_ID,
+    configVersion: bundle.version,
+    configAppliedAt: now.toISOString(),
+    sandboxCpus: settings.sandboxDefaults.cpus,
+    sandboxMemoryGb: settings.sandboxDefaults.memoryGb,
+    sandboxDiskGb: settings.sandboxDefaults.diskGb,
+    defaultFreezeAfterSeconds: settings.defaultPolicy.freezeAfterSeconds,
+    defaultStopAfterSeconds: settings.defaultPolicy.stopAfterSeconds,
+    defaultArchiveAfterSeconds: settings.defaultPolicy.archiveAfterSeconds,
+    swapGb: node.swapGb,
+    s3Endpoint: settings.s3?.endpoint ?? null,
+    s3Bucket: settings.s3?.bucket ?? null,
+    s3AccessKeyId: settings.s3?.accessKeyId ?? null,
+    s3SecretAccessKey: settings.s3?.secretAccessKey ?? null,
+    s3Region: settings.s3?.region ?? null,
+    s3ForcePathStyle: settings.s3?.forcePathStyle ?? null,
+    sandboxDomain: settings.sandboxDomain,
+    sandboxDomainAliases: JSON.stringify(settings.sandboxDomainAliases),
+    pidsLimit: settings.pidsLimit,
+  };
+  const { id: _id, ...set } = row;
+  db.transaction((tx) => {
+    tx.insert(runtimeSettings)
+      .values(row)
+      .onConflictDoUpdate({ target: runtimeSettings.id, set })
+      .run();
+    tx.delete(templates).run();
+    if (bundle.templates.length > 0) {
+      tx.insert(templates).values(bundle.templates).run();
+    }
+  });
+}
+
+/**
+ * The copy read back whole, keys included — what the node runs, in the
+ * bundle's own shape. For the boot log and for tests that edit a copy in
+ * place; the request handlers read the narrower views below.
+ */
+export function readNodeConfig(db: Db): NodeConfigBundle {
+  const row = readRow(db);
+  const view = toView(row);
+  return {
+    version: row.configVersion as number,
+    settings: {
+      sandboxDefaults: view.sandboxDefaults,
+      defaultPolicy: view.defaultPolicy,
+      s3: readS3Settings(db),
+      sandboxDomain: view.sandboxDomain,
+      sandboxDomainAliases: view.sandboxDomainAliases,
+      pidsLimit: view.pidsLimit,
+    },
+    node: { swapGb: row.swapGb },
+    templates: db.select().from(templates).orderBy(templates.name).all(),
+  };
+}
+
+function readRow(db: Db): RuntimeSettingsRow {
+  const row = db
+    .select()
+    .from(runtimeSettings)
+    .where(eq(runtimeSettings.id, SETTINGS_ROW_ID))
+    .get();
+  if (!row || row.configVersion === null) throw new NoConfigError();
+  return row;
+}
+
+function toView(row: RuntimeSettingsRow): NodeSettings {
   return {
     sandboxDefaults: {
       cpus: row.sandboxCpus,
@@ -152,29 +146,28 @@ function toView(row: RuntimeSettingsRow): RuntimeSettings {
       archiveAfterSeconds: row.defaultArchiveAfterSeconds,
     },
     s3:
-      row.s3Endpoint === OFF
+      row.s3Endpoint === null
         ? null
         : {
             endpoint: row.s3Endpoint,
-            // biome-ignore-start lint/style/noNonNullAssertion: the six columns write as one unit (s3Columns)
+            // biome-ignore-start lint/style/noNonNullAssertion: a copy writes every column (applyNodeConfig), and readRow refuses anything that is not a copy
             bucket: row.s3Bucket!,
             region: row.s3Region!,
             forcePathStyle: row.s3ForcePathStyle!,
-            // biome-ignore-end lint/style/noNonNullAssertion: the six columns write as one unit (s3Columns)
           },
-    sandboxDomain: row.sandboxDomain === OFF ? null : row.sandboxDomain,
+    sandboxDomain: row.sandboxDomain,
     // The one writer JSON.stringifies an array; a corrupt value should
     // throw right here, not read as "no aliases".
-    sandboxDomainAliases: JSON.parse(row.sandboxDomainAliases) as string[],
-    pidsLimit: row.pidsLimit,
-    updatedAt: row.updatedAt,
+    sandboxDomainAliases: JSON.parse(row.sandboxDomainAliases!) as string[],
+    pidsLimit: row.pidsLimit!,
+    // biome-ignore-end lint/style/noNonNullAssertion: a copy writes every column (applyNodeConfig), and readRow refuses anything that is not a copy
   };
 }
 
 /**
- * The node's managed-swap target — a knob of this machine, not of the
- * fleet, so it left the settings wire (shared/settings.ts) and is read by
- * the one consumer that acts on it, the boot reconcile in main.ts.
+ * The node's managed-swap target — its own row at the gateway
+ * (updateNodeSettings), applied by the boot reconcile in main.ts and by
+ * node-config.ts when a bundle moves it.
  */
 export function readSwapTarget(db: Db): number {
   return readRow(db).swapGb;
@@ -182,12 +175,10 @@ export function readSwapTarget(db: Db): number {
 
 /**
  * The knobs in force, read fresh at each use site — a better-sqlite3 point
- * read costs microseconds, and reading live is what makes a console edit
- * apply to the very next acquire without a restart. Throws when the row is
- * missing: that means ensureRuntimeSettings never ran, a wiring bug worth a
- * loud death, not a silent fallback to env.
+ * read costs microseconds, and reading live is what makes a bundle applied
+ * a moment ago reach the very next acquire without a restart.
  */
-export function readRuntimeSettings(db: Db): RuntimeSettings {
+export function readRuntimeSettings(db: Db): NodeSettings {
   return toView(readRow(db));
 }
 
@@ -199,85 +190,20 @@ export function readRuntimeSettings(db: Db): RuntimeSettings {
  */
 export function readS3Settings(db: Db): S3Settings | null {
   const row = readRow(db);
-  if (row.s3Endpoint === null) throw virginError('s3_endpoint');
-  if (row.s3Endpoint === OFF) return null;
+  if (row.s3Endpoint === null) return null;
   return {
     endpoint: row.s3Endpoint,
-    // biome-ignore-start lint/style/noNonNullAssertion: the six columns write as one unit (s3Columns)
+    // biome-ignore-start lint/style/noNonNullAssertion: the six columns write as one unit (applyNodeConfig)
     bucket: row.s3Bucket!,
     accessKeyId: row.s3AccessKeyId!,
     secretAccessKey: row.s3SecretAccessKey!,
     region: row.s3Region!,
     forcePathStyle: row.s3ForcePathStyle!,
-    // biome-ignore-end lint/style/noNonNullAssertion: the six columns write as one unit (s3Columns)
+    // biome-ignore-end lint/style/noNonNullAssertion: the six columns write as one unit (applyNodeConfig)
   };
 }
 
 /** The one adjudication of "is archiving available", read live. */
 export function archiveEnabled(db: Db): boolean {
   return readS3Settings(db) !== null;
-}
-
-function readRow(db: Db): RuntimeSettingsRow {
-  const row = db
-    .select()
-    .from(runtimeSettings)
-    .where(eq(runtimeSettings.id, SETTINGS_ROW_ID))
-    .get();
-  if (!row) {
-    throw new Error(
-      'runtime settings row missing — ensureRuntimeSettings must run at boot',
-    );
-  }
-  return row;
-}
-
-/**
- * Applies an updateSettings patch: each provided group replaces that group
- * whole, absent groups keep their stored values (shared/settings.ts is the
- * arbiter of that contract). Validation — the archive-without-archiver
- * refusal, the moving-store guard, the S3 probe — happened at the route;
- * this is the pure write.
- */
-export function writeRuntimeSettings(
-  db: Db,
-  patch: UpdateSettingsRequest,
-  now: Date,
-): RuntimeSettings {
-  const row = db
-    .update(runtimeSettings)
-    .set({
-      ...(patch.sandboxDefaults !== undefined
-        ? {
-            sandboxCpus: patch.sandboxDefaults.cpus,
-            sandboxMemoryGb: patch.sandboxDefaults.memoryGb,
-            sandboxDiskGb: patch.sandboxDefaults.diskGb,
-          }
-        : {}),
-      ...(patch.defaultPolicy !== undefined
-        ? {
-            defaultFreezeAfterSeconds: patch.defaultPolicy.freezeAfterSeconds,
-            defaultStopAfterSeconds: patch.defaultPolicy.stopAfterSeconds,
-            defaultArchiveAfterSeconds: patch.defaultPolicy.archiveAfterSeconds,
-          }
-        : {}),
-      ...(patch.s3 !== undefined ? s3Columns(patch.s3) : {}),
-      ...(patch.sandboxDomain !== undefined
-        ? { sandboxDomain: patch.sandboxDomain ?? OFF }
-        : {}),
-      ...(patch.sandboxDomainAliases !== undefined
-        ? { sandboxDomainAliases: JSON.stringify(patch.sandboxDomainAliases) }
-        : {}),
-      ...(patch.pidsLimit !== undefined ? { pidsLimit: patch.pidsLimit } : {}),
-      updatedAt: now.toISOString(),
-    })
-    .where(eq(runtimeSettings.id, SETTINGS_ROW_ID))
-    .returning()
-    .get();
-  if (!row) {
-    throw new Error(
-      'runtime settings row missing — ensureRuntimeSettings must run at boot',
-    );
-  }
-  return toView(row);
 }

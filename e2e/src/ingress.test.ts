@@ -2,27 +2,27 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { Dormice } from '@dormice/sdk';
 import { describe, expect, inject, it } from 'vitest';
 
-// Web domain binding, black-box: the daemon owns a Caddy config file (the
-// exam points DORMICE_INGRESS_FILE into its temp dir, reload is a no-op —
-// Caddy's half is real-machine acceptance). The file is an operator-visible
-// artifact, so reading and tampering with it from the test is fair play:
-// that is exactly what an operator can do.
+// Web domain binding, black-box: the gateway owns a Caddy config file (the
+// exam points its DORMICE_INGRESS_FILE into the temp dir, reload is a no-op
+// — Caddy's half is real-machine acceptance). The file is an operator-
+// visible artifact, so reading and tampering with it from the test is fair
+// play: that is exactly what an operator can do.
 //
-// Tests in this file share the daemon's single ingress state, so they run
+// Tests in this file share the gateway's single ingress state, so they run
 // as one ordered story instead of independent keys.
 
 function client() {
   return new Dormice({
-    endpoint: inject('dormiceEndpoint'),
+    endpoint: inject('dormiceGatewayEndpoint'),
     token: inject('dormiceToken'),
   });
 }
 
-describe('ingress domain binding over a real daemon', () => {
+describe('ingress domain binding over a real gateway', () => {
   it('walks bind → add → status → drop → clear, with the file telling the same story', async () => {
     const file = inject('dormiceIngressFile');
 
-    // Managed but unbound: the daemon has a file knob, nothing written yet.
+    // Managed but unbound: the gateway has a file knob, nothing written yet.
     const before = await client().getIngress();
     expect(before).toEqual({ managed: true, domains: [] });
 
@@ -41,6 +41,10 @@ describe('ingress domain binding over a real daemon', () => {
     expect(content).toContain('console.dormice-e2e.test {');
     expect(content).toContain('api.dormice-e2e.test {');
     expect(content).toContain(':80 {'); // the no-lockout catch-all
+    // The catch-all and every site point at the gateway, the fleet's door.
+    expect(content).toContain(
+      `reverse_proxy 127.0.0.1:${new URL(inject('dormiceGatewayEndpoint')).port}`,
+    );
 
     // Status carries live probes per domain; on record-less domains they
     // are honest reds/empties, never invented greens.

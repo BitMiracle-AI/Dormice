@@ -2,26 +2,32 @@ import {
   type BuildInfo,
   type CheckInRequest,
   checkInResponseSchema,
+  type NodeConfigBundle,
   type NodeReading,
 } from '@dormice/shared';
 import type { Db } from './db/db';
 import { countByState, listSandboxes } from './db/ledger';
 import { type CpuSampler, readHostReading } from './host-metrics';
+import type { SwapControl } from './swap';
 
 /**
- * A node's reading for its check-in: the host half (host-metrics.ts) and
- * the ledger's census. The same numbers getHostMetrics answers a caller
- * with, minus the daemon-local knobs no gateway places by.
+ * A node's reading for its check-in: the host half (host-metrics.ts), the
+ * ledger's census, and what the daemon-managed swap holds — null where
+ * the daemon manages none (a non-Linux host, the fake executor), which is
+ * how the gateway knows to refuse a swap target for this node.
  */
 export async function readNodeReading(
   db: Db,
   cpu: CpuSampler,
   dataDir: string,
+  swap?: SwapControl,
 ): Promise<NodeReading> {
   const { byState, total } = countByState(listSandboxes(db));
   return {
     ...(await readHostReading(cpu, dataDir)),
     sandboxes: { total, byState },
+    managedSwap:
+      swap === undefined ? null : { activeGb: (await swap.status()).activeGb },
   };
 }
 
@@ -41,6 +47,10 @@ export interface CheckInOptions {
   intervalSeconds: number;
   build: BuildInfo | null;
   readReading: () => Promise<NodeReading>;
+  /** The version of the configuration copy this node runs; null while it holds none (db/settings.ts). */
+  configVersion: () => number | null;
+  /** Makes a bundle the gateway answered with real on this node (node-config.ts applyConfig). */
+  applyConfig: (bundle: NodeConfigBundle) => Promise<void>;
   log: CheckInLog;
   /** Test seam; production uses the platform's fetch. */
   fetchImpl?: typeof fetch;
@@ -51,10 +61,15 @@ const CHECK_IN_TIMEOUT_MS = 10_000;
 
 /**
  * The node's check-in ticker: every interval, one POST /checkIn to the
- * gateway carrying the node's id, where it can be reached, its build and
- * a fresh reading (RULES/协议.md「网关」). The gateway learns of a node from
- * its first check-in — no registration verb, no nodes file — and reads
- * two missed check-ins as down.
+ * gateway carrying the node's id, where it can be reached, its build, a
+ * fresh reading and the version of the configuration copy it runs
+ * (RULES/协议.md「网关」). The gateway learns of a node from its first
+ * check-in — no registration verb, no nodes file — and reads two missed
+ * check-ins as down. The answer is the gateway's configuration version,
+ * and the whole bundle whenever the node's differs: the check-in IS the
+ * configuration pull (design record #22) — a fresh node, a node that
+ * missed an edit while the gateway was away, an operator's change a
+ * second ago, all one mechanism, and nothing for the gateway to remember.
  *
  * Chained setTimeout, the daemon's discipline: the next tick is scheduled
  * when this one is done, so a slow gateway never has ticks pile up.
@@ -107,6 +122,7 @@ export class CheckIn {
         intervalSeconds: opts.intervalSeconds,
         build: opts.build,
         reading: await opts.readReading(),
+        configVersion: opts.configVersion(),
       };
       const res = await (opts.fetchImpl ?? fetch)(`${opts.gateway}/checkIn`, {
         method: 'POST',
@@ -139,10 +155,22 @@ export class CheckIn {
             : `gateway answered ${res.status} redirecting to ${location} — DORMICE_GATEWAY_ENDPOINT must be the gateway's own address, not a front that redirects`,
         );
       }
-      checkInResponseSchema.parse(await res.json());
+      const answer = checkInResponseSchema.parse(await res.json());
       if (this.failing !== null) {
         opts.log.info(`check-in with gateway ${opts.gateway} answers again`);
         this.failing = null;
+      }
+      if (answer.config !== undefined) {
+        // A bundle that cannot be applied is this tick's failure: the copy
+        // stays what it was, the next check-in reports the old version, and
+        // the gateway answers the bundle again — the retry is the protocol.
+        try {
+          await opts.applyConfig(answer.config);
+        } catch (error) {
+          throw new Error(
+            `configuration v${answer.config.version} from the gateway could not be applied: ${describe(error)}`,
+          );
+        }
       }
     } catch (error) {
       const message = describe(error);
@@ -156,6 +184,26 @@ export class CheckIn {
         );
       }
       this.failing = failure;
+    }
+  }
+
+  /**
+   * Blocks until this node holds a configuration copy: a check-in now,
+   * then one per interval, until a bundle has been applied. For boot
+   * (main.ts) — a node without configuration has nothing to build a
+   * sandbox from and does not listen. Never gives up: the gateway is the
+   * fleet's configuration and there is no other source; each failure is
+   * logged once by once(), so a gateway down for an hour is one line. The
+   * check-ins sent here carry `configVersion: null`, which is what keeps
+   * the gateway from placing on this node before it listens.
+   */
+  async untilConfigured(): Promise<void> {
+    while (!this.closing && this.opts.configVersion() === null) {
+      await this.once();
+      if (this.opts.configVersion() !== null) return;
+      await new Promise((resolve) =>
+        setTimeout(resolve, this.opts.intervalSeconds * 1000),
+      );
     }
   }
 

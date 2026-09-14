@@ -7,19 +7,25 @@ import { join } from 'node:path';
 import { Dormice } from '@dormice/sdk';
 import { Sandbox } from 'e2b';
 import { describe, expect, inject, it } from 'vitest';
+import {
+  configSettled,
+  listNodes as listFleetNodes,
+  rpc as post,
+  until,
+} from './helpers';
 
-// The gateway exam: two real daemons behind a real gateway, all three
-// booted the production way and driven only over the wire — the SDK, the
+// The fleet exam: two real daemons behind a real gateway, all three booted
+// the production way and driven only over the wire — the SDK, the
 // official e2b package and plain fetch. Direct calls to a node exist only
 // to stage what the gateway must then find (a sandbox built behind its
 // back, a name on two nodes, a destroy it did not see). Skipped in docker
-// mode, where the setup boots node A alone.
-const skip = inject('dormiceGatewayEndpoint') === null;
+// mode, where the setup boots node A (and its own gateway) alone.
+const skip = inject('dormiceFleetNodes') === null;
 
-const gateway = () => inject('dormiceGatewayEndpoint') as string;
-const token = () => inject('dormiceGatewayToken') as string;
+const gateway = () => inject('dormiceFleetGateway') as string;
+const token = () => inject('dormiceFleetToken') as string;
 const nodes = () =>
-  inject('dormiceGatewayNodes') as Array<{ id: string; endpoint: string }>;
+  inject('dormiceFleetNodes') as Array<{ id: string; endpoint: string }>;
 const viaGateway = () => new Dormice({ endpoint: gateway(), token: token() });
 function direct(id: string) {
   const node = nodes().find((n) => n.id === id);
@@ -28,56 +34,14 @@ function direct(id: string) {
 }
 const other = (id: string) => (id === 'node-b' ? 'node-c' : 'node-b');
 
-/** Polls until the probe answers something — nodes check in on their own clock, not ours. */
-async function until<T>(
-  probe: () => Promise<T | undefined>,
-  timeoutMs = 10_000,
-): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const value = await probe();
-    if (value !== undefined) return value;
-    if (Date.now() > deadline) throw new Error('condition never became true');
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-}
-
-async function rpc(
+const rpc = (
   path: string,
   payload: unknown = {},
   bearer = token(),
   endpoint = gateway(),
-): Promise<{ status: number; body: unknown; headers: Headers }> {
-  const res = await fetch(`${endpoint}${path}`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${bearer}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-  const text = await res.text();
-  return {
-    status: res.status,
-    body: text ? JSON.parse(text) : null,
-    headers: res.headers,
-  };
-}
+) => post(endpoint, path, payload, bearer);
 
-interface ListedNode {
-  id: string;
-  endpoint: string;
-  reachable: boolean;
-  lastCheckInAt: string | null;
-  build: { commit: string } | null;
-  reading: { sandboxes: { byState: { active: number } } } | null;
-  placedSinceCheckIn: number;
-}
-async function listNodes(): Promise<ListedNode[]> {
-  const { status, body } = await rpc('/listNodes');
-  expect(status).toBe(200);
-  return (body as { nodes: ListedNode[] }).nodes;
-}
+const listNodes = () => listFleetNodes(gateway(), token());
 
 const status = (error: unknown) => (error as { status?: number }).status;
 const message = (r: { body: unknown }) =>
@@ -94,7 +58,7 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
     expect((await rpc('/listNodes', {}, 'x'.repeat(64))).status).toBe(401);
   });
 
-  it('both nodes checked in: reachable, with a reading and the build they run', async () => {
+  it('both nodes checked in: reachable, with a reading, the build they run and the configuration version they took from this gateway', async () => {
     const listed = await until(async () => {
       const seen = await listNodes();
       return seen.length === 2 && seen.every((n) => n.reachable)
@@ -102,12 +66,111 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
         : undefined;
     });
     expect(listed.map((n) => n.id).sort()).toEqual(['node-b', 'node-c']);
+    const { body } = await rpc('/getConfig');
+    const version = (body as { configVersion: number }).configVersion;
     for (const node of listed) {
       expect(node.reading?.sandboxes.byState.active).toBeGreaterThanOrEqual(0);
       expect(node.build?.commit).toMatch(/^[0-9a-f]{7,}$/);
       expect(node.endpoint).toBe(
         nodes().find((n) => n.id === node.id)?.endpoint,
       );
+      // A node boots on the gateway's bundle and reports its version back.
+      expect(node.configVersion).toBe(version);
+    }
+  });
+
+  it("a settings write at the gateway reaches both nodes within their check-in: the copy's defaults shape the next acquire", async () => {
+    const before = (await rpc('/getConfig')).body as {
+      configVersion: number;
+      settings: {
+        sandboxDefaults: { cpus: number; memoryGb: number; diskGb: number };
+      };
+    };
+    const { status } = await rpc('/updateSettings', {
+      sandboxDefaults: { ...before.settings.sandboxDefaults, cpus: 3 },
+    });
+    expect(status).toBe(200);
+    try {
+      const version = await configSettled(gateway(), token());
+      expect(version).toBe(before.configVersion + 1);
+      // Asked of the node directly: its own copy answers, no gateway in the path.
+      const created = await direct('node-b').acquireSandbox('gw-config');
+      try {
+        expect(created.sandbox.spec.cpus).toBe(3);
+      } finally {
+        await direct('node-b').destroySandbox('gw-config');
+      }
+    } finally {
+      await rpc('/updateSettings', {
+        sandboxDefaults: before.settings.sandboxDefaults,
+      });
+      await configSettled(gateway(), token());
+    }
+  });
+
+  it('a template registered at the gateway is usable on every node; removal asks the nodes and is refused while one holds a sandbox on it', async () => {
+    await viaGateway().registerTemplate('gw-tpl', 'img:gw-tpl');
+    await configSettled(gateway(), token());
+    const staged = await direct('node-b').acquireSandbox('gw-tpl-user', {
+      template: 'gw-tpl',
+    });
+    try {
+      expect(staged.sandbox.template).toBe('gw-tpl');
+      await expect(viaGateway().removeTemplate('gw-tpl')).rejects.toMatchObject(
+        {
+          status: 409,
+          message: expect.stringMatching(/gw-tpl-user on node node-b/),
+        },
+      );
+    } finally {
+      await direct('node-b').destroySandbox('gw-tpl-user');
+    }
+    expect(await viaGateway().removeTemplate('gw-tpl')).toEqual({
+      removed: true,
+    });
+    await configSettled(gateway(), token());
+    // Gone from the nodes' copies too: an acquire on it is the node's own 400.
+    await expect(
+      direct('node-c').acquireSandbox('gw-tpl-late', { template: 'gw-tpl' }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('envdToken through the gateway is minted by the sandbox’s node and opens its envd surface through the gateway', async () => {
+    const created = await viaGateway().acquireSandbox('gw-envd');
+    try {
+      const minted = await rpc('/envdToken', { sandboxId: created.sandbox.id });
+      expect(minted.status).toBe(200);
+      const { envdAccessToken } = minted.body as { envdAccessToken: string };
+      const stat = await fetch(
+        `${gateway()}/e2b/envd/filesystem.Filesystem/Stat`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'e2b-sandbox-id': created.sandbox.id,
+            'x-access-token': envdAccessToken,
+          },
+          body: JSON.stringify({ path: '/home/user' }),
+        },
+      );
+      expect(stat.status).toBe(200);
+      // Per sandbox: the same token opens no other.
+      const stranger = await fetch(
+        `${gateway()}/e2b/envd/filesystem.Filesystem/Stat`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'e2b-sandbox-id': randomUUID(),
+            'x-access-token': envdAccessToken,
+          },
+          body: JSON.stringify({ path: '/home/user' }),
+        },
+      );
+      expect(stat.status).toBe(200);
+      expect(stranger.status).not.toBe(200);
+    } finally {
+      await viaGateway().destroySandbox('gw-envd');
     }
   });
 
@@ -420,8 +483,15 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
       token: token(),
     });
     try {
+      // A booting node checks in before it listens (it takes its first
+      // configuration bundle from that check-in): reachable with
+      // configVersion null is "joined, not open yet"; the version it
+      // reports at its first check-in after listen is the cue that its
+      // port is open — placement waits for the same cue.
       await until(async () =>
-        (await listNodes()).some((n) => n.id === 'node-d' && n.reachable)
+        (await listNodes()).some(
+          (n) => n.id === 'node-d' && n.reachable && n.configVersion !== null,
+        )
           ? true
           : undefined,
       ).catch((error) => {

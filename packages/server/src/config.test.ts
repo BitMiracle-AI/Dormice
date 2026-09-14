@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadConfig, s3Settings } from './config';
+import { ignoredEnvKeys, loadConfig, MOVED_TO_GATEWAY } from './config';
 
 const TOKEN = { DORMICE_API_TOKEN: 'x'.repeat(32) };
 
@@ -23,7 +23,6 @@ describe('loadConfig executor knobs', () => {
     });
     expect(config.DORMICE_EXECUTOR).toBe('docker');
     expect(config.DORMICE_DATA_DIR).toBe('/var/lib/dormice');
-    expect(config.DORMICE_SANDBOX_DISK_GB).toBe(10);
   });
 
   it('rejects a relative DB path in docker mode', () => {
@@ -77,85 +76,36 @@ describe('the metrics sampler knobs', () => {
   });
 });
 
-describe('the pids cap seed', () => {
-  it('defaults to 4096 and refuses a seed below the wire floor, naming it', () => {
-    expect(loadConfig(TOKEN).DORMICE_SANDBOX_PIDS_LIMIT).toBe(4096);
+describe('the knobs that moved to the gateway', () => {
+  it('are not knobs here: the config has no field for them, and the boot line can name the ones an env file still carries', () => {
+    const config = loadConfig({
+      ...TOKEN,
+      DORMICE_SANDBOX_DISK_GB: '20',
+      DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
+    });
+    expect(Object.keys(config)).not.toContain('DORMICE_SANDBOX_DISK_GB');
+    expect(Object.keys(config)).not.toContain('DORMICE_S3_ENDPOINT');
     expect(
-      loadConfig({ ...TOKEN, DORMICE_SANDBOX_PIDS_LIMIT: '256' })
-        .DORMICE_SANDBOX_PIDS_LIMIT,
-    ).toBe(256);
-    // The settings view promises >= 256. A lower seed would be adopted
-    // into the ledger and leave getConfig unable to serialize its own
-    // settings (measured: HTTP 500 "Response doesn't match the schema").
-    expect(() =>
-      loadConfig({ ...TOKEN, DORMICE_SANDBOX_PIDS_LIMIT: '255' }),
-    ).toThrow(/DORMICE_SANDBOX_PIDS_LIMIT must be at least 256/);
-  });
-});
-
-describe('the S3 set', () => {
-  const S3 = {
-    DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
-    DORMICE_S3_BUCKET: 'dormice-archive',
-    DORMICE_S3_ACCESS_KEY_ID: 'minio-user',
-    DORMICE_S3_SECRET_ACCESS_KEY: 'minio-secret',
-  };
-
-  it('parses a full set and adjudicates the archiver as configured', () => {
-    const config = loadConfig({ ...TOKEN, ...S3 });
-    expect(s3Settings(config)).toEqual({
-      endpoint: 'http://127.0.0.1:9000',
-      bucket: 'dormice-archive',
-      accessKeyId: 'minio-user',
-      secretAccessKey: 'minio-secret',
-      region: 'us-east-1',
-      forcePathStyle: false,
-    });
-  });
-
-  it('adjudicates the archiver as absent when nothing is set', () => {
-    expect(s3Settings(loadConfig(TOKEN))).toBeNull();
-  });
-
-  it('refuses a partial set, naming exactly the missing variables', () => {
-    expect(() =>
-      loadConfig({
+      ignoredEnvKeys({
         ...TOKEN,
+        DORMICE_SANDBOX_DISK_GB: '20',
         DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
-        DORMICE_S3_BUCKET: 'dormice-archive',
+        DORMICE_PORT: '3676',
       }),
-    ).toThrow(
-      /DORMICE_S3_ACCESS_KEY_ID, DORMICE_S3_SECRET_ACCESS_KEY are missing/,
-    );
-  });
-
-  it('rejects an endpoint without a scheme', () => {
-    expect(() =>
-      loadConfig({ ...TOKEN, ...S3, DORMICE_S3_ENDPOINT: 's3.example.com' }),
-    ).toThrow(/DORMICE_S3_ENDPOINT must be a full http\(s\) URL/);
-  });
-
-  it('parses the path-style knob as a real boolean', () => {
-    // The z.coerce.boolean trap: the string "false" must not become true.
-    const on = loadConfig({
-      ...TOKEN,
-      ...S3,
-      DORMICE_S3_FORCE_PATH_STYLE: 'true',
-    });
-    expect(on.DORMICE_S3_FORCE_PATH_STYLE).toBe(true);
-    const off = loadConfig({
-      ...TOKEN,
-      ...S3,
-      DORMICE_S3_FORCE_PATH_STYLE: 'false',
-    });
-    expect(off.DORMICE_S3_FORCE_PATH_STYLE).toBe(false);
+    ).toEqual(['DORMICE_SANDBOX_DISK_GB', 'DORMICE_S3_ENDPOINT']);
+    expect(ignoredEnvKeys(TOKEN)).toEqual([]);
+    // Thirteen names, every one an old daemon variable and none of them a knob the node still has.
+    expect(MOVED_TO_GATEWAY).toHaveLength(13);
+    for (const key of MOVED_TO_GATEWAY) {
+      expect(Object.keys(loadConfig(TOKEN))).not.toContain(key);
+    }
   });
 });
 
 describe('the fleet knobs: gateway, node endpoint, check-in interval', () => {
-  it('defaults: no gateway (standalone), no node endpoint, 15s check-in', () => {
+  it('defaults: the gateway beside the daemon (a fleet of one), no node endpoint, 15s check-in', () => {
     const config = loadConfig(TOKEN);
-    expect(config.DORMICE_GATEWAY_ENDPOINT).toBeUndefined();
+    expect(config.DORMICE_GATEWAY_ENDPOINT).toBe('http://127.0.0.1:3677');
     expect(config.DORMICE_NODE_ENDPOINT).toBeUndefined();
     expect(config.DORMICE_CHECK_IN_INTERVAL_SECONDS).toBe(15);
   });
