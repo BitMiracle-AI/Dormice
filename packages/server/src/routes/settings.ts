@@ -16,7 +16,6 @@ import {
 import type { Executor } from '../executor/executor';
 import type { KeyedQueue } from '../keyed-queue';
 import { sweepPidsLimit } from '../pids-sweep';
-import type { SwapControl } from '../swap';
 
 export interface SettingsRoutesOptions {
   db: Db;
@@ -27,13 +26,6 @@ export interface SettingsRoutesOptions {
    */
   executor: Executor;
   locks: KeyedQueue;
-  /**
-   * The managed-swap surface, present exactly when the daemon can manage
-   * swap (Linux host, docker executor — main.ts's adjudication). Absent,
-   * a swapGb patch is refused: an unconfigurable knob must refuse, not
-   * silently store a target nothing will ever reconcile.
-   */
-  swap?: SwapControl;
   /** Test seam over the S3 round-trip probe; production uses the real one. */
   probeS3?: (s3: S3Settings) => Promise<void>;
 }
@@ -47,15 +39,14 @@ export interface SettingsRoutesOptions {
  * A ledger write with immediate effect: the consumers read live (the
  * executor's births, resolvePolicy's defaults, the archiver's store, the
  * sandbox proxy's domain, the executor's pids cap at each birth and
- * wake), so nothing here restarts or wakes a sandbox. Two knobs have a
- * reality on the host that the write alone does not move, and each is
- * reconciled right after it: managed swap (a swapfile) and the pids cap
- * on the shells running right now (a cgroup write their processes never
- * notice).
+ * wake), so nothing here restarts or wakes a sandbox. One knob has a
+ * reality on the host that the write alone does not move, and it is
+ * reconciled right after: the pids cap on the shells running right now (a
+ * cgroup write their processes never notice).
  */
 export const settingsRoutes: FastifyPluginAsyncZod<
   SettingsRoutesOptions
-> = async (app, { db, executor, locks, swap, probeS3 = defaultProbeS3 }) => {
+> = async (app, { db, executor, locks, probeS3 = defaultProbeS3 }) => {
   app.post(
     '/updateSettings',
     {
@@ -85,12 +76,6 @@ export const settingsRoutes: FastifyPluginAsyncZod<
         return reply.code(400).send({
           message:
             'invalid default policy: archiving requires an S3 archive store — configure one in the console settings first',
-        });
-      }
-      if (patch.swapGb !== undefined && swap === undefined) {
-        return reply.code(400).send({
-          message:
-            'managing swap requires a Linux host with the docker executor',
         });
       }
       // The alias-list guard, judged against the post-patch state — domain
@@ -199,7 +184,6 @@ export const settingsRoutes: FastifyPluginAsyncZod<
                 `defaultPolicy=${patch.defaultPolicy.freezeAfterSeconds}s/${patch.defaultPolicy.stopAfterSeconds ?? 'never'}/${patch.defaultPolicy.archiveAfterSeconds ?? 'never'}`,
               ]
             : []),
-          ...(patch.swapGb !== undefined ? [`swapGb=${patch.swapGb}`] : []),
           // Endpoint and bucket only — the keys never reach the log, the
           // same "value never crosses" rule as the wire's.
           ...(patch.s3 !== undefined
@@ -225,29 +209,6 @@ export const settingsRoutes: FastifyPluginAsyncZod<
             : []),
         ].join(', ')}`,
       );
-      // Reconcile the host after the write — each knob with a reality out
-      // there on its own, neither's failure sparing the other: the ledger
-      // holds both targets now, and a swapfile that would not grow says
-      // nothing about the shells that are waiting for their cap. The
-      // verdicts are collected and answered together; one patch carrying
-      // both knobs gets both.
-      const unfollowed: string[] = [];
-      // Swap: growing mounts new blocks now, shrinking defers itself (the
-      // planner never touches an active block). A failed grow — ENOSPC,
-      // most likely — leaves the target saved on purpose: the boot
-      // reconcile and the next edit retry it, and getConfig's swap.activeGb
-      // reports the divergence honestly.
-      if (patch.swapGb !== undefined && swap !== undefined) {
-        try {
-          await swap.reconcile(patch.swapGb);
-        } catch (error) {
-          unfollowed.push(
-            `swap target saved (${patch.swapGb} GiB) but applying it failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
-      }
       // Pids cap: the write already reached every future birth and wake;
       // the sweep brings the shells running right now along — an operator
       // raising the cap during an incident is looking at exactly those. A
@@ -257,13 +218,10 @@ export const settingsRoutes: FastifyPluginAsyncZod<
         const sweep = await sweepPidsLimit(db, executor, locks);
         app.log.info(sweep, 'pids cap sweep after updateSettings');
         if (sweep.failures.length > 0) {
-          unfollowed.push(
-            `pids cap saved (${patch.pidsLimit}) but ${sweep.failures.length} of ${sweep.considered} active sandboxes kept their old cap until their next wake — ${sweep.failures[0]}`,
-          );
+          return reply.code(500).send({
+            message: `pids cap saved (${patch.pidsLimit}) but ${sweep.failures.length} of ${sweep.considered} active sandboxes kept their old cap until their next wake — ${sweep.failures[0]}`,
+          });
         }
-      }
-      if (unfollowed.length > 0) {
-        return reply.code(500).send({ message: unfollowed.join('; ') });
       }
       return { settings };
     },

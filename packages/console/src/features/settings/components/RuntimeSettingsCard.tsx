@@ -34,12 +34,11 @@ import { useUpdateSettings } from '../hooks/useUpdateSettings';
  * 一个弹窗,给哪组就整组替换(updatePolicy 的规矩:界面上看到什么就写
  * 下什么)。改的是"之后"不是"已经":容量上限管下一次创建,默认配额管
  * 下一次出生的磁盘/容器,默认策略管下一次 acquire 创建的沙箱 — 存量
- * 沙箱一根汗毛都不动,这句话在每个弹窗里都说清。两个例外:swap 改的是
- * 宿主不是沙箱,增容立即、缩容等重启(swapLine 负责把这个时间差摆在
- * 明面上);pids 上限反而会触达存量沙箱 — 保存时就地扫一遍运行中的壳
- * (docker update,箱内无感),冻结/停止的在下一次唤醒跟上,都不重建。
- * 归档存储与沙箱域名不在这张卡:前者是独立的
- * 归档卡(六字段撑不进一行的形制),后者语义归域名页。
+ * 沙箱一根汗毛都不动,这句话在每个弹窗里都说清。一个例外:pids 上限会
+ * 触达存量沙箱 — 保存时就地扫一遍运行中的壳(docker update,箱内无感),
+ * 冻结/停止的在下一次唤醒跟上,都不重建。归档存储与沙箱域名不在这张卡:
+ * 前者是独立的归档卡(六字段撑不进一行的形制),后者语义归域名页。追加
+ * swap 是每台机器自己的旋钮,2026-09-14 随集群刀 2 搬去节点页(刀 3)。
  */
 
 function EditRow({
@@ -259,88 +258,6 @@ function PidsLimitDialog({ settings }: { settings: RuntimeSettings }) {
   );
 }
 
-function SwapDialog({ settings }: { settings: RuntimeSettings }) {
-  const [open, setOpen] = useState(false);
-  const [value, setValue] = useState('');
-  const { pending, error, setError, submit } = useUpdateSettings(() =>
-    setOpen(false),
-  );
-
-  const valid =
-    value.trim() !== '' &&
-    Number.isInteger(Number(value)) &&
-    Number(value) >= 0;
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (next) {
-          setValue(String(settings.swapGb));
-          setError(null);
-        }
-      }}
-    >
-      <EditTrigger />
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{m.settings_swap_dialog_title()}</DialogTitle>
-          <DialogDescription>{m.settings_swap_dialog_desc()}</DialogDescription>
-        </DialogHeader>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submit(
-              { swapGb: Number(value) },
-              m.settings_swap_saved({ value: Number(value) }),
-            );
-          }}
-        >
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="settings-swap-gb">
-                {m.settings_swap_label()}
-              </FieldLabel>
-              <Input
-                id="settings-swap-gb"
-                type="number"
-                min={0}
-                value={value}
-                onChange={(event) => setValue(event.target.value)}
-              />
-              <FieldDescription>
-                {m.settings_swap_field_desc()}
-              </FieldDescription>
-            </Field>
-            {error && <FieldError>{error}</FieldError>}
-          </FieldGroup>
-          <DialogFooter className="mt-6">
-            <Button type="submit" disabled={!valid || pending}>
-              {pending && <Spinner />}
-              {m.common_save()}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/**
- * swap 行的真话:目标与现实一致时一句话完事;缩容等重启、增容没跑完时
- * 把两个数都摆出来 — 只报目标会在这两种时刻撒谎。
- */
-function swapLine(targetGb: number, activeGb: number): string {
-  if (activeGb > targetGb) {
-    return m.settings_swap_line_shrink({ target: targetGb, active: activeGb });
-  }
-  if (activeGb < targetGb) {
-    return m.settings_swap_line_grow({ target: targetGb, active: activeGb });
-  }
-  return m.settings_swap_line_ok({ target: targetGb });
-}
-
 function DefaultPolicyDialog({
   settings,
   archiveEnabled,
@@ -539,17 +456,6 @@ export function RuntimeSettingsCard({ data }: { data: GetConfigResponse }) {
           label={m.settings_row_pids()}
           value={m.settings_row_pids_value({ n: settings.pidsLimit })}
           dialog={<PidsLimitDialog settings={settings} />}
-        />
-        <EditRow
-          label={m.settings_row_swap()}
-          value={
-            data.swap.supported
-              ? swapLine(settings.swapGb, data.swap.activeGb)
-              : m.settings_swap_unsupported()
-          }
-          dialog={
-            data.swap.supported ? <SwapDialog settings={settings} /> : undefined
-          }
         />
       </div>
     </section>

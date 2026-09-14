@@ -16,7 +16,6 @@ import { createSandbox, overwriteState } from '../db/ledger';
 import { readRuntimeSettings } from '../db/settings';
 import { FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
-import type { SwapControl, SwapStatus } from '../swap';
 
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
@@ -49,7 +48,6 @@ function freshDb() {
 function appOn(
   db: ReturnType<typeof freshDb>,
   env: Record<string, string> = {},
-  swap?: SwapControl,
   probeS3: (s3: S3Settings) => Promise<void> = () => Promise.resolve(),
   executor: FakeExecutor = new FakeExecutor(),
 ) {
@@ -65,26 +63,10 @@ function appOn(
     executor,
     locks: new KeyedQueue(),
     logger: false,
-    swap,
     // Forged by default: most tests here are about the settings machinery,
     // not S3's availability. Probe-behavior tests inject their own.
     probeS3,
   });
-}
-
-/** A ledger of reconcile calls standing in for the real block juggler. */
-function fakeSwap(activeGb = 0): SwapControl & { reconciled: number[] } {
-  const status = (): Promise<SwapStatus> =>
-    Promise.resolve({ activeGb, blocks: [] });
-  const control = {
-    reconciled: [] as number[],
-    status,
-    reconcile(targetGb: number) {
-      control.reconciled.push(targetGb);
-      return status();
-    },
-  };
-  return control;
 }
 
 type App = ReturnType<typeof appOn>;
@@ -127,8 +109,6 @@ describe('runtime settings: seeding', () => {
       sandboxDefaults: { cpus: 1, memoryGb: 2, diskGb: 20 },
       // No S3 seed in this env, so the seeded default never archives.
       defaultPolicy: { ...DEFAULT_LIFECYCLE_POLICY, archiveAfterSeconds: null },
-      // Managed swap has no env seed — it is born from the console.
-      swapGb: 0,
       s3: null,
       sandboxDomain: null,
       // Aliases have no env seed either — console-era editing only.
@@ -432,49 +412,6 @@ describe('updateSettings', () => {
     expect(body.archive).toEqual({ enabled: false, defaultSeconds: null });
   });
 
-  it('refuses a swap target where the daemon cannot manage swap', async () => {
-    // No SwapControl injected — the Mac-dev / fake-executor daemon shape.
-    const app = appOn(freshDb());
-    const res = await rpc(app, '/updateSettings', { swapGb: 32 });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().message).toMatch(/Linux host with the docker executor/);
-    // And getConfig says so up front, so the console never offers the knob.
-    const body = getConfigResponseSchema.parse(
-      (await rpc(app, '/getConfig')).json(),
-    );
-    expect(body.swap).toEqual({ supported: false, activeGb: 0 });
-  });
-
-  it('saves a swap target and reconciles it immediately', async () => {
-    const swap = fakeSwap(32);
-    const app = appOn(freshDb(), {}, swap);
-    const res = await rpc(app, '/updateSettings', { swapGb: 32 });
-    expect(res.statusCode).toBe(200);
-    expect(updateSettingsResponseSchema.parse(res.json()).settings.swapGb).toBe(
-      32,
-    );
-    expect(swap.reconciled).toEqual([32]);
-    // A patch without swapGb must not re-trigger the block juggler.
-    await rpc(app, '/updateSettings', { pidsLimit: 512 });
-    expect(swap.reconciled).toEqual([32]);
-    const body = getConfigResponseSchema.parse(
-      (await rpc(app, '/getConfig')).json(),
-    );
-    expect(body.swap).toEqual({ supported: true, activeGb: 32 });
-  });
-
-  it('keeps the saved target and answers 500 when applying it fails', async () => {
-    // ENOSPC mid-grow: the target must survive (boot and the next edit
-    // retry it) and the error must name what happened.
-    const swap = fakeSwap();
-    swap.reconcile = () => Promise.reject(new Error('fallocate: ENOSPC'));
-    const app = appOn(freshDb(), {}, swap);
-    const res = await rpc(app, '/updateSettings', { swapGb: 512 });
-    expect(res.statusCode).toBe(500);
-    expect(res.json().message).toMatch(/target saved.*ENOSPC/);
-    expect((await settingsOf(app)).swapGb).toBe(512);
-  });
-
   it('pidsLimit: live for the executor, floored, never unlimited, recorded', async () => {
     const app = appOn(freshDb(), { DORMICE_SANDBOX_PIDS_LIMIT: '512' });
     expect((await settingsOf(app)).pidsLimit).toBe(512);
@@ -501,7 +438,7 @@ describe('updateSettings', () => {
       undefined,
       () => readRuntimeSettings(db).pidsLimit,
     );
-    const app = appOn(db, {}, undefined, undefined, executor);
+    const app = appOn(db, {}, undefined, executor);
     const busy = (await rpc(app, '/acquireSandbox', { name: 'busy' })).json()
       .sandbox.id as string;
     const idle = (await rpc(app, '/acquireSandbox', { name: 'idle' })).json()
@@ -531,7 +468,7 @@ describe('updateSettings', () => {
       undefined,
       () => readRuntimeSettings(db).pidsLimit,
     );
-    const app = appOn(db, {}, undefined, undefined, executor);
+    const app = appOn(db, {}, undefined, executor);
     await rpc(app, '/acquireSandbox', { name: 'stubborn' });
     vi.spyOn(executor, 'convergePidsLimit').mockRejectedValue(
       new Error('runsc refused: no such luck'),
@@ -544,32 +481,6 @@ describe('updateSettings', () => {
     );
     // Saved: the next birth and every wake read the new value.
     expect((await settingsOf(app)).pidsLimit).toBe(2048);
-  });
-
-  it('one patch, two host realities: a failed swap grow does not spare the pids sweep, and both verdicts come back', async () => {
-    const db = freshDb();
-    const executor = new FakeExecutor(
-      undefined,
-      () => readRuntimeSettings(db).pidsLimit,
-    );
-    const swap = fakeSwap();
-    swap.reconcile = () => Promise.reject(new Error('fallocate: ENOSPC'));
-    const app = appOn(db, {}, swap, undefined, executor);
-    const busy = (await rpc(app, '/acquireSandbox', { name: 'busy' })).json()
-      .sandbox.id as string;
-
-    const res = await rpc(app, '/updateSettings', {
-      swapGb: 512,
-      pidsLimit: 2048,
-    });
-    expect(res.statusCode).toBe(500);
-    // The swap verdict first, and only the swap's: the sweep ran and every
-    // running shell followed, so it has nothing to add.
-    expect(res.json().message).toMatch(/^swap target saved.*ENOSPC$/);
-    expect(executor.pidsLimitOf(busy)).toBe(2048);
-    const saved = await settingsOf(app);
-    expect(saved.swapGb).toBe(512);
-    expect(saved.pidsLimit).toBe(2048);
   });
 
   it('is admin-only: an API key gets an honest 403', async () => {
@@ -677,7 +588,7 @@ describe('updateSettings: the S3 archive store', () => {
   });
 
   it("an S3-refused probe (4xx) answers 400 with S3's own words", async () => {
-    const app = appOn(freshDb(), {}, undefined, () =>
+    const app = appOn(freshDb(), {}, () =>
       Promise.reject(new S3ProbeError('AccessDenied: key rejected', 403)),
     );
     const res = await rpc(app, '/updateSettings', { s3: S3_PATCH });

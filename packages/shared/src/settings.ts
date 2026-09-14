@@ -2,12 +2,16 @@ import { z } from 'zod';
 import { lifecyclePolicySchema } from './policy';
 
 /**
- * Runtime settings — the operator knobs that live in the ledger, not the
- * environment. The dividing line (2026-07-19): a knob belongs here exactly
- * when changing it is an operations decision that must not require shell
- * access and a restart (what new sandboxes get); it stays an env
- * variable when changing it makes a different daemon (port, token,
- * executor, data dir).
+ * Runtime settings — the fleet-wide operator knobs, the ones that live in
+ * a table, not the environment. The dividing line (2026-07-19): a knob
+ * belongs here exactly when changing it is an operations decision that
+ * must not require shell access and a restart (what new sandboxes get);
+ * it stays an env variable when changing it makes a different process
+ * (port, token, executor, data dir). Since the configuration authority
+ * moved to the gateway (2026-09-14) the table is the gateway's and every
+ * node keeps a copy; a knob that is one machine's rather than the fleet's
+ * — the managed swap target — is a node's row instead (gateway.ts
+ * updateNodeSettings).
  *
  * The sandbox domain and the S3 archive store used to sit on the env side
  * of that line; overturned 2026-07-26: the archive backend and the port-
@@ -103,19 +107,6 @@ export const runtimeSettingsSchema = z.object({
   /** What acquire() gives a sandbox that asks for nothing. Existing sandboxes keep theirs. */
   defaultPolicy: lifecyclePolicySchema,
   /**
-   * Total daemon-managed swap, GiB, held as swapfiles on the data dir —
-   * ON TOP of whatever swap the host already has (the install-time
-   * swapfile stays fstab's business; the two never fight). Swap capacity
-   * is roughly "how much sandbox memory can hibernate at once" — freezing
-   * squeezes a sandbox's memory into swap. Growing takes effect
-   * immediately; shrinking is deferred to the next host reboot, because
-   * swapoff would drag every frozen sandbox's memory back into RAM
-   * (getConfig's `swap.activeGb` reports what is actually mounted).
-   * 0 = manage none. Ignored on hosts that cannot swap (see getConfig's
-   * `swap.supported`), where updateSettings refuses to set it.
-   */
-  swapGb: z.number().int().nonnegative(),
-  /**
    * The S3 archive store in force; null = archiving is off and sandboxes
    * park at stopped forever. The read shape — keys withheld (see
    * s3ArchiveViewSchema). Changing endpoint or bucket, or clearing, is
@@ -167,7 +158,6 @@ export const updateSettingsRequestSchema = z
   .object({
     sandboxDefaults: sandboxResourceDefaultsSchema.optional(),
     defaultPolicy: lifecyclePolicySchema.optional(),
-    swapGb: z.number().int().nonnegative().optional(),
     /** Write shape (all six fields, secret included); null clears the store and turns archiving off. */
     s3: s3ArchiveSettingsSchema.nullable().optional(),
     /** A bare hostname; null turns the sandbox proxy and domain fields off. */
@@ -202,13 +192,12 @@ export const updateSettingsRequestSchema = z
       patch.pidsLimit !== undefined ||
       patch.sandboxDefaults !== undefined ||
       patch.defaultPolicy !== undefined ||
-      patch.swapGb !== undefined ||
       patch.s3 !== undefined ||
       patch.sandboxDomain !== undefined ||
       patch.sandboxDomainAliases !== undefined,
     {
       message:
-        'updateSettings needs at least one of sandboxDefaults, defaultPolicy, swapGb, s3, sandboxDomain, sandboxDomainAliases, pidsLimit',
+        'updateSettings needs at least one of sandboxDefaults, defaultPolicy, s3, sandboxDomain, sandboxDomainAliases, pidsLimit',
     },
   );
 

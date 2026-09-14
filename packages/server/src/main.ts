@@ -10,7 +10,11 @@ import { type Config, loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
 import { listSandboxes } from './db/ledger';
 import { acquireSingleWriterLock } from './db/lock';
-import { ensureRuntimeSettings, readRuntimeSettings } from './db/settings';
+import {
+  ensureRuntimeSettings,
+  readRuntimeSettings,
+  readSwapTarget,
+} from './db/settings';
 import { WatcherTable } from './e2b/watcher-table';
 import { DockerExecutor } from './executor/docker';
 import type { Executor } from './executor/executor';
@@ -184,8 +188,10 @@ if (config.DORMICE_INGRESS_FILE) {
 // is a test double — e2e boots real daemons with it, and those must never
 // touch the host's swap). The boot reconcile is what makes shrink-by-
 // reboot converge and puts grown blocks back after a restart; its failure
-// is loud but not fatal — swap is capacity, not correctness, and
-// getConfig's swap.activeGb reports the shortfall honestly.
+// is loud but not fatal — swap is capacity, not correctness. The target is
+// this node's row of the fleet configuration (the gateway's
+// updateNodeSettings), applied here at boot and, once the node pulls its
+// configuration, whenever the bundle moves it.
 let swap: SwapManager | undefined;
 if (config.DORMICE_EXECUTOR === 'docker' && process.platform === 'linux') {
   swap = new SwapManager({
@@ -193,7 +199,7 @@ if (config.DORMICE_EXECUTOR === 'docker' && process.platform === 'linux') {
     log: (msg) => log.info(msg),
   });
   try {
-    await swap.reconcile(readRuntimeSettings(db).swapGb);
+    await swap.reconcile(readSwapTarget(db));
   } catch (error) {
     log.error(error, 'boot swap reconcile failed');
   }
@@ -253,7 +259,6 @@ const app = buildApp({
   consoleDistDir: existsSync(consoleDistDir) ? consoleDistDir : undefined,
   archiver,
   ingress,
-  swap,
   updater,
   watchers,
 });

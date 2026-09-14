@@ -151,7 +151,6 @@ function toView(row: RuntimeSettingsRow): RuntimeSettings {
       stopAfterSeconds: row.defaultStopAfterSeconds,
       archiveAfterSeconds: row.defaultArchiveAfterSeconds,
     },
-    swapGb: row.swapGb,
     s3:
       row.s3Endpoint === OFF
         ? null
@@ -170,6 +169,15 @@ function toView(row: RuntimeSettingsRow): RuntimeSettings {
     pidsLimit: row.pidsLimit,
     updatedAt: row.updatedAt,
   };
+}
+
+/**
+ * The node's managed-swap target — a knob of this machine, not of the
+ * fleet, so it left the settings wire (shared/settings.ts) and is read by
+ * the one consumer that acts on it, the boot reconcile in main.ts.
+ */
+export function readSwapTarget(db: Db): number {
+  return readRow(db).swapGb;
 }
 
 /**
@@ -253,7 +261,6 @@ export function writeRuntimeSettings(
             defaultArchiveAfterSeconds: patch.defaultPolicy.archiveAfterSeconds,
           }
         : {}),
-      ...(patch.swapGb !== undefined ? { swapGb: patch.swapGb } : {}),
       ...(patch.s3 !== undefined ? s3Columns(patch.s3) : {}),
       ...(patch.sandboxDomain !== undefined
         ? { sandboxDomain: patch.sandboxDomain ?? OFF }

@@ -35,7 +35,6 @@ import { settingsRoutes } from './routes/settings';
 import { templateRoutes } from './routes/templates';
 import { upgradeRoutes } from './routes/upgrade';
 import { createSandboxProxy } from './sandbox-proxy';
-import type { SwapControl } from './swap';
 import { Updater } from './updater';
 import { readBuildInfo } from './version';
 
@@ -79,12 +78,6 @@ export interface AppDeps {
    */
   ingress?: Ingress;
   /**
-   * The managed-swap surface, present exactly when the daemon can manage
-   * swap — main.ts builds one on Linux with the docker executor. Absent,
-   * getConfig reports { supported: false } and a swapGb patch is refused.
-   */
-  swap?: SwapControl;
-  /**
    * Test seam over updateSettings' S3 round-trip probe (routes/settings.ts)
    * — a unit test forges S3's answers instead of needing a live store.
    * Production omits it and probes for real.
@@ -125,7 +118,6 @@ export function buildApp({
   consoleDistDir,
   archiver,
   ingress,
-  swap,
   probeS3,
   sources = configSources(),
   updater = new Updater({
@@ -276,12 +268,7 @@ export function buildApp({
     await api.register(templateRoutes, { db });
     await api.register(hostRoutes, { config, db, executor });
     await api.register(ingressRoutes, { ingress });
-    await api.register(configRoutes, {
-      config,
-      db,
-      sources,
-      swap,
-    });
+    await api.register(configRoutes, { config, db, sources });
     await api.register(upgradeRoutes, { updater });
     await api.register(envdTokenRoutes, { envdSigningSecret });
   });
@@ -298,7 +285,6 @@ export function buildApp({
       db,
       executor,
       locks,
-      swap,
       ...(probeS3 ? { probeS3 } : {}),
     });
   });

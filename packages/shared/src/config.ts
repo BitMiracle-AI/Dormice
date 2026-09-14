@@ -2,11 +2,10 @@ import { z } from 'zod';
 import { runtimeSettingsSchema } from './settings';
 
 /**
- * getConfig() — the daemon's effective configuration: every env knob with
- * the value actually in force and where it came from, plus the runtime
- * settings that live in the ledger (see settings.ts — for those knobs the
- * env entries below are first-boot seeds, and `settings` is what is in
- * force). The same discipline as doctor: report effective values, never
+ * getConfig() — the effective configuration: every env knob with the value
+ * actually in force and where it came from, plus the runtime settings that
+ * live in the table (see settings.ts — for those knobs the env entries
+ * below are first-boot seeds, and `settings` is what is in force). The same discipline as doctor: report effective values, never
  * parrot a config file. Secrets are reported as present-or-absent only —
  * their value never crosses the wire, whoever asks.
  */
@@ -42,18 +41,6 @@ export const getConfigResponseSchema = z.object({
      * also when the operator set the default policy to never archive.
      */
     defaultSeconds: z.number().int().nullable(),
-  }),
-  /**
-   * The daemon-managed swap surface (see settings.ts `swapGb` — the
-   * target). `supported` is false where the daemon cannot manage swap
-   * (non-Linux, or the fake executor); `activeGb` is how much managed
-   * swap is actually mounted right now — it lags the target after a
-   * shrink (which waits for a host reboot) and after a failed grow, and
-   * clients surface that divergence instead of pretending.
-   */
-  swap: z.object({
-    supported: z.boolean(),
-    activeGb: z.number().nonnegative(),
   }),
   /** The ledger-resident operator knobs actually in force — see settings.ts. */
   settings: runtimeSettingsSchema,
