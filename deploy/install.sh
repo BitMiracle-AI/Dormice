@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Dormice installer: turns a bare Ubuntu/Debian x86_64 host into a running
-# Dormice daemon, then proves it by running `dor doctor`.
+# Dormice — a gateway (the fleet's one door: configuration, keys, the web
+# console) and a daemon (the node that runs the sandboxes) on one machine,
+# a fleet of one — then proves it by running `dor doctor`.
 #
 #   curl -fsSL https://raw.githubusercontent.com/BitMiracle-AI/Dormice/main/deploy/install.sh | bash
 #
@@ -46,9 +48,12 @@ SHIM_SHA512=87c63197836574b7a2c057d2c0647d2badb679187f0b9175ecf78ac52207cdaa3f10
 REPO_URL=https://github.com/BitMiracle-AI/Dormice.git
 INSTALL_DIR=/opt/dormice
 ENV_FILE=/etc/dormice/env
+GATEWAY_ENV_FILE=/etc/dormice/gateway.env
 DATA_DIR=/var/lib/dormice
+GATEWAY_DATA_DIR=/var/lib/dormice-gateway
 DAEMON_JSON=/etc/docker/daemon.json
 PORT=3676
+GATEWAY_PORT=3677
 
 # ---- flags -----------------------------------------------------------------
 MIRROR=''
@@ -609,11 +614,13 @@ else
 fi
 
 # ---- ingress (Caddy reverse proxy) -------------------------------------------
-# The daemon binds 127.0.0.1 by design; Caddy on :80 is what makes
-# http://<host-ip>/console reachable from a browser. The Caddyfile below is
-# also what the daemon rewrites when the operator binds a domain in the
-# console (setIngress) — Caddy then obtains and renews the TLS certificate
-# on its own. Pinned binary with checksum, same posture as gVisor.
+# Gateway and daemon bind 127.0.0.1 by design; Caddy on :80 is what makes
+# http://<host-ip>/console reachable from a browser. It proxies to the
+# GATEWAY — the fleet's one door, which serves the console and forwards
+# the sandbox verbs to the daemon. The Caddyfile below is also what the
+# gateway rewrites when the operator binds a domain in the console
+# (setIngress) — Caddy then obtains and renews the TLS certificate on its
+# own. Pinned binary with checksum, same posture as gVisor.
 log 'ingress (Caddy reverse proxy)'
 CADDY_VERSION=2.10.0
 CADDY_SHA512=626682d623ca04356ab3c9a93a82386cfde6d8243b11f2d0eea9e97ba630c7ada62373401e96b72c6690c98ae8dd004d61fafe477f5249690d5cb251ebbfd2d9
@@ -622,9 +629,10 @@ if command -v caddy >/dev/null; then
   note "[skip] caddy is installed ($(caddy version | cut -d' ' -f1))"
 elif ss -ltnH 'sport = :80' 2>/dev/null | grep -q .; then
   # Another server owns port 80: never fight it. The operator keeps their
-  # proxy (point it at 127.0.0.1:$PORT); web domain binding stays off.
+  # proxy (point it at the gateway, 127.0.0.1:$GATEWAY_PORT); web domain
+  # binding stays off.
   note "port 80 is already in use and caddy is not installed — skipping the ingress layer"
-  note "point your own reverse proxy at 127.0.0.1:$PORT; the console's domain binding stays disabled"
+  note "point your own reverse proxy at 127.0.0.1:$GATEWAY_PORT (the gateway); the console's domain binding stays disabled"
 else
   caddy_url="https://github.com/caddyserver/caddy/releases/download/v$CADDY_VERSION/caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
   [ "$MIRROR" = cn ] && caddy_url="https://ghfast.top/$caddy_url"
@@ -636,25 +644,36 @@ else
   note "installed caddy v$CADDY_VERSION to /usr/local/bin"
 fi
 INGRESS_FILE_READY=''
+CADDY_REPOINTED=''
 if command -v caddy >/dev/null; then
   mkdir -p /etc/caddy
   if [ ! -f "$CADDYFILE" ]; then
-    # The marker below is the ownership contract: the daemon refuses to
+    # The marker below is the ownership contract: the gateway refuses to
     # rewrite a Caddyfile that lacks it. Kept in sync by hand with
-    # packages/server/src/ingress.ts.
+    # packages/gateway/src/ingress.ts.
     cat >"$CADDYFILE" <<EOF
 # Managed by Dormice — setIngress rewrites this file.
 
 :80 {
-	reverse_proxy 127.0.0.1:$PORT {
+	reverse_proxy 127.0.0.1:$GATEWAY_PORT {
 		flush_interval -1
 	}
 }
 EOF
-    note "wrote $CADDYFILE (plain HTTP on :80 — bind domains in the console's domains page for HTTPS)"
+    note "wrote $CADDYFILE (plain HTTP on :80 to the gateway — bind domains in the console's domains page for HTTPS)"
     INGRESS_FILE_READY=1
   elif grep -q 'Managed by Dormice' "$CADDYFILE"; then
-    note "[skip] $CADDYFILE is managed by Dormice — left to the daemon"
+    if grep -q "reverse_proxy 127.0.0.1:$PORT\b" "$CADDYFILE"; then
+      # A file from before the gateway became the door (2026-09-14): the
+      # catch-all still points at the daemon, where the console no longer
+      # lives. Re-pointed in place; the bound domains, if any, are rewritten
+      # the same way by the gateway at the next setIngress.
+      sed -i "s|reverse_proxy 127.0.0.1:$PORT\b|reverse_proxy 127.0.0.1:$GATEWAY_PORT|g" "$CADDYFILE"
+      note "re-pointed $CADDYFILE from the daemon ($PORT) to the gateway ($GATEWAY_PORT) — the console lives there now"
+      CADDY_REPOINTED=1
+    else
+      note "[skip] $CADDYFILE is managed by Dormice — left to the gateway"
+    fi
     INGRESS_FILE_READY=1
   else
     note "$CADDYFILE exists but was not written by Dormice — left untouched; domain binding will refuse to overwrite it"
@@ -680,12 +699,20 @@ EOF
   if [ "$(systemctl is-active caddy)" != active ]; then
     systemctl start caddy
     note 'started caddy'
+  elif [ -n "$CADDY_REPOINTED" ]; then
+    caddy reload --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1 || systemctl restart caddy
+    note 'reloaded caddy with the re-pointed config'
   else
     note '[skip] caddy is running'
   fi
 fi
 
 # ---- daemon configuration ----------------------------------------------------
+# The daemon's env is the node's identity and its machine: token, executor,
+# image, ledger, data dir. The fleet's operator knobs (sandbox defaults,
+# the archive store, the sandbox domain, the managed front door) are the
+# gateway's since 2026-09-14 — its env seeds them once, the console edits
+# them, and the daemon takes them from its check-in.
 log "daemon configuration ($ENV_FILE)"
 install -d -m 700 "$DATA_DIR"
 if [ -f "$ENV_FILE" ]; then
@@ -695,57 +722,106 @@ else
   # No inline comments below: systemd's EnvironmentFile takes the whole line
   # as the value. Full-line comments are fine.
   cat >"$ENV_FILE" <<EOF
-# Dormice daemon configuration, read by systemd (EnvironmentFile).
+# Dormice daemon (node) configuration, read by systemd (EnvironmentFile).
 # Full-line comments only — an inline comment becomes part of the value.
-# All knobs and defaults: packages/server/src/config.ts
+# All knobs and defaults: packages/server/src/config.ts. The fleet's
+# settings (sandbox defaults, archive store, sandbox domain) are the
+# gateway's: /etc/dormice/gateway.env seeds them, the console edits them.
 DORMICE_API_TOKEN=$(openssl rand -hex 32)
 DORMICE_EXECUTOR=docker
 DORMICE_BASE_IMAGE=$base_image
 DORMICE_DB_PATH=$DATA_DIR/dormice.db
 DORMICE_DATA_DIR=$DATA_DIR
-# Optional: the S3 archiver. Set all four to archive idle sandboxes' disks
-# to any S3-compatible store (AWS, R2, MinIO, OSS in S3-compat mode) after
-# a week of idleness — and restore them on the next acquire. Endpoint is a
-# full URL; MinIO needs DORMICE_S3_FORCE_PATH_STYLE=true.
+EOF
+  chmod 600 "$ENV_FILE"
+  note "wrote $ENV_FILE (mode 600) with a fresh API token"
+fi
+API_TOKEN=$(sed -n 's/^DORMICE_API_TOKEN=//p' "$ENV_FILE" | head -1)
+[ -n "$API_TOKEN" ] || die "$ENV_FILE has no DORMICE_API_TOKEN line — the daemon cannot start without one"
+
+# ---- gateway configuration ---------------------------------------------------
+# One token for the whole fleet: the gateway's env carries the daemon's
+# DORMICE_API_TOKEN verbatim (callers present it to the gateway, the daemon
+# checks in with it, the gateway forwards under it). On a machine upgraded
+# across the move, the fleet knobs an operator once set in the daemon's env
+# are carried over as the gateway's first-boot seeds so the first bundle
+# the daemon takes says what its env used to say — and are then commented
+# out of the daemon's env, where they do nothing but earn a boot warning.
+log "gateway configuration ($GATEWAY_ENV_FILE)"
+install -d -m 700 "$GATEWAY_DATA_DIR"
+FLEET_KNOBS='DORMICE_SANDBOX_DISK_GB DORMICE_SANDBOX_CPUS DORMICE_SANDBOX_MEMORY_GB DORMICE_SANDBOX_PIDS_LIMIT DORMICE_SANDBOX_DOMAIN DORMICE_INGRESS_FILE DORMICE_INGRESS_RELOAD_CMD DORMICE_S3_ENDPOINT DORMICE_S3_BUCKET DORMICE_S3_ACCESS_KEY_ID DORMICE_S3_SECRET_ACCESS_KEY DORMICE_S3_REGION DORMICE_S3_FORCE_PATH_STYLE'
+if [ -f "$GATEWAY_ENV_FILE" ]; then
+  note "[skip] exists — kept as is"
+else
+  cat >"$GATEWAY_ENV_FILE" <<EOF
+# Dormice gateway configuration, read by systemd (EnvironmentFile).
+# Full-line comments only — an inline comment becomes part of the value.
+# All knobs and defaults: packages/gateway/src/config.ts
+# The one token of the fleet — the same string as in /etc/dormice/env.
+DORMICE_API_TOKEN=$API_TOKEN
+DORMICE_GATEWAY_DB_PATH=$GATEWAY_DATA_DIR/gateway.db
+# First-boot seeds of the fleet settings; the console edits the values in
+# force. Optional: the S3 archiver. Set all four to archive idle sandboxes'
+# disks to any S3-compatible store (AWS, R2, MinIO, OSS in S3-compat mode)
+# after a week of idleness — and restore them on the next acquire.
+# Endpoint is a full URL; MinIO needs DORMICE_S3_FORCE_PATH_STYLE=true.
 #DORMICE_S3_ENDPOINT=
 #DORMICE_S3_BUCKET=
 #DORMICE_S3_ACCESS_KEY_ID=
 #DORMICE_S3_SECRET_ACCESS_KEY=
 #DORMICE_S3_FORCE_PATH_STYLE=false
 EOF
-  chmod 600 "$ENV_FILE"
-  note "wrote $ENV_FILE (mode 600) with a fresh API token"
+  carried=''
+  for knob in $FLEET_KNOBS; do
+    line=$(grep "^$knob=" "$ENV_FILE" | head -1 || true)
+    if [ -n "$line" ]; then
+      echo "$line" >>"$GATEWAY_ENV_FILE"
+      sed -i "s|^$knob=|# moved to $GATEWAY_ENV_FILE (2026-09-14): $knob=|" "$ENV_FILE"
+      carried="$carried $knob"
+    fi
+  done
+  chmod 600 "$GATEWAY_ENV_FILE"
+  if [ -n "$carried" ]; then
+    note "wrote $GATEWAY_ENV_FILE (mode 600) with the fleet token; carried over from $ENV_FILE:$carried"
+  else
+    note "wrote $GATEWAY_ENV_FILE (mode 600) with the fleet token"
+  fi
 fi
 # Appended outside the create-once block so an upgrade re-run picks the
 # knob up too. The knob is what turns on web domain binding in the console.
-if [ -n "$INGRESS_FILE_READY" ] && ! grep -q '^DORMICE_INGRESS_FILE=' "$ENV_FILE"; then
+if [ -n "$INGRESS_FILE_READY" ] && ! grep -q '^DORMICE_INGRESS_FILE=' "$GATEWAY_ENV_FILE"; then
   {
-    echo '# The Caddy config file the daemon owns: enables binding domains (and'
+    echo '# The Caddy config file the gateway owns: enables binding domains (and'
     echo '# getting HTTPS) from the console domains page.'
     echo "DORMICE_INGRESS_FILE=$CADDYFILE"
-  } >>"$ENV_FILE"
-  note "added DORMICE_INGRESS_FILE=$CADDYFILE to $ENV_FILE"
+  } >>"$GATEWAY_ENV_FILE"
+  note "added DORMICE_INGRESS_FILE=$CADDYFILE to $GATEWAY_ENV_FILE"
+fi
+if ! grep -q "^DORMICE_API_TOKEN=$API_TOKEN\$" "$GATEWAY_ENV_FILE"; then
+  die "$GATEWAY_ENV_FILE and $ENV_FILE carry different DORMICE_API_TOKEN values — the fleet has one token; make them the same and re-run"
 fi
 
-# ---- systemd service ---------------------------------------------------------
-log 'systemd service'
+# ---- systemd services --------------------------------------------------------
+# Two units, the gateway first: a daemon without a configuration copy takes
+# its first bundle from its gateway before it listens, and a re-run just
+# built both dists — the two processes of a fleet of one run one commit,
+# never two. Restart, not start: both are crash-only by design, so
+# restarting them is always safe.
+log 'systemd services'
+cp "$INSTALL_DIR/deploy/dormice-gateway.service" /etc/systemd/system/dormice-gateway.service
 cp "$INSTALL_DIR/deploy/dormice.service" /etc/systemd/system/dormice.service
 systemctl daemon-reload
-systemctl enable dormice >/dev/null 2>&1
-# A gateway installed by hand on this machine (deploy/dormice-gateway.service;
-# install.sh does not install it yet) was just rebuilt with the daemon and is
-# restarted first, so the daemon's first check-in lands on the new one: the two
-# processes of a fleet of one run one commit, never two. Running or enabled —
-# a unit started by hand and never enabled is running the old dist just the
-# same.
-if systemctl is-active -q dormice-gateway 2>/dev/null || systemctl is-enabled -q dormice-gateway 2>/dev/null; then
-  systemctl restart dormice-gateway
-  note 'restarted dormice-gateway (hand-installed unit, rebuilt with the daemon)'
-fi
-# Restart, not start: a re-run just built fresh code, and the daemon is
-# crash-only by design — restarting it is always safe.
+systemctl enable dormice-gateway dormice >/dev/null 2>&1
+systemctl restart dormice-gateway
+for _ in $(seq 1 60); do
+  curl -fsS "http://127.0.0.1:$GATEWAY_PORT/healthz" >/dev/null 2>&1 && break
+  sleep 0.5
+done
+curl -fsS "http://127.0.0.1:$GATEWAY_PORT/healthz" >/dev/null 2>&1 \
+  || die "the gateway did not answer /healthz on 127.0.0.1:$GATEWAY_PORT — check: journalctl -u dormice-gateway -n 50"
+note "gateway is answering on 127.0.0.1:$GATEWAY_PORT"
 systemctl restart dormice
-note 'enabled and (re)started'
+note 'enabled and (re)started both'
 
 # ---- verification: the install has not succeeded until doctor says so --------
 log 'verification'
@@ -760,11 +836,15 @@ for _ in $(seq 1 240); do
   sleep 0.5
 done
 curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 \
-  || die "the daemon did not answer /healthz on 127.0.0.1:$PORT — check: journalctl -u dormice -n 50"
+  || die "the daemon did not answer /healthz on 127.0.0.1:$PORT — check: journalctl -u dormice -n 50 (a daemon with no configuration copy waits for its gateway before it listens)"
 note "daemon is answering on 127.0.0.1:$PORT"
+# Both env files: doctor reads the node's knobs from the daemon's and the
+# fleet's seeds (the S3 set, the managed front door) from the gateway's.
 set -a
 # shellcheck source=/dev/null
 . "$ENV_FILE"
+# shellcheck source=/dev/null
+. "$GATEWAY_ENV_FILE"
 set +a
 dor doctor
 
@@ -774,10 +854,12 @@ dor doctor
 status_write succeeded
 
 printf '\nDormice is installed.\n'
-printf '  API token:   grep ^DORMICE_API_TOKEN %s\n' "$ENV_FILE"
-printf '  daemon logs: journalctl -u dormice -f\n'
-printf '  CLI:         export DORMICE_ENDPOINT=http://127.0.0.1:%s DORMICE_API_TOKEN=<token>; dor sandbox ls\n' "$PORT"
-printf '  The daemon listens on 127.0.0.1 only, by design — exposing it is a reverse proxy'"'"'s job.\n'
+printf '  API token:    grep ^DORMICE_API_TOKEN %s\n' "$ENV_FILE"
+printf '  gateway logs: journalctl -u dormice-gateway -f   (the door: console, keys, settings, templates)\n'
+printf '  daemon logs:  journalctl -u dormice -f           (the node: sandboxes)\n'
+printf '  console:      http://<this host>/console  (Caddy on :80 -> the gateway on 127.0.0.1:%s)\n' "$GATEWAY_PORT"
+printf '  CLI:          export DORMICE_ENDPOINT=http://127.0.0.1:%s DORMICE_API_TOKEN=<token>; dor sandbox ls\n' "$PORT"
+printf '  Both processes listen on 127.0.0.1 only, by design — exposing them is a reverse proxy'"'"'s job.\n'
 if [ "$(systemctl is-active caddy 2>/dev/null)" = active ]; then
   printf '  console:     http://<this-host-ip>/console (Caddy on :80 — open your cloud firewall for 80/443,\n'
   printf '               then bind domains in the domains page for automatic HTTPS)\n'
