@@ -431,7 +431,7 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
     }
   });
 
-  it('getFleetMetrics sums both nodes from their check-ins without asking them; getFleetStateHistory grows a point per check-in with a peak', async () => {
+  it('getFleetMetrics sums both nodes from their check-ins without asking them; getFleetStateHistory grows a point per sampler tick with a peak', async () => {
     const metrics = await viaGateway().getFleetMetrics();
     expect(metrics.nodes).toEqual({ total: 2, reachable: 2, reported: 2 });
     const own = await Promise.all(
@@ -443,7 +443,8 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
     expect(metrics.sandboxDisks.count).toBe(
       own.reduce((sum, m) => sum + m.sandboxDisks.count, 0),
     );
-    // A check-in a second: a couple of them bring points and a peak.
+    // The gateway samples every second in the exam: a couple of ticks
+    // bring points and a peak.
     const history = await until(async () => {
       const h = await viaGateway().getFleetStateHistory();
       return h.points.length >= 2 && h.peak !== null ? h : undefined;

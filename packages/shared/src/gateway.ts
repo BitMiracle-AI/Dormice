@@ -335,10 +335,11 @@ export type GetFleetMetricsResponse = z.infer<
  * getFleetStateHistory(start?, end?) — how many sandboxes sat in each
  * state over time, fleet-wide: the product's own story ("idle is free" is
  * visible as active falling while frozen rises). Answered by the gateway
- * from its fleet_state_samples — one row per check-in, the sum of every
- * node's last census at that moment (design record #26: the one figure no
- * single node can compute); a node keeps no fleet history of its own
- * since the third cut. Kept 30 days.
+ * from its fleet_state_samples — one row per tick of its own sampler
+ * (DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS, 30 by default), the sum of
+ * every node's last census at that moment (design record #26: the one
+ * figure no single node can compute); a node keeps no fleet history of
+ * its own since the third cut. Kept 30 days.
  *
  * Bucketing differs from the per-sandbox verb on purpose: a bucket
  * reports its last raw row whole, never per-state maxima — independent

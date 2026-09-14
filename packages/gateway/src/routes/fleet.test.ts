@@ -3,13 +3,14 @@ import {
   getFleetStateHistoryResponseSchema,
 } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
+import { recordFleetSample } from '../db/fleet-samples';
 import { fleetStateSamples } from '../db/schema';
 import { STARTUP_GRACE_MS } from '../fleet';
 import { checkInOf, TEST_TOKEN, testGateway } from '../testing';
 
-// The fleet's own observation: what the check-ins write, what the two
-// verbs read back — over app.inject(), the check-ins posted as a node
-// posts them.
+// The fleet's own observation: what the sampler writes (recordFleetSample
+// is the ticker's unit; main.ts owns the clock), what the two verbs read
+// back — over app.inject(), the check-ins posted as a node posts them.
 
 const authed = { authorization: `Bearer ${TEST_TOKEN}` };
 type App = ReturnType<typeof testGateway>['app'];
@@ -42,42 +43,39 @@ function samples(db: ReturnType<typeof testGateway>['db']) {
     .all();
 }
 
-describe('the fleet state sample a check-in writes', () => {
-  it('each check-in writes one row: the sum over every node with a reading, a down node counted by its last reading', async () => {
+describe('the fleet state sample the sampler writes', () => {
+  it('a tick writes one row: the sum over every node with a reading, a down node counted by its last reading — and a check-in writes none', async () => {
     const { app, db, fleet } = testGateway({}, { startedAt: SETTLED });
     await checkIn(app, 'b', { active: 3, frozen: 1 });
     await checkIn(app, 'c', { active: 2, archived: 4 });
-    const rows = samples(db);
-    expect(rows).toHaveLength(2);
-    // The first check-in knew only b; the second knew both.
-    expect(rows[0]).toMatchObject({
-      active: 3,
-      frozen: 1,
-      archived: 0,
-      total: 4,
-    });
-    expect(rows[1]).toMatchObject({
-      active: 5,
-      frozen: 1,
-      archived: 4,
-      total: 10,
-    });
-    // c falls silent: its sandboxes are still there, and b's next check-in
-    // sums c's last reading in.
+    // The check-ins themselves wrote nothing: the sampler's clock is the
+    // gateway's own, and no check-in waits on a history write.
+    expect(samples(db)).toHaveLength(0);
+    expect(recordFleetSample(db, fleet, new Date())).toBe(true);
+    expect(samples(db)).toEqual([
+      expect.objectContaining({
+        active: 5,
+        frozen: 1,
+        archived: 4,
+        total: 10,
+      }),
+    ]);
+    // c falls silent: its sandboxes are still there, and its last reading
+    // stays in the sum.
     const c = fleet.get('c');
     if (!c) throw new Error('node lost');
     c.lastCheckInAt = new Date(Date.now() - 40_000);
-    await checkIn(app, 'b', { active: 3, frozen: 1 });
-    expect(samples(db)[2]).toMatchObject({ active: 5, total: 10 });
+    recordFleetSample(db, fleet, new Date());
+    expect(samples(db)[1]).toMatchObject({ active: 5, total: 10 });
     // Removed, it is counted no more.
     expect((await rpc(app, '/removeNode', { id: 'c' })).json()).toEqual({
       removed: true,
     });
-    await checkIn(app, 'b', { active: 3, frozen: 1 });
-    expect(samples(db)[3]).toMatchObject({ active: 3, total: 4 });
+    recordFleetSample(db, fleet, new Date());
+    expect(samples(db)[2]).toMatchObject({ active: 3, total: 4 });
   });
 
-  it('within the startup grace no row is written while a known node has not checked in; past it the sum is written without it', async () => {
+  it('no row while no node has a reading; within the startup grace none while a known node has not checked in; past it the sum is written without it', () => {
     // A node known from the rows but not heard from since this start: a
     // check-in's reading, then the memory a restart leaves — the row and
     // nothing else (fleet.ts's constructor shape).
@@ -89,21 +87,35 @@ describe('the fleet state sample a check-in writes', () => {
       c.lastCheckInAt = null;
       c.intervalSeconds = null;
     };
+    // Nobody has reported: nothing true to write, however long ago the
+    // gateway started — and an empty fleet writes nothing either.
+    const unheard = testGateway({}, { startedAt: SETTLED });
+    expect(recordFleetSample(unheard.db, unheard.fleet, new Date())).toBe(
+      false,
+    );
+    silence(unheard.fleet);
+    expect(recordFleetSample(unheard.db, unheard.fleet, new Date())).toBe(
+      false,
+    );
+    expect(samples(unheard.db)).toHaveLength(0);
+
     const fresh = testGateway({}, { startedAt: new Date() });
     silence(fresh.fleet);
-    await checkIn(fresh.app, 'b', { active: 2 });
+    fresh.fleet.checkIn(checkInOf('b', 'http://b:80', { active: 2 }));
+    expect(recordFleetSample(fresh.db, fresh.fleet, new Date())).toBe(false);
     expect(samples(fresh.db)).toHaveLength(0);
 
     const settled = testGateway({}, { startedAt: SETTLED });
     silence(settled.fleet);
-    await checkIn(settled.app, 'b', { active: 2 });
+    settled.fleet.checkIn(checkInOf('b', 'http://b:80', { active: 2 }));
+    expect(recordFleetSample(settled.db, settled.fleet, new Date())).toBe(true);
     expect(samples(settled.db)).toEqual([
       expect.objectContaining({ active: 2, total: 2 }),
     ]);
   });
 
-  it('rows older than 30 days are pruned with the write', async () => {
-    const { app, db } = testGateway({}, { startedAt: SETTLED });
+  it('rows older than 30 days are pruned with the write', () => {
+    const { db, fleet } = testGateway({}, { startedAt: SETTLED });
     db.insert(fleetStateSamples)
       .values({
         at: new Date(Date.now() - 31 * 86_400_000).toISOString(),
@@ -115,7 +127,8 @@ describe('the fleet state sample a check-in writes', () => {
         total: 9,
       })
       .run();
-    await checkIn(app, 'b', { active: 1 });
+    fleet.checkIn(checkInOf('b', 'http://b:80', { active: 1 }));
+    recordFleetSample(db, fleet, new Date());
     const rows = samples(db);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.active).toBe(1);

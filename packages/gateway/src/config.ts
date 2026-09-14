@@ -80,6 +80,20 @@ const envSchema = z.object({
    * names from landing on the same full box.
    */
   DORMICE_GATEWAY_NODE_MIN_DISK_GB: z.coerce.number().nonnegative().default(10),
+  /**
+   * How often the gateway writes one row of the fleet's state census —
+   * the data behind the console's concurrency curve (db/fleet-samples.ts).
+   * The gateway's one clock of its own: a row per tick keeps the table
+   * the same size for a fleet of one and a fleet of ten, where a row per
+   * node check-in grew with the fleet. 30, the daemon's own sampling
+   * interval, so a single node's imported history and the gateway's join
+   * at the same density; the exam sets 1.
+   */
+  DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30),
   // ---- first-boot seeds of the settings table, in the daemon's words ----
   DORMICE_SANDBOX_DISK_GB: z.coerce.number().positive().default(10),
   DORMICE_SANDBOX_CPUS: z.coerce.number().positive().default(1),
@@ -192,6 +206,7 @@ export const CONFIG_KEYS: Record<keyof Config, { sensitive: boolean }> = {
   DORMICE_GATEWAY_NODE_CPU_LIMIT_PCT: { sensitive: false },
   DORMICE_GATEWAY_NODE_ACTIVE_LIMIT: { sensitive: false },
   DORMICE_GATEWAY_NODE_MIN_DISK_GB: { sensitive: false },
+  DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS: { sensitive: false },
   DORMICE_SANDBOX_DISK_GB: { sensitive: false },
   DORMICE_SANDBOX_CPUS: { sensitive: false },
   DORMICE_SANDBOX_MEMORY_GB: { sensitive: false },

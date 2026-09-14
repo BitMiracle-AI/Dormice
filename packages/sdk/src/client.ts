@@ -293,7 +293,7 @@ export class Dormice {
    * Fleet state counts over time (default window: the last 24 hours) —
    * how many sandboxes sat active/frozen/stopped/archived/restoring at
    * each moment, summed over every node; the gateway keeps this history,
-   * one sample per node check-in. Bucketed points are whole raw samples
+   * one sample every 30 seconds by default. Bucketed points are whole raw samples
    * (byState always sums to total); `peak` carries the window's highest
    * active count from raw rows, immune to bucketing.
    */

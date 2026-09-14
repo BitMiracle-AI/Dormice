@@ -49,6 +49,7 @@ first-boot seeds of the fleet settings.
 | `DORMICE_GATEWAY_NODE_CPU_LIMIT_PCT` | `70` | Placement gate: a node whose last check-in reported whole-machine CPU above this takes no new sandboxes. |
 | `DORMICE_GATEWAY_NODE_ACTIVE_LIMIT` | `400` | Placement gate: a node with this many active sandboxes (placements since its check-in included) takes no more; frozen ones are not counted. |
 | `DORMICE_GATEWAY_NODE_MIN_DISK_GB` | `10` | Placement gate: a node whose data disk has less than this free takes no new sandboxes — a full data disk stops every sandbox on the node at once. |
+| `DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS` | `30` | How often the gateway writes one row of the fleet's state census (the overview's concurrency curve, `getFleetStateHistory`), summed from the nodes' last check-ins. One row per tick whatever the fleet's size; kept 30 days. |
 
 ### Fleet settings — first-boot seeds
 

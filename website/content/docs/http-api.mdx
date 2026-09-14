@@ -65,7 +65,7 @@ The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 | `POST /revokeApiKey` | gateway | soft-revoke a key by `id`; idempotent (`revoked: false` when none was) | — |
 | `POST /getHostMetrics` | both | one machine's snapshot; never wakes anything. At the gateway, `nodeId` names the machine (a fleet of one needs none) | 400 at the gateway when the fleet has several nodes and none is named; 404 unknown `nodeId` |
 | `POST /getFleetMetrics` | gateway | the figures that add up across the fleet — nodes (total / reachable / reported), the sandbox census by state, the sandbox disks' bill — from the nodes' last check-ins, asking nobody; `nodes.reported` says how many nodes the sums cover | — |
-| `POST /getFleetStateHistory` | gateway | how many sandboxes sat in each state over time, one sample per node check-in, with the window's concurrency `peak`; bucketed past 360 points by whole rows | 400 unparseable `start`/`end` |
+| `POST /getFleetStateHistory` | gateway | how many sandboxes sat in each state over time — one sample per tick of the gateway's own sampler (`DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS`, 30 by default), summed from the nodes' last check-ins — with the window's concurrency `peak`; bucketed past 360 points by whole rows | 400 unparseable `start`/`end` |
 | `POST /getSandboxMetrics` | both | one sandbox's live CPU/memory/disk sample; `sample` is `null` when nothing is running | 404 unknown name |
 | `POST /listSandboxMetrics` | both | every measurable sandbox's sample in one answer; at the gateway, every node's, with `silent` as in `listSandboxes` | — |
 | `POST /listSandboxImages` | both | each sandbox's born image vs its template's current one; at the gateway, every node's, with `silent` as in `listSandboxes` | — |

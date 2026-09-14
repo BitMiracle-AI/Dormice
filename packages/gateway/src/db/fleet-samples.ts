@@ -5,34 +5,41 @@ import { type FleetStateSampleRow, fleetStateSamples } from './schema';
 
 /**
  * How long fleet state samples live. Not a knob: the dashboard's widest
- * range (30 days) defines the need, and at one small row per check-in the
- * table stays tens of megabytes for a fleet of ten (the node's old fleet
- * table had the same ruling).
+ * range (30 days) defines the need, and at one small row per tick the
+ * table stays a few megabytes whatever the fleet's size (the node's old
+ * fleet table had the same ruling).
  */
 export const FLEET_SAMPLE_KEEP_DAYS = 30;
 
 /**
- * One sample of the fleet's state, written on a check-in (routes/nodes.ts)
- * once the reporting node's reading is in: the sum over every node that
- * has a reading — a node that is down contributes its last one; its
- * sandboxes are still there. Prune rides the same transaction, as on the
- * node's sampler.
+ * One sample of the fleet's state, written by the gateway's own ticker
+ * (main.ts, every DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS): the sum over
+ * every node that has a reading — a node that is down contributes its
+ * last one; its sandboxes are still there. Prune rides the same
+ * transaction, as on the node's sampler. A tick of the gateway's, not the
+ * check-in itself (the third cut first wrote a row per check-in; its
+ * review moved it, 2026-09-15): one figure, one row an interval, however
+ * many nodes report it — and a write that fails, a full disk, fails a
+ * sample the next tick retries, never a node's check-in and the
+ * configuration bundle riding on its answer.
  *
- * Not written while the gateway is still getting to know its fleet:
- * within STARTUP_GRACE_MS of a start, as long as any node from the rows
- * has not checked in yet. A restarted gateway hears from its nodes one by
- * one over an interval, and a sum written after the first would draw the
- * fleet collapsing to that node's share and climbing back — a false dip
- * on the curve at every gateway restart. Past the grace, a node still
- * silent is down, and the sum is written without it (a lower bound, as
- * getFleetMetrics says of the same figure). Answers whether a row was
- * written.
+ * Not written when there is nothing true to write: no node has a reading
+ * (nothing has checked in since this start — the fleet's sandboxes are
+ * on the nodes' disks, unknown here, and a zero row would draw a cliff
+ * the fleet did not fall off); or, within STARTUP_GRACE_MS of a start,
+ * while any node from the rows has not checked in yet — a restarted
+ * gateway hears from its nodes one by one over an interval, and a sum
+ * written after the first would draw the fleet collapsing to that node's
+ * share and climbing back, a false dip at every gateway restart. Past the
+ * grace, a node still silent is down, and the sum is written without it
+ * (a lower bound, as getFleetMetrics says of the same figure). Answers
+ * whether a row was written.
  */
 export function recordFleetSample(db: Db, fleet: Fleet, now: Date): boolean {
   const nodes = fleet.all();
+  const { reported, sandboxes } = sumReadings(nodes);
   const settling = now.getTime() - fleet.startedAt.getTime() < STARTUP_GRACE_MS;
-  if (settling && nodes.some((node) => node.reading === null)) return false;
-  const { sandboxes } = sumReadings(nodes);
+  if (reported === 0 || (settling && reported < nodes.length)) return false;
   const cutoff = new Date(
     now.getTime() - FLEET_SAMPLE_KEEP_DAYS * 86_400_000,
   ).toISOString();

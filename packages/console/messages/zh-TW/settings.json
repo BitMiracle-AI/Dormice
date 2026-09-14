@@ -6,6 +6,7 @@
   "settings_hint_node_cpu_limit": "落位閘:節點上一次報到的整機 CPU 高於此百分比就不接新沙箱",
   "settings_hint_node_active_limit": "落位閘:節點上活躍沙箱數(含報到後已落位的)達到此數就不接新沙箱;凍結的不算",
   "settings_hint_node_min_disk": "落位閘:節點資料碟剩餘空間低於此 GiB 就不接新沙箱 — 資料碟寫滿會讓整節點的沙箱一起停擺",
+  "settings_hint_sample_interval": "網關自己的採樣間隔(秒):每隔這麼久把各節點最近一次報到的五態計數加總寫一行,總覽走勢圖的資料來源;預設 30 與節點採樣器同步",
   "settings_hint_sandbox_disk": "預設磁碟配額的首次啟動種子值 — 生效值在上方維運旋鈕裡",
   "settings_hint_sandbox_cpus": "預設 CPU 配額的首次啟動種子值 — 生效值在上方維運旋鈕裡",
   "settings_hint_sandbox_memory": "預設記憶體上限的首次啟動種子值 — 生效值在上方維運旋鈕裡",

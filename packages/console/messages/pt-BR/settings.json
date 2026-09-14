@@ -6,6 +6,7 @@
   "settings_hint_node_cpu_limit": "Portão de alocação: um nó cujo último check-in informou CPU total acima desta porcentagem não recebe novos sandboxes",
   "settings_hint_node_active_limit": "Portão de alocação: um nó com esta quantidade de sandboxes ativos (incluindo alocações desde o check-in) não recebe mais; congelados não contam",
   "settings_hint_node_min_disk": "Portão de alocação: um nó com menos que estes GiB livres no disco de dados não recebe novos sandboxes — um disco de dados cheio para todos os sandboxes do nó de uma vez",
+  "settings_hint_sample_interval": "Intervalo de amostragem do próprio gateway, em segundos: a cada tanto ele soma o último censo de cada nó em uma linha do histórico da frota — os dados da curva da visão geral; 30 por padrão, o mesmo intervalo do amostrador dos nós",
   "settings_hint_sandbox_disk": "Semente de primeira inicialização para a cota padrão de disco — o valor efetivo está nos controles acima",
   "settings_hint_sandbox_cpus": "Semente de primeira inicialização para a cota padrão de CPU — o valor efetivo está nos controles acima",
   "settings_hint_sandbox_memory": "Semente de primeira inicialização para o limite padrão de memória — o valor efetivo está nos controles acima",

@@ -17,8 +17,8 @@ import { StatCard, StatCardSkeleton } from './StatCard';
  * 沙箱磁盘账单。容量上限随讨论稿 #23 删(2026-09-14):账本行数不是
  * 资源,数据盘水位才是——它有自己的卡。当前值来自 /getFleetMetrics
  * (2026-09-15 刀 3:网关把每台节点最近一次报到的读数加总,不扇出);
- * 峰值与 sparkline 来自 /getFleetStateHistory — 网关每次节点报到落一
- * 行,峰值由原始行现算,分桶抹不掉它。档位由页头的全局切换器驱动。
+ * 峰值与 sparkline 来自 /getFleetStateHistory — 网关自己的采样器 30 秒
+ * 落一行,峰值由原始行现算,分桶抹不掉它。档位由页头的全局切换器驱动。
  */
 export function FleetStatCards({ range }: { range: TimelineRangeKey }) {
   const host = useFleetMetrics();

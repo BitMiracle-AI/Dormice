@@ -6,6 +6,7 @@
   "settings_hint_node_cpu_limit": "落位闸:节点上一次报到的整机 CPU 高于此百分比就不接新沙箱",
   "settings_hint_node_active_limit": "落位闸:节点上活跃沙箱数(含报到后已落位的)达到此数就不接新沙箱;冻结的不算",
   "settings_hint_node_min_disk": "落位闸:节点数据盘剩余空间低于此 GiB 就不接新沙箱 — 数据盘写满会让整节点的沙箱一起停摆",
+  "settings_hint_sample_interval": "网关自己的采样间隔(秒):每隔这么久把各节点最近一次报到的五态计数加总写一行,总览走势图的数据源;默认 30 与节点采样器同步",
   "settings_hint_sandbox_disk": "默认磁盘配额的首启种子值 — 生效值在上方运营旋钮里",
   "settings_hint_sandbox_cpus": "默认 CPU 配额的首启种子值 — 生效值在上方运营旋钮里",
   "settings_hint_sandbox_memory": "默认内存上限的首启种子值 — 生效值在上方运营旋钮里",

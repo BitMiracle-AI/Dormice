@@ -184,7 +184,7 @@ export const getSandboxMetricsHistory = (
   });
 
 // Fleet state counts over time — the concurrency curve's data, kept by the
-// gateway one sample per node check-in. Bucketed points are whole raw
+// gateway's own sampler (30s by default). Bucketed points are whole raw
 // samples (byState always sums to total); peak is computed from raw rows
 // and immune to bucketing.
 export const getFleetStateHistory = (start: string, end: string) =>

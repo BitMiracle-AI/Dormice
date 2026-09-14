@@ -6,6 +6,7 @@
   "settings_hint_node_cpu_limit": "배치 게이트: 마지막 체크인에서 머신 전체 CPU가 이 비율을 넘은 노드는 새 샌드박스를 받지 않습니다",
   "settings_hint_node_active_limit": "배치 게이트: 활성 샌드박스 수(체크인 이후 배치된 것 포함)가 이 값에 도달한 노드는 더 받지 않습니다. 동결된 것은 세지 않습니다",
   "settings_hint_node_min_disk": "배치 게이트: 데이터 디스크 여유 공간이 이 GiB 미만인 노드는 새 샌드박스를 받지 않습니다 — 데이터 디스크가 가득 차면 노드의 모든 샌드박스가 한꺼번에 멈춥니다",
+  "settings_hint_sample_interval": "게이트웨이 자체 샘플링 간격(초): 이 간격마다 각 노드의 마지막 체크인 상태별 개수를 합산해 한 행을 기록합니다 — 개요 추이 그래프의 데이터 원본. 기본값 30은 노드 샘플러와 같습니다",
   "settings_hint_sandbox_disk": "기본 디스크 할당량의 첫 부팅 시드 값 — 유효 값은 위의 운영 노브에 있습니다",
   "settings_hint_sandbox_cpus": "기본 CPU 할당량의 첫 부팅 시드 값 — 유효 값은 위의 운영 노브에 있습니다",
   "settings_hint_sandbox_memory": "기본 메모리 상한의 첫 부팅 시드 값 — 유효 값은 위의 운영 노브에 있습니다",

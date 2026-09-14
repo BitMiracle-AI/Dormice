@@ -6,6 +6,7 @@
   "settings_hint_node_cpu_limit": "Puerta de colocación: un nodo cuyo último registro informó una CPU total por encima de este porcentaje no acepta sandboxes nuevos",
   "settings_hint_node_active_limit": "Puerta de colocación: un nodo con este número de sandboxes activos (incluidas las colocaciones desde su registro) no acepta más; los congelados no cuentan",
   "settings_hint_node_min_disk": "Puerta de colocación: un nodo con menos de estos GiB libres en el disco de datos no acepta sandboxes nuevos — un disco de datos lleno detiene de golpe todos los sandboxes del nodo",
+  "settings_hint_sample_interval": "Intervalo de muestreo propio del gateway, en segundos: cada tanto suma el último censo de cada nodo en una fila del historial de la flota — los datos de la curva del resumen; 30 por defecto, el mismo intervalo que el muestreador de los nodos",
   "settings_hint_sandbox_disk": "Valor semilla del primer arranque para la cuota de disco predeterminada — el valor efectivo está en los parámetros de arriba",
   "settings_hint_sandbox_cpus": "Valor semilla del primer arranque para la cuota de CPU predeterminada — el valor efectivo está en los parámetros de arriba",
   "settings_hint_sandbox_memory": "Valor semilla del primer arranque para el límite de memoria predeterminado — el valor efectivo está en los parámetros de arriba",

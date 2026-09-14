@@ -6,6 +6,7 @@
   "settings_hint_node_cpu_limit": "Porte de placement : un nœud dont le dernier pointage indiquait un CPU machine au-dessus de ce pourcentage ne prend plus de nouvelles sandboxes",
   "settings_hint_node_active_limit": "Porte de placement : un nœud avec autant de sandboxes actives (placements depuis son pointage inclus) n'en prend plus ; les gelées ne comptent pas",
   "settings_hint_node_min_disk": "Porte de placement : un nœud dont le disque de données a moins de ce nombre de Gio libres ne prend plus de nouvelles sandboxes — un disque de données plein arrête d'un coup toutes les sandboxes du nœud",
+  "settings_hint_sample_interval": "Intervalle d'échantillonnage propre à la passerelle, en secondes : à cette cadence elle additionne le dernier recensement de chaque nœud en une ligne d'historique de la flotte — les données de la courbe de la vue d'ensemble ; 30 par défaut, l'intervalle de l'échantillonneur des nœuds",
   "settings_hint_sandbox_disk": "Valeur d'amorçage du quota disque par défaut — la valeur effective est dans les réglages ci-dessus",
   "settings_hint_sandbox_cpus": "Valeur d'amorçage du quota CPU par défaut — la valeur effective est dans les réglages ci-dessus",
   "settings_hint_sandbox_memory": "Valeur d'amorçage de la limite mémoire par défaut — la valeur effective est dans les réglages ci-dessus",

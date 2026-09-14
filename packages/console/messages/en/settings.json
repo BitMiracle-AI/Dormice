@@ -6,6 +6,7 @@
   "settings_hint_node_cpu_limit": "Placement gate: a node whose last check-in reported whole-machine CPU above this percentage takes no new sandboxes",
   "settings_hint_node_active_limit": "Placement gate: a node with this many active sandboxes (placements since its check-in included) takes no more; frozen ones are not counted",
   "settings_hint_node_min_disk": "Placement gate: a node whose data disk has less than this many GiB free takes no new sandboxes — a full data disk stops every sandbox on the node at once",
+  "settings_hint_sample_interval": "The gateway's own sampling interval, in seconds: every this long it sums every node's last census into one fleet history row — the overview curve's data; 30 by default, the nodes' own sampling interval",
   "settings_hint_sandbox_disk": "First-boot seed for the default disk quota — the effective value is in the knobs above",
   "settings_hint_sandbox_cpus": "First-boot seed for the default CPU quota — the effective value is in the knobs above",
   "settings_hint_sandbox_memory": "First-boot seed for the default memory limit — the effective value is in the knobs above",

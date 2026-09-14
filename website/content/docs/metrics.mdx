@@ -120,7 +120,8 @@ checked in since the gateway started has no reading yet; until it does,
 the sums are a lower bound, and the console's overview says so.
 
 `getFleetStateHistory({ start?, end? })` is the same census over time —
-one sample per node check-in, kept 30 days, bucketed past 360 points by
-whole rows so the states always sum to the total, with the window's
-concurrency `peak` computed from the raw rows. It feeds the overview's
+one sample every 30 seconds (the gateway's own sampler,
+`DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS`), kept 30 days, bucketed past
+360 points by whole rows so the states always sum to the total, with the
+window's concurrency `peak` computed from the raw rows. It feeds the overview's
 concurrency curve.

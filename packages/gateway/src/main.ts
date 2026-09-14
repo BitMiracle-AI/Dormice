@@ -10,6 +10,7 @@ import { httpAskNode } from './ask';
 import { NameCache } from './cache';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
+import { recordFleetSample } from './db/fleet-samples';
 import { ensureSettings } from './db/settings';
 import { Finder } from './find';
 import { Fleet } from './fleet';
@@ -143,9 +144,36 @@ log.info(
 const SHUTDOWN_GRACE_MS = 10_000;
 const connections = trackConnections(app.server);
 let closing = false;
+
+// The fleet's state sampler — the gateway's one clock of its own, the
+// daemon's metrics ticker in shape (server/main.ts): every interval one
+// row of the fleet's census, summed from the readings the check-ins left
+// in memory (db/fleet-samples.ts says when no row is true enough to
+// write). The first shot fires at once, like the daemon's: a restart's
+// gap in the curve should equal the downtime, not downtime plus an
+// interval. Same failure stance: log, never fatal, the next tick retries —
+// and no check-in ever waits on this write.
+let sampleTimer: NodeJS.Timeout | undefined;
+function sampleTick() {
+  try {
+    recordFleetSample(db, fleet, new Date());
+  } catch (error) {
+    app.log.error(error, 'fleet state sample failed');
+  } finally {
+    if (!closing) {
+      sampleTimer = setTimeout(
+        sampleTick,
+        config.DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS * 1000,
+      );
+    }
+  }
+}
+sampleTimer = setTimeout(sampleTick, 0);
+
 const close = async (signal: NodeJS.Signals) => {
   if (closing) return;
   closing = true;
+  clearTimeout(sampleTimer);
   process.removeListener('SIGTERM', onSigterm);
   process.removeListener('SIGINT', onSigint);
   app.log.info(

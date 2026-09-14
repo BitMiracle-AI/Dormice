@@ -13,6 +13,7 @@ describe('loadConfig', () => {
     expect(config.DORMICE_GATEWAY_NODE_CPU_LIMIT_PCT).toBe(70);
     expect(config.DORMICE_GATEWAY_NODE_ACTIVE_LIMIT).toBe(400);
     expect(config.DORMICE_GATEWAY_NODE_MIN_DISK_GB).toBe(10);
+    expect(config.DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS).toBe(30);
   });
 
   it('requires the fleet token, at least 32 characters, naming the variable', () => {
@@ -47,6 +48,13 @@ describe('loadConfig', () => {
     ).toThrow();
     expect(() =>
       loadConfig({ ...TOKEN, DORMICE_GATEWAY_NODE_ACTIVE_LIMIT: '0' }),
+    ).toThrow();
+    expect(
+      loadConfig({ ...TOKEN, DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS: '1' })
+        .DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS,
+    ).toBe(1);
+    expect(() =>
+      loadConfig({ ...TOKEN, DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS: '0' }),
     ).toThrow();
   });
 });

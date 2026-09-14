@@ -105,9 +105,9 @@ export function awaitingFirstConfigWhy(node: NodeState): string | null {
  * this gateway started) contributes nothing, and `reported` says so: the
  * sums are a lower bound until every node has spoken. A node that is
  * down but did report contributes its last reading — its sandboxes are
- * still there, merely out of reach. One function for the check-in's
- * sample (db/fleet-samples.ts) and getFleetMetrics (routes/fleet.ts), so
- * the curve and the number under it can never disagree.
+ * still there, merely out of reach. One function for the sampler's row
+ * (db/fleet-samples.ts) and getFleetMetrics (routes/fleet.ts), so the
+ * curve and the number under it can never disagree.
  */
 export function sumReadings(nodes: readonly NodeState[]): {
   reported: number;

@@ -6,6 +6,7 @@
   "settings_hint_node_cpu_limit": "Platzierungsschranke: Ein Knoten, dessen letzter Check-in eine Gesamt-CPU über diesem Prozentsatz meldete, nimmt keine neuen Sandboxes an",
   "settings_hint_node_active_limit": "Platzierungsschranke: Ein Knoten mit so vielen aktiven Sandboxes (Platzierungen seit dem Check-in eingerechnet) nimmt keine weiteren an; eingefrorene zählen nicht",
   "settings_hint_node_min_disk": "Platzierungsschranke: Ein Knoten mit weniger als so vielen GiB frei auf der Datenplatte nimmt keine neuen Sandboxes an — eine volle Datenplatte hält alle Sandboxes des Knotens auf einmal an",
+  "settings_hint_sample_interval": "Das eigene Abtastintervall des Gateways in Sekunden: so oft summiert es den letzten Zensus jedes Knotens zu einer Zeile Flottenverlauf — die Daten der Übersichtskurve; Standard 30, das Intervall der Knoten-Sampler",
   "settings_hint_sandbox_disk": "Erststart-Saatwert für die Standard-Datenträgerquote — der wirksame Wert steht oben bei den Betriebsreglern",
   "settings_hint_sandbox_cpus": "Erststart-Saatwert für die Standard-CPU-Quote — der wirksame Wert steht oben bei den Betriebsreglern",
   "settings_hint_sandbox_memory": "Erststart-Saatwert für das Standard-Speicherlimit — der wirksame Wert steht oben bei den Betriebsreglern",

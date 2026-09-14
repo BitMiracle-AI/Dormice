@@ -192,22 +192,20 @@ export type ConsoleAccountRow = typeof consoleAccount.$inferSelect;
 
 /**
  * The fleet's state counts over time — how many sandboxes sat in each
- * state across every node — one row per node check-in (routes/nodes.ts,
- * db/fleet-samples.ts): the sum of every node's last census at that
- * moment, the data behind the console's concurrency curve and its peak.
- * Written on the check-in rather than by a ticker of the gateway's own,
- * which has none: the gateway only listens and compares, and the
- * check-ins are its clock. The one figure no single node can compute
- * (design record #26) — each node's own machine history stays on that
- * node (host_metrics_samples), and the nodes wrote no fleet history of
- * their own since the third cut. Kept 30 days, the dashboard's widest
- * range; pruned with every write.
+ * state across every node — one row per tick of the gateway's sampler
+ * (main.ts, db/fleet-samples.ts; DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS,
+ * 30 by default): the sum of every node's last census at that moment,
+ * the data behind the console's concurrency curve and its peak. The one
+ * figure no single node can compute (design record #26) — each node's
+ * own machine history stays on that node (host_metrics_samples), and the
+ * nodes write no fleet history of their own since the third cut. Kept 30
+ * days, the dashboard's widest range; pruned with every write.
  *
  * Five explicit state columns instead of a JSON blob, as on the node's
  * old table: the window peak is max(active) in one SQL aggregate, and the
  * stacked chart needs each state addressable. `total` is stored
  * redundantly so readers never re-derive it. `at` is indexed, not unique:
- * two nodes may check in within the same millisecond.
+ * the fourth cut's import lays a single node's old rows beside these.
  */
 export const fleetStateSamples = sqliteTable(
   'fleet_state_samples',

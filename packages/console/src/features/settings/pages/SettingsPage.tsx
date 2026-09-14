@@ -37,6 +37,7 @@ const KEY_HINTS: Record<string, () => string> = {
   DORMICE_GATEWAY_NODE_CPU_LIMIT_PCT: m.settings_hint_node_cpu_limit,
   DORMICE_GATEWAY_NODE_ACTIVE_LIMIT: m.settings_hint_node_active_limit,
   DORMICE_GATEWAY_NODE_MIN_DISK_GB: m.settings_hint_node_min_disk,
+  DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS: m.settings_hint_sample_interval,
   DORMICE_SANDBOX_DISK_GB: m.settings_hint_sandbox_disk,
   DORMICE_SANDBOX_CPUS: m.settings_hint_sandbox_cpus,
   DORMICE_SANDBOX_MEMORY_GB: m.settings_hint_sandbox_memory,

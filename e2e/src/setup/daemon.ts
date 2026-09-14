@@ -82,6 +82,8 @@ async function bootGateway(spec: GatewaySpec) {
     // CPU gate is opened wide and the disk floor is off.
     DORMICE_GATEWAY_NODE_CPU_LIMIT_PCT: '100',
     DORMICE_GATEWAY_NODE_MIN_DISK_GB: '0',
+    // A fleet history with points inside a test's patience.
+    DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS: '1',
     // A wildcard sandbox domain so getHost() and the port proxy are
     // exercised — no DNS needed, tests spoof the Host header locally.
     // Every exam starts on a fresh database, so the seed lands every run,
