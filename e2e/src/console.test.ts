@@ -160,7 +160,7 @@ describe('web console over a real daemon', () => {
 
 describe('browser-side signed download URLs (the Office preview foundation)', () => {
   // The console's preview pane recomputes the file signature in the browser
-  // (envd-client.ts signedDownloadUrl) from the token /console/envdToken
+  // (envd-client.ts signedDownloadUrl) from the token /envdToken
   // hands it. This pins the whole chain end-to-end — console minting, the
   // formula REWRITTEN here rather than imported (a black box pins the
   // formula itself, not a shared implementation's self-consistency), and
@@ -199,7 +199,7 @@ describe('browser-side signed download URLs (the Office preview foundation)', ()
     });
 
     // Mint the token exactly the way the browser does: cookie + console header.
-    const minted = await fetch(`${endpoint()}/console/envdToken`, {
+    const minted = await fetch(`${endpoint()}/envdToken`, {
       method: 'POST',
       headers: {
         cookie: session,

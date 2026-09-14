@@ -1,4 +1,3 @@
-import { tokensEqual } from '@dormice/server/auth';
 import type { KeyedQueue } from '@dormice/server/keyed-queue';
 import { sandboxNameSchema } from '@dormice/shared';
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
@@ -24,7 +23,10 @@ export interface E2bRoutesOptions {
   finder: Finder;
   locks: KeyedQueue;
   knobs: PlacementKnobs;
+  /** The fleet token, presented to the nodes when forwarding. */
   token: string;
+  /** The app's one adjudication of a bare credential (fleet token or a live minted key). */
+  isCredential: (bareToken: string) => boolean;
 }
 
 /**
@@ -37,7 +39,7 @@ export interface E2bRoutesOptions {
  */
 export const e2bControlRoutes: FastifyPluginAsyncZod<E2bRoutesOptions> = async (
   app,
-  { fleet, finder, locks, knobs, token },
+  { fleet, finder, locks, knobs, token, isCredential },
 ) => {
   app.addContentTypeParser(
     'application/json',
@@ -56,13 +58,14 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bRoutesOptions> = async (
     });
   });
 
-  // The daemon's own X-API-KEY convention (`e2b_<token>`), over the
-  // fleet's one token.
+  // The daemon's own X-API-KEY convention (`e2b_<credential>`; the prefix
+  // is the SDK's, not a secret): the fleet token or any live key the
+  // gateway minted, judged by the same closure as the native Bearer face.
   app.addHook('onRequest', async (request, reply) => {
     const presented = request.headers['x-api-key'];
     const key = Array.isArray(presented) ? presented[0] : presented;
     const bare = key?.startsWith('e2b_') ? key.slice(4) : key;
-    if (bare === undefined || !tokensEqual(bare, token)) {
+    if (bare === undefined || !isCredential(bare)) {
       await reply.code(401).send({ code: 401, message: 'invalid API key' });
     }
   });

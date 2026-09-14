@@ -17,6 +17,8 @@
   "dependencies": {
     "@dormice/server": "workspace:*",
     "@dormice/shared": "workspace:*",
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/static": "^9.1.3",
     "better-sqlite3": "^12.11.1",
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.10.0",

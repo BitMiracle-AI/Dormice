@@ -3,7 +3,7 @@
  * unary Filesystem/Process RPCs and the plain-HTTP file faces — the exact
  * wire the official e2b SDK speaks (see envd-pty.ts for why: a console-only
  * endpoint would be a second truth). Everything authenticates with the
- * per-sandbox envd access token minted via /console/envdToken.
+ * per-sandbox envd access token minted via /envdToken.
  *
  * Waking: the unary filesystem verbs wake a frozen sandbox (using files IS
  * using the sandbox); Process/List is read-only and never wakes. Callers

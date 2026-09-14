@@ -27,7 +27,7 @@ export interface ConsoleRoutesOptions {
   consoleDistDir?: string;
 }
 
-// No Secure flag: the daemon speaks plain http on 127.0.0.1 by design, and
+// No Secure flag: the gateway speaks plain http on 127.0.0.1 by design, and
 // behind a TLS reverse proxy the browser-facing side is the proxy's job.
 const COOKIE_OPTIONS = {
   httpOnly: true,
@@ -39,15 +39,17 @@ const messageResponse = z.object({ message: z.string() });
 
 /**
  * The web console's own surface: account + session endpoints and the static
- * SPA. Everything else the console does goes through the native RPC routes
- * with the session cookie — same routes, same truth as the SDK and CLI.
+ * SPA — on the gateway, the fleet's one door, since design record #24:
+ * one console, one account, whatever the number of nodes. Everything else
+ * the console does goes through the gateway's verbs with the session
+ * cookie — the same verbs, the same truth as the SDK and CLI.
  *
- * The credential model: the API token is the root of trust (machine
- * credential, lives in server env), the account is the human convenience
- * derived from it. Setup requires the token and overwrites the account —
- * first-run initialization, password change and forgot-password are all
- * that one verb, so there is no registration race (an open "first visitor
- * becomes admin" door on a public URL) and no recovery flow to build.
+ * The credential model: the fleet token is the root of trust (machine
+ * credential, lives in the gateway's env), the account is the human
+ * convenience derived from it. Setup requires the token and overwrites the
+ * account — first-run initialization, password change and forgot-password
+ * are all that one verb, so there is no registration race (an open "first
+ * visitor becomes admin" door on a public URL) and no recovery flow.
  */
 export const consoleRoutes: FastifyPluginAsyncZod<
   ConsoleRoutesOptions
@@ -102,11 +104,11 @@ export const consoleRoutes: FastifyPluginAsyncZod<
           message: `too many failed attempts — retry in ${wait}s`,
         });
       }
-      // Deliberately the env token only, never a ledger API key: this verb
+      // Deliberately the fleet token only, never a minted API key: this verb
       // resets the human account, and a leaked machine credential must not
       // escalate into a console takeover. The token's root of trust is
-      // filesystem access to /etc/dormice/env — exactly what a recovery
-      // path should require.
+      // filesystem access to the gateway's env file — exactly what a
+      // recovery path should require.
       if (!tokensEqual(request.body.token, config.DORMICE_API_TOKEN)) {
         throttle.recordFailure(request.ip);
         return reply.code(401).send({ message: 'invalid API token' });

@@ -9,6 +9,7 @@ import { buildGatewayApp } from './app';
 import { NameCache } from './cache';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
+import { ensureSettings } from './db/settings';
 import { Finder } from './find';
 import { Fleet } from './fleet';
 import { httpAskNode } from './lookup';
@@ -122,6 +123,12 @@ class FakeNode {
     const name = body.name as string | undefined;
     const found = name === undefined ? undefined : this.sandboxes.get(name);
     switch (path) {
+      case '/envdToken': {
+        // The daemon's HMAC stands in as a string only this node would mint.
+        return json(200, {
+          envdAccessToken: `envd-${this.id}-${String(body.sandboxId)}`,
+        });
+      }
       case '/lookupSandbox': {
         const sandbox = 'id' in body ? this.byId(body.id as string) : found;
         return json(
@@ -232,6 +239,7 @@ async function gateway(
     DORMICE_GATEWAY_NODE_CPU_LIMIT_PCT: '100',
     ...env,
   });
+  ensureSettings(db, config);
   const fleet = new Fleet(db, opts.startedAt);
   const cache = new NameCache();
   const finder = new Finder(fleet, cache, httpAskNode(TOKEN), {
@@ -240,6 +248,7 @@ async function gateway(
   const logs = opts.logs;
   const app = buildGatewayApp({
     config,
+    db,
     fleet,
     finder,
     locks: new KeyedQueue(),
@@ -849,6 +858,23 @@ describe('acquire: placing and finding', () => {
 });
 
 describe('using, destroying, and the cache', () => {
+  it('envdToken is minted by the node that runs the sandbox, found by id, under the fleet token; an unknown id is a 404', async () => {
+    const h = await gateway(['b', 'c']);
+    const created = sandboxOf(await rpc(h, '/acquireSandbox', { name: 'x' }));
+    const minted = await rpc(h, '/envdToken', { sandboxId: created.id });
+    expect(minted.status).toBe(200);
+    expect(minted.body).toEqual({
+      envdAccessToken: `envd-${created.nodeId}-${created.id}`,
+    });
+    const home = h.nodes.find((n) => n.id === created.nodeId);
+    expect(home?.hits.find((hit) => hit.path === '/envdToken')?.auth).toBe(
+      `Bearer ${TOKEN}`,
+    );
+    const nobody = await rpc(h, '/envdToken', { sandboxId: randomUUID() });
+    expect(nobody.status).toBe(404);
+    expect(message(nobody)).toMatch(/is on no node/);
+  });
+
   it("files round-trip; a node's 404 for a missing file passes through and the sandbox stays cached", async () => {
     const h = await gateway(['a']);
     const a = h.nodes[0] as FakeNode;
@@ -911,7 +937,7 @@ describe('using, destroying, and the cache', () => {
     const listed = await rpc(h, '/listSandboxes');
     expect(listed.status).toBe(501);
     expect(message(listed)).toContain('call the node directly');
-    expect((await rpc(h, '/createApiKey', { name: 'k' })).status).toBe(501);
+    expect((await rpc(h, '/registerTemplate', { name: 'k' })).status).toBe(501);
     expect((await rpc(h, '/acquireSandbx', { name: 'x' })).status).toBe(404);
     expect((await rpc(h, '/execCommand', { command: 'x' })).status).toBe(400);
     expect(h.nodes[0]?.hits).toEqual([]);

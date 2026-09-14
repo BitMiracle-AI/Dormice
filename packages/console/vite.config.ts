@@ -31,7 +31,7 @@ export default defineConfig({
     // knob.
     proxy: {
       '/console/auth': 'http://127.0.0.1:3676',
-      '/console/envdToken': 'http://127.0.0.1:3676',
+      '/envdToken': 'http://127.0.0.1:3676',
       '/listSandboxes': 'http://127.0.0.1:3676',
       '/destroySandbox': 'http://127.0.0.1:3676',
       '/acquireSandbox': 'http://127.0.0.1:3676',

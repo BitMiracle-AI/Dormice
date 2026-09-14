@@ -27,6 +27,7 @@ import type { KeyedQueue } from './keyed-queue';
 import { apiKeyRoutes } from './routes/api-keys';
 import { configRoutes } from './routes/config';
 import { consoleRoutes } from './routes/console';
+import { envdTokenRoutes } from './routes/envd-token';
 import { hostRoutes } from './routes/host';
 import { ingressRoutes } from './routes/ingress';
 import { sandboxRoutes } from './routes/sandboxes';
@@ -282,6 +283,7 @@ export function buildApp({
       swap,
     });
     await api.register(upgradeRoutes, { updater });
+    await api.register(envdTokenRoutes, { envdSigningSecret });
   });
 
   // The apiKey management verbs and updateSettings sit behind the stricter
@@ -308,9 +310,7 @@ export function buildApp({
     await scope.register(consoleRoutes, {
       config,
       db,
-      apiAuth,
       consoleDistDir,
-      envdSigningSecret,
     });
   });
 

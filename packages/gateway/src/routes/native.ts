@@ -47,10 +47,11 @@ export const NAMED_VERBS = [
 
 /**
  * The verbs that address the daemon, not a sandbox: fleet lists, host
- * readings, templates, settings, ingress, upgrade, keys. Asking every
- * node and merging, or answering from the gateway's own tables, comes
- * with the configuration authority; until then each answers an honest
- * 501 naming the alternative, instead of a misleading answer from
+ * readings, templates, settings, ingress, upgrade. The ones the gateway
+ * answers from its own tables leave this list as they arrive (the API
+ * keys did with the configuration authority); asking every node and
+ * merging the rest comes in a later cut. Until then each answers an
+ * honest 501 naming the alternative, instead of a misleading answer from
  * whichever node the gateway happened to pick.
  */
 export const UNNAMED_VERBS = [
@@ -70,10 +71,6 @@ export const UNNAMED_VERBS = [
   'listTemplates',
   'removeTemplate',
   'updateSettings',
-  'createApiKey',
-  'listApiKeys',
-  'updateApiKey',
-  'revokeApiKey',
 ] as const;
 
 export interface NativeRoutesOptions {

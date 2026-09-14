@@ -2,6 +2,7 @@ export * from './acquire';
 export * from './api-keys';
 export * from './config';
 export * from './destroy';
+export * from './envd-token';
 export * from './exec';
 export * from './files';
 export * from './gateway';

@@ -283,4 +283,4 @@ export const updatePolicy = (name: string, policy: LifecyclePolicyOverride) =>
 // The terminal's key: trades the session cookie for one sandbox's envd
 // access token, so the browser can speak to the envd surface directly.
 export const mintEnvdToken = (sandboxId: string) =>
-  rpc<{ envdAccessToken: string }>('/console/envdToken', { sandboxId });
+  rpc<{ envdAccessToken: string }>('/envdToken', { sandboxId });

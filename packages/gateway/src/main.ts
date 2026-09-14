@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '@dormice/server/keyed-queue';
 import { acquireSingleWriterLock } from '@dormice/server/lock';
@@ -80,13 +81,25 @@ log.info(
     : 'dormice-gateway build: no version identity (built outside a git checkout)',
 );
 
+// The built web console, by the monorepo layout: dist/main.js sits two
+// levels under packages/gateway, the console's dist beside it. Absent
+// (a deploy without the console built), /console answers an honest 404.
+const consoleDistDir = fileURLToPath(
+  new URL('../../console/dist', import.meta.url),
+);
+if (!existsSync(consoleDistDir)) {
+  log.warn(`web console not found at ${consoleDistDir} — /console disabled`);
+}
+
 const app = buildGatewayApp({
   config,
+  db,
   fleet,
   finder,
   locks,
   logger: log,
   build,
+  consoleDistDir: existsSync(consoleDistDir) ? consoleDistDir : undefined,
 });
 
 // Same red line as the daemon: loopback only, host not configurable — the

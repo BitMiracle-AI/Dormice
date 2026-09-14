@@ -10,6 +10,10 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import type { NameCache } from '../cache';
 import { downReason, type Fleet, STARTUP_GRACE_MS } from '../fleet';
 
+export interface CheckInRoutesOptions {
+  fleet: Fleet;
+}
+
 export interface NodeRoutesOptions {
   fleet: Fleet;
   cache: NameCache;
@@ -21,15 +25,12 @@ function refusal(statusCode: number, message: string): Error {
 }
 
 /**
- * The gateway's own verbs about its nodes: the check-in the nodes send
- * (RULES/协议.md「网关」), and what an operator reads and does about them.
- * Everything listNodes answers is what the gateway already holds, so
- * answering costs no node anything.
+ * The check-in the nodes send (RULES/协议.md「网关」) — behind the nodes'
+ * own gate in app.ts: the fleet token and nothing else.
  */
-export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
-  app,
-  { fleet, cache },
-) => {
+export const checkInRoutes: FastifyPluginAsyncZod<
+  CheckInRoutesOptions
+> = async (app, { fleet }) => {
   /**
    * Per node, the ids it was last reported to share an endpoint with
    * (sorted, joined) — so the warning below is said when the situation
@@ -103,7 +104,17 @@ export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
       return {};
     },
   );
+};
 
+/**
+ * What an operator reads and does about the nodes — behind the admin gate.
+ * Everything listNodes answers is what the gateway already holds, so
+ * answering costs no node anything.
+ */
+export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
+  app,
+  { fleet, cache },
+) => {
   app.post(
     '/listNodes',
     {

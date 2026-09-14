@@ -1,9 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { buildApp } from '../app';
 import {
   CONSOLE_HEADER,
   hashPassword,
@@ -14,34 +12,16 @@ import {
   verifyPassword,
   verifySession,
 } from '../auth';
-import { loadConfig } from '../config';
-import { migrateDb, openDb } from '../db/db';
-import { FakeExecutor } from '../executor/fake';
-import { KeyedQueue } from '../keyed-queue';
+import { TEST_TOKEN, testGateway } from '../testing';
 
-const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
-const TOKEN = 'test-token-test-token-test-token';
 const USERNAME = 'operator';
 const PASSWORD = 'correct horse battery';
 
-function testApp(consoleDistDir?: string) {
-  const db = openDb(':memory:');
-  migrateDb(db, MIGRATIONS);
-  const config = loadConfig({
-    DORMICE_DB_PATH: ':memory:',
-    DORMICE_API_TOKEN: TOKEN,
-  });
-  return buildApp({
-    config,
-    db,
-    executor: new FakeExecutor(),
-    locks: new KeyedQueue(),
-    logger: false,
-    consoleDistDir,
-  });
-}
+type TestApp = ReturnType<typeof testGateway>['app'];
 
-type TestApp = ReturnType<typeof testApp>;
+function testApp(consoleDistDir?: string): TestApp {
+  return testGateway({}, { consoleDistDir }).app;
+}
 
 /** A minimal built console: an index.html and one hashed asset. */
 function fixtureDist(): string {
@@ -54,7 +34,7 @@ function fixtureDist(): string {
 
 async function setup(
   app: TestApp,
-  { token = TOKEN, username = USERNAME, password = PASSWORD } = {},
+  { token = TEST_TOKEN, username = USERNAME, password = PASSWORD } = {},
 ) {
   return app.inject({
     method: 'POST',
@@ -79,6 +59,21 @@ function sessionCookie(res: { cookies: Array<Record<string, unknown>> }) {
   const cookie = res.cookies.find((c) => c.name === SESSION_COOKIE);
   expect(cookie).toBeDefined();
   return cookie as { value: string } & Record<string, unknown>;
+}
+
+/** A verb behind the admin gate, the console's everyday food. */
+async function listNodes(
+  app: TestApp,
+  cookieValue: string,
+  headers: Record<string, string> = { [CONSOLE_HEADER]: '1' },
+) {
+  return app.inject({
+    method: 'POST',
+    url: '/listNodes',
+    cookies: { [SESSION_COOKIE]: cookieValue },
+    headers,
+    payload: {},
+  });
 }
 
 describe('password hashing', () => {
@@ -178,7 +173,7 @@ describe('POST /console/auth/setup', () => {
       password: 'brand-new-pass',
     });
     expect(res.statusCode).toBe(200);
-    expect((await list(app, first.value)).statusCode).toBe(401);
+    expect((await listNodes(app, first.value)).statusCode).toBe(401);
     expect(
       (await login(app, { username: 'renamed', password: 'brand-new-pass' }))
         .statusCode,
@@ -186,20 +181,6 @@ describe('POST /console/auth/setup', () => {
     expect((await login(app)).statusCode).toBe(401);
   });
 });
-
-async function list(
-  app: TestApp,
-  cookieValue: string,
-  headers: Record<string, string> = { [CONSOLE_HEADER]: '1' },
-) {
-  return app.inject({
-    method: 'POST',
-    url: '/listSandboxes',
-    cookies: { [SESSION_COOKIE]: cookieValue },
-    headers,
-    payload: {},
-  });
-}
 
 describe('POST /console/auth/login', () => {
   it('answers 409 before setup — an honest pointer, not a guess counted', async () => {
@@ -257,21 +238,44 @@ describe('login throttle over the wire', () => {
   });
 });
 
-describe('cookie-authenticated API access', () => {
-  it('a fresh session cookie opens the native API', async () => {
+describe('cookie-authenticated access to the gates', () => {
+  it('a fresh session cookie opens the admin gate', async () => {
     const app = testApp();
     await setup(app);
     const cookie = sessionCookie(await login(app));
-    const res = await list(app, cookie.value);
+    const res = await listNodes(app, cookie.value);
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ sandboxes: [] });
+    expect(res.json()).toEqual({ nodes: [] });
+  });
+
+  it('and the sandbox gate: the console header rides along, the verb judges the rest', async () => {
+    const app = testApp();
+    await setup(app);
+    const cookie = sessionCookie(await login(app));
+    const res = await app.inject({
+      method: 'POST',
+      url: '/envdToken',
+      cookies: { [SESSION_COOKIE]: cookie.value },
+      headers: { [CONSOLE_HEADER]: '1' },
+      payload: { sandboxId: 'sb-nowhere' },
+    });
+    // Through the gate; no node holds the id, so the verb's own 404.
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toContain('is on no node');
+    const bare = await app.inject({
+      method: 'POST',
+      url: '/envdToken',
+      cookies: { [SESSION_COOKIE]: cookie.value },
+      payload: { sandboxId: 'sb-nowhere' },
+    });
+    expect(bare.statusCode).toBe(401);
   });
 
   it('the cookie alone is not enough: the console header is required', async () => {
     const app = testApp();
     await setup(app);
     const cookie = sessionCookie(await login(app));
-    const res = await list(app, cookie.value, {});
+    const res = await listNodes(app, cookie.value, {});
     expect(res.statusCode).toBe(401);
   });
 
@@ -279,14 +283,14 @@ describe('cookie-authenticated API access', () => {
     const app = testApp();
     await setup(app);
     const cookie = sessionCookie(await login(app));
-    const res = await list(app, `${cookie.value}ff`);
+    const res = await listNodes(app, `${cookie.value}ff`);
     expect(res.statusCode).toBe(401);
   });
 
   it('rejects any cookie while no account exists', async () => {
-    // A cookie minted under some secret proves nothing when the ledger has
-    // no account (e.g. the ledger was recreated).
-    const res = await list(testApp(), mintSession(mintSessionSecret()));
+    // A cookie minted under some secret proves nothing when the table has
+    // no account (e.g. the database was recreated).
+    const res = await listNodes(testApp(), mintSession(mintSessionSecret()));
     expect(res.statusCode).toBe(401);
   });
 
@@ -302,61 +306,18 @@ describe('cookie-authenticated API access', () => {
     });
     expect(res.statusCode).toBe(401);
   });
-});
 
-describe('POST /envdToken', () => {
-  async function mint(
-    app: TestApp,
-    cookieValue: string,
-    headers: Record<string, string> = { [CONSOLE_HEADER]: '1' },
-  ) {
-    return app.inject({
+  it('nor the nodes gate: a check-in is a machine reporting, not a session', async () => {
+    const app = testApp();
+    await setup(app);
+    const cookie = sessionCookie(await login(app));
+    const res = await app.inject({
       method: 'POST',
-      url: '/envdToken',
-      cookies: { [SESSION_COOKIE]: cookieValue },
-      headers,
-      payload: { sandboxId: 'sb-terminal' },
+      url: '/checkIn',
+      cookies: { [SESSION_COOKIE]: cookie.value },
+      headers: { [CONSOLE_HEADER]: '1' },
+      payload: {},
     });
-  }
-
-  it('a session cookie mints the exact token the envd surface accepts', async () => {
-    const app = testApp();
-    await setup(app);
-    const cookie = sessionCookie(await login(app));
-    const res = await mint(app, cookie.value);
-    expect(res.statusCode).toBe(200);
-    const { envdAccessToken } = res.json() as { envdAccessToken: string };
-    // The envd surface itself is the judge — the token derives from the
-    // ledger's signing secret, which nothing outside the daemon (this test
-    // included) can recompute. Auth passing shows as anything-but-401.
-    const probe = (sandboxId: string) =>
-      app.inject({
-        method: 'POST',
-        url: '/e2b/envd/filesystem.Filesystem/Stat',
-        headers: {
-          'e2b-sandbox-id': sandboxId,
-          'x-access-token': envdAccessToken,
-        },
-        payload: { path: '/home/user' },
-      });
-    expect((await probe('sb-terminal')).statusCode).not.toBe(401);
-    // Per-sandbox: the same token opens no other sandbox.
-    expect((await probe('sb-other')).statusCode).toBe(401);
-  });
-
-  it('goes through the API-wide arbiter: no console header, no token', async () => {
-    const app = testApp();
-    await setup(app);
-    const cookie = sessionCookie(await login(app));
-    const res = await mint(app, cookie.value, {});
-    expect(res.statusCode).toBe(401);
-  });
-
-  it('rejects a tampered cookie', async () => {
-    const app = testApp();
-    await setup(app);
-    const cookie = sessionCookie(await login(app));
-    const res = await mint(app, `${cookie.value}ff`);
     expect(res.statusCode).toBe(401);
   });
 });
