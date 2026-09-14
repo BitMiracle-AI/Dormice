@@ -8,6 +8,16 @@
  * and wholesale for a node an operator removed. An entry that is wrong
  * costs one misrouted request, whose answer evicts it; a cache that is
  * lost costs one extra round of questions per name.
+ *
+ * Bounded, least recently used first. A node deletes rows on its own — an
+ * E2B deadline kill is the scanner's routine — and tells no gateway, so
+ * an unbounded map would keep an entry for every sandbox ever created
+ * through this process, for as long as it lived: an unnamed E2B create
+ * every minute is half a million dead entries a year. The bound is
+ * generous next to a fleet's live population (Beijing holds some fifteen
+ * thousand rows, 2026-09), and past it the entry nobody has asked about
+ * for longest goes; asked about again, it costs the one round of
+ * questions any miss costs.
  */
 export interface CacheEntry {
   id: string;
@@ -16,9 +26,14 @@ export interface CacheEntry {
   nodeId: string;
 }
 
+export const CACHE_LIMIT = 100_000;
+
 export class NameCache {
   private readonly byName = new Map<string, CacheEntry>();
+  /** Insertion order is recency: a hit re-inserts, and the first key is the least recently used. */
   private readonly byId = new Map<string, CacheEntry>();
+
+  constructor(private readonly limit = CACHE_LIMIT) {}
 
   put(entry: CacheEntry): void {
     // A name that moves to a new id (destroyed and re-acquired elsewhere
@@ -39,15 +54,30 @@ export class NameCache {
     ) {
       this.byName.delete(known.name);
     }
+    this.byId.delete(entry.id);
     this.byId.set(entry.id, entry);
+    if (this.byId.size > this.limit) {
+      const oldest = this.byId.values().next().value;
+      if (oldest !== undefined) this.evict(oldest);
+    }
   }
 
   getByName(name: string): CacheEntry | undefined {
-    return this.byName.get(name);
+    const entry = this.byName.get(name);
+    if (entry !== undefined) this.touch(entry);
+    return entry;
   }
 
   getById(id: string): CacheEntry | undefined {
-    return this.byId.get(id);
+    const entry = this.byId.get(id);
+    if (entry !== undefined) this.touch(entry);
+    return entry;
+  }
+
+  /** Marks the entry as just used: back to the end of the recency order. */
+  private touch(entry: CacheEntry): void {
+    this.byId.delete(entry.id);
+    this.byId.set(entry.id, entry);
   }
 
   evict(entry: CacheEntry): void {
