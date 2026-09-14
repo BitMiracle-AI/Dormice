@@ -213,6 +213,10 @@ const checkIn = new CheckIn({
   applyConfig: (bundle) =>
     applyConfig(bundle, { db, executor, locks, swap, log, beat }),
   log,
+  // For the wait before listen alone (check-in.ts untilConfigured): the
+  // ticker itself never beats, for the reason the metrics ticker does not
+  // (the watchdog's comment above).
+  beat,
 });
 
 // The daemon's own upgrade window compares the commit baked into this

@@ -26,8 +26,8 @@ export function clientFromEnv(
       .join(' and ');
     throw new Error(
       `${missing} must be set, e.g.\n` +
-        '  export DORMICE_ENDPOINT=http://127.0.0.1:3676\n' +
-        "  export DORMICE_API_TOKEN=<the daemon's token>",
+        '  export DORMICE_ENDPOINT=http://127.0.0.1:3677\n' +
+        '  export DORMICE_API_TOKEN=<the fleet token, from /etc/dormice/env>',
     );
   }
   return new Dormice({ endpoint, token });

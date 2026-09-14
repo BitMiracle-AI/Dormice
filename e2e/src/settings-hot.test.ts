@@ -86,18 +86,36 @@ describe('the S3 archive store as a live ledger setting', () => {
   it('refuses an unreachable store with S3’s own words and saves nothing', async () => {
     const dormice = client();
     const before = (await dormice.getConfig()).settings.s3;
-    await expect(
-      dormice.updateSettings({
-        s3: {
-          endpoint: 'http://127.0.0.1:1',
-          bucket: 'nowhere',
-          region: 'us-east-1',
-          forcePathStyle: true,
-          accessKeyId: 'k',
-          secretAccessKey: 's',
-        },
-      }),
-    ).rejects.toMatchObject({
+    // Another endpoint is a move, and the moving-store guard is judged
+    // before the probe: while another suite (archive.test.ts) has a
+    // sandbox archived on the shared node, the answer is that guard's 400,
+    // not the probe's 502 — so the attempt repeats until the fleet's
+    // readings let the probe speak (seen in a local run, 2026-09-14).
+    const refused = await until(async () => {
+      try {
+        await dormice.updateSettings({
+          s3: {
+            endpoint: 'http://127.0.0.1:1',
+            bucket: 'nowhere',
+            region: 'us-east-1',
+            forcePathStyle: true,
+            accessKeyId: 'k',
+            secretAccessKey: 's',
+          },
+        });
+        throw new Error('an unreachable store was accepted');
+      } catch (error) {
+        const { status, message } = error as {
+          status?: number;
+          message: string;
+        };
+        if (status === 400 && /archived or restoring/.test(message)) {
+          return undefined;
+        }
+        return { status, message };
+      }
+    }, 12_000);
+    expect(refused).toMatchObject({
       status: 502,
       message: expect.stringMatching(/nothing was saved/),
     });

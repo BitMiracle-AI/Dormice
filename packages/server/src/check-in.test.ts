@@ -311,7 +311,7 @@ describe('CheckIn', () => {
     ).toBeNull();
   });
 
-  it('untilConfigured() asks until a bundle lands, on the interval, and returns at once when a copy exists', async () => {
+  it('untilConfigured() asks until a bundle lands, on the interval, beating the watchdog per attempt, and returns at once when a copy exists', async () => {
     let sent = 0;
     const gw = await gateway(() => {
       sent += 1;
@@ -321,7 +321,12 @@ describe('CheckIn', () => {
         : answering(2, testBundle({}, 2));
     });
     const { log } = logSpy();
-    const opts = options(gw.endpoint, log);
+    let beats = 0;
+    const opts = options(gw.endpoint, log, {
+      beat: () => {
+        beats += 1;
+      },
+    });
     const checkIn = new CheckIn(opts);
     const started = Date.now();
     await checkIn.untilConfigured();
@@ -329,15 +334,49 @@ describe('CheckIn', () => {
     expect(gw.seen).toHaveLength(3);
     // Two waits of one interval between the three asks.
     expect(Date.now() - started).toBeGreaterThanOrEqual(1_900);
-    // Holding a copy already: nothing is asked.
+    // Every attempt, the two refused ones included, beat the watchdog: a
+    // node waiting for its gateway is alive, not stalled.
+    expect(beats).toBe(3);
+    // Holding a copy already: nothing is asked, nothing beats.
     await checkIn.untilConfigured();
     expect(gw.seen).toHaveLength(3);
+    expect(beats).toBe(3);
   });
 
-  it('ticks on its interval from start() and stops on stop()', async () => {
+  it("the first failure's sentence names the cost for where the node stands: not listening without a copy, not placed on with one", async () => {
+    const gw = await gateway(() => ({
+      status: 503,
+      body: '{"message":"starting"}',
+    }));
+    const bare = logSpy();
+    await new CheckIn(options(gw.endpoint, bare.log)).once();
+    expect(bare.warns).toEqual([
+      expect.stringMatching(
+        /^check-in failed; this node holds no configuration copy and does not listen until the gateway answers with one/,
+      ),
+    ]);
+    const holding = logSpy();
+    const opts = options(gw.endpoint, holding.log);
+    applyNodeConfig(opts.db, testBundle({}, 1));
+    await new CheckIn(opts).once();
+    expect(holding.warns).toEqual([
+      expect.stringMatching(
+        /^check-in failed; the gateway places nothing here and forwards no new names to this node/,
+      ),
+    ]);
+  });
+
+  it('ticks on its interval from start() and stops on stop(); the ticker never beats the watchdog', async () => {
     const gw = await gateway(() => answering(1));
     const { log } = logSpy();
-    const checkIn = new CheckIn(options(gw.endpoint, log));
+    let beats = 0;
+    const checkIn = new CheckIn(
+      options(gw.endpoint, log, {
+        beat: () => {
+          beats += 1;
+        },
+      }),
+    );
     checkIn.start();
     const deadline = Date.now() + 5_000;
     while (gw.seen.length < 2 && Date.now() < deadline) {
@@ -348,5 +387,7 @@ describe('CheckIn', () => {
     const afterStop = gw.seen.length;
     await new Promise((resolve) => setTimeout(resolve, 1_200));
     expect(gw.seen.length).toBe(afterStop);
+    // A ticker's liveness must never reassure the watchdog (main.ts).
+    expect(beats).toBe(0);
   });
 });

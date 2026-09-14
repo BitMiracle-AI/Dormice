@@ -52,6 +52,14 @@ export interface CheckInOptions {
   /** Makes a bundle the gateway answered with real on this node (node-config.ts applyConfig). */
   applyConfig: (bundle: NodeConfigBundle) => Promise<void>;
   log: CheckInLog;
+  /**
+   * The heartbeat watchdog's ear, for untilConfigured() alone: a node
+   * waiting for its first bundle has no lifecycle work to beat, and each
+   * attempt — answered or not, bounded by CHECK_IN_TIMEOUT_MS — is the
+   * wait provably alive. The ticker never beats: a ticker's liveness must
+   * not reassure the watchdog (main.ts has the 2026-08-13 lesson).
+   */
+  beat?: () => void;
   /** Test seam; production uses the platform's fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -176,10 +184,19 @@ export class CheckIn {
       const message = describe(error);
       const failure = message.replace(/\d+/g, '#');
       if (failure !== this.failing) {
+        // What the failure costs depends on where this node stands: one
+        // holding a copy keeps serving and is merely not placed on; one
+        // without (untilConfigured, at boot) is not listening at all, and
+        // "the gateway forwards nothing here" would name the wrong
+        // predicament (found by review, 2026-09-14).
+        const cost =
+          opts.configVersion() === null
+            ? 'this node holds no configuration copy and does not listen until the gateway answers with one'
+            : 'the gateway places nothing here and forwards no new names to this node until it answers again';
         opts.log.warn(
           { gateway: opts.gateway, error: message },
           this.failing === null
-            ? 'check-in failed; the gateway places nothing here and forwards no new names to this node until it answers again — retrying every interval'
+            ? `check-in failed; ${cost} — retrying every interval`
             : 'check-in still failing, differently — retrying every interval',
         );
       }
@@ -200,6 +217,12 @@ export class CheckIn {
   async untilConfigured(): Promise<void> {
     while (!this.closing && this.opts.configVersion() === null) {
       await this.once();
+      // Each attempt is the wait provably alive (CheckInOptions.beat): the
+      // watchdog starts before boot's awaits, and without a beat it read a
+      // node half an hour into waiting for its gateway as a stalled daemon
+      // and exited it — every thirty minutes, for nothing (found by
+      // review, 2026-09-14).
+      this.opts.beat?.();
       if (this.opts.configVersion() !== null) return;
       await new Promise((resolve) =>
         setTimeout(resolve, this.opts.intervalSeconds * 1000),

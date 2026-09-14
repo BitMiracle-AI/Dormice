@@ -2,7 +2,7 @@ import http from 'node:http';
 import { Dormice } from '@dormice/sdk';
 import { CommandExitError, Sandbox } from 'e2b';
 import { describe, expect, inject, it } from 'vitest';
-import { door, settled } from './helpers';
+import { door, until as poll, settled } from './helpers';
 
 // The compatibility promise, verified with the promise's own artifact: the
 // OFFICIAL e2b package, pointed at the daemon by exactly two URLs (plus its
@@ -523,14 +523,22 @@ describe('official e2b SDK against the daemon', () => {
   });
 
   it('getHost builds the wildcard host from the served domain', async () => {
-    const sbx = await Sandbox.create(connection());
-    try {
-      // Pure client-side string assembly — but from OUR domain field, which
-      // is the whole point: the daemon told the SDK where sandboxes live.
-      expect(sbx.getHost(8000)).toBe(`8000-${sbx.sandboxId}.sbx.dormice.test`);
-    } finally {
-      await sbx.kill();
-    }
+    // Pure client-side string assembly — but from OUR domain field, which
+    // is the whole point: the daemon told the SDK where sandboxes live.
+    // Polled: settings-hot swaps the shared node's domain for a second or
+    // two at a time (the edit travels by check-in since 2026-09-14), and a
+    // sandbox created inside that window is told the other domain. The
+    // seed is the steady state and always comes back.
+    await poll(async () => {
+      const sbx = await Sandbox.create(connection());
+      try {
+        return sbx.getHost(8000) === `8000-${sbx.sandboxId}.sbx.dormice.test`
+          ? true
+          : undefined;
+      } finally {
+        await sbx.kill();
+      }
+    });
   });
 
   it('watchDir streams filesystem events for changes made through the SDK', async () => {

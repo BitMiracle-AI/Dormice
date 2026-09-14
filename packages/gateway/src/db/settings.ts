@@ -14,13 +14,6 @@ import { type SettingsRow, settings } from './schema';
 const SETTINGS_ROW_ID = 1;
 
 /**
- * The fleet-wide settings as the wire shows them. The daemon's settings
- * view once carried the managed-swap target too; on the gateway that knob
- * is a node's (nodes.swapGb), so it is absent here.
- */
-export type FleetSettings = Omit<RuntimeSettings, 'swapGb'>;
-
-/**
  * Seeds the settings row from the env at the gateway's first start —
  * insert-or-nothing, so every later start finds the row and leaves it
  * alone: the table is the one truth from then on, and a later env edit of
@@ -76,7 +69,7 @@ function readRow(db: Db): SettingsRow {
   return row;
 }
 
-function toView(row: SettingsRow): FleetSettings {
+function toView(row: SettingsRow): RuntimeSettings {
   return {
     sandboxDefaults: {
       cpus: row.sandboxCpus,
@@ -109,7 +102,7 @@ function toView(row: SettingsRow): FleetSettings {
 }
 
 /** The knobs in force, read fresh at each use — a point read costs microseconds and makes a console edit apply to the very next request. */
-export function readSettings(db: Db): FleetSettings {
+export function readSettings(db: Db): RuntimeSettings {
   return toView(readRow(db));
 }
 
@@ -167,9 +160,9 @@ export function bumpConfigVersion(db: Writer): number {
  */
 export function writeSettings(
   db: Db,
-  patch: Omit<UpdateSettingsRequest, 'swapGb'>,
+  patch: UpdateSettingsRequest,
   now: Date,
-): FleetSettings {
+): RuntimeSettings {
   const row = db
     .update(settings)
     .set({

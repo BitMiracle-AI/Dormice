@@ -817,8 +817,14 @@ describe('the observability verbs over a real daemon', () => {
     expect(settings.updatedAt).not.toBeNull();
     const after = await viaDoor().getConfig();
     expect(after.settings.pidsLimit).toBe(before.settings.pidsLimit + 1);
-    expect(after.configVersion).toBe(before.configVersion + 1);
-    expect(await settled()).toBe(after.configVersion);
+    // Greater, not exactly one more: the exam's gateway is shared by every
+    // suite in this run, and another suite's write (settings-hot's domain
+    // edits) can count the version up between two reads here — CI saw 22
+    // where +1 said 21 (2026-09-14). The node's proof keeps its shape:
+    // settled() returns once node A reports the gateway's current version,
+    // which is at least the one this write produced.
+    expect(after.configVersion).toBeGreaterThan(before.configVersion);
+    expect(await settled()).toBeGreaterThanOrEqual(after.configVersion);
     // Restore: the exam's gateway is shared by every suite in this run.
     await viaDoor().updateSettings({ pidsLimit: before.settings.pidsLimit });
     await settled();
