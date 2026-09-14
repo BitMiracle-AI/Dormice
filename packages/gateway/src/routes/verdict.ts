@@ -27,14 +27,30 @@ export function verdict(found: Found, what: string): Verdict {
       return { kind: 'node', node: found.node, id: found.id, name: found.name };
     case 'none':
       return { kind: 'none' };
-    case 'conflict':
+    case 'conflict': {
       // The gateway refuses every verb for this name with this very 409,
       // destroy included — it will not guess which copy the caller means.
+      const ids = found.nodes.map((n) => n.id).join(' and ');
+      const endpoints = new Set(found.nodes.map((n) => n.endpoint));
+      if (endpoints.size === 1) {
+        // Two ids, one endpoint: not two copies but one daemon answering
+        // twice — a node whose DORMICE_NODE_ID changed (its old id keeps
+        // its row until removed), or two nodes whose DORMICE_NODE_ENDPOINT
+        // name the same machine. Nothing to destroy; the fleet's list of
+        // nodes is wrong, and the check-in log said so when it happened
+        // (routes/nodes.ts).
+        return {
+          kind: 'refuse',
+          status: 409,
+          message: `${what} was answered for by nodes ${ids}, which are one endpoint (${[...endpoints][0]}) — one daemon under two node ids: a node whose DORMICE_NODE_ID changed and whose old id still has its row (removeNode the id that no longer checks in; listNodes shows which), or two nodes whose DORMICE_NODE_ENDPOINT name the same machine (correct the wrong one)`,
+        };
+      }
       return {
         kind: 'refuse',
         status: 409,
-        message: `${what} exists on nodes ${found.nodeIds.join(' and ')} — destroy one copy directly on its node before routing can resume`,
+        message: `${what} exists on nodes ${ids} — destroy one copy directly on its node before routing can resume`,
       };
+    }
     case 'unsure':
       return {
         kind: 'refuse',

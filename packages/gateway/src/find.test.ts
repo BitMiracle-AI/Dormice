@@ -83,8 +83,42 @@ describe('Finder', () => {
     const found = await new Finder(fleet, cache, ask, silentLog).byName(
       'alice',
     );
-    expect(found).toEqual({ kind: 'conflict', nodeIds: ['a', 'c'] });
+    expect(found).toEqual({
+      kind: 'conflict',
+      nodes: [
+        { id: 'a', endpoint: 'http://a:80' },
+        { id: 'c', endpoint: 'http://c:80' },
+      ],
+    });
     expect(cache.size).toBe(0);
+  });
+
+  it('two ids checked in from one endpoint answer twice for every name there: a conflict whose nodes share the endpoint', async () => {
+    const fleet = fleetOf('a', 'b');
+    // The node at a's address checks in again under a new id: a rename.
+    fleet.checkIn(checkInOf('a-renamed', 'http://a:80'), NOW);
+    const { ask } = scripted({
+      a: { kind: 'found', id: 'sb-1', name: 'alice', state: 'active' },
+      'a-renamed': {
+        kind: 'found',
+        id: 'sb-1',
+        name: 'alice',
+        state: 'active',
+      },
+    });
+    const found = await new Finder(
+      fleet,
+      new NameCache(),
+      ask,
+      silentLog,
+    ).byName('alice');
+    expect(found).toEqual({
+      kind: 'conflict',
+      nodes: [
+        { id: 'a', endpoint: 'http://a:80' },
+        { id: 'a-renamed', endpoint: 'http://a:80' },
+      ],
+    });
   });
 
   it('every node says no: the name is new; a silent node among the noes: unsure, naming it', async () => {

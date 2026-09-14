@@ -534,7 +534,7 @@ describe('acquire: placing and finding', () => {
     expect(h.fleet.get('b')?.placedSinceCheckIn).toBe(1);
   });
 
-  it('an acquire whose client left while it waited for the name\'s slot asks no node and builds nothing', async () => {
+  it("an acquire whose client left while it waited for the name's slot asks no node and builds nothing", async () => {
     const h = await gateway(['a']);
     const a = h.nodes[0] as FakeNode;
     await rpc(h, '/acquireSandbox', { name: 'q' });
@@ -679,6 +679,41 @@ describe('acquire: placing and finding', () => {
     b.sandboxes.delete('twin');
     const healed = await rpc(h, '/acquireSandbox', { name: 'twin' });
     expect(sandboxOf(healed).nodeId).toBe('a');
+  });
+
+  it("a node that checked in again under a new id answers every lookup twice: the 409 says the two ids are one endpoint and names the way out, not 'destroy one copy'", async () => {
+    const h = await gateway(['a', 'b']);
+    const [a] = h.nodes as [FakeNode, FakeNode];
+    expect(
+      sandboxOf(await rpc(h, '/acquireSandbox', { name: 'kept' })).nodeId,
+    ).toBe('a');
+    // The operator renamed DORMICE_NODE_ID on a's machine; the old row stays.
+    const renamed = await fetch(`${h.endpoint}/checkIn`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(checkInOf('a-renamed', a.endpoint)),
+    });
+    expect(renamed.status).toBe(200);
+    h.cache.evict({
+      id: sandboxOf(await rpc(h, '/acquireSandbox', { name: 'kept' })).id,
+      name: 'kept',
+      nodeId: 'a',
+    });
+    const refused = await rpc(h, '/execCommand', {
+      name: 'kept',
+      command: 'true',
+    });
+    expect(refused.status).toBe(409);
+    expect(message(refused)).toContain(
+      `nodes a and a-renamed, which are one endpoint (${a.endpoint})`,
+    );
+    expect(message(refused)).toContain(
+      'removeNode the id that no longer checks in',
+    );
+    expect(message(refused)).not.toContain('destroy one copy');
   });
 
   it('a node that does not answer: its cached names 502, and a new name is a 503 with Retry-After naming it — until an operator removes it', async () => {

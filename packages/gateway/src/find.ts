@@ -16,7 +16,7 @@ import type { AskNode, LookupQuery } from './lookup';
  */
 export type Found =
   | { kind: 'one'; node: NodeState; id: string; name: string | null }
-  | { kind: 'conflict'; nodeIds: string[] }
+  | { kind: 'conflict'; nodes: Array<{ id: string; endpoint: string }> }
   | { kind: 'none' }
   | { kind: 'unsure'; silent: Array<{ nodeId: string; why: string }> };
 
@@ -119,9 +119,13 @@ export class Finder {
       return { kind: 'one', node: first.node, id: entry.id, name: entry.name };
     }
     if (found.length > 1) {
+      // The endpoints ride along: two ids answering from one endpoint is
+      // one daemon under two names, which verdict.ts diagnoses as such.
       return {
         kind: 'conflict',
-        nodeIds: found.map((f) => f.node.id).sort(),
+        nodes: found
+          .map((f) => ({ id: f.node.id, endpoint: f.node.endpoint }))
+          .sort((x, y) => x.id.localeCompare(y.id)),
       };
     }
     const silent = answers.flatMap(({ node, answer }) =>
