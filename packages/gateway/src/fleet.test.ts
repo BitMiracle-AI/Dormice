@@ -22,8 +22,13 @@ function db() {
 describe('Fleet', () => {
   it('a first check-in joins the node and persists its row; a gateway restart still knows it, unreached until it checks in again', () => {
     const handle = db();
-    const fleet = new Fleet(handle);
+    const fleet = new Fleet(handle, NOW);
     expect(fleet.all()).toEqual([]);
+    expect(fleet.startedAt).toBe(NOW);
+    // Left unsaid, the start is now.
+    expect(Date.now() - new Fleet(handle).startedAt.getTime()).toBeLessThan(
+      5_000,
+    );
     const { node, joined } = taken(
       fleet.checkIn(
         checkInOf('node-b', 'http://10.0.0.7:80', { intervalSeconds: 15 }),

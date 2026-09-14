@@ -27,6 +27,19 @@ export interface NodeState {
 }
 
 /**
+ * How long after a gateway start a node that has not checked in yet is
+ * still presumed alive. A restarted gateway knows its nodes from their
+ * rows and nothing else: every lastCheckInAt is null, and "has not checked
+ * in since the gateway started" is true of a healthy node for up to one
+ * of its intervals. Judged by downReason alone, removeNode would let an
+ * operator delete a running node in that window (found by review,
+ * 2026-09-14). Two of the daemon's default intervals
+ * (DORMICE_CHECK_IN_INTERVAL_SECONDS, 15): the gateway cannot know a
+ * node's own interval before it has heard from it once.
+ */
+export const STARTUP_GRACE_MS = 2 * 15 * 1000;
+
+/**
  * Why a node is not to be placed on right now, or null when it is fine:
  * never checked in since this gateway started, or silent for two of its
  * own intervals — the interval it stated in its last check-in, so the
@@ -59,7 +72,14 @@ export type CheckInOutcome =
 export class Fleet {
   private readonly members = new Map<string, NodeState>();
 
-  constructor(private readonly db: Db) {
+  /** When this gateway process started — the yardstick for STARTUP_GRACE_MS. */
+  readonly startedAt: Date;
+
+  constructor(
+    private readonly db: Db,
+    startedAt: Date = new Date(),
+  ) {
+    this.startedAt = startedAt;
     for (const row of db.select().from(nodes).all()) {
       this.members.set(row.id, {
         id: row.id,

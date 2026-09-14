@@ -8,7 +8,7 @@ import {
 } from '@dormice/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import type { NameCache } from '../cache';
-import { downReason, type Fleet } from '../fleet';
+import { downReason, type Fleet, STARTUP_GRACE_MS } from '../fleet';
 
 export interface NodeRoutesOptions {
   fleet: Fleet;
@@ -30,6 +30,16 @@ export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
   app,
   { fleet, cache },
 ) => {
+  /**
+   * Per node, the ids it was last reported to share an endpoint with
+   * (sorted, joined) — so the warning below is said when the situation
+   * arises or changes, not at every check-in: two nodes on one endpoint
+   * checking in every fifteen seconds is one misconfiguration, not two
+   * hundred and forty log lines an hour (the daemon's check-in log keeps
+   * the same discipline, server/check-in.ts).
+   */
+  const twinsWarned = new Map<string, string>();
+
   app.post(
     '/checkIn',
     {
@@ -70,15 +80,24 @@ export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
       }
       const twins = fleet
         .all()
-        .filter((n) => n.id !== node.id && n.endpoint === node.endpoint);
+        .filter((n) => n.id !== node.id && n.endpoint === node.endpoint)
+        .map((n) => n.id)
+        .sort();
+      const before = twinsWarned.get(node.id);
       if (twins.length > 0) {
-        request.log.warn(
-          {
-            nodeId: node.id,
-            endpoint: node.endpoint,
-            alsoReportedBy: twins.map((n) => n.id),
-          },
-          'two nodes report the same endpoint — check DORMICE_NODE_ID and DORMICE_NODE_ENDPOINT on both; their sandboxes will be found twice (409) or land on the wrong machine',
+        const now = twins.join(',');
+        if (now !== before) {
+          twinsWarned.set(node.id, now);
+          request.log.warn(
+            { nodeId: node.id, endpoint: node.endpoint, alsoReportedBy: twins },
+            'two nodes report the same endpoint — check DORMICE_NODE_ID and DORMICE_NODE_ENDPOINT on both; their sandboxes will be found twice (409) or land on the wrong machine',
+          );
+        }
+      } else if (before !== undefined) {
+        twinsWarned.delete(node.id);
+        request.log.info(
+          { nodeId: node.id, endpoint: node.endpoint },
+          'the node no longer shares its endpoint with another',
         );
       }
       return {};
@@ -131,6 +150,17 @@ export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
       const node = fleet.get(request.body.id);
       if (node !== undefined) {
         const now = new Date();
+        // Right after a gateway start every node is silent so far, the
+        // running ones included: they are heard from within one interval.
+        // Until two default intervals have passed, "not heard from" is
+        // not "down" (fleet.ts STARTUP_GRACE_MS).
+        const sinceStart = now.getTime() - fleet.startedAt.getTime();
+        if (node.lastCheckInAt === null && sinceStart < STARTUP_GRACE_MS) {
+          throw refusal(
+            409,
+            `the gateway started ${Math.round(sinceStart / 1000)}s ago and has not heard from node ${node.id} yet — a running node checks in within its interval, so silence this early proves nothing; wait ${STARTUP_GRACE_MS / 1000}s from the gateway's start, then remove it`,
+          );
+        }
         if (downReason(node, now) === null && node.lastCheckInAt !== null) {
           const ago = Math.round(
             (now.getTime() - node.lastCheckInAt.getTime()) / 1000,

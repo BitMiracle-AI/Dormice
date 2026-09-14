@@ -3,6 +3,7 @@ import http from 'node:http';
 import net, { type AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '@dormice/server/keyed-queue';
+import { pino } from 'pino';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildGatewayApp } from './app';
 import { NameCache } from './cache';
@@ -215,6 +216,12 @@ afterEach(async () => {
 async function gateway(
   nodeIds: string[],
   env: Record<string, string> = {},
+  opts: {
+    /** When the gateway "started" — the removeNode startup grace is judged against it. */
+    startedAt?: Date;
+    /** Collects the gateway's own log lines (JSON, one per entry) when a test asserts on what it says. */
+    logs?: string[];
+  } = {},
 ): Promise<Harness> {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
@@ -225,17 +232,21 @@ async function gateway(
     DORMICE_GATEWAY_NODE_CPU_LIMIT_PCT: '100',
     ...env,
   });
-  const fleet = new Fleet(db);
+  const fleet = new Fleet(db, opts.startedAt);
   const cache = new NameCache();
   const finder = new Finder(fleet, cache, httpAskNode(TOKEN), {
     warn: () => {},
   });
+  const logs = opts.logs;
   const app = buildGatewayApp({
     config,
     fleet,
     finder,
     locks: new KeyedQueue(),
-    logger: false,
+    logger:
+      logs === undefined
+        ? false
+        : pino({ level: 'info' }, { write: (line: string) => logs.push(line) }),
     build: null,
   });
   await app.listen({ host: '127.0.0.1', port: 0 });
@@ -454,6 +465,75 @@ describe('check-in and the node verbs', () => {
     expect(
       ((await rpc(h, '/listNodes')).body as { nodes: unknown[] }).nodes,
     ).toHaveLength(2);
+  });
+
+  it('two nodes on one endpoint are warned about when it arises or changes, not at every check-in; and once more when it stops', async () => {
+    const logs: string[] = [];
+    const h = await gateway(['b'], {}, { logs });
+    const shared = h.nodes[0]?.endpoint ?? '';
+    const warned = () =>
+      logs.filter((l) => l.includes('two nodes report the same endpoint'));
+    // Three check-ins from c at b's address: one warning, not three.
+    for (let i = 0; i < 3; i += 1) {
+      await rpc(h, '/checkIn', checkInOf('c', shared));
+    }
+    expect(warned()).toHaveLength(1);
+    expect(JSON.parse(warned()[0] ?? '{}')).toMatchObject({
+      nodeId: 'c',
+      alsoReportedBy: ['b'],
+    });
+    // A third node at the address is news; c's next check-in is news
+    // again, because the set it shares with changed.
+    await rpc(h, '/checkIn', checkInOf('d', shared));
+    expect(warned()).toHaveLength(2);
+    await rpc(h, '/checkIn', checkInOf('c', shared));
+    expect(warned()).toHaveLength(3);
+    expect(JSON.parse(warned()[2] ?? '{}')).toMatchObject({
+      nodeId: 'c',
+      alsoReportedBy: ['b', 'd'],
+    });
+    // c moves to an address of its own (an interval later, so the move is
+    // taken): said once, as the end of the situation.
+    const c = h.fleet.get('c');
+    if (!c) throw new Error('node lost');
+    c.lastCheckInAt = new Date(Date.now() - 16_000);
+    await rpc(h, '/checkIn', checkInOf('c', 'http://10.0.0.99:80'));
+    await rpc(h, '/checkIn', checkInOf('c', 'http://10.0.0.99:80'));
+    expect(
+      logs.filter((l) => l.includes('no longer shares its endpoint')),
+    ).toHaveLength(1);
+    expect(warned()).toHaveLength(3);
+  });
+
+  it('right after a gateway start a node not yet heard from cannot be removed; past two default intervals it can', async () => {
+    // A restart: the rows are known, nothing has checked in yet.
+    const fresh = await gateway(['b']);
+    const b = fresh.fleet.get('b');
+    if (!b) throw new Error('node lost');
+    b.lastCheckInAt = null;
+    b.intervalSeconds = null;
+    const early = await rpc(fresh, '/removeNode', { id: 'b' });
+    expect(early.status).toBe(409);
+    expect(message(early)).toMatch(
+      /^the gateway started \ds ago and has not heard from node b yet/,
+    );
+    expect(fresh.fleet.get('b')).toBeDefined();
+    // The same silence thirty-one seconds into the gateway's life is a
+    // node that is down.
+    const settled = await gateway(
+      ['b'],
+      {},
+      {
+        startedAt: new Date(Date.now() - 31_000),
+      },
+    );
+    const quiet = settled.fleet.get('b');
+    if (!quiet) throw new Error('node lost');
+    quiet.lastCheckInAt = null;
+    quiet.intervalSeconds = null;
+    expect((await rpc(settled, '/removeNode', { id: 'b' })).body).toEqual({
+      removed: true,
+    });
   });
 });
 
