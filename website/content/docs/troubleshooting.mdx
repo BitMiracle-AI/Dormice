@@ -118,13 +118,12 @@ shows one line: `fork rejected by pids controller`. The sandbox object's
 the sandbox — immediately, even inside the heartbeat's blind spot (see
 the entry above). The default is 4096 (it was 512, runc's
 fork-bomb number — a browser plus a few agent sessions in one sandbox is
-enough to pass it). A daemon upgraded from the old default adopts 4096 at
-that boot and brings its running sandboxes to it right there; only an
-environment that pins `DORMICE_SANDBOX_PIDS_LIMIT` at the old number
-keeps it, and the console's settings page (or `updateSettings`'s
-`pidsLimit`) is where to raise it — no restart, no rebuild: running
-sandboxes are brought to the new value in place as it is saved, frozen or
-stopped ones at their next wake.
+enough to pass it). The cap is a fleet setting at the gateway
+(`DORMICE_SANDBOX_PIDS_LIMIT` in the gateway's env seeds it once), and
+the console's settings page (or `updateSettings`'s `pidsLimit`) is where
+to raise it — no restart, no rebuild: each node takes the new value at
+its next check-in and brings its running sandboxes to it in place,
+frozen or stopped ones at their next wake.
 
 ## E2B `watchDir` refuses to start
 

@@ -8,56 +8,69 @@ output entirely in the JSON body. The route name is identical to the SDK
 method name, so there is nothing the SDK can do that curl cannot:
 
 ```sh
-curl -X POST http://127.0.0.1:3676/acquireSandbox \
+curl -X POST http://127.0.0.1:3677/acquireSandbox \
   -H "Authorization: Bearer $DORMICE_API_TOKEN" \
   -H "content-type: application/json" \
   -d '{"name": "my-agent"}'
 ```
 
+Two doors answer this wire. The **gateway** (`127.0.0.1:3677`) is the
+fleet's one door: it answers the configuration verbs itself — templates,
+API keys, settings, domains, nodes — and forwards every per-sandbox verb
+to the node that holds the sandbox (placing a new name on a node first).
+The **daemon** (`127.0.0.1:3676`) is a node: it answers the per-sandbox
+verbs and the list and observation verbs directly. Until the gateway
+answers the fleet-wide list and observation verbs itself (the next step
+of the move), point clients at the daemon for those; the gateway answers
+them with an honest `501` naming the node meanwhile. The rows below say
+which door.
+
 Two rules cover the whole surface:
 
 - **Auth** is `Authorization: Bearer <token>` on every route except
-  `GET /healthz`, the open liveness probe (it answers
-  `{"status":"ok"}`). The token is `DORMICE_API_TOKEN` — or any active
+  `GET /healthz`, the open liveness probe. The token is
+  `DORMICE_API_TOKEN` — or, at the gateway, any active
   [API key](#api-keys), the revocable credentials minted through
-  `createApiKey` or the console.
+  `createApiKey` or the console. A node knows only the token.
 - **Every non-2xx body is `{ "message": "..." }`** — one error shape,
-  whoever produced the error. 4xx name your mistake; 5xx are the
-  daemon's.
+  whoever produced the error. 4xx name your mistake; 5xx are ours.
 
 The [E2B compatibility surface](/docs/e2b-sdks) is a separate wire under
 `/e2b/*` with its own authentication — nothing below applies to it.
 
 ## The verbs
 
-| Route | Does | Errors worth knowing |
-| --- | --- | --- |
-| `POST /acquireSandbox` | create, wake, or restore — idempotent per name | 400 invalid policy/unknown template, 429 at the sandbox limit |
-| `POST /updatePolicy` | patch an existing sandbox's [lifecycle policy](/docs/lifecycle#change-the-policy-later) in place; never wakes, never resets the idle clock | 404 unknown name, 400 invalid merged policy |
-| `POST /updateMetadata` | replace an existing sandbox's label set wholesale (`{}` clears); never wakes, never resets the idle clock | 404 unknown name |
-| `POST /listSandboxes` | every sandbox and its state; never wakes anything | — |
-| `POST /execCommand` | run a command, buffered | 404 unknown name, 409 archived/restoring |
-| `POST /writeFiles` | batch write, base64 in JSON | 404/409 as above; body over 48 MiB refused |
-| `POST /writeFile` | write one file — the single form of `writeFiles` | same as `writeFiles` |
-| `POST /readFile` | read one file, base64 out | 404 no such file, 400 not a file, 413 over 16 MiB (names the real size) |
-| `POST /readFiles` | batch read, all or nothing, request order | first bad path fails the whole batch; 413 over 48 MiB total |
-| `POST /rebuildSandbox` | swap container, keep `/home/user` | 404 unknown name, 409 archived/restoring |
-| `POST /destroySandbox` | destroy; idempotent | 409 mid-restore — retry when it finishes |
-| `POST /registerTemplate` | upsert name → image | 400 `'base'` is reserved |
-| `POST /listTemplates` | every registered template | — |
-| `POST /removeTemplate` | unregister; idempotent | 409 while sandboxes still use it (names them) |
-| `POST /createApiKey` | mint an [API key](#api-keys), optionally with an `expiresAt`; the token appears in this response once, never again | 409 while a non-revoked key already has this name |
-| `POST /listApiKeys` | every key ever minted, revoked ones included, newest first — no secrets | — |
-| `POST /updateApiKey` | edit a key by `id`: rename, change/clear `expiresAt`, park/resume via `disabled` — absent fields untouched | 404 unknown id; 409 revoked row or name collision |
-| `POST /revokeApiKey` | soft-revoke a key by `id`; idempotent (`revoked: false` when none was) | — |
-| `POST /getHostMetrics` | host snapshot; never wakes anything | — |
-| `POST /getSandboxMetrics` | one sandbox's live CPU/memory/disk sample; `sample` is `null` when nothing is running | 404 unknown name |
-| `POST /listSandboxMetrics` | every measurable sandbox's sample in one answer | — |
-| `POST /listSandboxImages` | each sandbox's born image vs its template's current one | — |
-| `POST /getConfig` | effective configuration: env knobs (read-only; secrets reported present-or-absent, value never sent) plus the live runtime `settings` | — |
-| `POST /updateSettings` | rewrite the runtime settings (new-sandbox defaults, default policy, the S3 archive store, the sandbox domain, the per-sandbox pids cap) — immediate effect, no restart; each provided group replaces that group whole. The `s3` group takes all six fields every time (keys included — they are never read back) and is probed with a real write-read-delete round trip before anything is saved; `s3: null` turns archiving off. `sandboxDomain` takes a bare hostname or `null`; `sandboxDomainAliases` takes the full list of inbound-only alias hostnames (`[]` clears) — swapping the canonical domain is one call carrying both fields, see [Exposing ports](/docs/ports). `pidsLimit` (floor 256, never unlimited) reaches new containers at birth, running sandboxes in place before the call returns, and frozen or stopped ones at their next wake — no rebuild | 400 empty patch, a `pidsLimit` below 256, a default policy that asks to archive with no store in force, a failed probe (S3 answered 4xx), clearing/moving the store while sandboxes are archived in it (named by count), or an alias list that contradicts the post-patch state (duplicates, the canonical domain listed as an alias, or aliases left standing with no canonical domain); 500 when a value was saved but the host would not follow — a running sandbox refused the new `pidsLimit` (named; it follows at its next wake); 502 when the probed store is unreachable |
-| `POST /getIngress` | domains bound on the daemon's managed reverse proxy, with live DNS and certificate probes | — |
-| `POST /setIngress` | rewrite the managed proxy config to exactly this domain list (empty list unbinds all) | 400 when the daemon manages no proxy |
+| Route | Door | Does | Errors worth knowing |
+| --- | --- | --- | --- |
+| `POST /acquireSandbox` | both | create, wake, or restore — idempotent per name; at the gateway a new name is placed on a node first | 400 invalid policy/unknown template; 503 with `Retry-After` when no node can take a new sandbox (each node and its reason named) |
+| `POST /updatePolicy` | both | patch an existing sandbox's [lifecycle policy](/docs/lifecycle#change-the-policy-later) in place; never wakes, never resets the idle clock | 404 unknown name, 400 invalid merged policy |
+| `POST /updateMetadata` | both | replace an existing sandbox's label set wholesale (`{}` clears); never wakes, never resets the idle clock | 404 unknown name |
+| `POST /listSandboxes` | daemon | every sandbox and its state; never wakes anything | — |
+| `POST /execCommand` | both | run a command, buffered | 404 unknown name, 409 archived/restoring |
+| `POST /writeFiles` | both | batch write, base64 in JSON | 404/409 as above; body over 48 MiB refused |
+| `POST /writeFile` | both | write one file — the single form of `writeFiles` | same as `writeFiles` |
+| `POST /readFile` | both | read one file, base64 out | 404 no such file, 400 not a file, 413 over 16 MiB (names the real size) |
+| `POST /readFiles` | both | batch read, all or nothing, request order | first bad path fails the whole batch; 413 over 48 MiB total |
+| `POST /rebuildSandbox` | both | swap container, keep `/home/user` | 404 unknown name, 409 archived/restoring |
+| `POST /destroySandbox` | both | destroy; idempotent | 409 mid-restore — retry when it finishes |
+| `POST /registerTemplate` | gateway | upsert name → image; every node learns it at its next check-in | 400 `'base'` is reserved |
+| `POST /listTemplates` | gateway | every registered template | — |
+| `POST /removeTemplate` | gateway | unregister; idempotent. The gateway asks every node first | 409 while sandboxes on any node still use it (named, by node); 503 with `Retry-After` while a node has not answered |
+| `POST /createApiKey` | gateway | mint an [API key](#api-keys), optionally with an `expiresAt`; the token appears in this response once, never again | 409 while a non-revoked key already has this name |
+| `POST /listApiKeys` | gateway | every key ever minted, revoked ones included, newest first — no secrets | — |
+| `POST /updateApiKey` | gateway | edit a key by `id`: rename, change/clear `expiresAt`, park/resume via `disabled` — absent fields untouched | 404 unknown id; 409 revoked row or name collision |
+| `POST /revokeApiKey` | gateway | soft-revoke a key by `id`; idempotent (`revoked: false` when none was) | — |
+| `POST /getHostMetrics` | daemon | host snapshot; never wakes anything | — |
+| `POST /getSandboxMetrics` | both | one sandbox's live CPU/memory/disk sample; `sample` is `null` when nothing is running | 404 unknown name |
+| `POST /listSandboxMetrics` | daemon | every measurable sandbox's sample in one answer | — |
+| `POST /listSandboxImages` | daemon | each sandbox's born image vs its template's current one | — |
+| `POST /getConfig` | gateway | effective configuration: the gateway's env knobs (read-only; secrets reported present-or-absent, value never sent), the live fleet `settings`, and `configVersion` — the number every node reports back once it runs this configuration | — |
+| `POST /updateSettings` | gateway | rewrite the fleet settings (new-sandbox defaults, default policy, the S3 archive store, the sandbox domain, the per-sandbox pids cap) — no restart; the version counts up and every node applies the bundle at its next check-in (within 15 seconds); each provided group replaces that group whole. The `s3` group takes all six fields every time (keys included — they are never read back) and is probed with a real write-read-delete round trip before anything is saved; `s3: null` turns archiving off. `sandboxDomain` takes a bare hostname or `null`; `sandboxDomainAliases` takes the full list of inbound-only alias hostnames (`[]` clears) — swapping the canonical domain is one call carrying both fields, see [Exposing ports](/docs/ports). `pidsLimit` (floor 256, never unlimited) reaches new containers at birth, running sandboxes in place as their node takes the bundle, and frozen or stopped ones at their next wake — no rebuild | 400 empty patch, a `pidsLimit` below 256, a default policy that asks to archive with no store in force, a failed probe (S3 answered 4xx), clearing/moving the store while sandboxes are archived in it (counted across the fleet from the nodes' check-ins), or an alias list that contradicts the post-patch state (duplicates, the canonical domain listed as an alias, or aliases left standing with no canonical domain); 502 when the probed store is unreachable; 503 with `Retry-After` when a node has not checked in since the gateway started, so the archived count is unknown |
+| `POST /getIngress` | gateway | domains bound on the gateway's managed reverse proxy, with live DNS and certificate probes | — |
+| `POST /setIngress` | gateway | rewrite the managed proxy config to exactly this domain list (empty list unbinds all) | 400 when the gateway manages no proxy |
+| `POST /listNodes` | gateway | every node that ever checked in: endpoint, reachable, last check-in, build, reading, the configuration version it runs, its swap target | — |
+| `POST /updateNodeSettings` | gateway | set one node's managed-swap target (GiB); the node applies it at its next check-in | 404 unknown node; 400 when its daemon cannot manage swap; 503 before it has checked in |
+| `POST /removeNode` | gateway | forget a node that is gone for good | 409 while it still checks in |
 
 **Only `acquireSandbox` creates.** The use verbs (`execCommand`, files,
 `rebuildSandbox`) answer 404 for an unknown name rather than creating a
@@ -120,28 +133,34 @@ signal that the policy/template/metadata in the request were ignored.
 
 ## API keys
 
-`DORMICE_API_TOKEN` works forever, but rotating it means editing
-`/etc/dormice/env` and restarting the daemon. API keys are its
-full-power, revocable peers: mint one per client with
+`DORMICE_API_TOKEN` works forever, but rotating it means editing both
+env files and restarting the gateway and the daemon. API keys are its
+full-power, revocable peers at the gateway: mint one per client with
 `POST /createApiKey {"name": "ci"}` (optionally with
 `"expiresAt": "<ISO>"` for a TTL key), hand out the returned 64-hex
 `token`, and when a key leaks, revoke it — the credential dies on its
 next request, no config edit, no restart, no other client disturbed.
 
-The token appears in the create response **once**. The daemon stores
+The token appears in the create response **once**. The gateway stores
 only its hash, so nothing can ever show it again — copy it then. Keys
-open every door the env token does, the
+open every door the fleet token does at the gateway, the
 [E2B surface](/docs/e2b-sdks) included (`e2b_<key>` works as an E2B API
 key), with exactly two exceptions:
 
-- **Console account setup/reset** accepts only the env token — a leaked
-  machine credential must not be able to take over the human account.
-- **The four apiKey verbs and `updateSettings`** accept only the env
-  token or a console session. A key that could manage keys is a
-  self-replication ladder — one leaked credential minting itself an
-  unrevoked successor — and a leaked key must not be able to raise the
-  very limits that contain it, so a valid key gets an honest 403 on
-  these routes.
+- **Console account setup/reset** accepts only the fleet token — a
+  leaked machine credential must not be able to take over the human
+  account.
+- **Everything that configures the fleet** — the four apiKey verbs,
+  `updateSettings`, the template verbs, `getIngress`/`setIngress`, and
+  the node verbs — accepts only the fleet token or a console session. A
+  key that could manage keys is a self-replication ladder — one leaked
+  credential minting itself an unrevoked successor — and a leaked key
+  must not be able to raise the very limits that contain it, so a valid
+  key gets an honest 403 on these routes.
+
+Keys are the gateway's: a daemon judges one credential, the fleet
+token, and answers a minted key with 401. Toward its nodes the gateway
+always speaks the fleet token.
 
 Each key has two handles: `name`, the human label (renameable through
 `updateApiKey`), and `id`, the stable address `updateApiKey` and
@@ -155,8 +174,8 @@ granularity), and revoked rows stay in `listApiKeys` forever.
 
 Suspect a leak: disable the key to stop the bleeding, then revoke and
 rotate. Dormice keeps no per-key audit trail — lifecycle moves land in
-the daemon's own log (journald on a systemd host), attributed to the
-request, not to the credential.
+the gateway's and the daemon's own logs (journald on a systemd host),
+attributed to the request, not to the credential.
 
 ## Commands and files on the wire
 

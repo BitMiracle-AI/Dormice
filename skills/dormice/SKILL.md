@@ -5,8 +5,10 @@ description: Operate Dormice self-hosted agent sandboxes — acquire a sandbox, 
 
 # Dormice
 
-Dormice is a self-hosted sandbox platform: one daemon on one machine, and
-sandboxes that are **permanent** — idle ones cool down
+Dormice is a self-hosted sandbox platform: a gateway (the front door —
+console, API keys, fleet settings) and one or more daemons (the nodes that
+run the sandboxes; a single machine runs both), and sandboxes that are
+**permanent** — idle ones cool down
 (`active → frozen → stopped → archived`) instead of being destroyed, and any
 acquire brings them back. Two facts drive every workflow below:
 
@@ -21,17 +23,21 @@ acquire brings them back. Two facts drive every workflow below:
 
 ## Connecting
 
-The daemon serves everything on one port and binds to `127.0.0.1:3676`
-only. On the server itself use that address directly; from another machine
-the operator has either an SSH tunnel
-(`ssh -L 3676:127.0.0.1:3676 root@host`, then use `http://127.0.0.1:3676`)
-or a reverse-proxy domain (then use `https://their-domain`). Auth is one
-API token (created by the installer, hex): ask the user for the endpoint
-and token, conventionally held in `DORMICE_ENDPOINT` / `DORMICE_API_TOKEN`.
-API keys minted in the console (or with `dor apikey create <name>`) work
-everywhere the token does — same variables, revocable per client — except
-the apiKey management verbs themselves, which require the env token
-(keys cannot manage keys).
+Two doors, both bound to `127.0.0.1` only: the gateway on `3677` (the
+console, templates, API keys, settings, and every per-sandbox verb, which
+it forwards to the node) and the daemon on `3676` (the sandbox verbs plus
+the list and observation verbs the gateway does not answer yet). On the
+server itself use those addresses directly; from another machine the
+operator has either an SSH tunnel (`ssh -L 3677:127.0.0.1:3677 -L
+3676:127.0.0.1:3676 root@host`) or a reverse-proxy domain in front of the
+gateway (then use `https://their-domain`). Auth is one API token (created
+by the installer, hex): ask the user for the endpoint and token,
+conventionally held in `DORMICE_ENDPOINT` / `DORMICE_API_TOKEN`. API keys
+minted in the console (or with `dor apikey create <name>`) open the
+gateway wherever the token does — same variables, revocable per client —
+except the verbs that configure the fleet (keys, settings, templates,
+domains), which require the token (keys cannot manage keys); a daemon
+knows only the token.
 
 ## Pick an entry path
 
@@ -119,16 +125,19 @@ an existing sandbox's lifecycle policy in place — no wake, no destroy),
 `{}` clears — same no-wake manners), `listSandboxes`,
 `execCommand`, `writeFiles` / `writeFile`, `readFile` / `readFiles`,
 `rebuildSandbox` (fresh container, `/home/user` kept), `destroySandbox`,
-`registerTemplate` / `listTemplates` / `removeTemplate`,
-`createApiKey` / `listApiKeys` / `updateApiKey` / `revokeApiKey`
-(revocable peers of the API token with optional expiry and a reversible
-disable switch; the create response shows the key once, never again;
-these four verbs accept only the env token),
+`registerTemplate` / `listTemplates` / `removeTemplate` (at the gateway;
+nodes learn a template at their next check-in),
+`createApiKey` / `listApiKeys` / `updateApiKey` / `revokeApiKey` (at the
+gateway: revocable peers of the API token with optional expiry and a
+reversible disable switch; the create response shows the key once, never
+again; these four verbs accept only the token),
 `getHostMetrics`, `getSandboxMetrics` / `listSandboxMetrics` (live
 resource samples; never wake anything), `listSandboxImages` (who still
-runs an old template image),
-`getConfig` (effective config, secrets redacted), `getIngress` /
-`setIngress` (bind domains on the daemon's managed reverse proxy).
+runs an old template image) — the list and host verbs at the daemon —
+`getConfig` / `updateSettings` (the fleet's settings at the gateway,
+secrets redacted; applied by every node at its next check-in),
+`getIngress` / `setIngress` (bind domains on the gateway's managed reverse
+proxy), `listNodes` (every node and what it last reported).
 `execCommand` takes
 `{ name, command, timeoutSeconds?, cwd?, env? }` and returns
 `{ exitCode, stdout, stderr, ... }` — **a non-zero exit code is a result,

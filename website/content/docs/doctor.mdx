@@ -91,27 +91,29 @@ know why; the Linux terms in it are covered in
 
 - **DORMICE_API_TOKEN** — set and at least 32 characters (the daemon
   refuses to start without it).
-- **S3 archive configuration** — the `DORMICE_S3_*` variables are
-  first-boot seeds (the store in force lives in the daemon's database,
-  edited from the console), so three honest states: none set (skipped —
-  no seed; archiving can still be switched on from the console at any
-  time), all four set (pass — a seed; once booted, the console
-  settings rule), or a partial set (fail, naming the missing variables
-  — the daemon refuses a half-configured seed anyway).
+- **S3 archive configuration** — the `DORMICE_S3_*` variables are the
+  gateway's first-boot seeds (the store in force lives in the gateway's
+  settings, edited from the console; a node never reads them), so three
+  honest states: none set (skipped — no seed; archiving can still be
+  switched on from the console at any time), all four set (pass — a
+  seed; once the gateway has started, the console settings rule), or a
+  partial set (fail, naming the missing variables — the gateway refuses
+  a half-configured seed anyway). `install.sh` runs doctor with both env
+  files loaded.
 - **zstd available** — the archiver shells out to `tar -I zstd` on the
   host at every archive and restore. Checked on every docker host, not
   just seeded ones: archiving can be switched on from the console at
   any moment, so a missing binary is a warn without a seed and a fail
   with one.
 - **ingress (Caddy)** — skipped when `DORMICE_INGRESS_FILE` is not
-  set: the daemon manages no reverse proxy, and you bind domains by
-  editing your proxy config directly. Set, the `caddy` binary must be
-  installed and the caddy service active — a missing binary means
-  `setIngress` cannot reload anything, and an inactive service means
-  nothing proxies the outside world to the daemon. A config file that
-  doesn't exist yet is a *warn* (the first bind creates it), and so is
-  one the daemon did not write: `setIngress` refuses to overwrite it,
-  so web domain binding is effectively off.
+  set (it is the gateway's variable): no managed reverse proxy, and you
+  bind domains by editing your proxy config directly. Set, the `caddy`
+  binary must be installed and the caddy service active — a missing
+  binary means `setIngress` cannot reload anything, and an inactive
+  service means nothing proxies the outside world to the gateway. A
+  config file that doesn't exist yet is a *warn* (the first bind
+  creates it), and so is one the gateway did not write: `setIngress`
+  refuses to overwrite it, so web domain binding is effectively off.
 - **base image available** — present locally; the fix names
   `images/Dockerfile`, and doctor never pulls.
 - **docker-mode paths absolute** — a relative `DORMICE_DB_PATH` depends

@@ -1,15 +1,22 @@
 ---
 title: Web console
-description: The daemon serves its own web UI at /console — watch every sandbox live, open terminals, browse files, and manage templates.
+description: The gateway serves the web UI at /console — watch every sandbox live, open terminals, browse files, and manage templates.
 ---
 
-The daemon hosts a web console at `http://127.0.0.1:3676/console` — same
-process, same port, nothing extra to run. Everything it shows comes from
-the same API documented in this section, and it follows the same rule:
-**watching never wakes a sandbox; using one does, and only behind an
-explicit click.**
+The gateway hosts a web console at `http://127.0.0.1:3677/console` —
+same process, same port, nothing extra to run. Everything it shows comes
+from the same API documented in this section, and it follows the same
+rule: **watching never wakes a sandbox; using one does, and only behind
+an explicit click.**
 
 (The console UI is currently Chinese-language.)
+
+**Work in progress:** the console moved to the gateway with the fleet's
+configuration. The pages that read the fleet-wide list and observation
+verbs — the overview and the sandbox list — stay dark until the gateway
+answers those verbs itself, the next step of the move; the settings,
+domains, templates, API keys and version pages, and the per-sandbox
+workbench, work.
 
 ## Signing in
 

@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Install the Dormice daemon on a Linux host with one command.
+description: Install Dormice on a Linux host with one command.
 ---
 
 Installing Dormice is one command on a fresh Linux server. The command
@@ -8,7 +8,7 @@ downloads an installer script that sets up everything the platform
 needs; you do not need to know Docker or Linux administration — this
 page tells you what to type, and explains what happened afterwards.
 
-## Install the daemon
+## Install Dormice
 
 You need a Linux server ([the host](/docs/core-concepts#the-host))
 running Ubuntu or Debian on a regular Intel/AMD CPU (`x86_64`), ideally
@@ -28,8 +28,12 @@ The installer sets up everything —
 runtime), [gVisor](/docs/core-concepts#gvisor) (the extra isolation
 layer around each sandbox),
 [swap](/docs/core-concepts#swap-and-freezing) (the disk-as-overflow-memory
-that makes freezing work), the network hardening, and the daemon itself
-as a systemd service (so it starts on boot and restarts after a crash).
+that makes freezing work), the network hardening, and Dormice's two
+processes as systemd services (so they start on boot and restart after
+a crash): the **gateway** — the front door that serves the web console
+and holds the fleet's settings and API keys — and the **daemon** — the
+node that runs the sandboxes. On one machine they are a fleet of one;
+more machines can join the same gateway later.
 It finishes by running `dor doctor`, a battery of read-only checks that
 verifies the install actually works. You can re-run `dor doctor` at any
 time.
@@ -41,9 +45,10 @@ and repairs anything that drifted, and never rotates your API token.
 
 The installer generates an [API
 token](/docs/core-concepts#tokens-sdks-and-the-cli) — a long random
-string that acts as the password for programs — and stores it in the
-daemon's config file. You need it for every client — SDK, CLI, and
-console. Print it with:
+string that acts as the password for programs — and stores it in both
+config files (`/etc/dormice/env` and `/etc/dormice/gateway.env`, the
+same value). You need it for every client — SDK, CLI, and console.
+Print it with:
 
 ```sh
 grep ^DORMICE_API_TOKEN /etc/dormice/env
@@ -51,8 +56,9 @@ grep ^DORMICE_API_TOKEN /etc/dormice/env
 
 ## Connect from another machine
 
-The daemon listens on `127.0.0.1` only — reaching it from another
-machine is a choice you make explicitly, one of two ways.
+Both processes listen on `127.0.0.1` only — the gateway on `3677`, the
+daemon on `3676` — so reaching them from another machine is a choice you
+make explicitly, one of two ways.
 
 **Option 1: SSH tunnel** (private, zero setup). SSH — the tool you
 already use to log in to the server — can also carry other traffic
@@ -60,17 +66,19 @@ through its encrypted connection, making a port on the server appear on
 your own machine:
 
 ```sh
-ssh -L 3676:127.0.0.1:3676 root@your-host
+ssh -L 3677:127.0.0.1:3677 -L 3676:127.0.0.1:3676 root@your-host
 ```
 
-Keep that command running, and use `http://127.0.0.1:3676` as your
-endpoint, as if the daemon were local.
+Keep that command running, and use `http://127.0.0.1:3677` (the
+gateway: console, keys, settings, and every sandbox verb) and
+`http://127.0.0.1:3676` (the daemon, for the list and observation verbs
+the gateway does not answer yet) as if they were local.
 
 **Option 2: Bind a domain** — serves the API, the E2B surface, and the
 web console at once, over HTTPS. The installer already placed a reverse
 proxy ([Caddy](https://caddyserver.com)) at the server's public door —
 a small program that receives internet requests and forwards them to
-the daemon ([what's a reverse
+the gateway ([what's a reverse
 proxy?](/docs/core-concepts#reverse-proxies-domains-and-https)). To
 give it a domain:
 
@@ -78,14 +86,14 @@ give it a domain:
    `dormice.example.com`) at the server's public IP — in the dashboard
    of whoever sold you the domain.
 2. Bind the domain on the web console's domains page (or with the
-   `setIngress` API verb). The daemon rewrites its managed Caddy
+   `setIngress` API verb). The gateway rewrites its managed Caddy
    config, and Caddy obtains and renews the HTTPS certificate on its
    own. The domains page shows each domain's real progress — DNS
    resolution and certificate status — until it turns green.
 
 **Note:** Do not hand-edit the managed Caddy config — the next bind
-rewrites it. If you run your own proxy instead, forward to
-`127.0.0.1:3676` with buffering disabled (`flush_interval -1` in
+rewrites it. If you run your own proxy instead, forward to the gateway,
+`127.0.0.1:3677`, with buffering disabled (`flush_interval -1` in
 Caddy): streamed command output is written frame by frame, and a
 buffering proxy would hold it all back until the end. Use HTTPS for
 anything exposed beyond localhost — the API token and the session

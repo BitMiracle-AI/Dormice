@@ -135,28 +135,30 @@ Deliberate deltas from the hosted product:
 
 ## Web console
 
-The daemon serves a small web console at `http://127.0.0.1:3676/console` —
-sign in with the API token once and it becomes an httpOnly session cookie;
-the token itself is never stored anywhere the page can read. The console
+The gateway — the fleet's front door, installed beside the daemon — serves
+a small web console at `http://127.0.0.1:3677/console`: sign in with the
+API token once and it becomes an httpOnly session cookie; the token itself
+is never stored anywhere the page can read. The console
 shows every sandbox with its live lifecycle state (the same
 `/listSandboxes` the SDK sees), opens a per-sandbox detail view, creates
 sandboxes (the same idempotent `acquire`, with the lifecycle knobs),
 releases them, and has a Connect page with copy-paste snippets for every
 client (E2B SDK, native SDK, CLI) pointed at your own endpoint.
 
-The daemon listens on 127.0.0.1 only, so reaching it from another machine
-is a choice you make explicitly, one of two ways:
+Both processes listen on 127.0.0.1 only (the gateway on 3677, the daemon
+on 3676), so reaching them from another machine is a choice you make
+explicitly, one of two ways:
 
 - **SSH tunnel** (private, zero setup):
-  `ssh -L 3676:127.0.0.1:3676 root@host`, then open
-  `http://127.0.0.1:3676/console`.
+  `ssh -L 3677:127.0.0.1:3677 root@host`, then open
+  `http://127.0.0.1:3677/console`.
 - **Reverse proxy** for the console, the API, and the E2B surface at once —
-  e.g. Caddy, which also handles TLS certificates automatically once you
-  give it a domain:
+  e.g. Caddy pointed at the gateway, which also handles TLS certificates
+  automatically once you give it a domain:
 
   ```
   your-domain.example {
-  	reverse_proxy 127.0.0.1:3676 {
+  	reverse_proxy 127.0.0.1:3677 {
   		flush_interval -1
   	}
   }
@@ -169,8 +171,9 @@ is a choice you make explicitly, one of two ways:
 
 ## Cold archive (S3, optional)
 
-Set the four `DORMICE_S3_*` variables and idle sandboxes take the last
-step down: a week after stopping (tunable per sandbox via
+Configure a store in the console's settings page — or seed the four
+`DORMICE_S3_*` variables in the gateway's env (`/etc/dormice/gateway.env`)
+— and idle sandboxes take the last step down: a week after stopping (tunable per sandbox via
 `archiveAfterSeconds`), the disk is packed with `tar` + `zstd`, shipped to
 any S3-compatible bucket (AWS, Cloudflare R2, MinIO, Alibaba OSS in
 S3-compat mode), and freed locally. The next `acquireSandbox` answers
@@ -242,8 +245,8 @@ pnpm monorepo:
 | `packages/server` | The daemon: Fastify + SQLite ledger + lifecycle engine |
 | `packages/sdk` | `@dormice/sdk` — TypeScript client for the native API |
 | `packages/cli` | `dormice` command-line tool (`dor` for short) |
-| `packages/console` | Web console: React SPA, served by the daemon at `/console` |
-| `packages/gateway` | The fleet's one door in front of one or more daemons: places new sandboxes, finds existing ones by asking the nodes, forwards everything else |
+| `packages/console` | Web console: React SPA, served by the gateway at `/console` |
+| `packages/gateway` | The fleet's one door in front of one or more daemons: holds the fleet's settings, templates, API keys and the console; places new sandboxes, finds existing ones by asking the nodes, forwards everything else |
 | `e2e` | Black-box suite: boots the built daemon, drives it over the wire |
 | `examples` | Runnable demos: the native SDK, the official `e2b` package, a resident agent |
 

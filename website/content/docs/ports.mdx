@@ -24,8 +24,8 @@ separate from the domain you may have bound for the API and console in
 Pick a domain for sandbox traffic and set it on the console's
 **Domains** page (the sandbox domain card) — it applies live, no
 restart. The card shows the exact wildcard DNS record to copy. The
-`DORMICE_SANDBOX_DOMAIN` environment variable still works as a
-first-boot seed:
+`DORMICE_SANDBOX_DOMAIN` environment variable in the gateway's env still
+works as a first-boot seed:
 
 ```sh
 DORMICE_SANDBOX_DOMAIN=sbx.example.com
@@ -55,7 +55,9 @@ path and operation — never the domain.
 ## 2. Point DNS and a reverse proxy at the host
 
 The daemon itself only binds `127.0.0.1`. The internet-facing half is
-one wildcard DNS record plus a reverse proxy that terminates TLS:
+one wildcard DNS record plus a reverse proxy that terminates TLS — pointed
+at the daemon, which serves the sandbox port proxy (the gateway takes
+this face over in a later step):
 
 ```text
 *.sbx.example.com → your host
