@@ -121,11 +121,14 @@ export const nativeRoutes: FastifyPluginAsyncZod<NativeRoutesOptions> = async (
           return reply.code(400).send({ message: named.refusal });
         }
         const { name } = named;
-        // Only the two verbs that create or remove take the name's slot —
-        // the daemon's own discipline (its other verbs run unserialized
-        // too). The slot is what keeps twenty simultaneous acquires of a
-        // new name from each placing their own copy: the first finds
-        // nothing and places, the rest find its cache entry.
+        // The gateway takes the name's slot for the two verbs whose
+        // outcome it acts on — a create it may have to place, a destroy it
+        // must forget — so twenty simultaneous acquires of a new name
+        // place once: the first finds nothing and places, the rest find
+        // its cache entry. Every other verb is relayed unserialized: the
+        // daemon holds its own slot per name for the ones that touch the
+        // sandbox (routes/sandboxes.ts locks.run), and a relay in front of
+        // it has nothing to add to their order.
         if (verb === 'acquireSandbox') {
           return locks.run(name, () => acquire(request, reply, name, body));
         }
