@@ -23,15 +23,15 @@ import { z } from 'zod';
  */
 
 /**
- * The ceiling on an interval knob: one day. A tick a day is the slowest
- * cadence that still means anything — and past 2^31-1 ms (24.8 days)
- * Node's setTimeout does not wait at all: it warns and fires after one
- * millisecond (TimeoutOverflowWarning), which for a sampler is a row
- * every millisecond. Refused at boot instead (found by review,
- * 2026-09-15; the daemon's interval knobs carry the same rule,
+ * The ceiling on a knob that becomes a Node timer: one day. A tick a day
+ * is the slowest cadence that still means anything — and past 2^31-1 ms
+ * (24.8 days) Node's setTimeout does not wait at all: it warns and fires
+ * after one millisecond (TimeoutOverflowWarning), which for a sampler is
+ * a row every millisecond. Refused at boot instead (found by review,
+ * 2026-09-15; the daemon's timer knobs carry the same rule,
  * server/config.ts).
  */
-const MAX_INTERVAL_SECONDS = 86_400;
+const MAX_TIMER_SECONDS = 86_400;
 
 const envSchema = z.object({
   DORMICE_GATEWAY_PORT: z.coerce.number().int().min(1).max(65535).default(3677),
@@ -100,13 +100,13 @@ const envSchema = z.object({
    * node check-in grew with the fleet. 30, the daemon's own sampling
    * interval, so a single node's imported history and the gateway's join
    * at the same density; the exam sets 1. At most a day
-   * (MAX_INTERVAL_SECONDS).
+   * (MAX_TIMER_SECONDS).
    */
   DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS: z.coerce
     .number()
     .int()
     .positive()
-    .max(MAX_INTERVAL_SECONDS)
+    .max(MAX_TIMER_SECONDS)
     .default(30),
   // ---- first-boot seeds of the settings table, in the daemon's words ----
   DORMICE_SANDBOX_DISK_GB: z.coerce.number().positive().default(10),

@@ -75,11 +75,14 @@ describe('the metrics sampler knobs', () => {
     ).toThrow();
   });
 
-  it('refuses an interval past a day on every ticker knob — past 2^31-1 ms Node would fire it every millisecond instead', () => {
+  it('refuses a value past a day on every knob that becomes a timer — past 2^31-1 ms Node would fire it after one millisecond instead', () => {
     for (const knob of [
       'DORMICE_SCAN_INTERVAL_SECONDS',
       'DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS',
       'DORMICE_CHECK_IN_INTERVAL_SECONDS',
+      // execa's timeout is the same timer: overflowed, every freeze's
+      // memory.reclaim would be killed after one millisecond.
+      'DORMICE_RECLAIM_TIMEOUT_SECONDS',
     ]) {
       const atTheCeiling = loadConfig({ ...TOKEN, [knob]: '86400' }) as Record<
         string,

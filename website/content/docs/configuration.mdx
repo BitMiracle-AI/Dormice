@@ -130,7 +130,7 @@ is a fleet setting.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `DORMICE_SCAN_INTERVAL_SECONDS` | `60` | How often the idle scanner runs. Each sweep moves an idle sandbox down at most one state — see [Sandbox lifecycle](/docs/lifecycle). At most `86400` (a day). |
-| `DORMICE_RECLAIM_TIMEOUT_SECONDS` | `45` | Upper bound on the memory-reclaim step of a freeze. Hitting it is expected on stubborn workloads, not a failure. |
+| `DORMICE_RECLAIM_TIMEOUT_SECONDS` | `45` | Upper bound on the memory-reclaim step of a freeze. Hitting it is expected on stubborn workloads, not a failure. At most `86400` (a day). |
 
 ## Client-side variables
 

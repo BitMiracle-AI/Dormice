@@ -24,15 +24,18 @@ import { z } from 'zod';
  */
 
 /**
- * The ceiling on the three interval knobs: one day. A tick a day is the
- * slowest cadence that still means anything — and past 2^31-1 ms (24.8
- * days) Node's setTimeout does not wait at all: it warns and fires after
- * one millisecond (TimeoutOverflowWarning) — a sweep, a sample or a
- * check-in every millisecond. Refused at boot instead (found by review,
- * 2026-09-15; the gateway's sampler knob carries the same rule,
- * gateway/config.ts).
+ * The ceiling on every knob that becomes a Node timer — the three
+ * intervals and the reclaim timeout: one day. A day is the slowest
+ * cadence, and the longest bound, that still means anything — and past
+ * 2^31-1 ms (24.8 days) Node's timers do not wait at all: setTimeout
+ * warns and fires after one millisecond (TimeoutOverflowWarning), and
+ * execa's timeout rides the same timer. A sweep, a sample or a check-in
+ * every millisecond; a memory.reclaim killed at once on every freeze and
+ * logged as the expected cut-short, the idle sandboxes' memory never
+ * squeezed out. Refused at boot instead (found by review, 2026-09-15;
+ * the gateway's sampler knob carries the same rule, gateway/config.ts).
  */
-const MAX_INTERVAL_SECONDS = 86_400;
+const MAX_TIMER_SECONDS = 86_400;
 
 const envSchema = z.object({
   DORMICE_PORT: z.coerce.number().int().min(1).max(65535).default(3676),
@@ -49,7 +52,7 @@ const envSchema = z.object({
     .number()
     .int()
     .positive()
-    .max(MAX_INTERVAL_SECONDS)
+    .max(MAX_TIMER_SECONDS)
     .default(60),
   /**
    * How often the metrics sampler persists a reading per measurable sandbox
@@ -59,7 +62,7 @@ const envSchema = z.object({
     .number()
     .int()
     .positive()
-    .max(MAX_INTERVAL_SECONDS)
+    .max(MAX_TIMER_SECONDS)
     .default(30),
   /**
    * How long per-sandbox samples live (fleet rows are fixed at 30 days —
@@ -91,10 +94,18 @@ const envSchema = z.object({
   DORMICE_BASE_IMAGE: z.string().optional(),
   /** Sandbox disk images and their mount points live here (docker executor only). */
   DORMICE_DATA_DIR: z.string().default('/var/lib/dormice'),
+  /**
+   * Upper bound on a freeze's memory.reclaim write (executor/docker.ts
+   * reclaimMemory) — a SIGKILL deadline on the writer, so a Node timer
+   * too, and capped like the intervals (MAX_TIMER_SECONDS): overflowed,
+   * every reclaim would be killed after one millisecond and logged as
+   * the expected cut-short, and idle would stop being free.
+   */
   DORMICE_RECLAIM_TIMEOUT_SECONDS: z.coerce
     .number()
     .int()
     .positive()
+    .max(MAX_TIMER_SECONDS)
     .default(45),
   /**
    * The gateway this daemon is a node of — its intranet address, e.g.
@@ -154,7 +165,7 @@ const envSchema = z.object({
     .number()
     .int()
     .positive()
-    .max(MAX_INTERVAL_SECONDS)
+    .max(MAX_TIMER_SECONDS)
     .default(15),
 });
 

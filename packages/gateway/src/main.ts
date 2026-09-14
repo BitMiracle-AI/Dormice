@@ -149,15 +149,17 @@ let closing = false;
 // daemon's metrics ticker in shape (server/main.ts): every interval one
 // row of the fleet's census, summed from the readings the check-ins left
 // in memory (db/fleet-samples.ts says when no row is true enough to
-// write). The first shot fires at once and, on a gateway just started,
-// writes nothing: the readings are the nodes' to report, and none has
-// yet. So the first row after a restart lands at the first tick after
-// every known node has checked in, and the curve's gap is the downtime
-// plus at most one check-in interval and one sample interval (measured
-// 2026-09-15: 0.6s down, a 54s gap) — not the daemon's "gap equals
-// downtime", whose figures sit in its own ledger at boot where the
-// gateway's sit in the nodes' mouths. Same failure stance: log, never
-// fatal, the next tick retries — and no check-in ever waits on this write.
+// write). The first tick is one interval after boot, not at once as the
+// daemon's: the readings are the nodes' to report, none has yet, and a
+// shot at boot would write nothing. So the first row after a restart is
+// the first tick after every known node has checked in, and the curve's
+// gap is the downtime plus at most one check-in interval and one sample
+// interval (measured 2026-09-15: 0.6s down, a 54s gap) — not the
+// daemon's "gap equals downtime", whose figures sit in its own ledger at
+// boot where the gateway's sit in the nodes' mouths. Same failure
+// stance: log, never fatal, the next tick retries — and no check-in ever
+// waits on this write.
+const sampleIntervalMs = config.DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS * 1000;
 let sampleTimer: NodeJS.Timeout | undefined;
 function sampleTick() {
   try {
@@ -165,15 +167,10 @@ function sampleTick() {
   } catch (error) {
     app.log.error(error, 'fleet state sample failed');
   } finally {
-    if (!closing) {
-      sampleTimer = setTimeout(
-        sampleTick,
-        config.DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS * 1000,
-      );
-    }
+    if (!closing) sampleTimer = setTimeout(sampleTick, sampleIntervalMs);
   }
 }
-sampleTimer = setTimeout(sampleTick, 0);
+sampleTimer = setTimeout(sampleTick, sampleIntervalMs);
 
 const close = async (signal: NodeJS.Signals) => {
   if (closing) return;
