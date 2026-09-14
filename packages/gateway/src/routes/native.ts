@@ -166,6 +166,12 @@ export const nativeRoutes: FastifyPluginAsyncZod<NativeRoutesOptions> = async (
     name: string,
     body: Buffer | undefined,
   ) {
+    // First, before any node is asked: a creator that waited for the slot
+    // behind a slow create or destroy and whose client left meanwhile
+    // asks nobody — the confirmation below is a question to a node inside
+    // the slot, and twenty abandoned acquires of one name would otherwise
+    // hold the slot for twenty answers nobody reads (create.ts clientGone).
+    if (clientGone(reply)) return;
     // A creator confirms a cache hit with its node first (find.ts byName
     // has why): the daemon's acquire builds what it does not find.
     const judged = verdict(
@@ -179,6 +185,7 @@ export const nativeRoutes: FastifyPluginAsyncZod<NativeRoutesOptions> = async (
     // node's reading.
     const placed = target === null;
     if (target === null) {
+      // Asked again: the round of questions took up to two seconds.
       if (clientGone(reply)) return;
       const placement = place(fleet, knobs, new Date());
       if (placement.node === null) {

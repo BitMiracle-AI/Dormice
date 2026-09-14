@@ -57,10 +57,12 @@ export function place(
 }
 
 /**
- * A create that waited for its name's slot behind a slow destroy and whose
- * client left meanwhile: nothing is placed or counted for it — the
- * response is gone, forwardCapture would send nothing. The reply is
- * hijacked so Fastify writes nothing to the dead socket either.
+ * A create whose client has already left: nothing is asked, placed or
+ * counted for it — the response is gone, forwardCapture would send
+ * nothing. Checked first thing inside the slot (a creator that waited
+ * behind a slow create or destroy) and again after the lookup round (up
+ * to two seconds). The reply is hijacked so Fastify writes nothing to the
+ * dead socket either.
  */
 export function clientGone(reply: FastifyReply): boolean {
   if (!reply.raw.destroyed) return false;

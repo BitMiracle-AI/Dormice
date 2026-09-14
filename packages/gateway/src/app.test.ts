@@ -29,6 +29,8 @@ class FakeNode {
   readonly hits: Array<{ path: string; auth: string | undefined }> = [];
   creates = 0;
   endpoint = '';
+  /** How long a destroy takes to answer — a slow node holding the name's slot. */
+  destroyTakesMs = 0;
   private readonly server: http.Server;
 
   constructor(readonly id: string) {
@@ -145,8 +147,15 @@ class FakeNode {
         });
       }
       case '/destroySandbox': {
-        if (name !== undefined) this.sandboxes.delete(name);
-        return json(200, { destroyed: found !== undefined });
+        const destroy = () => {
+          if (name !== undefined) this.sandboxes.delete(name);
+          json(200, { destroyed: found !== undefined });
+        };
+        if (this.destroyTakesMs > 0) {
+          setTimeout(destroy, this.destroyTakesMs);
+          return;
+        }
+        return destroy();
       }
       case '/execCommand': {
         if (!found)
@@ -523,6 +532,42 @@ describe('acquire: placing and finding', () => {
     expect((await create('ttl-e2b')).status).toBe(201);
     expect(h.cache.getByName('ttl-e2b')?.nodeId).toBe('b');
     expect(h.fleet.get('b')?.placedSinceCheckIn).toBe(1);
+  });
+
+  it('an acquire whose client left while it waited for the name\'s slot asks no node and builds nothing', async () => {
+    const h = await gateway(['a']);
+    const a = h.nodes[0] as FakeNode;
+    await rpc(h, '/acquireSandbox', { name: 'q' });
+    // A destroy holds the slot; an acquire queues behind it, and its
+    // client gives up while queued.
+    a.destroyTakesMs = 400;
+    const destroying = rpc(h, '/destroySandbox', { name: 'q' });
+    await until(() =>
+      a.hits.some((hit) => hit.path === '/destroySandbox') ? true : undefined,
+    );
+    const asked = a.lookups();
+    const left = new AbortController();
+    const abandoned = fetch(`${h.endpoint}/acquireSandbox`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'q' }),
+      signal: left.signal,
+    }).then(
+      () => 'answered',
+      () => 'left',
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    left.abort();
+    expect(await abandoned).toBe('left');
+    expect((await destroying).body).toEqual({ destroyed: true });
+    // The slot is free; the abandoned acquire ran and did nothing.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(a.lookups()).toBe(asked);
+    expect(a.creates).toBe(1);
+    expect(a.sandboxes.has('q')).toBe(false);
   });
 
   it('twenty simultaneous acquires of one new name are one create on one node; different names spread', async () => {
