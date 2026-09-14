@@ -1,4 +1,4 @@
-import { parseSandboxHost } from '@dormice/shared';
+import { isFilesPath, parseSandboxHost } from '@dormice/shared';
 
 /**
  * Which face a raw request belongs to — the gateway's serverFactory
@@ -46,16 +46,17 @@ export function isOriginForm(req: { url?: string }): boolean {
   return (req.url ?? '').startsWith('/');
 }
 
+/** The one sentence a non-origin-form target is refused with: a 400 on a request (app.ts), a status line on an upgrade (raw.ts). */
+export const ORIGIN_FORM_REQUIRED =
+  'request target must be origin-form (a path starting with "/")';
+
 export function classify(
   req: { url?: string; headers: { host?: string } },
   domains: readonly string[],
 ): Classified {
   const sandbox = parseSandboxHost(req.headers.host, domains);
   if (sandbox) return { face: 'proxy', ...sandbox };
-  const url = req.url ?? '';
-  const q = url.indexOf('?');
-  const path = q === -1 ? url : url.slice(0, q);
-  if (url.startsWith('/e2b/envd/')) return { face: 'envd' };
-  if (path === '/files') return { face: 'signedRoot' };
+  if ((req.url ?? '').startsWith('/e2b/envd/')) return { face: 'envd' };
+  if (isFilesPath(req.url)) return { face: 'signedRoot' };
   return { face: 'fastify' };
 }

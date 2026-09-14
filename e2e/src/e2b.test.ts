@@ -745,9 +745,21 @@ describe.runIf(process.env.DORMICE_EXECUTOR !== 'docker')(
     it('a Host-routed request lands inside the sandbox and echoes back', async () => {
       const sbx = await Sandbox.create(connection());
       try {
-        const host = sbx.getHost(8000);
-        const res = await throughProxy(host, '/hello?from=e2e');
-        expect(res.status).toBe(200);
+        // The seed domain, spelled out rather than read off getHost():
+        // settings-hot.test.ts moves the shared domain for a few seconds
+        // at a time, a create inside that window is told the other domain,
+        // and the seed is the steady state that comes back (the getHost
+        // exam above covers the assembly). Each door is asked until its
+        // proxy answers: a 404 mid-switch is the router speaking while the
+        // edit travels — the gateway keys on its own copy at once, the
+        // node on its next check-in (seen in a local run, 2026-09-14).
+        const host = `8000-${sbx.sandboxId}.sbx.dormice.test`;
+        const proxied = (via: string, path: string) =>
+          poll(async () => {
+            const res = await throughProxy(host, path, via);
+            return res.status === 200 ? res : undefined;
+          });
+        const res = await proxied(inject('dormiceEndpoint'), '/hello?from=e2e');
         const echo = JSON.parse(res.body);
         expect(echo.sandboxId).toBe(sbx.sandboxId);
         expect(echo.path).toBe('/hello?from=e2e');
@@ -756,8 +768,7 @@ describe.runIf(process.env.DORMICE_EXECUTOR !== 'docker')(
         // finds the node holding it and forwards, Host kept — getHost()
         // works through the fleet's one door, which is where the wildcard
         // DNS points in production.
-        const viaDoor = await throughProxy(host, '/hello?from=door', door());
-        expect(viaDoor.status).toBe(200);
+        const viaDoor = await proxied(door(), '/hello?from=door');
         expect(JSON.parse(viaDoor.body)).toMatchObject({
           sandboxId: sbx.sandboxId,
           path: '/hello?from=door',

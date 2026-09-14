@@ -11,7 +11,7 @@ import {
 import { type Logger, pino } from 'pino';
 import { z } from 'zod';
 import { requireAdminAuth, requireApiAuth, tokensEqual } from './auth';
-import { classify, isOriginForm } from './classify';
+import { classify, isOriginForm, ORIGIN_FORM_REQUIRED } from './classify';
 import { type Config, type ConfigSources, configSources } from './config';
 import { getConsoleAccount } from './db/account';
 import { isLiveApiKey, verifyApiKeyToken } from './db/api-keys';
@@ -137,8 +137,7 @@ export function buildGatewayApp({
       if (!isOriginForm(req)) {
         renderError(res, 'native', {
           status: 400,
-          message:
-            'request target must be origin-form (a path starting with "/")',
+          message: ORIGIN_FORM_REQUIRED,
         });
         return;
       }
@@ -146,6 +145,9 @@ export function buildGatewayApp({
       if (kind.face === 'fastify') handler(req, res);
       else raw.handleRequest(kind, req, res);
     });
+    // Upgrades are judged by the same rules (origin form, then the face),
+    // in raw.ts: a refusal there is a status line on the socket, which
+    // that module writes.
     server.on('upgrade', (req, socket, head) => {
       raw.handleUpgrade(classify(req, domains()), req, socket, head);
     });

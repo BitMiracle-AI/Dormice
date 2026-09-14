@@ -1145,12 +1145,14 @@ describe('the E2B faces', () => {
 /**
  * A request at the door with a spoofed Host — wildcard-DNS traffic as the
  * reverse proxy hands it over (fetch refuses to set Host, so node:http
- * speaks).
+ * speaks). `method` and `headers` for the preflight shapes.
  */
 function viaHost(
   h: Harness,
   host: string,
   path = '/',
+  method = 'GET',
+  headers: Record<string, string> = {},
 ): Promise<{
   status: number;
   headers: http.IncomingHttpHeaders;
@@ -1159,7 +1161,13 @@ function viaHost(
   const endpoint = new URL(h.endpoint);
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { host: endpoint.hostname, port: endpoint.port, path, headers: { host } },
+      {
+        host: endpoint.hostname,
+        port: endpoint.port,
+        path,
+        method,
+        headers: { ...headers, host },
+      },
       (res) => {
         let body = '';
         res.on('data', (chunk) => {
@@ -1178,16 +1186,17 @@ function viaHost(
 /**
  * An upgrade handshake at the door, raw: what came back before the socket
  * closed — a 101 and the echo of `marco`, a refusal's status line, or
- * nothing at all for a socket the gateway cut.
+ * nothing at all for a socket the gateway cut. `target` is the request
+ * target as written on the request line (origin-form by default).
  */
-function rawUpgrade(h: Harness, host: string): Promise<string> {
+function rawUpgrade(h: Harness, host: string, target = '/ws'): Promise<string> {
   const port = Number(new URL(h.endpoint).port);
   return new Promise((resolve, reject) => {
     let buffer = '';
     const socket = net.connect(port, '127.0.0.1', () => {
       socket.write(
         [
-          'GET /ws HTTP/1.1',
+          `GET ${target} HTTP/1.1`,
           `Host: ${host}`,
           'Connection: Upgrade',
           'Upgrade: websocket',
@@ -1237,7 +1246,7 @@ describe('the sandbox port proxy face', () => {
     expect(elsewhere?.hits.some((hit) => hit.host !== undefined)).toBe(false);
   });
 
-  it('a sandbox built behind the gateway’s back is found by asking; an id on no node gets the daemon’s proxy answer, 502 { message } without CORS — except on the browser-direct file form, which carries it', async () => {
+  it('a sandbox built behind the gateway’s back is found by asking; an id on no node gets the daemon’s proxy answer, 502 { message } without CORS — except on the browser-direct file form, which carries it and whose preflight the door answers itself', async () => {
     const h = await gateway(['a', 'b'], { DORMICE_SANDBOX_DOMAIN: DOMAIN });
     const staged = await stage(h.nodes[1] as FakeNode, 'behind');
     const res = await viaHost(h, `3000-${staged.id}.${DOMAIN}`, '/');
@@ -1261,6 +1270,47 @@ describe('the sandbox port proxy face', () => {
     );
     expect(files.status).toBe(502);
     expect(files.headers['access-control-allow-origin']).toBe('*');
+    // Its preflight is the door's own answer, in the node's shape, whether
+    // or not the id is anywhere: a browser sends nothing until the
+    // preflight passes, so a 502 here would have hidden the refusal above.
+    const preflight = await viaHost(
+      h,
+      `49983-${randomUUID()}.${DOMAIN}`,
+      '/files',
+      'OPTIONS',
+      { 'access-control-request-headers': 'content-type' },
+    );
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers['access-control-allow-origin']).toBe('*');
+    expect(preflight.headers['access-control-allow-methods']).toBe(
+      'GET, POST, OPTIONS',
+    );
+    expect(preflight.headers['access-control-allow-headers']).toBe(
+      'content-type',
+    );
+    // A known id too — and the node is not asked for it.
+    const nodeB = h.nodes[1] as FakeNode;
+    const hitsBefore = nodeB.hits.length;
+    const known = await viaHost(
+      h,
+      `49983-${staged.id}.${DOMAIN}`,
+      '/files',
+      'OPTIONS',
+    );
+    expect(known.status).toBe(204);
+    expect(nodeB.hits.length).toBe(hitsBefore);
+    // Only that form: an OPTIONS on any other port is the sandbox's own
+    // and rides to it like any request.
+    const appOptions = await viaHost(
+      h,
+      `3000-${staged.id}.${DOMAIN}`,
+      '/api',
+      'OPTIONS',
+    );
+    expect(JSON.parse(appOptions.body)).toMatchObject({
+      proxied: 'b',
+      url: '/api',
+    });
     // For a sandbox that exists the form rides to its node whole — the
     // carve-out onto the signed door is the node's own.
     const carved = await viaHost(
@@ -1275,7 +1325,7 @@ describe('the sandbox port proxy face', () => {
     });
   });
 
-  it('WebSocket upgrades ride through to the node both ways, Host kept; an upgrade for an id on no node is refused with a status line; any other upgrade is cut', async () => {
+  it('WebSocket upgrades ride through to the node both ways, Host kept; an upgrade for an id on no node is refused with a status line, an absolute-form handshake with a 400; any other upgrade is cut', async () => {
     const h = await gateway(['a'], { DORMICE_SANDBOX_DOMAIN: DOMAIN });
     const created = sandboxOf(await rpc(h, '/acquireSandbox', { name: 'ws' }));
     const host = `5173-${created.id}.${DOMAIN}`;
@@ -1289,6 +1339,16 @@ describe('the sandbox port proxy face', () => {
     const refused = await rawUpgrade(h, `5173-${randomUUID()}.${DOMAIN}`);
     expect(refused).toMatch(/^HTTP\/1\.1 502 /);
     expect(refused).toContain('on no node');
+
+    // The request path's first rule holds on this path too: an absolute-
+    // form handshake is refused in the same words, as a status line, and
+    // is never replayed into the sandbox.
+    const nodeA = h.nodes[0] as FakeNode;
+    const hitsBefore = nodeA.hits.length;
+    const absolute = await rawUpgrade(h, host, `http://${host}/ws`);
+    expect(absolute).toMatch(/^HTTP\/1\.1 400 /);
+    expect(absolute).toContain('origin-form');
+    expect(nodeA.hits.length).toBe(hitsBefore);
 
     // Not a sandbox host: nothing said, the socket closed — stock
     // Fastify's behavior for an upgrade it never handles.

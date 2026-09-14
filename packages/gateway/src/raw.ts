@@ -1,8 +1,12 @@
 import http from 'node:http';
 import type { Duplex } from 'node:stream';
-import { ENVD_PORT } from '@dormice/shared';
+import { isEnvdFilesForm } from '@dormice/shared';
 import type { Logger } from 'pino';
-import type { Classified } from './classify';
+import {
+  type Classified,
+  isOriginForm,
+  ORIGIN_FORM_REQUIRED,
+} from './classify';
 import {
   type Dialect,
   type RenderedError,
@@ -11,6 +15,7 @@ import {
   sendPreflight,
 } from './errors';
 import type { Finder, Found } from './find';
+import type { NodeState } from './fleet';
 import { forwardStream, forwardUpgrade } from './forward';
 
 export interface RawFacesDeps {
@@ -23,6 +28,9 @@ export interface RawFacesDeps {
 export const RETRY_AFTER_SECONDS = 15;
 
 type ProxyFace = Extract<Classified, { face: 'proxy' }>;
+
+/** What a keyed face learned of a sandbox id: the node to forward to, or the refusal to answer with. */
+type Located = { node: NodeState } | { refusal: RenderedError };
 
 /**
  * The faces Fastify never sees — keyed on a header on any path, judged on
@@ -38,6 +46,8 @@ type ProxyFace = Extract<Classified, { face: 'proxy' }>;
  *               frozen sandbox on traffic and answers "not listening" for
  *               a port nobody serves; the gateway adds only where it is.
  *               WebSocket upgrades ride the same way (forwardUpgrade).
+ *               The one exception is the browser-direct file form's
+ *               preflight, answered at the door (handleRequest below).
  *   envd        E2B's in-sandbox API, keyed by E2b-Sandbox-Id; forwarded
  *               with no credential change (the access token is the node's
  *               own HMAC). Preflights are answered here: the node answers
@@ -89,41 +99,37 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
   }
 
   /**
-   * Finds the id, or answers the refusal and returns null. The lookup
-   * itself failing (not a node's silence — the gateway's own bug) is a 500
-   * that sends the operator to the log.
+   * Finds the id, or the refusal to answer with — the one adjudication
+   * both halves of a keyed face make, each writing a refusal in its own
+   * medium (a response; a status line on an upgrade's socket). A value,
+   * not an exception: the refusal is an answer, not a failure. The lookup
+   * itself failing (not a node's silence — the gateway's own bug) is a
+   * 500 that sends the operator to the log.
    */
-  async function locate(
-    res: http.ServerResponse,
-    id: string,
-    dialect: Dialect,
-    cors: boolean,
-    face: string,
-  ): Promise<Extract<Found, { kind: 'one' }>> {
+  async function locate(id: string, what: string): Promise<Located> {
     let found: Found;
     try {
       found = await finder.byId(id);
     } catch (error) {
-      log.error(error, `${face} face: the lookup itself failed`);
-      renderError(res, dialect, {
-        status: 500,
-        message: 'the gateway failed while locating the sandbox — see its log',
-        cors,
-      });
-      throw new Refused();
+      log.error(error, `${what}: the lookup itself failed`);
+      return {
+        refusal: {
+          status: 500,
+          message:
+            'the gateway failed while locating the sandbox — see its log',
+        },
+      };
     }
-    if (found.kind !== 'one') {
-      renderError(res, dialect, { ...sentence(id, found), cors });
-      throw new Refused();
-    }
-    return found;
+    return found.kind === 'one'
+      ? { node: found.node }
+      : { refusal: sentence(id, found) };
   }
 
   /**
    * Finds the id and forwards, or answers the refusal — the one path
-   * every keyed face takes. Nothing here may throw past this point: no
-   * framework stands behind a raw face, so an escaped rejection would be
-   * the process's, not the request's (errors.ts relay answers instead).
+   * every keyed face takes. Nothing here may throw: no framework stands
+   * behind a raw face, so an escaped rejection would be the process's,
+   * not the request's (errors.ts relay answers instead).
    */
   async function route(
     req: http.IncomingMessage,
@@ -133,13 +139,12 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
     cors: boolean,
   ): Promise<void> {
     const dialect: Dialect = face === 'envd' ? 'connect' : 'native';
-    let found: Extract<Found, { kind: 'one' }>;
-    try {
-      found = await locate(res, id, dialect, cors, face);
-    } catch {
+    const located = await locate(id, `${face} face`);
+    if ('refusal' in located) {
+      renderError(res, dialect, { ...located.refusal, cors });
       return;
     }
-    const node = found.node;
+    const { node } = located;
     await relay(
       res,
       dialect,
@@ -184,26 +189,16 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
     socket: Duplex,
     head: Buffer,
   ): Promise<void> {
-    let found: Found;
-    try {
-      found = await finder.byId(kind.sandboxId);
-    } catch (error) {
-      log.error(error, 'proxy face: the lookup itself failed (upgrade)');
-      refuseUpgrade(socket, {
-        status: 500,
-        message: 'the gateway failed while locating the sandbox — see its log',
-      });
-      return;
-    }
+    const located = await locate(kind.sandboxId, 'proxy face (upgrade)');
     // The client left while its sandbox was being found (a lookup round
     // is up to two seconds): nothing to dial the node for.
     if (socket.destroyed) return;
-    if (found.kind !== 'one') {
-      refuseUpgrade(socket, sentence(kind.sandboxId, found));
+    if ('refusal' in located) {
+      refuseUpgrade(socket, located.refusal);
       return;
     }
     forwardUpgrade(req, socket, head, {
-      endpoint: found.node.endpoint,
+      endpoint: located.node.endpoint,
       token,
     });
   }
@@ -220,13 +215,20 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
           // signed door) promises CORS on every answer, refusals included,
           // or the browser could not read them; the daemon's proxy answers
           // carry none, and neither do the gateway's for any other host.
-          void route(
-            req,
-            res,
-            kind.sandboxId,
-            'proxy',
-            browserDirect(kind, req),
-          );
+          // Its preflight is answered here, as the envd face's is: a
+          // preflight is credential-less and asks nothing of the sandbox,
+          // and the node would answer it in this very shape (its cors.ts).
+          // Forwarded instead, an id on no node earned it the 502 below —
+          // which no browser reads on a preflight: it drops the real
+          // request, and the readable refusal is never seen (found by
+          // review, 2026-09-14). Every other sandbox host's OPTIONS is the
+          // sandbox's own: the app inside decides its CORS.
+          const direct = isEnvdFilesForm(kind.port, req.url);
+          if (direct && req.method === 'OPTIONS') {
+            sendPreflight(req, res);
+            return;
+          }
+          void route(req, res, kind.sandboxId, 'proxy', direct);
           return;
         }
         case 'envd': {
@@ -277,6 +279,16 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
       // whole gateway down — from an unauthenticated face (the daemon's
       // sandbox-proxy.ts handleUpgrade has the same first line).
       socket.on('error', () => socket.destroy());
+      // The request path's first rule (classify.ts isOriginForm), in this
+      // path's medium — a status line, there being no response object.
+      // Judged ahead of the face: an absolute-form handshake on a sandbox
+      // host was replayed into the sandbox verbatim, the gateway and the
+      // node reading two different requests (found by review, 2026-09-14,
+      // reproduced on the test machine).
+      if (!isOriginForm(req)) {
+        refuseUpgrade(socket, { status: 400, message: ORIGIN_FORM_REQUIRED });
+        return;
+      }
       // Only the proxy face takes upgrades: sandbox WebSockets (a dev
       // server's HMR, a notebook). Everything else is cut, exactly as
       // stock Fastify, which never handles upgrades, would.
@@ -287,17 +299,6 @@ export function createRawFaces({ finder, token, log }: RawFacesDeps) {
       void upgrade(kind, req, socket, head);
     },
   };
-}
-
-/** Thrown inside route() once the refusal is on the wire — the signal to stop, never seen outside. */
-class Refused extends Error {}
-
-/** Is this the browser-postable signed-URL form, `49983-<id>.<domain>/files`? Path-only, query ignored — the daemon's own carve-out test. */
-function browserDirect(kind: ProxyFace, req: http.IncomingMessage): boolean {
-  if (kind.port !== ENVD_PORT) return false;
-  const url = req.url ?? '';
-  const q = url.indexOf('?');
-  return (q === -1 ? url : url.slice(0, q)) === '/files';
 }
 
 /** A refusal on an upgrade: one status line and a JSON body, before any handshake was replayed (forwardUpgrade's own refusals have the same shape). */

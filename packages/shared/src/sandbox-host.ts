@@ -21,9 +21,36 @@ import type { RuntimeSettings } from './settings';
  * speak for (server/e2b/signed-files.ts). Every other path keeps the
  * honest proxy answer: nothing listens on 49983 inside the sandbox. The
  * gateway forwards this form like any other sandbox host; the node does
- * the carving.
+ * the carving, the gateway answers its preflights and wears CORS on its
+ * own refusals to it (isEnvdFilesForm below is the one judgment of it).
  */
 export const ENVD_PORT = 49983;
+
+/**
+ * Exactly `/files`, query ignored — the path of both signed-URL forms,
+ * the bare daemon root and the 49983 subdomain (isEnvdFilesForm).
+ */
+export function isFilesPath(url: string | undefined): boolean {
+  const target = url ?? '';
+  const q = target.indexOf('?');
+  return (q === -1 ? target : target.slice(0, q)) === '/files';
+}
+
+/**
+ * The browser-postable signed-URL form: envd's port in the Host label and
+ * the /files path — `49983-<sandboxId>.<domain>/files`. Judged here for
+ * both doors, so what is browser-direct at one is browser-direct at the
+ * other: the daemon's proxy carves it out of port forwarding onto its
+ * signed door (server/sandbox-proxy.ts), the gateway answers its
+ * preflights itself and wears CORS on its own refusals to it
+ * (gateway/raw.ts).
+ */
+export function isEnvdFilesForm(
+  port: number,
+  url: string | undefined,
+): boolean {
+  return port === ENVD_PORT && isFilesPath(url);
+}
 
 /**
  * The domain group inbound matching runs against: the canonical domain

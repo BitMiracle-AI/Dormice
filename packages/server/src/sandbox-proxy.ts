@@ -3,7 +3,7 @@ import { request as httpRequest } from 'node:http';
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
 import {
-  ENVD_PORT,
+  isEnvdFilesForm,
   parseSandboxHost,
   sandboxDomainsInForce,
 } from '@dormice/shared';
@@ -38,19 +38,13 @@ import { wakeSandbox } from './lifecycle';
  */
 
 /**
- * The Host grammar — parseSandboxHost, the domain group in force,
- * ENVD_PORT — lives in @dormice/shared (sandbox-host.ts): the gateway's
- * proxy face reads the same header to find the node holding the sandbox
- * and forwards the request here whole, Host kept, so a host names the
- * same sandbox at both doors.
+ * The Host grammar — parseSandboxHost, the domain group in force, and
+ * the browser-direct file form isEnvdFilesForm — lives in @dormice/shared
+ * (sandbox-host.ts): the gateway's proxy face reads the same header to
+ * find the node holding the sandbox and forwards the request here whole,
+ * Host kept, so a host names the same sandbox at both doors and the same
+ * form is browser-direct at both.
  */
-
-/** Path-only match for the carve-out: exactly /files, query ignored. */
-function isEnvdFilesRequest(req: http.IncomingMessage): boolean {
-  const url = req.url ?? '';
-  const q = url.indexOf('?');
-  return (q === -1 ? url : url.slice(0, q)) === '/files';
-}
 
 export interface SandboxProxyDeps {
   db: Db;
@@ -127,10 +121,9 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
     matches(req) {
       const parsed = parseSandboxHost(req.headers.host, domains());
       if (!parsed) return false;
-      // The envd file face on its fixed port belongs to Fastify's signed
-      // door, not to a dial into the container (see ENVD_PORT).
-      if (parsed.port === ENVD_PORT && isEnvdFilesRequest(req)) return false;
-      return true;
+      // The browser-direct file form on envd's fixed port belongs to
+      // Fastify's signed door, not to a dial into the container.
+      return !isEnvdFilesForm(parsed.port, req.url);
     },
 
     handleRequest(req, res) {
