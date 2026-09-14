@@ -12,13 +12,17 @@ npm install -g @dormice/cli
 
 ## Connect
 
-Everything under `dor sandbox` talks to a daemon named by two environment
-variables (it complains by name if one is missing):
+`dor` talks to the gateway — the fleet's one door — named by two
+environment variables (it complains by name if one is missing):
 
 ```sh
-export DORMICE_ENDPOINT=http://127.0.0.1:3676
+export DORMICE_ENDPOINT=http://127.0.0.1:3677
 export DORMICE_API_TOKEN=...
 ```
+
+`dor sandbox ls` (and `dor sandbox meta <key>` without labels) read the
+sandbox list, which the gateway does not route yet: point
+`DORMICE_ENDPOINT` at the daemon, `http://127.0.0.1:3676`, for those.
 
 ## Commands
 
@@ -30,7 +34,7 @@ export DORMICE_API_TOKEN=...
 | `dor sandbox push <key> <local> [remote]` | Copy a local file into the sandbox |
 | `dor sandbox pull <key> <remote> [local]` | Copy a file out; no local path = raw bytes to stdout |
 | `dor sandbox rebuild <key>` | Swap the container, keep `/home/user` — next use starts on the daemon's current base image |
-| `dor sandbox release <key>` | Destroy the sandbox (idempotent) |
+| `dor sandbox destroy <key>` | Destroy the sandbox (idempotent) |
 
 `doctor` inspects the local host, never writes, and prints the fix for
 anything it flags — the checks are the distilled lessons of running the

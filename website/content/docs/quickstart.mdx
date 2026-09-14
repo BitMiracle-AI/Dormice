@@ -20,10 +20,11 @@ export DORMICE_ENDPOINT=http://127.0.0.1:3677
 export DORMICE_API_TOKEN=<your token>  # on the host: grep ^DORMICE_API_TOKEN /etc/dormice/env
 ```
 
-The gateway answers everything this page does. Two CLI commands list
-rather than act — `dor sandbox ls` and `dor sandbox meta` — and the
-gateway does not route the list verbs yet: for those, point
-`DORMICE_ENDPOINT` at the daemon (`http://127.0.0.1:3676`) until it does.
+The gateway answers everything this page does. Two CLI forms read the
+sandbox list — `dor sandbox ls`, and `dor sandbox meta <name>` without
+labels — and the gateway does not route the list verbs yet: for those,
+point `DORMICE_ENDPOINT` at the daemon (`http://127.0.0.1:3676`) until
+it does.
 
 ## 2. Get the SDK
 

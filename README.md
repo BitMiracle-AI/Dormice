@@ -40,7 +40,7 @@ first release is queued; inside this repo, `pnpm build` produces it.)
 import { Dormice } from '@dormice/sdk';
 
 const client = new Dormice({
-  endpoint: 'http://127.0.0.1:3676',
+  endpoint: 'http://127.0.0.1:3677',
   token: process.env.DORMICE_API_TOKEN!,
 });
 
@@ -93,8 +93,8 @@ import { Sandbox } from 'e2b';
 
 const sbx = await Sandbox.create({
   apiKey: `e2b_${process.env.DORMICE_API_TOKEN}`,
-  apiUrl: 'http://127.0.0.1:3676/e2b/api',
-  sandboxUrl: 'http://127.0.0.1:3676/e2b/envd',
+  apiUrl: 'http://127.0.0.1:3677/e2b/api',
+  sandboxUrl: 'http://127.0.0.1:3677/e2b/envd',
 });
 ```
 

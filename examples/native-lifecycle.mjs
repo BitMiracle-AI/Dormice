@@ -5,7 +5,7 @@
 //   DORMICE_API_TOKEN=... node examples/native-lifecycle.mjs
 import { Dormice } from '@dormice/sdk';
 
-const endpoint = process.env.DORMICE_ENDPOINT ?? 'http://127.0.0.1:3676';
+const endpoint = process.env.DORMICE_ENDPOINT ?? 'http://127.0.0.1:3677';
 const token = process.env.DORMICE_API_TOKEN;
 if (!token) {
   console.error(

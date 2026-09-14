@@ -83,9 +83,9 @@ import { Agent, fetch, type Response } from 'undici';
 const dispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 
 export interface DormiceOptions {
-  /** Base URL of the daemon, e.g. `http://127.0.0.1:3676`. */
+  /** Base URL of the gateway, the fleet's door, e.g. `http://127.0.0.1:3677`. */
   endpoint: string;
-  /** The daemon's DORMICE_API_TOKEN. */
+  /** The fleet's DORMICE_API_TOKEN, or an API key minted at the gateway. */
   token: string;
   /**
    * Per-request timeout. Without one, a wedged daemon would hang the

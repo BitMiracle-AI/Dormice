@@ -58,8 +58,8 @@ import { Sandbox } from 'e2b';
 
 const sbx = await Sandbox.create({
   apiKey: `e2b_${process.env.DORMICE_API_TOKEN}`,
-  apiUrl: 'http://127.0.0.1:3676/e2b/api',
-  sandboxUrl: 'http://127.0.0.1:3676/e2b/envd',
+  apiUrl: 'http://127.0.0.1:3677/e2b/api',
+  sandboxUrl: 'http://127.0.0.1:3677/e2b/envd',
 });
 await sbx.commands.run('echo hello');
 ```
@@ -70,8 +70,8 @@ from e2b import Sandbox
 
 sandbox = Sandbox.create(
     api_key=f"e2b_{os.environ['DORMICE_API_TOKEN']}",
-    api_url="http://127.0.0.1:3676/e2b/api",
-    sandbox_url="http://127.0.0.1:3676/e2b/envd",
+    api_url="http://127.0.0.1:3677/e2b/api",
+    sandbox_url="http://127.0.0.1:3677/e2b/envd",
 )
 sandbox.commands.run("echo hello")
 ```
@@ -93,7 +93,7 @@ Every operation is `POST /<sdkMethodName>` with a JSON body and
 import { Dormice } from '@dormice/sdk';
 
 const client = new Dormice({
-  endpoint: 'http://127.0.0.1:3676',
+  endpoint: 'http://127.0.0.1:3677',
   token: process.env.DORMICE_API_TOKEN!,
 });
 
@@ -112,7 +112,7 @@ await client.destroySandbox('my-agent'); // the only verb that loses data
 The same loop in curl:
 
 ```sh
-curl -X POST http://127.0.0.1:3676/acquireSandbox \
+curl -X POST http://127.0.0.1:3677/acquireSandbox \
   -H "Authorization: Bearer $DORMICE_API_TOKEN" \
   -H "content-type: application/json" \
   -d '{"name": "my-agent"}'

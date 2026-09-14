@@ -16,7 +16,7 @@ npm install @dormice/sdk
 import { Dormice } from '@dormice/sdk';
 
 const client = new Dormice({
-  endpoint: 'http://127.0.0.1:3676', // your daemon
+  endpoint: 'http://127.0.0.1:3677', // the gateway, the fleet's door
   token: process.env.DORMICE_API_TOKEN!,
 });
 

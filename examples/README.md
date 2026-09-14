@@ -1,6 +1,6 @@
 # Examples
 
-Small, runnable programs against a live Dormice daemon. Each file is
+Small, runnable programs against a live Dormice install. Each file is
 self-contained — read it top to bottom, then run it.
 
 | File | What it shows |
@@ -11,20 +11,21 @@ self-contained — read it top to bottom, then run it.
 
 ## Prerequisites
 
-A running daemon with the docker executor — a host prepared by
-[`install.sh`](../deploy/install.sh) is exactly right. The examples speak to
-it through the same two environment variables the `dor` CLI uses:
+A running Dormice — a host prepared by [`install.sh`](../deploy/install.sh)
+is exactly right: the gateway on 3677, a daemon with the docker executor
+behind it. The examples speak to the gateway through the same two
+environment variables the `dor` CLI uses:
 
 ```sh
-export DORMICE_ENDPOINT=http://127.0.0.1:3676   # the default; omit when local
+export DORMICE_ENDPOINT=http://127.0.0.1:3677   # the default; omit when local
 export DORMICE_API_TOKEN=...                    # /etc/dormice/env on the host
 ```
 
-The daemon binds to 127.0.0.1 only. To run the examples from your laptop
+The gateway binds to 127.0.0.1 only. To run the examples from your laptop
 against a remote host, open a tunnel first and keep the default endpoint:
 
 ```sh
-ssh -L 3676:127.0.0.1:3676 root@your-host
+ssh -L 3677:127.0.0.1:3677 root@your-host
 ```
 
 ## Running
@@ -44,5 +45,5 @@ In your own project, once the packages are published, the same code runs
 after `npm install @dormice/sdk e2b`.
 
 `resident-agent.mjs` deliberately leaves its sandbox running; when you are
-done playing, remove it with `dor sandbox release example-resident-agent`
+done playing, remove it with `dor sandbox destroy example-resident-agent`
 (or `destroySandbox` from the SDK).
