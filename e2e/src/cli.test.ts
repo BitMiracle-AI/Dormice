@@ -59,6 +59,18 @@ describe('dor CLI against a real daemon', () => {
     expect(stdout).toContain(created.sandbox.id);
   });
 
+  it("sandbox ls at the door lists the fleet — node A's sandboxes, nobody silent, no warning line", async () => {
+    const sdk = new Dormice({
+      endpoint: inject('dormiceEndpoint'),
+      token: inject('dormiceToken'),
+    });
+    const created = await sdk.acquireSandbox('cli-ls-door-key');
+    const { stdout } = await door('sandbox', 'ls');
+    expect(stdout).toMatch(/cli-ls-door-key\s{2,}active/);
+    expect(stdout).toContain(created.sandbox.id);
+    expect(stdout).not.toContain('warning:');
+  });
+
   it('sandbox meta shows, replaces and clears labels through the real binary', async () => {
     const sdk = new Dormice({
       endpoint: inject('dormiceEndpoint'),

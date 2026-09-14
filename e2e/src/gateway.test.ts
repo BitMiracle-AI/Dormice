@@ -702,11 +702,30 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
           ? true
           : undefined,
       );
+      // The merged list is the other nodes' and says so: d's sandbox is
+      // not in it, and d is named silent with the reason it was not even
+      // asked — not a dial that waited the whole merge timeout.
+      const partial = await viaGateway().listSandboxes();
+      expect(partial.sandboxes.some((s) => s.name === 'gw-on-d')).toBe(false);
+      expect(partial.silent).toEqual([
+        { nodeId: 'node-d', why: expect.stringMatching(/has not checked in/) },
+      ]);
+      // The E2B list has nowhere to say what it lacks: a 503 naming d.
+      const e2bList = await fetch(`${gateway()}/e2b/api/v2/sandboxes`, {
+        headers: { 'x-api-key': `e2b_${token()}` },
+      });
+      expect(e2bList.status).toBe(503);
+      expect((await e2bList.json()) as object).toMatchObject({
+        code: 503,
+        message: expect.stringMatching(/node node-d did not answer/),
+      });
 
       expect((await rpc('/removeNode', { id: 'node-d' })).body).toEqual({
         removed: true,
       });
       expect((await listNodes()).some((n) => n.id === 'node-d')).toBe(false);
+      // Removed, it is nobody's silence: the list is whole again.
+      expect((await viaGateway().listSandboxes()).silent).toEqual([]);
       const placed = await viaGateway().acquireSandbox('gw-while-d-down');
       try {
         expect(['node-b', 'node-c']).toContain(placed.sandbox.nodeId);
