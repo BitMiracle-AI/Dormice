@@ -2,6 +2,7 @@ import type { BuildInfo, CheckInRequest, NodeReading } from '@dormice/shared';
 import { eq } from 'drizzle-orm';
 import type { Db } from './db/db';
 import { nodes } from './db/schema';
+import { bumpConfigVersion } from './db/settings';
 
 /**
  * A node as the gateway knows it: the persistent row (id, endpoint,
@@ -18,6 +19,10 @@ export interface NodeState {
   readonly id: string;
   endpoint: string;
   readonly addedAt: string;
+  /** The node's own setting, from its row: managed swap on its data disk, GiB. */
+  swapGb: number;
+  /** The configuration version the node last reported running; null before it has said. */
+  configVersion: number | null;
   lastCheckInAt: Date | null;
   intervalSeconds: number | null;
   build: BuildInfo | null;
@@ -85,6 +90,8 @@ export class Fleet {
         id: row.id,
         endpoint: row.endpoint,
         addedAt: row.addedAt,
+        swapGb: row.swapGb,
+        configVersion: null,
         lastCheckInAt: null,
         intervalSeconds: null,
         build: null,
@@ -136,6 +143,8 @@ export class Fleet {
         id: report.nodeId,
         endpoint: report.endpoint,
         addedAt,
+        swapGb: 0,
+        configVersion: null,
         lastCheckInAt: null,
         intervalSeconds: null,
         build: null,
@@ -174,6 +183,23 @@ export class Fleet {
     node.placedSinceCheckIn = 0;
     node.placedIds.clear();
     return { node, joined, movedFrom };
+  }
+
+  /**
+   * The one per-node setting, written to the row and counted as a
+   * configuration change in the same transaction, so the node that pulls
+   * the next bundle gets the new target under the new version and never
+   * one without the other. Answers false for an unknown id.
+   */
+  setSwapGb(id: string, swapGb: number): boolean {
+    const node = this.members.get(id);
+    if (node === undefined) return false;
+    this.db.transaction((tx) => {
+      tx.update(nodes).set({ swapGb }).where(eq(nodes.id, id)).run();
+      bumpConfigVersion(tx);
+    });
+    node.swapGb = swapGb;
+    return true;
   }
 
   /** The operator's word that the node is gone for good (routes/nodes.ts refuses it for a node still checking in); one removed while briefly silent re-adds itself at its next check-in. */

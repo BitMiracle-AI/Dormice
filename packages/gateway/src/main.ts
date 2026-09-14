@@ -12,6 +12,7 @@ import { migrateDb, openDb } from './db/db';
 import { ensureSettings } from './db/settings';
 import { Finder } from './find';
 import { Fleet } from './fleet';
+import { Ingress } from './ingress';
 import { httpAskNode } from './lookup';
 import { readBuildInfo } from './version';
 
@@ -81,6 +82,25 @@ log.info(
     : 'dormice-gateway build: no version identity (built outside a git checkout)',
 );
 
+// The managed front door, present exactly when the knob names a file
+// (the archiver precedent). The upstream is this gateway: the fleet's one
+// public Caddy sits in front of the one door.
+const ingress =
+  config.DORMICE_INGRESS_FILE === undefined
+    ? undefined
+    : new Ingress({
+        filePath: config.DORMICE_INGRESS_FILE,
+        upstreamPort: config.DORMICE_GATEWAY_PORT,
+        ...(config.DORMICE_INGRESS_RELOAD_CMD
+          ? { reloadCommand: config.DORMICE_INGRESS_RELOAD_CMD }
+          : {}),
+      });
+if (ingress) {
+  log.info(
+    `managed ingress: ${config.DORMICE_INGRESS_FILE} (domains bound from the console reach this gateway)`,
+  );
+}
+
 // The built web console, by the monorepo layout: dist/main.js sits two
 // levels under packages/gateway, the console's dist beside it. Absent
 // (a deploy without the console built), /console answers an honest 404.
@@ -100,6 +120,7 @@ const app = buildGatewayApp({
   logger: log,
   build,
   consoleDistDir: existsSync(consoleDistDir) ? consoleDistDir : undefined,
+  ingress,
 });
 
 // Same red line as the daemon: loopback only, host not configurable — the

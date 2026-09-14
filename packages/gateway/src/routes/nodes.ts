@@ -3,12 +3,20 @@ import {
   checkInResponseSchema,
   listNodesRequestSchema,
   listNodesResponseSchema,
+  type NodeView,
   removeNodeRequestSchema,
   removeNodeResponseSchema,
+  updateNodeSettingsRequestSchema,
+  updateNodeSettingsResponseSchema,
 } from '@dormice/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import type { NameCache } from '../cache';
-import { downReason, type Fleet, STARTUP_GRACE_MS } from '../fleet';
+import {
+  downReason,
+  type Fleet,
+  type NodeState,
+  STARTUP_GRACE_MS,
+} from '../fleet';
 
 export interface CheckInRoutesOptions {
   fleet: Fleet;
@@ -125,19 +133,33 @@ export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
     },
     async () => {
       const now = new Date();
-      return {
-        nodes: fleet.all().map((node) => ({
-          id: node.id,
-          endpoint: node.endpoint,
-          addedAt: node.addedAt,
-          lastCheckInAt: node.lastCheckInAt?.toISOString() ?? null,
-          intervalSeconds: node.intervalSeconds,
-          reachable: downReason(node, now) === null,
-          build: node.build,
-          reading: node.reading,
-          placedSinceCheckIn: node.placedSinceCheckIn,
-        })),
-      };
+      return { nodes: fleet.all().map((node) => view(node, now)) };
+    },
+  );
+
+  app.post(
+    '/updateNodeSettings',
+    {
+      schema: {
+        body: updateNodeSettingsRequestSchema,
+        response: { 200: updateNodeSettingsResponseSchema },
+      },
+    },
+    async (request) => {
+      const { id, swapGb } = request.body;
+      if (!fleet.setSwapGb(id, swapGb)) {
+        throw refusal(
+          404,
+          `no node with id '${id}' — listNodes shows which exist`,
+        );
+      }
+      const node = fleet.get(id);
+      if (node === undefined) throw refusal(404, `no node with id '${id}'`);
+      request.log.info(
+        { nodeId: id, swapGb },
+        'node swap target set; the node applies it at its next check-in',
+      );
+      return { node: view(node, new Date()) };
     },
   );
 
@@ -194,3 +216,20 @@ export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
     },
   );
 };
+
+/** What listNodes and updateNodeSettings answer for one node: the row, the last check-in, the gateway's own counters. */
+function view(node: NodeState, now: Date): NodeView {
+  return {
+    id: node.id,
+    endpoint: node.endpoint,
+    addedAt: node.addedAt,
+    swapGb: node.swapGb,
+    configVersion: node.configVersion,
+    lastCheckInAt: node.lastCheckInAt?.toISOString() ?? null,
+    intervalSeconds: node.intervalSeconds,
+    reachable: downReason(node, now) === null,
+    build: node.build,
+    reading: node.reading,
+    placedSinceCheckIn: node.placedSinceCheckIn,
+  };
+}

@@ -937,7 +937,7 @@ describe('using, destroying, and the cache', () => {
     const listed = await rpc(h, '/listSandboxes');
     expect(listed.status).toBe(501);
     expect(message(listed)).toContain('call the node directly');
-    expect((await rpc(h, '/registerTemplate', { name: 'k' })).status).toBe(501);
+    expect((await rpc(h, '/getHostMetrics')).status).toBe(501);
     expect((await rpc(h, '/acquireSandbx', { name: 'x' })).status).toBe(404);
     expect((await rpc(h, '/execCommand', { command: 'x' })).status).toBe(400);
     expect(h.nodes[0]?.hits).toEqual([]);

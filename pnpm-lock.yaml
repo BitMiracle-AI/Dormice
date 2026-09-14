@@ -200,6 +200,9 @@ importers:
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@types/better-sqlite3@7.6.13)(better-sqlite3@12.11.1)(kysely@0.28.17)
+      execa:
+        specifier: ^9.6.1
+        version: 9.6.1
       fastify:
         specifier: ^5.10.0
         version: 5.10.0

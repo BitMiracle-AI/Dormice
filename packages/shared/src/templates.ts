@@ -92,3 +92,24 @@ export const removeTemplateResponseSchema = z.object({
 export type RemoveTemplateResponse = z.infer<
   typeof removeTemplateResponseSchema
 >;
+
+/**
+ * templateUsers({ name }) — "which of your sandboxes still use this
+ * template?", the question the gateway puts to every node before it
+ * removes a template (design record #29: templates are the gateway's, the
+ * sandboxes that reference them are the nodes'). Read-only. A node
+ * answers with the names, the gateway refuses the removal while any node
+ * names one, and a node that does not answer holds the removal too: a
+ * template deleted under a sandbox would wake it onto a dangling name.
+ */
+export const templateUsersRequestSchema = z.object({
+  name: templateNameSchema,
+});
+
+export type TemplateUsersRequest = z.infer<typeof templateUsersRequestSchema>;
+
+export const templateUsersResponseSchema = z.object({
+  sandboxNames: z.array(z.string()),
+});
+
+export type TemplateUsersResponse = z.infer<typeof templateUsersResponseSchema>;

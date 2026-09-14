@@ -3,11 +3,13 @@ import {
   lookupSandboxResponseSchema,
   type SandboxState,
 } from '@dormice/shared';
+import type { z } from 'zod';
 
 /**
- * Asking one node "do you hold this sandbox?" — the daemon's lookupSandbox
- * verb, the one question the gateway puts to a node on its own account
- * (everything else it sends is a caller's request, forwarded raw). Two
+ * Asking one node a question on the gateway's own account — the daemon's
+ * lookupSandbox ("do you hold this sandbox?") and templateUsers ("which
+ * of yours still use this template?"), the two read-only verbs the
+ * gateway sends that are not a caller's request forwarded raw. Two
  * seconds, not more: a node that cannot answer a ledger read in two
  * seconds is a node in trouble, and the caller is waiting on the whole
  * round. There is no second, slower deadline — slow is down (design
@@ -32,6 +34,19 @@ export type AskNode = (
   node: AskedNode,
   query: LookupQuery,
 ) => Promise<LookupAnswer>;
+
+/** A node's answer to any verb asked on the gateway's account: parsed, or silence with the transport's word. */
+export type Asked<T> =
+  | { kind: 'answer'; value: T }
+  | { kind: 'silent'; why: string };
+
+/** Asks one node one verb, validated by the schema of its answer. */
+export type AskVerb = <T>(
+  node: AskedNode,
+  verb: string,
+  body: unknown,
+  schema: z.ZodType<T>,
+) => Promise<Asked<T>>;
 
 /**
  * The transport's word for a failure, for a log line or a 503's sentence:
@@ -64,16 +79,16 @@ export function causeOf(error: unknown): string {
  * quirk comes with fetch: it refuses the Fetch standard's "bad ports"
  * (9, 22, 25, 6000 …) without dialling — no node's front lives on one.
  */
-export function httpAskNode(token: string): AskNode {
-  return async (node, query) => {
+export function httpAsk(token: string): AskVerb {
+  return async (node, verb, body, schema) => {
     try {
-      const res = await fetch(`${node.endpoint}/lookupSandbox`, {
+      const res = await fetch(`${node.endpoint}/${verb}`, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${token}`,
           'content-type': 'application/json',
         },
-        body: JSON.stringify(query),
+        body: JSON.stringify(body),
         signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
         redirect: 'manual',
       });
@@ -81,15 +96,29 @@ export function httpAskNode(token: string): AskNode {
         const text = await res.text();
         return {
           kind: 'silent',
-          why: `lookupSandbox answered ${res.status}: ${text.slice(0, 200)}`,
+          why: `${verb} answered ${res.status}: ${text.slice(0, 200)}`,
         };
       }
-      const answer = lookupSandboxResponseSchema.parse(await res.json());
-      return answer.found
-        ? { kind: 'found', ...answer.sandbox }
-        : { kind: 'absent' };
+      return { kind: 'answer', value: schema.parse(await res.json()) };
     } catch (error) {
       return { kind: 'silent', why: causeOf(error) };
     }
+  };
+}
+
+/** lookupSandbox over httpAsk, in the words find.ts reads. */
+export function httpAskNode(token: string): AskNode {
+  const ask = httpAsk(token);
+  return async (node, query) => {
+    const asked = await ask(
+      node,
+      'lookupSandbox',
+      query,
+      lookupSandboxResponseSchema,
+    );
+    if (asked.kind === 'silent') return asked;
+    return asked.value.found
+      ? { kind: 'found', ...asked.value.sandbox }
+      : { kind: 'absent' };
   };
 }

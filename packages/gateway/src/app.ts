@@ -11,21 +11,26 @@ import { type Logger, pino } from 'pino';
 import { z } from 'zod';
 import { requireAdminAuth, requireApiAuth, tokensEqual } from './auth';
 import { classify, isOriginForm } from './classify';
-import type { Config } from './config';
+import { type Config, type ConfigSources, configSources } from './config';
 import { getConsoleAccount } from './db/account';
 import { isLiveApiKey, verifyApiKeyToken } from './db/api-keys';
 import type { Db } from './db/db';
 import { renderError } from './errors';
 import type { Finder } from './find';
 import type { Fleet } from './fleet';
+import type { Ingress } from './ingress';
+import { type AskVerb, httpAsk } from './lookup';
 import type { PlacementKnobs } from './placement';
 import { createRawFaces } from './raw';
 import { apiKeyRoutes } from './routes/api-keys';
 import { consoleRoutes } from './routes/console';
 import { e2bControlRoutes } from './routes/e2b';
 import { envdTokenRoutes } from './routes/envd-token';
+import { ingressRoutes } from './routes/ingress';
 import { nativeRoutes } from './routes/native';
 import { checkInRoutes, nodeRoutes } from './routes/nodes';
+import { settingsRoutes } from './routes/settings';
+import { templateRoutes } from './routes/templates';
 import { type BuildInfo, readBuildInfo } from './version';
 
 export interface GatewayAppDeps {
@@ -46,7 +51,29 @@ export interface GatewayAppDeps {
    * honest 404.
    */
   consoleDistDir?: string;
+  /**
+   * The managed reverse-proxy front door, present exactly when
+   * DORMICE_INGRESS_FILE is set. Absent, getIngress answers
+   * { managed: false } and setIngress refuses.
+   */
+  ingress?: Ingress;
+  /** Test seam over updateSettings' S3 round-trip probe; production probes for real. */
+  probeS3?: SettingsProbe;
+  /**
+   * How the gateway asks a node a verb on its own account (removeTemplate's
+   * templateUsers). Defaults to HTTP under the fleet token; tests script it.
+   */
+  ask?: AskVerb;
+  /**
+   * Which knobs came from the environment versus defaults, for getConfig.
+   * Defaults to reading process.env; tests inject a fixed map.
+   */
+  sources?: ConfigSources;
 }
+
+type SettingsProbe = NonNullable<
+  Parameters<typeof settingsRoutes>[1]['probeS3']
+>;
 
 /** Placement's knobs, read once from the config. */
 export function placementKnobs(config: Config): PlacementKnobs {
@@ -83,6 +110,10 @@ export function buildGatewayApp({
   logger = true,
   build = readBuildInfo(),
   consoleDistDir,
+  ingress,
+  probeS3,
+  ask,
+  sources = configSources(),
 }: GatewayAppDeps) {
   const loggerInstance =
     typeof logger === 'boolean' ? pino({ enabled: logger }) : logger;
@@ -215,6 +246,19 @@ export function buildGatewayApp({
     admin.addHook('onRequest', adminAuth);
     await admin.register(apiKeyRoutes, { db });
     await admin.register(nodeRoutes, { fleet, cache: finder.cache });
+    await admin.register(settingsRoutes, {
+      config,
+      db,
+      fleet,
+      sources,
+      ...(probeS3 ? { probeS3 } : {}),
+    });
+    await admin.register(templateRoutes, {
+      db,
+      fleet,
+      ask: ask ?? httpAsk(token),
+    });
+    await admin.register(ingressRoutes, { ingress });
   });
 
   // The web console: account + session endpoints (open — setup and login

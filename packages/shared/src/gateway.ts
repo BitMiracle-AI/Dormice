@@ -118,6 +118,10 @@ export const nodeViewSchema = z.object({
   endpoint: z.string(),
   /** ISO 8601 UTC — the first check-in. */
   addedAt: z.iso.datetime(),
+  /** The node's own setting: managed swap on its data disk, GiB (updateNodeSettings). */
+  swapGb: z.number().int().nonnegative(),
+  /** The configuration version the node last reported it runs; null until it has said (or before it pulls one). */
+  configVersion: z.number().int().nullable(),
   /** ISO 8601 UTC — null only right after a gateway start, before the node's next check-in. */
   lastCheckInAt: z.iso.datetime().nullable(),
   intervalSeconds: z.number().int().positive().nullable(),
@@ -159,3 +163,32 @@ export const removeNodeResponseSchema = z.object({
 });
 
 export type RemoveNodeResponse = z.infer<typeof removeNodeResponseSchema>;
+
+/**
+ * updateNodeSettings — the one per-node knob: how much swap the node's
+ * daemon manages on its own data disk, on top of the host's own. A
+ * machine's setting, not the fleet's (a 29 GB box and a 243 GB box want
+ * different numbers), so it lives on the node's row and reaches that node
+ * alone with the next configuration bundle. Growing takes effect at the
+ * node within one check-in; shrinking waits for that host's next reboot —
+ * an active swapfile is never unmounted (server/swap.ts has the rule).
+ * Refused (400) for a node whose last reading says its daemon cannot
+ * manage swap (a non-Linux host, the fake executor): a target nothing
+ * will ever reconcile must refuse, not be stored. 404 for an unknown id.
+ */
+export const updateNodeSettingsRequestSchema = z.object({
+  id: z.string().min(1),
+  swapGb: z.number().int().nonnegative(),
+});
+
+export type UpdateNodeSettingsRequest = z.infer<
+  typeof updateNodeSettingsRequestSchema
+>;
+
+export const updateNodeSettingsResponseSchema = z.object({
+  node: nodeViewSchema,
+});
+
+export type UpdateNodeSettingsResponse = z.infer<
+  typeof updateNodeSettingsResponseSchema
+>;

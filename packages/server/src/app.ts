@@ -32,6 +32,7 @@ import { hostRoutes } from './routes/host';
 import { ingressRoutes } from './routes/ingress';
 import { sandboxRoutes } from './routes/sandboxes';
 import { settingsRoutes } from './routes/settings';
+import { templateUsersRoutes } from './routes/template-users';
 import { templateRoutes } from './routes/templates';
 import { upgradeRoutes } from './routes/upgrade';
 import { createSandboxProxy } from './sandbox-proxy';
@@ -266,6 +267,7 @@ export function buildApp({
       archiver,
     });
     await api.register(templateRoutes, { db });
+    await api.register(templateUsersRoutes, { db });
     await api.register(hostRoutes, { config, db, executor });
     await api.register(ingressRoutes, { ingress });
     await api.register(configRoutes, { config, db, sources });
