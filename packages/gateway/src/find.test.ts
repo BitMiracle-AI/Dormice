@@ -6,7 +6,12 @@ import { NameCache } from './cache';
 import { migrateDb, openDb } from './db/db';
 import { Finder } from './find';
 import { Fleet } from './fleet';
-import { type AskNode, httpAskNode, type LookupAnswer } from './lookup';
+import {
+  type AskNode,
+  httpAskNode,
+  LOOKUP_TIMEOUT_MS,
+  type LookupAnswer,
+} from './lookup';
 import { checkInOf } from './testing';
 
 const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
@@ -245,8 +250,33 @@ describe('httpAskNode', () => {
       kind: 'silent',
       why: expect.stringMatching(/answered 401/),
     });
+    // A port nobody listens on any more: the OS hands one out and it is
+    // released before the question is asked. (Not port 9 — fetch refuses
+    // the Fetch standard's "bad ports" without dialling.)
+    const released = http.createServer();
+    await new Promise<void>((r) => released.listen(0, '127.0.0.1', r));
+    const port = (released.address() as AddressInfo).port;
+    await new Promise<void>((r) => released.close(() => r()));
     expect(
-      await ask({ id: 'gone', endpoint: 'http://127.0.0.1:9' }, { id: 'x' }),
+      await ask(
+        { id: 'gone', endpoint: `http://127.0.0.1:${port}` },
+        { id: 'x' },
+      ),
     ).toMatchObject({ kind: 'silent', why: 'ECONNREFUSED' });
   });
+
+  it('a node whose host swallows the connection is silent after the two seconds, not after a connect timeout — and the why is a word, not a number', async () => {
+    // 192.0.2.1 (TEST-NET-1) is routed nowhere: the SYN is dropped, the
+    // connect hangs. Where a network refuses it outright instead
+    // (ENETUNREACH), the answer is immediate and the assertion still holds.
+    const started = Date.now();
+    const answer = await httpAskNode(TOKEN)(
+      { id: 'hole', endpoint: 'http://192.0.2.1:80' },
+      { id: 'x' },
+    );
+    expect(Date.now() - started).toBeLessThan(LOOKUP_TIMEOUT_MS + 1_500);
+    expect(answer.kind).toBe('silent');
+    expect(answer.kind === 'silent' && typeof answer.why).toBe('string');
+    expect(answer.kind === 'silent' && answer.why).not.toMatch(/^\d+$/);
+  }, 15_000);
 });

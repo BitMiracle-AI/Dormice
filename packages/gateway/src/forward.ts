@@ -3,6 +3,7 @@ import net from 'node:net';
 import type { Duplex } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { Agent } from 'undici';
+import { causeOf } from './lookup';
 
 /**
  * The one place the gateway talks to a node on a caller's behalf. Bytes
@@ -129,12 +130,6 @@ function inboundHeaders(
     out[name] = value;
   }
   return out;
-}
-
-function causeOf(error: unknown): string {
-  const e = error as { code?: string; message?: string; cause?: unknown };
-  const cause = e.cause as { code?: string; message?: string } | undefined;
-  return cause?.code ?? cause?.message ?? e.code ?? e.message ?? String(error);
 }
 
 /**
