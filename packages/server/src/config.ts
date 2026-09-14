@@ -20,8 +20,13 @@ import type { S3Settings } from './archive/s3-store';
 const envSchema = z.object({
   DORMICE_PORT: z.coerce.number().int().min(1).max(65535).default(3676),
   DORMICE_DB_PATH: z.string().default('data/dormice.db'),
-  /** Identifies this machine in the ledger. Single-machine today; the field keeps the ledger shardable. */
-  DORMICE_NODE_ID: z.string().default('node-1'),
+  /**
+   * This node's name: in its ledger's rows, and to its gateway, which
+   * tells nodes apart by it. The default serves a daemon that is the
+   * whole platform, or shares its machine with its gateway; a node whose
+   * gateway is elsewhere must state its own (checkedSchema below).
+   */
+  DORMICE_NODE_ID: z.string().min(1).default('node-1'),
   /** How often the idle scanner sweeps the ledger. */
   DORMICE_SCAN_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
   /**
@@ -299,6 +304,23 @@ const checkedSchema = envSchema
       message:
         "DORMICE_NODE_ENDPOINT is required when DORMICE_GATEWAY_ENDPOINT is not loopback: the gateway is on another machine, and without it this node would report http://127.0.0.1:<DORMICE_PORT> — an address on the gateway's machine, not this one. Name this node's address on the network, e.g. http://10.0.0.7:80",
       path: ['DORMICE_NODE_ENDPOINT'],
+    },
+  )
+  // ...and who it is. The gateway tells nodes apart by DORMICE_NODE_ID,
+  // and node-1 is what every other unconfigured node says too: the
+  // second node-1 to check in is refused as a twin (409) at every
+  // check-in — or, when the first has been silent for an interval, taken
+  // for it having moved, and the first's names are placed again
+  // elsewhere. Refused here, at boot, where the operator is looking.
+  .refine(
+    (cfg) =>
+      cfg.DORMICE_GATEWAY_ENDPOINT === undefined ||
+      isLoopbackUrl(cfg.DORMICE_GATEWAY_ENDPOINT) !== false ||
+      cfg.DORMICE_NODE_ID !== 'node-1',
+    {
+      message:
+        'DORMICE_NODE_ID is required when DORMICE_GATEWAY_ENDPOINT is not loopback: the gateway tells nodes apart by it, and node-1 (the default) is what every other unconfigured node says — the second to check in is refused as a twin. Give this node a name of its own, e.g. its hostname',
+      path: ['DORMICE_NODE_ID'],
     },
   )
   // All-or-none: a half-configured store would make the archiver's

@@ -165,6 +165,7 @@ describe('the fleet knobs: gateway, node endpoint, check-in interval', () => {
       ...TOKEN,
       DORMICE_GATEWAY_ENDPOINT: 'http://10.0.0.5:3677/',
       DORMICE_NODE_ENDPOINT: 'http://10.0.0.7:80///',
+      DORMICE_NODE_ID: 'node-7',
       DORMICE_CHECK_IN_INTERVAL_SECONDS: '5',
     });
     expect(config.DORMICE_GATEWAY_ENDPOINT).toBe('http://10.0.0.5:3677');
@@ -220,6 +221,7 @@ describe('the fleet knobs: gateway, node endpoint, check-in interval', () => {
         ...TOKEN,
         DORMICE_GATEWAY_ENDPOINT: 'http://10.0.0.5:3677',
         DORMICE_NODE_ENDPOINT: 'http://10.0.0.7:80',
+        DORMICE_NODE_ID: 'node-7',
       }).DORMICE_NODE_ENDPOINT,
     ).toBe('http://10.0.0.7:80');
     for (const local of [
@@ -232,5 +234,32 @@ describe('the fleet knobs: gateway, node endpoint, check-in interval', () => {
           .DORMICE_NODE_ENDPOINT,
       ).toBeUndefined();
     }
+  });
+
+  it('a gateway on another machine requires a node id of its own, naming why; beside its gateway the default serves', () => {
+    expect(() =>
+      loadConfig({
+        ...TOKEN,
+        DORMICE_GATEWAY_ENDPOINT: 'http://10.0.0.5:3677',
+        DORMICE_NODE_ENDPOINT: 'http://10.0.0.7:80',
+      }),
+    ).toThrow(
+      /DORMICE_NODE_ID is required when DORMICE_GATEWAY_ENDPOINT is not loopback/,
+    );
+    expect(
+      loadConfig({
+        ...TOKEN,
+        DORMICE_GATEWAY_ENDPOINT: 'http://10.0.0.5:3677',
+        DORMICE_NODE_ENDPOINT: 'http://10.0.0.7:80',
+        DORMICE_NODE_ID: 'bj-7',
+      }).DORMICE_NODE_ID,
+    ).toBe('bj-7');
+    expect(
+      loadConfig({
+        ...TOKEN,
+        DORMICE_GATEWAY_ENDPOINT: 'http://127.0.0.1:3677',
+      }).DORMICE_NODE_ID,
+    ).toBe('node-1');
+    expect(loadConfig(TOKEN).DORMICE_NODE_ID).toBe('node-1');
   });
 });
