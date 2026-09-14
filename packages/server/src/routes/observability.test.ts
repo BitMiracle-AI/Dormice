@@ -98,7 +98,7 @@ function hostReading(cpuUsedPct: number | null): HostSample {
 
 describe('getConfig', () => {
   it('reports every knob with value and source, and validates', async () => {
-    const { app } = testApp({ DORMICE_MAX_SANDBOXES: '7' });
+    const { app } = testApp({ DORMICE_SANDBOX_DISK_GB: '7' });
     const res = await rpc(app, '/getConfig');
     expect(res.statusCode).toBe(200);
     const body = getConfigResponseSchema.parse(res.json());
@@ -106,7 +106,7 @@ describe('getConfig', () => {
     const byKey = new Map(body.entries.map((e: ConfigEntry) => [e.key, e]));
     // Complete: one entry per knob the config schema knows.
     expect(body.entries).toHaveLength(Object.keys(CONFIG_KEYS).length);
-    expect(byKey.get('DORMICE_MAX_SANDBOXES')).toMatchObject({
+    expect(byKey.get('DORMICE_SANDBOX_DISK_GB')).toMatchObject({
       value: '7',
       source: 'env',
     });

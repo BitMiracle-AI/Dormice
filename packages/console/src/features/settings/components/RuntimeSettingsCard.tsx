@@ -78,69 +78,6 @@ function EditTrigger() {
   );
 }
 
-function MaxSandboxesDialog({ settings }: { settings: RuntimeSettings }) {
-  const [open, setOpen] = useState(false);
-  const [value, setValue] = useState('');
-  const { pending, error, setError, submit } = useUpdateSettings(() =>
-    setOpen(false),
-  );
-
-  const valid =
-    value.trim() !== '' && Number.isInteger(Number(value)) && Number(value) > 0;
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (next) {
-          setValue(String(settings.maxSandboxes));
-          setError(null);
-        }
-      }}
-    >
-      <EditTrigger />
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{m.settings_max_dialog_title()}</DialogTitle>
-          <DialogDescription>{m.settings_max_dialog_desc()}</DialogDescription>
-        </DialogHeader>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submit(
-              { maxSandboxes: Number(value) },
-              m.settings_max_saved({ value: Number(value) }),
-            );
-          }}
-        >
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="settings-max-sandboxes">
-                {m.settings_max_label()}
-              </FieldLabel>
-              <Input
-                id="settings-max-sandboxes"
-                type="number"
-                min={1}
-                value={value}
-                onChange={(event) => setValue(event.target.value)}
-              />
-            </Field>
-            {error && <FieldError>{error}</FieldError>}
-          </FieldGroup>
-          <DialogFooter className="mt-6">
-            <Button type="submit" disabled={!valid || pending}>
-              {pending && <Spinner />}
-              {m.common_save()}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 function SandboxDefaultsDialog({ settings }: { settings: RuntimeSettings }) {
   const [open, setOpen] = useState(false);
   const [cpus, setCpus] = useState('');
@@ -579,11 +516,6 @@ export function RuntimeSettingsCard({ data }: { data: GetConfigResponse }) {
         </p>
       </div>
       <div className="divide-y">
-        <EditRow
-          label={m.settings_row_max_sandboxes()}
-          value={m.settings_row_max_value({ n: settings.maxSandboxes })}
-          dialog={<MaxSandboxesDialog settings={settings} />}
-        />
         <EditRow
           label={m.settings_row_defaults()}
           value={m.settings_row_defaults_value({

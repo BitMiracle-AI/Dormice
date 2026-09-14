@@ -122,12 +122,8 @@ function seedArchivedRow(db: ReturnType<typeof freshDb>, name: string) {
 
 describe('runtime settings: seeding', () => {
   it('seeds from the env at first boot, defaults where the env is silent', async () => {
-    const app = appOn(freshDb(), {
-      DORMICE_MAX_SANDBOXES: '7',
-      DORMICE_SANDBOX_DISK_GB: '20',
-    });
+    const app = appOn(freshDb(), { DORMICE_SANDBOX_DISK_GB: '20' });
     expect(await settingsOf(app)).toEqual({
-      maxSandboxes: 7,
       sandboxDefaults: { cpus: 1, memoryGb: 2, diskGb: 20 },
       // No S3 seed in this env, so the seeded default never archives.
       defaultPolicy: { ...DEFAULT_LIFECYCLE_POLICY, archiveAfterSeconds: null },
@@ -171,17 +167,17 @@ describe('runtime settings: seeding', () => {
 
   it('the ledger wins over a later env edit — seeds are read once', async () => {
     const db = freshDb();
-    appOn(db, { DORMICE_MAX_SANDBOXES: '5' });
+    appOn(db, { DORMICE_SANDBOX_DISK_GB: '5' });
     // Same ledger, "restarted" with a different env: the row already
     // exists, so the new env value is deliberately ignored...
-    const rebooted = appOn(db, { DORMICE_MAX_SANDBOXES: '9' });
-    expect((await settingsOf(rebooted)).maxSandboxes).toBe(5);
+    const rebooted = appOn(db, { DORMICE_SANDBOX_DISK_GB: '9' });
+    expect((await settingsOf(rebooted)).sandboxDefaults.diskGb).toBe(5);
     // ...while getConfig still reports what the env says, as an entry.
     const body = getConfigResponseSchema.parse(
       (await rpc(rebooted, '/getConfig')).json(),
     );
     expect(
-      body.entries.find((e) => e.key === 'DORMICE_MAX_SANDBOXES')?.value,
+      body.entries.find((e) => e.key === 'DORMICE_SANDBOX_DISK_GB')?.value,
     ).toBe('9');
   });
 
@@ -320,30 +316,6 @@ describe('updateSettings', () => {
     const later = appOn(db, { DORMICE_SANDBOX_PIDS_LIMIT: '999' });
     expect((await settingsOf(later)).pidsLimit).toBe(4096);
   });
-  it('raises maxSandboxes with immediate effect on the acquire gate', async () => {
-    const app = appOn(freshDb(), { DORMICE_MAX_SANDBOXES: '1' });
-    expect((await rpc(app, '/acquireSandbox', { name: 'a' })).statusCode).toBe(
-      200,
-    );
-    expect((await rpc(app, '/acquireSandbox', { name: 'b' })).statusCode).toBe(
-      429,
-    );
-
-    const res = await rpc(app, '/updateSettings', { maxSandboxes: 2 });
-    expect(res.statusCode).toBe(200);
-    expect(
-      updateSettingsResponseSchema.parse(res.json()).settings.maxSandboxes,
-    ).toBe(2);
-
-    // No restart, no re-read of the env: the very next create passes.
-    expect((await rpc(app, '/acquireSandbox', { name: 'b' })).statusCode).toBe(
-      200,
-    );
-    // And the observation window reports the new capacity.
-    const host = await rpc(app, '/getHostMetrics');
-    expect(host.json().sandboxes.maxSandboxes).toBe(2);
-  });
-
   it('a new default policy applies to the next acquire, not existing sandboxes', async () => {
     const app = appOn(freshDb());
     const before = await rpc(app, '/acquireSandbox', { name: 'old' });
@@ -373,9 +345,9 @@ describe('updateSettings', () => {
 
   it('replaces provided groups whole and leaves the rest untouched', async () => {
     const app = appOn(freshDb(), { DORMICE_SANDBOX_MEMORY_GB: '4' });
-    await rpc(app, '/updateSettings', { maxSandboxes: 50 });
+    await rpc(app, '/updateSettings', { pidsLimit: 512 });
     const settings = await settingsOf(app);
-    expect(settings.maxSandboxes).toBe(50);
+    expect(settings.pidsLimit).toBe(512);
     expect(settings.sandboxDefaults.memoryGb).toBe(4);
     expect(settings.updatedAt).not.toBeNull();
   });
@@ -483,7 +455,7 @@ describe('updateSettings', () => {
     );
     expect(swap.reconciled).toEqual([32]);
     // A patch without swapGb must not re-trigger the block juggler.
-    await rpc(app, '/updateSettings', { maxSandboxes: 9 });
+    await rpc(app, '/updateSettings', { pidsLimit: 512 });
     expect(swap.reconciled).toEqual([32]);
     const body = getConfigResponseSchema.parse(
       (await rpc(app, '/getConfig')).json(),
@@ -609,7 +581,7 @@ describe('updateSettings', () => {
     const refused = await rpc(
       app,
       '/updateSettings',
-      { maxSandboxes: 999 },
+      { pidsLimit: 999 },
       { authorization: `Bearer ${keyToken}` },
     );
     expect(refused.statusCode).toBe(403);

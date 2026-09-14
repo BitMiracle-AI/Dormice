@@ -1,6 +1,4 @@
-import { Meter } from '@/components/Meter';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { pctOf } from '@/lib/format';
 import { m } from '@/paraglide/messages';
 import { fullClock } from '../format';
 import {
@@ -15,8 +13,9 @@ import { StatCard, StatCardSkeleton } from './StatCard';
 
 /**
  * 舰队四卡(openasi 顶排版式,2026-07-16 沙箱磁盘上顶):当前活跃
- * (5 秒一刷的快照 + 窗口内活跃数 sparkline)、窗口峰值、总数/容量、
- * 沙箱磁盘账单。当前值来自 /getHostMetrics;峰值与 sparkline 来自
+ * (5 秒一刷的快照 + 窗口内活跃数 sparkline)、窗口峰值、总数、
+ * 沙箱磁盘账单。容量上限随讨论稿 #23 删(2026-09-14):账本行数不是
+ * 资源,数据盘水位才是——它有自己的卡。当前值来自 /getHostMetrics;峰值与 sparkline 来自
  * /getFleetTimeline — daemon 采样器 30 秒落一行,峰值由原始行现算,
  * 分桶抹不掉它。档位由页头的全局切换器驱动。
  */
@@ -50,9 +49,6 @@ export function FleetStatCards({ range }: { range: TimelineRangeKey }) {
   const { sandboxes } = host.data;
   const { points, peak } = timeline.data;
   const activeSeries = points.map((p) => p.byState.active);
-  const capacityPct = Math.round(
-    pctOf(sandboxes.total, sandboxes.maxSandboxes),
-  );
 
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -81,14 +77,13 @@ export function FleetStatCards({ range }: { range: TimelineRangeKey }) {
       />
       <StatCard
         label={m.overview_stat_total_label()}
-        value={`${sandboxes.total} / ${sandboxes.maxSandboxes}`}
-        hint={m.overview_stat_total_hint({ max: sandboxes.maxSandboxes })}
-        sub={m.overview_stat_total_sub({ pct: capacityPct })}
-        corner={
-          <div className="w-20 shrink-0 pb-1.5 @[250px]/card:w-24">
-            <Meter pct={capacityPct} />
-          </div>
-        }
+        value={String(sandboxes.total)}
+        hint={m.overview_stat_total_hint()}
+        sub={m.overview_stat_total_sub({
+          frozen: sandboxes.byState.frozen,
+          stopped: sandboxes.byState.stopped,
+          archived: sandboxes.byState.archived,
+        })}
         to="/sandboxes"
       />
       <SandboxDisksCard />

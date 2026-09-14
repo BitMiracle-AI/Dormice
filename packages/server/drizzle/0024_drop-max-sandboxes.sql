@@ -1,0 +1,1 @@
+ALTER TABLE `runtime_settings` DROP COLUMN `max_sandboxes`;

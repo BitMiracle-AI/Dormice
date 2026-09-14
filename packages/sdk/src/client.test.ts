@@ -436,22 +436,22 @@ describe('runtime settings over real HTTP', () => {
   it('updates a knob and reads it back through getConfig', async () => {
     const before = (await client.getConfig()).settings;
     const { settings } = await client.updateSettings({
-      maxSandboxes: before.maxSandboxes + 1,
+      pidsLimit: before.pidsLimit + 1,
     });
-    expect(settings.maxSandboxes).toBe(before.maxSandboxes + 1);
+    expect(settings.pidsLimit).toBe(before.pidsLimit + 1);
     expect(settings.updatedAt).not.toBeNull();
-    expect((await client.getConfig()).settings.maxSandboxes).toBe(
-      before.maxSandboxes + 1,
+    expect((await client.getConfig()).settings.pidsLimit).toBe(
+      before.pidsLimit + 1,
     );
     // Restore: other suites share this daemon's ledger.
-    await client.updateSettings({ maxSandboxes: before.maxSandboxes });
+    await client.updateSettings({ pidsLimit: before.pidsLimit });
   });
 
   it('is admin-only, like the apiKey verbs', async () => {
     const { apiKey, token } = await client.createApiKey('sdk-settings');
     const keyed = new Dormice({ endpoint, token });
     await expect(
-      keyed.updateSettings({ maxSandboxes: 12345 }),
+      keyed.updateSettings({ pidsLimit: 12345 }),
     ).rejects.toMatchObject({
       status: 403,
       message: expect.stringMatching(/cannot manage API keys or settings/),

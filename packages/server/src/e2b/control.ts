@@ -3,7 +3,6 @@ import type { FastifyError } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import {
-  countSandboxes,
   createSandbox,
   findById,
   findByName,
@@ -329,13 +328,6 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           );
         }
 
-        const maxSandboxes = readRuntimeSettings(db).maxSandboxes;
-        if (countSandboxes(db) >= maxSandboxes) {
-          throw apiError(
-            429,
-            `sandbox limit reached (maxSandboxes=${maxSandboxes}) — destroy a sandbox or raise the limit in settings`,
-          );
-        }
         const id = randomUUID();
         await executor.create(id, {
           image: resolveImage(db, template),

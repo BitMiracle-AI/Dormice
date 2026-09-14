@@ -5,7 +5,7 @@ import { lifecyclePolicySchema } from './policy';
  * Runtime settings — the operator knobs that live in the ledger, not the
  * environment. The dividing line (2026-07-19): a knob belongs here exactly
  * when changing it is an operations decision that must not require shell
- * access and a restart (capacity, what new sandboxes get); it stays an env
+ * access and a restart (what new sandboxes get); it stays an env
  * variable when changing it makes a different daemon (port, token,
  * executor, data dir).
  *
@@ -99,8 +99,6 @@ export type S3ArchiveView = z.infer<typeof s3ArchiveViewSchema>;
 export const PIDS_LIMIT_MIN = 256;
 
 export const runtimeSettingsSchema = z.object({
-  /** How many sandboxes may exist at once; past it, creation answers 429. Wakes are never blocked. */
-  maxSandboxes: z.number().int().positive(),
   sandboxDefaults: sandboxResourceDefaultsSchema,
   /** What acquire() gives a sandbox that asks for nothing. Existing sandboxes keep theirs. */
   defaultPolicy: lifecyclePolicySchema,
@@ -167,7 +165,6 @@ export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>;
  */
 export const updateSettingsRequestSchema = z
   .object({
-    maxSandboxes: z.number().int().positive().optional(),
     sandboxDefaults: sandboxResourceDefaultsSchema.optional(),
     defaultPolicy: lifecyclePolicySchema.optional(),
     swapGb: z.number().int().nonnegative().optional(),
@@ -203,7 +200,6 @@ export const updateSettingsRequestSchema = z
   .refine(
     (patch) =>
       patch.pidsLimit !== undefined ||
-      patch.maxSandboxes !== undefined ||
       patch.sandboxDefaults !== undefined ||
       patch.defaultPolicy !== undefined ||
       patch.swapGb !== undefined ||
@@ -212,7 +208,7 @@ export const updateSettingsRequestSchema = z
       patch.sandboxDomainAliases !== undefined,
     {
       message:
-        'updateSettings needs at least one of maxSandboxes, sandboxDefaults, defaultPolicy, swapGb, s3, sandboxDomain, sandboxDomainAliases, pidsLimit',
+        'updateSettings needs at least one of sandboxDefaults, defaultPolicy, swapGb, s3, sandboxDomain, sandboxDomainAliases, pidsLimit',
     },
   );
 

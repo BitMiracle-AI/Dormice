@@ -51,14 +51,6 @@ const envSchema = z.object({
     .positive()
     .default(168),
   /**
-   * How many sandboxes may exist at once. The binding resource is disk:
-   * every sandbox holds a disk image, and an unbounded acquire loop fills
-   * the host until the ledger itself can no longer write — the daemon dying
-   * of its own success. Past the cap, acquire answers an honest 429; wakes
-   * of existing sandboxes are never blocked.
-   */
-  DORMICE_MAX_SANDBOXES: z.coerce.number().int().positive().default(100),
-  /**
    * Required, no default: loopback-only is not authentication — any local
    * process could otherwise drive the daemon.
    */
@@ -363,7 +355,6 @@ export const CONFIG_KEYS: Record<keyof Config, { sensitive: boolean }> = {
   DORMICE_EXECUTOR: { sensitive: false },
   DORMICE_BASE_IMAGE: { sensitive: false },
   DORMICE_DATA_DIR: { sensitive: false },
-  DORMICE_MAX_SANDBOXES: { sensitive: false },
   DORMICE_SCAN_INTERVAL_SECONDS: { sensitive: false },
   DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS: { sensitive: false },
   DORMICE_METRICS_RETENTION_HOURS: { sensitive: false },

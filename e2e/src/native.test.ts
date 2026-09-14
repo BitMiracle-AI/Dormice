@@ -747,7 +747,6 @@ describe('native API over a real daemon', () => {
     expect(metrics.host.cpuCount).toBeGreaterThan(0);
     expect(metrics.host.memTotalBytes).toBeGreaterThan(0);
     expect(metrics.sandboxes.total).toBeGreaterThanOrEqual(1);
-    expect(metrics.sandboxes.maxSandboxes).toBeGreaterThan(0);
     expect(metrics.sandboxDisks.count).toBeGreaterThanOrEqual(1);
     expect(metrics.sandboxDisks.actualBytes).toBeGreaterThan(0);
     // Disks are sparse: the fleet is promised more than it occupies —
@@ -777,15 +776,15 @@ describe('the observability verbs over a real daemon', () => {
   it('updateSettings moves a ledger knob with immediate effect', async () => {
     const before = (await client().getConfig()).settings;
     const { settings } = await client().updateSettings({
-      maxSandboxes: before.maxSandboxes + 1,
+      pidsLimit: before.pidsLimit + 1,
     });
-    expect(settings.maxSandboxes).toBe(before.maxSandboxes + 1);
+    expect(settings.pidsLimit).toBe(before.pidsLimit + 1);
     expect(settings.updatedAt).not.toBeNull();
-    expect((await client().getConfig()).settings.maxSandboxes).toBe(
-      before.maxSandboxes + 1,
+    expect((await client().getConfig()).settings.pidsLimit).toBe(
+      before.pidsLimit + 1,
     );
     // Restore: the exam daemon is shared by every suite in this run.
-    await client().updateSettings({ maxSandboxes: before.maxSandboxes });
+    await client().updateSettings({ pidsLimit: before.pidsLimit });
   });
 
   it('the swap knob follows getConfig: refused where unmanageable, accepted where real', async () => {

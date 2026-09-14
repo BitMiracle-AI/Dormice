@@ -35,7 +35,6 @@ const KEY_HINTS: Record<string, () => string> = {
   DORMICE_EXECUTOR: m.settings_hint_executor,
   DORMICE_BASE_IMAGE: m.settings_hint_base_image,
   DORMICE_DATA_DIR: m.settings_hint_data_dir,
-  DORMICE_MAX_SANDBOXES: m.settings_hint_max_sandboxes,
   DORMICE_SCAN_INTERVAL_SECONDS: m.settings_hint_scan_interval,
   DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS:
     m.settings_hint_metrics_sample_interval,

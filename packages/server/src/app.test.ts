@@ -238,24 +238,6 @@ describe('error shape', () => {
   });
 });
 
-describe('sandbox capacity', () => {
-  it('caps creation at maxSandboxes with an honest 429', async () => {
-    // The env variable seeds the ledger's runtime settings at first boot.
-    const { app } = testApp(undefined, { DORMICE_MAX_SANDBOXES: '1' });
-    expect((await acquire(app, { name: 'alice' })).statusCode).toBe(200);
-
-    const capped = await acquire(app, { name: 'bob' });
-    expect(capped.statusCode).toBe(429);
-    expect(capped.json().message).toMatch(/maxSandboxes=1/);
-
-    // Existing sandboxes always wake — the cap only guards creation.
-    expect((await acquire(app, { name: 'alice' })).statusCode).toBe(200);
-    // Releasing frees the slot.
-    await rpc(app, '/destroySandbox', { name: 'alice' });
-    expect((await acquire(app, { name: 'bob' })).statusCode).toBe(200);
-  });
-});
-
 describe('concurrent acquires', () => {
   /** create() takes seconds under real Docker; 20ms makes two in-flight
    *  requests overlap deterministically. */
@@ -1834,7 +1816,6 @@ describe('POST /getHostMetrics', () => {
     expect(body.dataDisk?.totalBytes).toBeGreaterThan(0);
     expect(body.sandboxes).toEqual({
       total: 0,
-      maxSandboxes: 100,
       byState: { active: 0, frozen: 0, stopped: 0, archived: 0, restoring: 0 },
     });
     expect(body.sandboxDisks).toEqual({

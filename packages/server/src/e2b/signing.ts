@@ -56,7 +56,7 @@ function matchesToken(
  * `<origin>/files?...` and browsers add nothing) — but every sandbox's
  * access token is different, so the signature itself binds the sandbox:
  * compute the expected signature per live ledger row and take the match.
- * At most DORMICE_MAX_SANDBOXES hashes per request — microseconds.
+ * One hash per live ledger row — microseconds even at thousands.
  *
  * This is the single-domain answer to what real E2B solves with one
  * subdomain per sandbox; the deliberate divergence is documented in the

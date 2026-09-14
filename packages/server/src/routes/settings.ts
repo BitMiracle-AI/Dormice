@@ -44,17 +44,14 @@ export interface SettingsRoutesOptions {
  * session only, like the apiKey verbs — a leaked automation key must not
  * be able to raise the very limits that contain it.
  *
- * A ledger write with immediate effect: the consumers read live
- * (acquire's capacity gate, the executor's births, resolvePolicy's
- * defaults, the archiver's store, the sandbox proxy's domain, the
- * executor's pids cap at each birth and wake), so nothing here restarts or
- * wakes a sandbox. Two knobs have a reality on the host that the write
- * alone does not move, and each is reconciled right after it: managed swap
- * (a swapfile) and the pids cap on the shells running right now (a cgroup
- * write their processes never notice). Lowering maxSandboxes below the
- * current total is deliberately legal — the gate only blocks creation, and
- * refusing would leave an operator unable to say "no more" during an
- * incident.
+ * A ledger write with immediate effect: the consumers read live (the
+ * executor's births, resolvePolicy's defaults, the archiver's store, the
+ * sandbox proxy's domain, the executor's pids cap at each birth and
+ * wake), so nothing here restarts or wakes a sandbox. Two knobs have a
+ * reality on the host that the write alone does not move, and each is
+ * reconciled right after it: managed swap (a swapfile) and the pids cap
+ * on the shells running right now (a cgroup write their processes never
+ * notice).
  */
 export const settingsRoutes: FastifyPluginAsyncZod<
   SettingsRoutesOptions
@@ -192,9 +189,6 @@ export const settingsRoutes: FastifyPluginAsyncZod<
       request.log.info(
         { settings },
         `runtime settings updated: ${[
-          ...(patch.maxSandboxes !== undefined
-            ? [`maxSandboxes=${patch.maxSandboxes}`]
-            : []),
           ...(patch.sandboxDefaults !== undefined
             ? [
                 `sandboxDefaults=${patch.sandboxDefaults.cpus}cpu/${patch.sandboxDefaults.memoryGb}GiB/${patch.sandboxDefaults.diskGb}GiB`,

@@ -44,7 +44,6 @@ export function ensureRuntimeSettings(db: Db, config: Config): void {
   db.insert(runtimeSettings)
     .values({
       id: SETTINGS_ROW_ID,
-      maxSandboxes: config.DORMICE_MAX_SANDBOXES,
       sandboxCpus: config.DORMICE_SANDBOX_CPUS,
       sandboxMemoryGb: config.DORMICE_SANDBOX_MEMORY_GB,
       sandboxDiskGb: config.DORMICE_SANDBOX_DISK_GB,
@@ -142,7 +141,6 @@ function toView(row: RuntimeSettingsRow): RuntimeSettings {
   }
   if (row.pidsLimit === null) throw virginError('pids_limit');
   return {
-    maxSandboxes: row.maxSandboxes,
     sandboxDefaults: {
       cpus: row.sandboxCpus,
       memoryGb: row.sandboxMemoryGb,
@@ -241,9 +239,6 @@ export function writeRuntimeSettings(
   const row = db
     .update(runtimeSettings)
     .set({
-      ...(patch.maxSandboxes !== undefined
-        ? { maxSandboxes: patch.maxSandboxes }
-        : {}),
       ...(patch.sandboxDefaults !== undefined
         ? {
             sandboxCpus: patch.sandboxDefaults.cpus,

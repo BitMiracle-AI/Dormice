@@ -133,15 +133,6 @@ The sandbox image predates `inotify-tools`. Rebuild the image from
 [rebuild](/docs/upgrading) the sandboxes that need watching. Doctor's
 image probe warns about exactly this.
 
-## `acquireSandbox` answers 429
-
-The sandbox limit (default 100, seeded from `DORMICE_MAX_SANDBOXES`)
-gates *creation* only — waking an existing sandbox is never blocked.
-Raise it live in the console's settings page (or the `updateSettings`
-verb); no restart needed. Before raising it, look at the disk-overcommit
-figure in [`getHostMetrics`](/docs/metrics): disk is the real ceiling,
-and past full even the daemon's database cannot write.
-
 ## Creating from a template fails: "image … is not on this host"
 
 By design: [registration is configuration](/docs/templates) — the image

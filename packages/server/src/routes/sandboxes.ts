@@ -53,7 +53,6 @@ import type { Archiver, RestoreProgress } from '../archive/archiver';
 import type { Config } from '../config';
 import type { Db } from '../db/db';
 import {
-  countSandboxes,
   createSandbox,
   findById,
   findByName,
@@ -224,18 +223,11 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       return { status: 'ready', created: false, row: touch(db, awake.id) };
     }
 
-    // The capacity check lives at the only verb that creates — wakes of
-    // existing sandboxes are never blocked. Disk is the real ceiling: every
-    // sandbox holds a disk image, and unbounded creation fills the host
-    // until the ledger itself can no longer write. Read live from the
-    // ledger: a console edit applies to the very next create.
-    const maxSandboxes = readRuntimeSettings(db).maxSandboxes;
-    if (countSandboxes(db) >= maxSandboxes) {
-      throw httpError(
-        429,
-        `sandbox limit reached (maxSandboxes=${maxSandboxes}) — destroy a sandbox or raise the limit in settings`,
-      );
-    }
+    // No count-based cap: a ledger row is not a resource (design record
+    // #23 — stopped rows cost only disk, archived ones nothing local), and
+    // the physical ceilings each have their own reading: the data disk's
+    // free space and the host's CPU and memory, which the gateway places
+    // by and the operator watches through getHostMetrics.
 
     // Reality first, ledger second: bring the container up, then record
     // it. If create fails, no row was written — the next acquire retries

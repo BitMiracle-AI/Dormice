@@ -76,7 +76,6 @@ export const hostMetricsResponseSchema = z.object({
   /** Ledger aggregates: what the daemon believes it is running. */
   sandboxes: z.object({
     total: z.number().int(),
-    maxSandboxes: z.number().int(),
     byState: sandboxStateCountsSchema,
   }),
   /**

@@ -19,7 +19,6 @@ import {
   resolveBucketSeconds,
   resolveWindow,
 } from '../db/metrics';
-import { readRuntimeSettings } from '../db/settings';
 import type { Executor } from '../executor/executor';
 import { CpuSampler, readHostReading } from '../host-metrics';
 
@@ -61,8 +60,6 @@ export const hostRoutes: FastifyPluginAsyncZod<HostRoutesOptions> = async (
         ...(await readHostReading(cpu, config.DORMICE_DATA_DIR)),
         sandboxes: {
           total,
-          // The ledger's live knob, not the env seed — the console edits it.
-          maxSandboxes: readRuntimeSettings(db).maxSandboxes,
           byState,
         },
         sandboxDisks: await executor.diskUsage(),

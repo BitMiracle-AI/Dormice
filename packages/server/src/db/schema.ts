@@ -268,7 +268,6 @@ export type DaemonSecretsRow = typeof daemonSecrets.$inferSelect;
  */
 export const runtimeSettings = sqliteTable('runtime_settings', {
   id: integer('id').primaryKey(),
-  maxSandboxes: integer('max_sandboxes').notNull(),
   sandboxCpus: real('sandbox_cpus').notNull(),
   sandboxMemoryGb: real('sandbox_memory_gb').notNull(),
   sandboxDiskGb: real('sandbox_disk_gb').notNull(),

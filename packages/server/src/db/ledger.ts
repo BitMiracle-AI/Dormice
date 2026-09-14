@@ -4,7 +4,7 @@ import {
   SANDBOX_STATES,
   type SandboxState,
 } from '@dormice/shared';
-import { count, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { Db } from './db';
 import { type SandboxRow, sandboxes } from './schema';
 
@@ -127,11 +127,6 @@ export function countByState(rows: SandboxRow[]): {
   ) as Record<SandboxState, number>;
   for (const row of rows) byState[row.state] += 1;
   return { byState, total: rows.length };
-}
-
-/** How many sandboxes exist, for the capacity check at acquire. */
-export function countSandboxes(db: Db): number {
-  return db.select({ n: count() }).from(sandboxes).get()?.n ?? 0;
 }
 
 /**
