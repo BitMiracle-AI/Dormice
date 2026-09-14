@@ -2,6 +2,8 @@ import { z } from 'zod';
 import {
   dataDiskSchema,
   hostReadingSchema,
+  isoTimestampSchema,
+  sandboxDisksSchema,
   sandboxStateCountsSchema,
 } from './host';
 import { lifecyclePolicySchema } from './policy';
@@ -91,6 +93,16 @@ export const nodeReadingSchema = z.object({
   managedSwap: z
     .object({ activeGb: z.number().int().nonnegative() })
     .nullable(),
+  /**
+   * What this node's sandbox disks cost (host.ts sandboxDisksSchema), so
+   * the fleet's bill is a sum the gateway already holds (getFleetMetrics)
+   * and no console poll has to ask the nodes. Optional on the wire for one
+   * reason: a rolling upgrade takes the gateway first, and a node still on
+   * a build before the third cut (2026-09-14) reports without it — its
+   * check-in is taken, not refused with a 400 for the length of the
+   * upgrade.
+   */
+  sandboxDisks: sandboxDisksSchema.optional(),
 });
 
 export type NodeReading = z.infer<typeof nodeReadingSchema>;
@@ -257,3 +269,151 @@ export const updateNodeSettingsResponseSchema = z.object({
 export type UpdateNodeSettingsResponse = z.infer<
   typeof updateNodeSettingsResponseSchema
 >;
+
+/**
+ * A node a merged answer could not include, and why. The gateway's
+ * fleet-wide lists (listSandboxes, listSandboxMetrics, listSandboxImages)
+ * ask every node and concatenate; a node that is down, not listening yet
+ * or too slow is left out — and said, here, in the same answer. A list
+ * that quietly lacked a node would pass for the whole fleet, and refusing
+ * the whole list for one node would blind the operator exactly when a
+ * node is in trouble (RULES: a verb tells the truth). Always present in a
+ * gateway's answer, empty when every node answered; absent from a node's
+ * own answer, which has nobody to be silent.
+ */
+export const silentNodeSchema = z.object({
+  nodeId: z.string(),
+  /** In the gateway's words: why the node was not asked (down, not listening yet) or how it failed to answer (the transport's word). */
+  why: z.string(),
+});
+
+export type SilentNode = z.infer<typeof silentNodeSchema>;
+
+/**
+ * getFleetMetrics() — the fleet's figures that add up, from what the
+ * gateway already holds: every node's last reading. The sandbox census by
+ * state and the sandbox disks' bill are sums over nodes; a machine's CPU,
+ * memory and swap are not, and getHostMetrics names a node for those.
+ * Costs no node anything — the console polls this every few seconds, and
+ * a poll that fanned out to every node would make the nodes' one observer
+ * their heaviest caller (design record #24: the console's polling was 42%
+ * of every request measured on the Beijing node, 2026-09-12).
+ *
+ * `nodes.reported` says how many nodes the sums cover: a node that has
+ * not checked in since this gateway started has no reading here, and
+ * until it does the sums are a lower bound — said as such, never rounded
+ * up.
+ */
+export const getFleetMetricsRequestSchema = z.object({});
+
+export type GetFleetMetricsRequest = z.infer<
+  typeof getFleetMetricsRequestSchema
+>;
+
+export const getFleetMetricsResponseSchema = z.object({
+  nodes: z.object({
+    /** Every node the gateway knows — its nodes table. */
+    total: z.number().int(),
+    /** Checked in within two of their own intervals (listNodes' `reachable`). */
+    reachable: z.number().int(),
+    /** Have a reading — checked in since this gateway started. The sums below cover exactly these. */
+    reported: z.number().int(),
+  }),
+  sandboxes: z.object({
+    total: z.number().int(),
+    byState: sandboxStateCountsSchema,
+  }),
+  /** Summed over the reported nodes whose reading carries it (a node on an older build reports none). */
+  sandboxDisks: sandboxDisksSchema,
+});
+
+export type GetFleetMetricsResponse = z.infer<
+  typeof getFleetMetricsResponseSchema
+>;
+
+/**
+ * getFleetStateHistory(start?, end?) — how many sandboxes sat in each
+ * state over time, fleet-wide: the product's own story ("idle is free" is
+ * visible as active falling while frozen rises). Answered by the gateway
+ * from its fleet_state_samples — one row per check-in, the sum of every
+ * node's last census at that moment (design record #26: the one figure no
+ * single node can compute); a node keeps no fleet history of its own
+ * since the third cut. Kept 30 days.
+ *
+ * Bucketing differs from the per-sandbox verb on purpose: a bucket
+ * reports its last raw row whole, never per-state maxima — independent
+ * maxima would double-count a sandbox mid-transition and the stacked
+ * counts would stop summing to total. The concurrency peak is instead
+ * computed from the window's raw rows and carried separately in `peak`,
+ * so no bucketing can flatten it.
+ */
+export const fleetStatePointSchema = z.object({
+  /** ISO 8601 UTC — when the sample was taken. */
+  at: z.string(),
+  byState: sandboxStateCountsSchema,
+  total: z.number().int(),
+});
+
+export type FleetStatePoint = z.infer<typeof fleetStatePointSchema>;
+
+export const getFleetStateHistoryRequestSchema = z.object({
+  /** ISO 8601; defaults to 24 hours before `end`. */
+  start: isoTimestampSchema.optional(),
+  /** ISO 8601; defaults to now. */
+  end: isoTimestampSchema.optional(),
+});
+
+export type GetFleetStateHistoryRequest = z.infer<
+  typeof getFleetStateHistoryRequestSchema
+>;
+
+export const getFleetStateHistoryResponseSchema = z.object({
+  /** Ascending by timestamp. */
+  points: z.array(fleetStatePointSchema),
+  /** Null when raw samples were returned unbucketed. */
+  bucketSeconds: z.number().int().positive().nullable(),
+  /**
+   * Highest active count in the window, from raw rows (not buckets), with
+   * the earliest instant it was observed. Null when the window holds no
+   * samples at all.
+   */
+  peak: z
+    .object({
+      active: z.number().int(),
+      at: z.string(),
+    })
+    .nullable(),
+});
+
+export type GetFleetStateHistoryResponse = z.infer<
+  typeof getFleetStateHistoryResponseSchema
+>;
+
+/**
+ * The native verbs that answer at the gateway and nowhere else: the
+ * fleet's configuration (keys, settings, templates, domains, nodes) and
+ * its own observation (getFleetMetrics, getFleetStateHistory). A node has
+ * no route for them, and its 404 names the gateway (server/app.ts); the
+ * gateway's suite checks that each is registered — so the two ends of
+ * this list cannot drift apart.
+ */
+export const GATEWAY_ONLY_VERBS = [
+  'createApiKey',
+  'listApiKeys',
+  'updateApiKey',
+  'revokeApiKey',
+  'getConfig',
+  'updateSettings',
+  'registerTemplate',
+  'listTemplates',
+  'removeTemplate',
+  'getIngress',
+  'setIngress',
+  'listNodes',
+  'updateNodeSettings',
+  'removeNode',
+  'getFleetMetrics',
+  'getFleetStateHistory',
+] as const;
+
+export type GatewayOnlyVerb = (typeof GATEWAY_ONLY_VERBS)[number];

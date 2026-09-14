@@ -7,6 +7,7 @@ import { CheckIn, type CheckInOptions, readNodeReading } from './check-in';
 import { migrateDb, openDb } from './db/db';
 import { createSandbox } from './db/ledger';
 import { applyNodeConfig, readConfigVersion } from './db/settings';
+import { FakeExecutor } from './executor/fake';
 import { CpuSampler } from './host-metrics';
 import { testBundle } from './testing';
 
@@ -103,7 +104,8 @@ function options(
       title: 'a commit',
       committedAt: '2026-09-14T00:00:00.000Z',
     },
-    readReading: () => readNodeReading(db, cpu, '/nonexistent-data-dir'),
+    readReading: () =>
+      readNodeReading(db, cpu, '/nonexistent-data-dir', new FakeExecutor()),
     // The daemon's wiring in miniature: the copy is the ledger's, applied
     // by the pure write (node-config.ts's hooks are its own suite).
     configVersion: () => readConfigVersion(db),
@@ -143,10 +145,16 @@ describe('CheckIn', () => {
   it('the reading carries the managed swap when the daemon has one', async () => {
     const db = openDb(':memory:');
     migrateDb(db, MIGRATIONS);
-    const reading = await readNodeReading(db, new CpuSampler(), '/tmp', {
-      status: async () => ({ activeGb: 16, blocks: [] }),
-      reconcile: async () => ({ activeGb: 16, blocks: [] }),
-    });
+    const reading = await readNodeReading(
+      db,
+      new CpuSampler(),
+      '/tmp',
+      new FakeExecutor(),
+      {
+        status: async () => ({ activeGb: 16, blocks: [] }),
+        reconcile: async () => ({ activeGb: 16, blocks: [] }),
+      },
+    );
     expect(reading.managedSwap).toEqual({ activeGb: 16 });
   });
 
@@ -168,10 +176,21 @@ describe('CheckIn', () => {
         spec: undefined,
       });
     }
-    const reading = await readNodeReading(db, new CpuSampler(), '/tmp');
+    const reading = await readNodeReading(
+      db,
+      new CpuSampler(),
+      '/tmp',
+      new FakeExecutor(),
+    );
     expect(reading.sandboxes.total).toBe(2);
     expect(reading.sandboxes.byState.active).toBe(2);
     expect(reading.dataDisk?.path).toBe('/tmp');
+    // The disks' bill rides along: what the gateway sums for the fleet.
+    expect(reading.sandboxDisks).toEqual({
+      count: 0,
+      nominalBytes: 0,
+      actualBytes: 0,
+    });
   });
 
   it('logs a failing gateway once, and its recovery once — not every tick', async () => {

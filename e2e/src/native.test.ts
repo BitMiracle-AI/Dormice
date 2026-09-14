@@ -94,7 +94,9 @@ describe('native API over a real daemon', () => {
     expect(updated.sandbox.metadata).toEqual({ app: 'assistant' });
 
     const listed = await client().listSandboxes();
-    expect(listed.find((s) => s.name === 'meta-key')?.metadata).toEqual({
+    expect(
+      listed.sandboxes.find((s) => s.name === 'meta-key')?.metadata,
+    ).toEqual({
       app: 'assistant',
     });
 
@@ -172,7 +174,9 @@ describe('native API over a real daemon', () => {
       destroyed: true,
     });
     const listed = await client().listSandboxes();
-    expect(listed.some((s) => s.id === created.sandbox.id)).toBe(false);
+    expect(listed.sandboxes.some((s) => s.id === created.sandbox.id)).toBe(
+      false,
+    );
     expect(await client().destroySandbox('destroy-key')).toEqual({
       destroyed: false,
     });
@@ -352,7 +356,7 @@ describe('native API over a real daemon', () => {
     });
     const result = await client().execCommand('exec-busy-key', 'sleep 3');
     expect(result.exitCode).toBe(0);
-    const observed = (await client().listSandboxes()).find(
+    const observed = (await client().listSandboxes()).sandboxes.find(
       (s) => s.name === 'exec-busy-key',
     );
     expect(observed?.state).toBe('active');
@@ -369,7 +373,7 @@ describe('native API over a real daemon', () => {
     // Watch it actually freeze from outside, on real wall-clock time.
     const deadline = Date.now() + 15_000;
     for (;;) {
-      const cold = (await client().listSandboxes()).find(
+      const cold = (await client().listSandboxes()).sandboxes.find(
         (s) => s.name === 'exec-wake-key',
       );
       if (cold?.state === 'frozen') break;
@@ -386,7 +390,7 @@ describe('native API over a real daemon', () => {
     const result = await client().execCommand('exec-wake-key', 'echo woke');
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('woke\n');
-    const observed = (await client().listSandboxes()).find(
+    const observed = (await client().listSandboxes()).sandboxes.find(
       (s) => s.name === 'exec-wake-key',
     );
     expect(observed?.state).toBe('active');
@@ -410,7 +414,7 @@ describe('native API over a real daemon', () => {
     // own, in a separate process, on real wall-clock time.
     const deadline = Date.now() + 15_000;
     for (;;) {
-      const asleep = (await client().listSandboxes()).find(
+      const asleep = (await client().listSandboxes()).sandboxes.find(
         (s) => s.name === 'sleeper-key',
       );
       if (asleep?.state === 'stopped') break;
@@ -511,7 +515,7 @@ describe('native API over a real daemon', () => {
       template: 'native-tpl',
     });
     expect(created.sandbox.template).toBe('native-tpl');
-    const listed = (await client().listSandboxes()).find(
+    const listed = (await client().listSandboxes()).sandboxes.find(
       (s) => s.name === 'tpl-key',
     );
     expect(listed?.template).toBe('native-tpl');
@@ -612,7 +616,7 @@ describe('native API over a real daemon', () => {
       template: 'lineage-tpl',
     });
     const mine = async () =>
-      (await client().listSandboxImages()).find(
+      (await client().listSandboxImages()).images.find(
         (e) => e.sandboxName === 'lineage-key',
       );
 
@@ -678,7 +682,7 @@ describe('native API over a real daemon', () => {
       // Watch it actually freeze from outside, on real wall-clock time.
       const deadline = Date.now() + 15_000;
       for (;;) {
-        const cold = (await client().listSandboxes()).find(
+        const cold = (await client().listSandboxes()).sandboxes.find(
           (s) => s.name === 'swap-key',
         );
         if (cold?.state === 'frozen') break;
@@ -702,7 +706,7 @@ describe('native API over a real daemon', () => {
       // The deployment check: the lineage row reports the new image and the
       // upgradable flag has cleared.
       expect(
-        (await client().listSandboxImages()).find(
+        (await client().listSandboxImages()).images.find(
           (e) => e.sandboxName === 'swap-key',
         ),
       ).toMatchObject({ image: 'img:swap-v2', upgradable: false });
@@ -751,7 +755,7 @@ describe('native API over a real daemon', () => {
     // Watch it actually freeze from outside, on real wall-clock time.
     const deadline = Date.now() + 15_000;
     for (;;) {
-      const cold = (await client().listSandboxes()).find(
+      const cold = (await client().listSandboxes()).sandboxes.find(
         (s) => s.name === 'files-wake-key',
       );
       if (cold?.state === 'frozen') break;
@@ -765,7 +769,7 @@ describe('native API over a real daemon', () => {
 
     const read = await client().readFile('files-wake-key', 'keep.txt');
     expect(new TextDecoder().decode(read.content)).toBe('still here');
-    const observed = (await client().listSandboxes()).find(
+    const observed = (await client().listSandboxes()).sandboxes.find(
       (s) => s.name === 'files-wake-key',
     );
     expect(observed?.state).toBe('active');
@@ -868,17 +872,17 @@ describe('the observability verbs over a real daemon', () => {
     ).rejects.toMatchObject({ name: 'DormiceApiError', status: 404 });
   });
 
-  it('getFleetTimeline reports points and a peak once the fleet was seen', async () => {
+  it('getFleetStateHistory reports points and a peak once the fleet was seen', async () => {
     await client().acquireSandbox('obs-timeline-key');
     const deadline = Date.now() + 15_000;
-    let timeline = await client().getFleetTimeline();
+    let timeline = await client().getFleetStateHistory();
     // Wait for a tick that observed at least one sandbox alive.
     while (
       (timeline.points.length < 1 || (timeline.peak?.active ?? 0) < 1) &&
       Date.now() < deadline
     ) {
       await sleep(0.5);
-      timeline = await client().getFleetTimeline();
+      timeline = await client().getFleetStateHistory();
     }
     expect(timeline.points.length).toBeGreaterThanOrEqual(1);
     expect(timeline.peak?.active).toBeGreaterThanOrEqual(1);

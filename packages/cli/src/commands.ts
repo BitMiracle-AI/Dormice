@@ -71,16 +71,28 @@ function renderTable(headers: string[], rows: string[][]): string {
   return [line(headers), ...rows.map(line)].join('\n');
 }
 
-/** `dor sandbox ls`: every sandbox with its lifecycle state, as plain columns. */
+/**
+ * `dor sandbox ls`: every sandbox with its lifecycle state, as plain
+ * columns. Asked of the gateway, the list may lack a node that did not
+ * answer — said under the table, one line per node, never dropped: an
+ * operator reading "No sandboxes." while a node is down must be told.
+ */
 export async function sandboxLs(client: Dormice): Promise<string> {
-  const sandboxes = await client.listSandboxes();
-  if (sandboxes.length === 0) {
-    return 'No sandboxes.';
-  }
-  return renderTable(
-    COLUMNS.map((column) => column.header),
-    sandboxes.map((s) => COLUMNS.map((column) => printable(column.value(s)))),
+  const { sandboxes, silent = [] } = await client.listSandboxes();
+  const table =
+    sandboxes.length === 0
+      ? 'No sandboxes.'
+      : renderTable(
+          COLUMNS.map((column) => column.header),
+          sandboxes.map((s) =>
+            COLUMNS.map((column) => printable(column.value(s))),
+          ),
+        );
+  const warnings = silent.map(
+    (node) =>
+      `warning: node ${printable(node.nodeId)} did not answer (${printable(node.why)}) — its sandboxes are not listed`,
   );
+  return [table, ...warnings].join('\n');
 }
 
 /**
@@ -113,7 +125,9 @@ export async function sandboxMeta(
 ): Promise<string> {
   if (labels === null) {
     // Read path: the native list is the one read the daemon offers.
-    const sandbox = (await client.listSandboxes()).find((s) => s.name === name);
+    const sandbox = (await client.listSandboxes()).sandboxes.find(
+      (s) => s.name === name,
+    );
     if (!sandbox) {
       throw new Error(`no sandbox named "${name}" — acquire it first`);
     }

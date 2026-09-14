@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { getFleetTimeline } from '@/lib/api';
+import { getFleetStateHistory } from '@/lib/api';
 import { m } from '@/paraglide/messages';
 
 /**
@@ -34,7 +34,7 @@ export function useFleetTimeline(range: TimelineRangeKey) {
     queryFn: () => {
       const end = Date.now();
       const start = end - rangeSpanMs(range);
-      return getFleetTimeline(
+      return getFleetStateHistory(
         new Date(start).toISOString(),
         new Date(end).toISOString(),
       );

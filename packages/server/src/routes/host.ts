@@ -1,6 +1,6 @@
 import {
-  getFleetTimelineRequestSchema,
-  getFleetTimelineResponseSchema,
+  getFleetStateHistoryRequestSchema,
+  getFleetStateHistoryResponseSchema,
   getHostMetricsHistoryRequestSchema,
   getHostMetricsHistoryResponseSchema,
   hostMetricsResponseSchema,
@@ -11,15 +11,13 @@ import type { Db } from '../db/db';
 import { countByState, listSandboxes } from '../db/ledger';
 import {
   bucketHostSamples,
-  bucketSnapshots,
   queryFleetPeak,
   queryFleetSnapshots,
   queryHostCpuPeak,
   queryHostSamples,
-  resolveBucketSeconds,
-  resolveWindow,
 } from '../db/metrics';
 import type { Executor } from '../executor/executor';
+import { bucketLast, resolveBucketSeconds, resolveWindow } from '../history';
 import { CpuSampler, readHostReading } from '../host-metrics';
 
 export interface HostRoutesOptions {
@@ -33,7 +31,9 @@ export interface HostRoutesOptions {
  * of listSandboxes. Read-only by construction: it reads the ledger, /proc,
  * statfs and the disk images' metadata, and touches no sandbox and no
  * lifecycle state (observation is not activity — the same principle that
- * keeps listing and metrics from waking anything).
+ * keeps listing and metrics from waking anything). A request may carry
+ * `nodeId` (shared getHostMetricsRequestSchema): that is the gateway's
+ * address of this node, forwarded along, and means nothing here.
  */
 export const hostRoutes: FastifyPluginAsyncZod<HostRoutesOptions> = async (
   app,
@@ -129,13 +129,14 @@ export const hostRoutes: FastifyPluginAsyncZod<HostRoutesOptions> = async (
   // the bucket — so byState always sums to total; the concurrency peak is
   // computed from raw rows and travels beside the points, immune to
   // bucketing. A window the daemon slept through simply has no rows: the
-  // gap IS the answer.
+  // gap IS the answer. (The gateway answers this verb for the fleet from
+  // its own samples; this node-local answer leaves with the third cut.)
   app.post(
-    '/getFleetTimeline',
+    '/getFleetStateHistory',
     {
       schema: {
-        body: getFleetTimelineRequestSchema,
-        response: { 200: getFleetTimelineResponseSchema },
+        body: getFleetStateHistoryRequestSchema,
+        response: { 200: getFleetStateHistoryResponseSchema },
       },
     },
     async (request) => {
@@ -150,7 +151,7 @@ export const hostRoutes: FastifyPluginAsyncZod<HostRoutesOptions> = async (
       const points =
         bucketSeconds === null
           ? rows
-          : bucketSnapshots(rows, startMs, bucketSeconds);
+          : bucketLast(rows, startMs, bucketSeconds);
       return {
         points: points.map((row) => ({
           at: row.at,

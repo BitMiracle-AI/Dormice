@@ -11,15 +11,11 @@ import {
   setPausedByUser,
   touch,
 } from '../db/ledger';
-import {
-  bucketSamples,
-  querySandboxSamples,
-  resolveBucketSeconds,
-  resolveWindow,
-} from '../db/metrics';
+import { bucketSamples, querySandboxSamples } from '../db/metrics';
 import type { SandboxRow } from '../db/schema';
 import { archiveEnabled, readRuntimeSettings } from '../db/settings';
 import { findTemplate, resolveImage } from '../db/templates';
+import { resolveBucketSeconds, resolveWindow } from '../history';
 import {
   destroySandbox,
   freezeSandbox,

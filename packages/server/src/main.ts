@@ -208,7 +208,7 @@ const checkIn = new CheckIn({
   intervalSeconds: config.DORMICE_CHECK_IN_INTERVAL_SECONDS,
   build,
   readReading: () =>
-    readNodeReading(db, checkInCpu, config.DORMICE_DATA_DIR, swap),
+    readNodeReading(db, checkInCpu, config.DORMICE_DATA_DIR, executor, swap),
   configVersion: () => readConfigVersion(db),
   applyConfig: (bundle) =>
     applyConfig(bundle, { db, executor, locks, swap, log, beat }),

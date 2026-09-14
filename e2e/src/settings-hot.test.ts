@@ -121,7 +121,7 @@ describe('the S3 archive store as a live ledger setting', () => {
     try {
       const deadline = Date.now() + 15_000;
       for (;;) {
-        const mine = (await node().listSandboxes()).find(
+        const mine = (await node().listSandboxes()).sandboxes.find(
           (s) => s.name === 'settings-hot-held',
         );
         if (mine?.state === 'archived') break;

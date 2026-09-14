@@ -248,9 +248,11 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
       expect(created.created).toBe(true);
       expect(['node-b', 'node-c']).toContain(created.sandbox.nodeId);
       const here = await direct(created.sandbox.nodeId).listSandboxes();
-      expect(here.some((s) => s.id === created.sandbox.id)).toBe(true);
+      expect(here.sandboxes.some((s) => s.id === created.sandbox.id)).toBe(
+        true,
+      );
       const there = await direct(other(created.sandbox.nodeId)).listSandboxes();
-      expect(there.some((s) => s.name === 'gw-place')).toBe(false);
+      expect(there.sandboxes.some((s) => s.name === 'gw-place')).toBe(false);
 
       const again = await viaGateway().acquireSandbox('gw-place');
       expect(again.created).toBe(false);

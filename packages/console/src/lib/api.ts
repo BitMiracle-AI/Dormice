@@ -6,7 +6,7 @@ import type {
   CheckUpgradeResponse,
   CreateApiKeyResponse,
   GetConfigResponse,
-  GetFleetTimelineResponse,
+  GetFleetStateHistoryResponse,
   GetHostMetricsHistoryResponse,
   GetIngressResponse,
   GetSandboxMetricsHistoryResponse,
@@ -14,6 +14,7 @@ import type {
   GetUpgradeStatusResponse,
   HostMetricsResponse,
   LifecyclePolicyOverride,
+  ListSandboxesResponse,
   ListSandboxImagesResponse,
   ListSandboxMetricsResponse,
   RegisterTemplateResponse,
@@ -139,8 +140,7 @@ export const login = (input: { username: string; password: string }) =>
 export const logout = () =>
   rpc<{ loggedIn: false }>('/console/auth/logout', {}, { intercept401: false });
 
-export const listSandboxes = () =>
-  rpc<{ sandboxes: Sandbox[] }>('/listSandboxes');
+export const listSandboxes = () => rpc<ListSandboxesResponse>('/listSandboxes');
 
 // The host-level observation window: machine health plus fleet aggregates.
 // Pure observation — the daemon wakes nothing to answer it.
@@ -170,11 +170,12 @@ export const getSandboxMetricsHistory = (
     end,
   });
 
-// Fleet state counts over time — the concurrency curve's data. Bucketed
-// points are whole raw snapshots (byState always sums to total); peak is
-// computed from raw rows and immune to bucketing.
-export const getFleetTimeline = (start: string, end: string) =>
-  rpc<GetFleetTimelineResponse>('/getFleetTimeline', { start, end });
+// Fleet state counts over time — the concurrency curve's data, kept by the
+// gateway one sample per node check-in. Bucketed points are whole raw
+// samples (byState always sums to total); peak is computed from raw rows
+// and immune to bucketing.
+export const getFleetStateHistory = (start: string, end: string) =>
+  rpc<GetFleetStateHistoryResponse>('/getFleetStateHistory', { start, end });
 
 // The machine's sampled past — the host health card's trend food. Buckets
 // keep each field's worst case (max usage, min available) so spikes

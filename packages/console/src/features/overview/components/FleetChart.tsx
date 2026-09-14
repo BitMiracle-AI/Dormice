@@ -1,4 +1,7 @@
-import type { GetFleetTimelineResponse, SandboxState } from '@dormice/shared';
+import type {
+  GetFleetStateHistoryResponse,
+  SandboxState,
+} from '@dormice/shared';
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 import {
   Card,
@@ -66,7 +69,7 @@ type ChartRow = { at: number } & Record<SandboxState, number | null>;
  * 样本则取中位点距(采样间隔是服务端配置,客户端不猜死值)。
  */
 function toChartRows(
-  points: GetFleetTimelineResponse['points'],
+  points: GetFleetStateHistoryResponse['points'],
   bucketSeconds: number | null,
 ): ChartRow[] {
   const rows: ChartRow[] = points.map((p) => ({

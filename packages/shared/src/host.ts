@@ -65,11 +65,43 @@ export const sandboxStateCountsSchema = z.object({
 export type SandboxStateCounts = z.infer<typeof sandboxStateCountsSchema>;
 
 /**
- * getHostMetrics() — the observation window into the machine itself: is the
- * host healthy, and what do the sandboxes collectively cost it? A single
- * point-in-time snapshot; for the machine's past see getHostMetricsHistory
- * below. Observation never wakes a sandbox and never touches lifecycle.
+ * What the sandbox disks cost, from the executor: nominal is the summed
+ * promised sizes, actual is what the sparse images really occupy. The gap
+ * is the overcommit — the number an operator watches close as the host
+ * fills, because nothing else caps it. A node's figure in getHostMetrics
+ * and in its check-in reading (gateway.ts); the fleet's sum in
+ * getFleetMetrics.
  */
+export const sandboxDisksSchema = z.object({
+  count: z.number().int(),
+  nominalBytes: z.number(),
+  actualBytes: z.number(),
+});
+
+export type SandboxDisks = z.infer<typeof sandboxDisksSchema>;
+
+/**
+ * getHostMetrics({ nodeId? }) — the observation window into the machine
+ * itself: is the host healthy, and what do the sandboxes collectively cost
+ * it? A single point-in-time snapshot; for the machine's past see
+ * getHostMetricsHistory below. Observation never wakes a sandbox and never
+ * touches lifecycle.
+ *
+ * A machine's reading is one machine's: N nodes' CPU percentages add up
+ * to nothing, so at the gateway this verb names its node — `nodeId`, as
+ * listNodes lists them — and is forwarded there whole. A fleet of one
+ * needs no name (the single-machine install, unchanged); a fleet of
+ * several refuses an unnamed request (400) rather than pick a machine.
+ * A node ignores the field. The fleet's figures that do add up — the
+ * sandbox census, the disks' bill — are getFleetMetrics (gateway.ts).
+ */
+export const getHostMetricsRequestSchema = z.object({
+  /** Which node's machine. Required at the gateway once the fleet has more than one node; ignored by a node. */
+  nodeId: z.string().min(1).optional(),
+});
+
+export type GetHostMetricsRequest = z.infer<typeof getHostMetricsRequestSchema>;
+
 export const hostMetricsResponseSchema = z.object({
   host: hostReadingSchema,
   dataDisk: dataDiskSchema.nullable(),
@@ -78,17 +110,7 @@ export const hostMetricsResponseSchema = z.object({
     total: z.number().int(),
     byState: sandboxStateCountsSchema,
   }),
-  /**
-   * What the sandbox disks cost, from the executor: nominal is the summed
-   * promised sizes, actual is what the sparse images really occupy. The gap
-   * is the overcommit — the number an operator watches close as the host
-   * fills, because nothing else caps it.
-   */
-  sandboxDisks: z.object({
-    count: z.number().int(),
-    nominalBytes: z.number(),
-    actualBytes: z.number(),
-  }),
+  sandboxDisks: sandboxDisksSchema,
 });
 
 export type HostMetricsResponse = z.infer<typeof hostMetricsResponseSchema>;
@@ -143,16 +165,19 @@ export const hostTimelinePointSchema = z.object({
 export type HostTimelinePoint = z.infer<typeof hostTimelinePointSchema>;
 
 /**
- * A parseable timestamp, rejected at the door — same rule as the metrics
- * verbs: a malformed start/end must 400, never become NaN arithmetic.
+ * A parseable timestamp, rejected at the door — the one rule for every
+ * history window (this file, metrics.ts, gateway.ts): a malformed
+ * start/end must 400, never become NaN arithmetic.
  */
-const isoTimestampSchema = z
+export const isoTimestampSchema = z
   .string()
   .refine((value) => !Number.isNaN(Date.parse(value)), {
     message: 'must be an ISO 8601 timestamp',
   });
 
 export const getHostMetricsHistoryRequestSchema = z.object({
+  /** Which node's machine — getHostMetricsRequestSchema has the rule. */
+  nodeId: z.string().min(1).optional(),
   /** ISO 8601; defaults to 24 hours before `end`. */
   start: isoTimestampSchema.optional(),
   /** ISO 8601; defaults to now. */

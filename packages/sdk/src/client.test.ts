@@ -197,8 +197,10 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
 
   it('lists sandboxes with their lifecycle states', async () => {
     await client.acquireSandbox('erin');
-    const sandboxes = await client.listSandboxes();
+    const { sandboxes, silent } = await client.listSandboxes();
     const erin = sandboxes.find((s) => s.name === 'erin');
+    // A node's own list has nobody to be silent about.
+    expect(silent).toBeUndefined();
     expect(erin?.state).toBe('active');
   });
 
@@ -208,7 +210,7 @@ describe('Dormice.acquireSandbox over real HTTP', () => {
     expect(metrics.host.cpuCount).toBeGreaterThan(0);
     expect(metrics.host.memTotalBytes).toBeGreaterThan(0);
     const listed = await client.listSandboxes();
-    expect(metrics.sandboxes.total).toBe(listed.length);
+    expect(metrics.sandboxes.total).toBe(listed.sandboxes.length);
     expect(metrics.sandboxDisks.count).toBeGreaterThanOrEqual(1);
     expect(metrics.sandboxDisks.nominalBytes).toBeGreaterThan(
       metrics.sandboxDisks.actualBytes,
@@ -553,7 +555,7 @@ describe('the observability verbs over real HTTP', () => {
   it('listSandboxMetrics answers every measurable sandbox in one call', async () => {
     await client.acquireSandbox('fleet-a');
     await client.acquireSandbox('fleet-b');
-    const samples = await client.listSandboxMetrics();
+    const { samples } = await client.listSandboxMetrics();
     const mine = samples.filter((s) => s.sandboxName.startsWith('fleet-'));
     expect(mine.map((s) => s.sandboxName).sort()).toEqual([
       'fleet-a',
@@ -566,6 +568,8 @@ describe('the observability verbs over real HTTP', () => {
     await client.destroySandbox('fleet-b');
     // Released means gone from the measurable set, not null-stuffed.
     const after = await client.listSandboxMetrics();
-    expect(after.filter((s) => s.sandboxName.startsWith('fleet-'))).toEqual([]);
+    expect(
+      after.samples.filter((s) => s.sandboxName.startsWith('fleet-')),
+    ).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import {
-  getFleetTimelineResponseSchema,
+  getFleetStateHistoryResponseSchema,
   getHostMetricsHistoryResponseSchema,
   getSandboxMetricsHistoryResponseSchema,
   getSandboxMetricsResponseSchema,
@@ -11,8 +11,9 @@ import { describe, expect, it } from 'vitest';
 import { buildApp } from '../app';
 import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
-import { insertMetricsTick, MAX_POINTS } from '../db/metrics';
+import { insertMetricsTick } from '../db/metrics';
 import { FAKE_BASE_IMAGE, FakeExecutor } from '../executor/fake';
+import { MAX_POINTS } from '../history';
 import { CpuSampler, type HostSample } from '../host-metrics';
 import { KeyedQueue } from '../keyed-queue';
 import { freezeSandbox, stopSandbox } from '../lifecycle';
@@ -229,12 +230,12 @@ describe('getSandboxMetricsHistory', () => {
   });
 });
 
-describe('getFleetTimeline', () => {
+describe('getFleetStateHistory', () => {
   it('answers an empty window with no points and a null peak', async () => {
     const { app } = testApp();
-    const res = await rpc(app, '/getFleetTimeline', {});
+    const res = await rpc(app, '/getFleetStateHistory', {});
     expect(res.statusCode).toBe(200);
-    const body = getFleetTimelineResponseSchema.parse(res.json());
+    const body = getFleetStateHistoryResponseSchema.parse(res.json());
     expect(body).toEqual({ points: [], bucketSeconds: null, peak: null });
   });
 
@@ -246,12 +247,12 @@ describe('getFleetTimeline', () => {
     await rpc(app, '/acquireSandbox', { name: 'two' });
     await sampleOnce(db, executor, new Date(t0 + 30_000), tickOpts());
 
-    const res = await rpc(app, '/getFleetTimeline', {
+    const res = await rpc(app, '/getFleetStateHistory', {
       start: new Date(t0 - 1000).toISOString(),
       end: new Date(t0 + 60_000).toISOString(),
     });
     const { points, bucketSeconds, peak } =
-      getFleetTimelineResponseSchema.parse(res.json());
+      getFleetStateHistoryResponseSchema.parse(res.json());
     expect(bucketSeconds).toBe(null);
     expect(points.map((p) => p.at)).toEqual([
       new Date(t0).toISOString(),
@@ -306,12 +307,12 @@ describe('getFleetTimeline', () => {
       retentionHours: 168,
     });
 
-    const res = await rpc(app, '/getFleetTimeline', {
+    const res = await rpc(app, '/getFleetStateHistory', {
       start: new Date(t0).toISOString(),
       end: new Date(t0 + rows * 30_000).toISOString(),
     });
     const { points, bucketSeconds, peak } =
-      getFleetTimelineResponseSchema.parse(res.json());
+      getFleetStateHistoryResponseSchema.parse(res.json());
     expect(bucketSeconds).not.toBe(null);
     expect(points.length).toBeLessThanOrEqual(MAX_POINTS);
     expect(peak).toEqual({

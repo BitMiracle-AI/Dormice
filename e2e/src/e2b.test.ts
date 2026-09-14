@@ -597,7 +597,7 @@ describe('official e2b SDK against the daemon', () => {
       );
       // The real wall-clock scanner freezes the sandbox under the open watch.
       const frozen = async () => {
-        const sandboxes = await dormice.listSandboxes();
+        const { sandboxes } = await dormice.listSandboxes();
         return sandboxes.find((s) => s.name === name)?.state;
       };
       const deadline = Date.now() + 15_000;

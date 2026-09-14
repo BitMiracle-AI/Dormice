@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { silentNodeSchema } from './gateway';
+import { isoTimestampSchema } from './host';
 import { sandboxNameSchema } from './sandbox';
 
 /**
@@ -78,6 +80,8 @@ export const listSandboxMetricsResponseSchema = z.object({
       sample: sandboxMetricsSampleSchema,
     }),
   ),
+  /** At the gateway: the nodes this answer could not include (gateway.ts silentNodeSchema). A node's own answer carries none. */
+  silent: z.array(silentNodeSchema).optional(),
 });
 
 export type ListSandboxMetricsResponse = z.infer<
@@ -104,16 +108,6 @@ export type ListSandboxMetricsResponse = z.infer<
  *   shows the hole instead of interpolating over it.
  * - An unsampled sandbox answers an empty array — never a made-up reading.
  */
-/**
- * A parseable timestamp, rejected at the door: a malformed start/end would
- * otherwise turn into NaN arithmetic deep in the window resolver.
- */
-const isoTimestampSchema = z
-  .string()
-  .refine((value) => !Number.isNaN(Date.parse(value)), {
-    message: 'must be an ISO 8601 timestamp',
-  });
-
 export const getSandboxMetricsHistoryRequestSchema = z.object({
   name: sandboxNameSchema,
   /** ISO 8601; defaults to one hour before `end`. */
@@ -135,65 +129,4 @@ export const getSandboxMetricsHistoryResponseSchema = z.object({
 
 export type GetSandboxMetricsHistoryResponse = z.infer<
   typeof getSandboxMetricsHistoryResponseSchema
->;
-
-/**
- * getFleetTimeline(start?, end?) — how many sandboxes sat in each state
- * over time: the fleet-level sibling of getSandboxMetricsHistory, and the
- * product's own story ("idle is free" is visible as active falling while
- * frozen rises). One snapshot row per sampler tick, kept 30 days.
- *
- * Bucketing differs from the per-sandbox verb on purpose: a bucket reports
- * its last raw snapshot whole, never per-state maxima — independent maxima
- * would double-count a sandbox mid-transition and the stacked counts would
- * stop summing to total. The concurrency peak is instead computed from the
- * window's raw rows and carried separately in `peak`, so no bucketing can
- * flatten it.
- */
-export const fleetTimelinePointSchema = z.object({
-  /** ISO 8601 UTC — when the snapshot was taken. */
-  at: z.string(),
-  byState: z.object({
-    active: z.number().int(),
-    frozen: z.number().int(),
-    stopped: z.number().int(),
-    archived: z.number().int(),
-    restoring: z.number().int(),
-  }),
-  total: z.number().int(),
-});
-
-export type FleetTimelinePoint = z.infer<typeof fleetTimelinePointSchema>;
-
-export const getFleetTimelineRequestSchema = z.object({
-  /** ISO 8601; defaults to 24 hours before `end`. */
-  start: isoTimestampSchema.optional(),
-  /** ISO 8601; defaults to now. */
-  end: isoTimestampSchema.optional(),
-});
-
-export type GetFleetTimelineRequest = z.infer<
-  typeof getFleetTimelineRequestSchema
->;
-
-export const getFleetTimelineResponseSchema = z.object({
-  /** Ascending by timestamp. */
-  points: z.array(fleetTimelinePointSchema),
-  /** Null when raw snapshots were returned unbucketed. */
-  bucketSeconds: z.number().int().positive().nullable(),
-  /**
-   * Highest active count in the window, from raw rows (not buckets), with
-   * the earliest instant it was observed. Null when the window holds no
-   * snapshots at all.
-   */
-  peak: z
-    .object({
-      active: z.number().int(),
-      at: z.string(),
-    })
-    .nullable(),
-});
-
-export type GetFleetTimelineResponse = z.infer<
-  typeof getFleetTimelineResponseSchema
 >;

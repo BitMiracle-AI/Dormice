@@ -33,6 +33,10 @@
     "./s3-store": {
       "types": "./dist/archive/s3-store.d.ts",
       "default": "./dist/archive/s3-store.js"
+    },
+    "./history": {
+      "types": "./dist/history.d.ts",
+      "default": "./dist/history.js"
     }
   },
   "files": [

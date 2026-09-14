@@ -7,12 +7,16 @@ import {
 } from '@dormice/shared';
 import type { Db } from './db/db';
 import { countByState, listSandboxes } from './db/ledger';
+import type { Executor } from './executor/executor';
 import { type CpuSampler, readHostReading } from './host-metrics';
 import type { SwapControl } from './swap';
 
 /**
  * A node's reading for its check-in: the host half (host-metrics.ts), the
- * ledger's census, and what the daemon-managed swap holds — null where
+ * ledger's census, what the sandbox disks cost (the executor's diskUsage —
+ * a readdir and a stat per disk, what the console's getHostMetrics poll
+ * already asked of this node every five seconds; the gateway sums it for
+ * the fleet instead), and what the daemon-managed swap holds — null where
  * the daemon manages none (a non-Linux host, the fake executor), which is
  * how the gateway knows to refuse a swap target for this node.
  */
@@ -20,12 +24,14 @@ export async function readNodeReading(
   db: Db,
   cpu: CpuSampler,
   dataDir: string,
+  executor: Executor,
   swap?: SwapControl,
 ): Promise<NodeReading> {
   const { byState, total } = countByState(listSandboxes(db));
   return {
     ...(await readHostReading(cpu, dataDir)),
     sandboxes: { total, byState },
+    sandboxDisks: await executor.diskUsage(),
     managedSwap:
       swap === undefined ? null : { activeGb: (await swap.status()).activeGb },
   };

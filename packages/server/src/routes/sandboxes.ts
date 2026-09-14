@@ -61,12 +61,7 @@ import {
   updateSpec,
   updateTemplate,
 } from '../db/ledger';
-import {
-  bucketSamples,
-  querySandboxSamples,
-  resolveBucketSeconds,
-  resolveWindow,
-} from '../db/metrics';
+import { bucketSamples, querySandboxSamples } from '../db/metrics';
 import type { SandboxRow } from '../db/schema';
 import { archiveEnabled, readRuntimeSettings } from '../db/settings';
 import { findTemplate, resolveImage } from '../db/templates';
@@ -78,6 +73,7 @@ import {
   FileTooLargeError,
   NotAFileError,
 } from '../executor/executor';
+import { resolveBucketSeconds, resolveWindow } from '../history';
 import { httpError } from '../http-error';
 import type { KeyedQueue } from '../keyed-queue';
 import { destroySandbox, rebuildSandbox, wakeSandbox } from '../lifecycle';

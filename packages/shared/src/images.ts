@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { silentNodeSchema } from './gateway';
 
 /**
  * listSandboxImages() — every sandbox's image lineage in one answer: which
@@ -46,6 +47,8 @@ export const listSandboxImagesResponseSchema = z.object({
       upgradable: z.boolean(),
     }),
   ),
+  /** At the gateway: the nodes this answer could not include (gateway.ts silentNodeSchema). A node's own answer carries none. */
+  silent: z.array(silentNodeSchema).optional(),
 });
 
 export type ListSandboxImagesResponse = z.infer<

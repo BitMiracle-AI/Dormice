@@ -37,7 +37,7 @@ describe('the archive lifecycle over a real daemon', () => {
     // idle clock and keep the sandbox warm forever.
     const deadline = Date.now() + 15_000;
     for (;;) {
-      const sandboxes = await dormice.listSandboxes();
+      const { sandboxes } = await dormice.listSandboxes();
       const mine = sandboxes.find((s) => s.name === 'archive-key');
       if (mine?.state === 'archived') break;
       if (Date.now() > deadline) {
@@ -82,7 +82,7 @@ describe('the archive lifecycle over a real daemon', () => {
     });
     const deadline = Date.now() + 15_000;
     for (;;) {
-      const sandboxes = await dormice.listSandboxes();
+      const { sandboxes } = await dormice.listSandboxes();
       const mine = sandboxes.find((s) => s.name === 'archive-destroy-key');
       if (mine?.state === 'archived') break;
       if (Date.now() > deadline) {
