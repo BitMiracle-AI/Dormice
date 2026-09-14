@@ -25,25 +25,22 @@ import { useConfig } from '../hooks/useConfig';
 
 /**
  * 每个旋钮管什么,一句话 — UI 文案,所以住在前端;wire 上只有键、值、
- * 来源(daemon 不说中文)。没列到的键显示为空,不编造。
+ * 来源(网关不说中文)。2026-09-14 起 getConfig 是网关的:这里列的是网关
+ * 的环境变量 — 它自己的端口/库/落位闸,加舰队设置的首启种子;节点的端
+ * 口、执行器、数据盘等不在这张表上(它们是节点机器的事)。没列到的键显示
+ * 为空,不编造。
  */
 const KEY_HINTS: Record<string, () => string> = {
-  DORMICE_PORT: m.settings_hint_port,
-  DORMICE_DB_PATH: m.settings_hint_db_path,
-  DORMICE_NODE_ID: m.settings_hint_node_id,
+  DORMICE_GATEWAY_PORT: m.settings_hint_gateway_port,
+  DORMICE_GATEWAY_DB_PATH: m.settings_hint_gateway_db_path,
   DORMICE_API_TOKEN: m.settings_hint_api_token,
-  DORMICE_EXECUTOR: m.settings_hint_executor,
-  DORMICE_BASE_IMAGE: m.settings_hint_base_image,
-  DORMICE_DATA_DIR: m.settings_hint_data_dir,
-  DORMICE_SCAN_INTERVAL_SECONDS: m.settings_hint_scan_interval,
-  DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS:
-    m.settings_hint_metrics_sample_interval,
-  DORMICE_METRICS_RETENTION_HOURS: m.settings_hint_metrics_retention,
+  DORMICE_GATEWAY_NODE_CPU_LIMIT_PCT: m.settings_hint_node_cpu_limit,
+  DORMICE_GATEWAY_NODE_ACTIVE_LIMIT: m.settings_hint_node_active_limit,
+  DORMICE_GATEWAY_NODE_MIN_DISK_GB: m.settings_hint_node_min_disk,
   DORMICE_SANDBOX_DISK_GB: m.settings_hint_sandbox_disk,
   DORMICE_SANDBOX_CPUS: m.settings_hint_sandbox_cpus,
   DORMICE_SANDBOX_MEMORY_GB: m.settings_hint_sandbox_memory,
   DORMICE_SANDBOX_PIDS_LIMIT: m.settings_hint_sandbox_pids_limit,
-  DORMICE_RECLAIM_TIMEOUT_SECONDS: m.settings_hint_reclaim_timeout,
   DORMICE_SANDBOX_DOMAIN: m.settings_hint_sandbox_domain,
   DORMICE_INGRESS_FILE: m.settings_hint_ingress_file,
   DORMICE_INGRESS_RELOAD_CMD: m.settings_hint_ingress_reload_cmd,
@@ -73,9 +70,10 @@ const PAGE_SIZE = 50;
  * 设置页两段(2026-07-19 用户拍板加运营旋钮):上面是账本里的运营旋钮
  * — 容量上限、新沙箱默认配额、默认策略,updateSettings 网页可改、立即
  * 生效;下面仍是 env 配置的只读观察窗 — 端口、token、executor 这些
- * "身份与地基"改了就是另一台 daemon,真身留在 /etc/dormice/env,改完
- * 重启生效。daemon 从不写自己的环境文件(那是另一个安全等级的决定),
- * 运营旋钮走的是账本:env 同名变量降级为首次启动的种子值。
+ * "身份与地基"改了就是另一台网关,真身留在 /etc/dormice/gateway.env,改完
+ * 重启生效。网关从不写自己的环境文件(那是另一个安全等级的决定),运营
+ * 旋钮走的是网关的设置表,节点在下一次报到时接手:env 同名变量降级为网关
+ * 首次启动的种子值(2026-09-14 配置权威搬到网关)。
  */
 export function SettingsPage() {
   const { data, isPending, isError, error } = useConfig();
@@ -112,9 +110,9 @@ export function SettingsPage() {
         {/* 这行不是装饰:两类旋钮的界限与 env 的改法只在这里说。 */}
         <p className="mt-1 text-sm text-muted-foreground">
           {m.settings_env_note_1()}{' '}
-          <code className="font-mono">/etc/dormice/env</code>
+          <code className="font-mono">/etc/dormice/gateway.env</code>
           {m.settings_env_note_2()}{' '}
-          <code className="font-mono">systemctl restart dormice</code>
+          <code className="font-mono">systemctl restart dormice-gateway</code>
           {m.settings_env_note_archive()}
           {data.archive.enabled
             ? m.settings_archive_enabled({
