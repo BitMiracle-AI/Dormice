@@ -857,10 +857,9 @@ printf '\nDormice is installed.\n'
 printf '  API token:    grep ^DORMICE_API_TOKEN %s\n' "$ENV_FILE"
 printf '  gateway logs: journalctl -u dormice-gateway -f   (the door: console, keys, settings, templates)\n'
 printf '  daemon logs:  journalctl -u dormice -f           (the node: sandboxes)\n'
-printf '  CLI:          export DORMICE_ENDPOINT=http://127.0.0.1:%s DORMICE_API_TOKEN=<token>; dor template ls\n' "$GATEWAY_PORT"
-printf '                (the gateway is the door; dor sandbox ls, and dor sandbox meta <name> without labels, read\n'
-printf '                the sandbox list, which the gateway does not route yet — point DORMICE_ENDPOINT at the daemon,\n'
-printf '                127.0.0.1:%s, for those)\n' "$PORT"
+printf '  CLI:          export DORMICE_ENDPOINT=http://127.0.0.1:%s DORMICE_API_TOKEN=<token>; dor sandbox ls\n' "$GATEWAY_PORT"
+printf '                (the gateway is the door for every verb; a node answers only the sandbox and host verbs\n'
+printf '                for itself on 127.0.0.1:%s)\n' "$PORT"
 printf '  Both processes listen on 127.0.0.1 only, by design — exposing them is a reverse proxy'"'"'s job.\n'
 if [ "$(systemctl is-active caddy 2>/dev/null)" = active ]; then
   printf '  console:      http://<this-host-ip>/console (Caddy on :80 -> the gateway; open your cloud firewall for\n'
