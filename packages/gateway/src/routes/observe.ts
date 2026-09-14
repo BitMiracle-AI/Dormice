@@ -4,13 +4,13 @@ import {
   listSandboxMetricsResponseSchema,
 } from '@dormice/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
+import type { AskVerb } from '../ask';
 import type { Fleet } from '../fleet';
-import type { AskVerb } from '../lookup';
 import { askEach } from '../merge';
 
 export interface ObserveRoutesOptions {
   fleet: Fleet;
-  /** Asks one node one verb on the gateway's account (lookup.ts httpAsk). */
+  /** Asks one node one verb on the gateway's account (ask.ts httpAsk). */
   ask: AskVerb;
 }
 
@@ -31,18 +31,20 @@ export interface ObserveRoutesOptions {
 export const observeRoutes: FastifyPluginAsyncZod<
   ObserveRoutesOptions
 > = async (app, { fleet, ask }) => {
+  // Three routes written out rather than one generic helper: the type
+  // provider derives each handler's return type from its concrete schema
+  // and cannot resolve it through a generic `z.ZodType<T>` (tried at the
+  // third cut's review, 2026-09-15 — TS2345 on every route), and the
+  // fifteen lines a helper would save are not worth a cast.
   app.post(
     '/listSandboxes',
     { schema: { response: { 200: listSandboxesResponseSchema } } },
     async () => {
-      const { answers, silent } = await askEach(
-        fleet,
-        ask,
-        new Date(),
-        'listSandboxes',
-        {},
-        listSandboxesResponseSchema,
-      );
+      const { answers, silent } = await askEach(fleet, ask, {
+        verb: 'listSandboxes',
+        body: {},
+        schema: listSandboxesResponseSchema,
+      });
       return {
         sandboxes: answers.flatMap((a) => a.value.sandboxes),
         silent,
@@ -54,14 +56,11 @@ export const observeRoutes: FastifyPluginAsyncZod<
     '/listSandboxMetrics',
     { schema: { response: { 200: listSandboxMetricsResponseSchema } } },
     async () => {
-      const { answers, silent } = await askEach(
-        fleet,
-        ask,
-        new Date(),
-        'listSandboxMetrics',
-        {},
-        listSandboxMetricsResponseSchema,
-      );
+      const { answers, silent } = await askEach(fleet, ask, {
+        verb: 'listSandboxMetrics',
+        body: {},
+        schema: listSandboxMetricsResponseSchema,
+      });
       return { samples: answers.flatMap((a) => a.value.samples), silent };
     },
   );
@@ -70,14 +69,11 @@ export const observeRoutes: FastifyPluginAsyncZod<
     '/listSandboxImages',
     { schema: { response: { 200: listSandboxImagesResponseSchema } } },
     async () => {
-      const { answers, silent } = await askEach(
-        fleet,
-        ask,
-        new Date(),
-        'listSandboxImages',
-        {},
-        listSandboxImagesResponseSchema,
-      );
+      const { answers, silent } = await askEach(fleet, ask, {
+        verb: 'listSandboxImages',
+        body: {},
+        schema: listSandboxImagesResponseSchema,
+      });
       return { images: answers.flatMap((a) => a.value.images), silent };
     },
   );

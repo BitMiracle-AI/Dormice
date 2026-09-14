@@ -118,7 +118,10 @@ describe('clientFromEnv', () => {
 describe('sandbox commands over real HTTP', () => {
   // Runs first: the daemon starts with an empty ledger.
   it('ls reports an empty daemon honestly', async () => {
-    expect(await sandboxLs(client)).toBe('No sandboxes.');
+    expect(await sandboxLs(client)).toEqual({
+      table: 'No sandboxes.',
+      warnings: [],
+    });
   });
 
   it('ls renders one aligned row per sandbox', async () => {
@@ -127,7 +130,8 @@ describe('sandbox commands over real HTTP', () => {
     });
     await client.acquireSandbox('bob');
 
-    const output = await sandboxLs(client);
+    const { table: output, warnings } = await sandboxLs(client);
+    expect(warnings).toEqual([]);
     const lines = output.split('\n');
     expect(lines[0]).toMatch(
       /^NAME\s{2,}STATE\s{2,}ID\s{2,}LAST ACTIVE\s{2,}METADATA$/,
@@ -162,7 +166,7 @@ describe('sandbox commands over real HTTP', () => {
     // The protocol keeps name opaque, so an ESC sequence is a legal key;
     // printed raw it would rewrite the operator's terminal.
     await client.acquireSandbox('evil\u001b[31mkey');
-    const output = await sandboxLs(client);
+    const { table: output } = await sandboxLs(client);
     expect(output).not.toContain('\u001b');
     expect(output).toContain('evil?[31mkey');
     await client.destroySandbox('evil\u001b[31mkey');

@@ -6,14 +6,18 @@ import {
 import type { z } from 'zod';
 
 /**
- * Asking one node a question on the gateway's own account — the daemon's
- * lookupSandbox ("do you hold this sandbox?") and templateUsers ("which
- * of yours still use this template?"), the two read-only verbs the
- * gateway sends that are not a caller's request forwarded raw. Two
- * seconds, not more: a node that cannot answer a ledger read in two
- * seconds is a node in trouble, and the caller is waiting on the whole
- * round. There is no second, slower deadline — slow is down (design
- * record #35).
+ * Asking one node a question on the gateway's own account — a read-only
+ * verb the gateway sends that is not a caller's request forwarded raw:
+ * the finder's lookupSandbox ("do you hold this sandbox?"), removeTemplate's
+ * templateUsers, the merged lists (merge.ts), the E2B list's page. One
+ * transport (httpAsk) under the fleet token; the callers differ in what
+ * they ask and how long they wait.
+ *
+ * The lookup's deadline. Two seconds, not more: a node that cannot answer
+ * a ledger read in two seconds is a node in trouble, and the caller is
+ * waiting on the whole round. There is no second, slower deadline for a
+ * lookup — slow is down (design record #35). A verb that reads containers
+ * waits longer (merge.ts MERGE_TIMEOUT_MS).
  */
 export const LOOKUP_TIMEOUT_MS = 2_000;
 

@@ -1,4 +1,5 @@
 import type { SignedFileLookup } from '@dormice/shared';
+import type { AskNode, LookupAnswer, LookupQuery } from './ask';
 import type { CacheEntry, NameCache } from './cache';
 import {
   awaitingFirstConfig,
@@ -6,7 +7,6 @@ import {
   type Fleet,
   type NodeState,
 } from './fleet';
-import type { AskNode, LookupAnswer, LookupQuery } from './lookup';
 
 /**
  * Where a sandbox is, adjudicated once for every face:
@@ -32,7 +32,7 @@ export interface FinderLog {
 
 /**
  * Finds a sandbox by asking. The cache answers first; on a miss every
- * node in the fleet is asked in parallel (lookup.ts), and exactly one
+ * node in the fleet is asked in parallel (ask.ts), and exactly one
  * "yes" wins — the sandbox is wherever it says it is, whether or not some
  * other node was slow to say no. Down nodes are asked like any other:
  * the reading a node last reported says where NOT to place, never where

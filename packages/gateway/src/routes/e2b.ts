@@ -3,12 +3,12 @@ import { sandboxNameSchema } from '@dormice/shared';
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import type { AskVerb } from '../ask';
 import { decodeCursor, encodeCursor, mergePages } from '../cursor';
 import { relay } from '../errors';
 import type { Finder } from '../find';
 import type { Fleet, NodeState } from '../fleet';
 import { forwardStream, replay } from '../forward';
-import type { AskVerb } from '../lookup';
 import { askEach } from '../merge';
 import { type PlacementKnobs, refusalMessage } from '../placement';
 import { RETRY_AFTER_SECONDS } from '../raw';
@@ -31,7 +31,7 @@ export interface E2bRoutesOptions {
   token: string;
   /** The app's one adjudication of a bare credential (fleet token or a live minted key). */
   isCredential: (bareToken: string) => boolean;
-  /** Asks one node one verb on the gateway's account (lookup.ts httpAsk) — the list. */
+  /** Asks one node one verb on the gateway's account (ask.ts httpAsk) — the list. */
   ask: AskVerb;
 }
 
@@ -221,20 +221,16 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bRoutesOptions> = async (
     }
     query.delete('nextToken');
     query.set('limit', String(limit.data));
-    const { answers, silent } = await askEach(
-      fleet,
-      ask,
-      new Date(),
-      (node) => {
+    const { answers, silent } = await askEach(fleet, ask, {
+      verb: (node) => {
         const own = new URLSearchParams(query);
         const offset = offsets[node.id] ?? 0;
         if (offset > 0) own.set('nextToken', String(offset));
         return `e2b/api/v2/sandboxes?${own.toString()}`;
       },
-      undefined,
-      z.array(e2bListItemSchema),
-      { method: 'GET', credential: 'x-api-key' },
-    );
+      schema: z.array(e2bListItemSchema),
+      options: { method: 'GET', credential: 'x-api-key' },
+    });
     if (silent.length > 0) {
       reply.header('retry-after', String(RETRY_AFTER_SECONDS));
       return send(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import type { AskVerb } from '../ask';
 import { readConfigVersion } from '../db/settings';
-import type { AskVerb } from '../lookup';
 import { checkInOf, TEST_TOKEN, testGateway } from '../testing';
 
 const authed = { authorization: `Bearer ${TEST_TOKEN}` };
@@ -8,7 +8,7 @@ const authed = { authorization: `Bearer ${TEST_TOKEN}` };
 /**
  * A fleet whose nodes answer templateUsers from a script: which names
  * each node reports for a template, or silence. The route is about the
- * decision, not the transport (lookup.ts httpAsk is the transport, and
+ * decision, not the transport (ask.ts httpAsk is the transport, and
  * app.test.ts exercises it over sockets).
  */
 function templatesGateway(users: Record<string, string[] | 'silent'>) {

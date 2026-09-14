@@ -8,6 +8,7 @@ import {
 } from '@dormice/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import type { AskVerb } from '../ask';
 import type { Db } from '../db/db';
 import {
   listTemplates,
@@ -15,13 +16,12 @@ import {
   removeTemplate,
 } from '../db/templates';
 import type { Fleet } from '../fleet';
-import type { AskVerb } from '../lookup';
 import { RETRY_AFTER_SECONDS } from '../raw';
 
 export interface TemplateRoutesOptions {
   db: Db;
   fleet: Fleet;
-  /** Asks one node one verb on the gateway's account (lookup.ts httpAsk). */
+  /** Asks one node one verb on the gateway's account (ask.ts httpAsk). */
   ask: AskVerb;
 }
 

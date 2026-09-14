@@ -2,17 +2,17 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { NameCache } from './cache';
-import { migrateDb, openDb } from './db/db';
-import { Finder } from './find';
-import { Fleet } from './fleet';
 import {
   type AskNode,
   httpAskNode,
   LOOKUP_TIMEOUT_MS,
   type LookupAnswer,
   type LookupQuery,
-} from './lookup';
+} from './ask';
+import { NameCache } from './cache';
+import { migrateDb, openDb } from './db/db';
+import { Finder } from './find';
+import { Fleet } from './fleet';
 import { checkInOf } from './testing';
 
 const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));

@@ -7,13 +7,13 @@ import { parseSandboxHost } from '@dormice/shared';
 import { pino } from 'pino';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildGatewayApp } from './app';
+import { type AskVerb, httpAsk, httpAskNode } from './ask';
 import { NameCache } from './cache';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
 import { ensureSettings } from './db/settings';
 import { Finder } from './find';
 import { Fleet } from './fleet';
-import { type AskVerb, httpAsk, httpAskNode } from './lookup';
 import { checkInOf, type reading } from './testing';
 
 const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));

@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '@dormice/server/keyed-queue';
 import type { CheckInRequest, NodeReading } from '@dormice/shared';
 import { buildGatewayApp } from './app';
+import { type AskNode, type AskVerb, httpAskNode } from './ask';
 import { NameCache } from './cache';
 import { configSources, loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
@@ -9,7 +10,6 @@ import { ensureSettings } from './db/settings';
 import { Finder } from './find';
 import { Fleet } from './fleet';
 import type { Ingress } from './ingress';
-import { type AskNode, type AskVerb, httpAskNode } from './lookup';
 
 /**
  * Test scaffolding shared by the gateway's suites — and, through index.ts,

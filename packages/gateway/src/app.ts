@@ -10,6 +10,7 @@ import {
 } from 'fastify-type-provider-zod';
 import { type Logger, pino } from 'pino';
 import { z } from 'zod';
+import { type AskVerb, httpAsk } from './ask';
 import { requireAdminAuth, requireApiAuth, tokensEqual } from './auth';
 import { classify, isOriginForm, ORIGIN_FORM_REQUIRED } from './classify';
 import { type Config, type ConfigSources, configSources } from './config';
@@ -21,7 +22,6 @@ import { renderError } from './errors';
 import type { Finder } from './find';
 import type { Fleet } from './fleet';
 import type { Ingress } from './ingress';
-import { type AskVerb, httpAsk } from './lookup';
 import type { PlacementKnobs } from './placement';
 import { createRawFaces } from './raw';
 import { apiKeyRoutes } from './routes/api-keys';
@@ -64,9 +64,10 @@ export interface GatewayAppDeps {
   /** Test seam over updateSettings' S3 round-trip probe; production probes for real. */
   probeS3?: SettingsProbe;
   /**
-   * How the gateway asks a node a verb on its own account (removeTemplate's
-   * templateUsers, the merged lists, the E2B list). Defaults to HTTP under
-   * the fleet token; tests script it, or shorten its patience.
+   * How the gateway asks a node a verb on its own account (ask.ts:
+   * removeTemplate's templateUsers, the merged lists, the E2B list).
+   * Defaults to HTTP under the fleet token; tests script it, or shorten
+   * its patience.
    */
   ask?: AskVerb;
   /**

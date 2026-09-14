@@ -73,11 +73,15 @@ function renderTable(headers: string[], rows: string[][]): string {
 
 /**
  * `dor sandbox ls`: every sandbox with its lifecycle state, as plain
- * columns. Asked of the gateway, the list may lack a node that did not
- * answer — said under the table, one line per node, never dropped: an
- * operator reading "No sandboxes." while a node is down must be told.
+ * columns (`table`, for stdout). Asked of the gateway, the list may lack
+ * a node that did not answer — said in `warnings`, one line per node,
+ * never dropped: an operator reading "No sandboxes." while a node is down
+ * must be told. Kept apart from the table so main.ts can send them to
+ * stderr: `dor sandbox ls | grep …` must not read a warning as a row.
  */
-export async function sandboxLs(client: Dormice): Promise<string> {
+export async function sandboxLs(
+  client: Dormice,
+): Promise<{ table: string; warnings: string[] }> {
   const { sandboxes, silent = [] } = await client.listSandboxes();
   const table =
     sandboxes.length === 0
@@ -92,7 +96,7 @@ export async function sandboxLs(client: Dormice): Promise<string> {
     (node) =>
       `warning: node ${printable(node.nodeId)} did not answer (${printable(node.why)}) — its sandboxes are not listed`,
   );
-  return [table, ...warnings].join('\n');
+  return { table, warnings };
 }
 
 /**

@@ -52,7 +52,11 @@ sandbox
   .command('ls')
   .description('List every sandbox with its current lifecycle state')
   .action(async () => {
-    console.log(await sandboxLs(clientFromEnv(process.env)));
+    const { table, warnings } = await sandboxLs(clientFromEnv(process.env));
+    console.log(table);
+    // A node the list lacks is said on stderr: the table stays a table for
+    // a pipe, and the warning still reaches the operator's terminal.
+    for (const warning of warnings) console.error(warning);
   });
 
 sandbox

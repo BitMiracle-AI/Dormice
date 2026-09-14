@@ -3,7 +3,7 @@ import net from 'node:net';
 import type { Duplex } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { Agent } from 'undici';
-import { causeOf } from './lookup';
+import { causeOf } from './ask';
 
 /**
  * The one place the gateway talks to a node on a caller's behalf. Bytes

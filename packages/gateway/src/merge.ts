@@ -1,5 +1,6 @@
 import type { SilentNode } from '@dormice/shared';
 import type { z } from 'zod';
+import type { AskOptions, AskVerb } from './ask';
 import {
   awaitingFirstConfig,
   awaitingFirstConfigWhy,
@@ -8,7 +9,6 @@ import {
   type NodeState,
   STARTUP_GRACE_MS,
 } from './fleet';
-import type { AskOptions, AskVerb } from './lookup';
 
 /**
  * How long a merged answer waits for a node. Longer than a lookup's two
@@ -66,24 +66,34 @@ export interface Merged<T> {
   silent: SilentNode[];
 }
 
+/** What every node is asked. */
+export interface EachAsk<T> {
+  /** The path under each node's endpoint (query string included for a GET) — or a function of the node: the E2B list sends each node its own offset. */
+  verb: string | ((node: NodeState) => string);
+  /** The POST body; none for a GET. */
+  body?: unknown;
+  /** The shape of one node's answer; a body that fails it is silence (ask.ts httpAsk). */
+  schema: z.ZodType<T>;
+  /** How the verb is asked (ask.ts AskOptions); the timeout defaults to MERGE_TIMEOUT_MS. */
+  options?: AskOptions;
+  /** The instant askability is judged at; now by default, injected by tests. */
+  now?: Date;
+}
+
 /**
  * Asks every askable node one verb in parallel and keeps every answer —
  * the fleet-wide lists' one step (routes/observe.ts, the E2B list in
  * routes/e2b.ts). Unlike the finder, which wants exactly one yes, a
  * merged answer wants everyone, and a node that does not answer is not
  * a reason to refuse the rest: the operator reads the fleet's sandboxes
- * with one node in trouble, and reads which one. `verb` may depend on
- * the node — the E2B list sends each node its own offset.
+ * with one node in trouble, and reads which one.
  */
 export async function askEach<T>(
   fleet: Fleet,
   ask: AskVerb,
-  now: Date,
-  verb: string | ((node: NodeState) => string),
-  body: unknown,
-  schema: z.ZodType<T>,
-  options: AskOptions = {},
+  each: EachAsk<T>,
 ): Promise<Merged<T>> {
+  const now = each.now ?? new Date();
   const silent: SilentNode[] = [];
   const asked: NodeState[] = [];
   for (const node of fleet.all()) {
@@ -97,10 +107,10 @@ export async function askEach<T>(
       node,
       asked: await ask(
         node,
-        typeof verb === 'string' ? verb : verb(node),
-        body,
-        schema,
-        { timeoutMs: MERGE_TIMEOUT_MS, ...options },
+        typeof each.verb === 'string' ? each.verb : each.verb(node),
+        each.body,
+        each.schema,
+        { timeoutMs: MERGE_TIMEOUT_MS, ...each.options },
       ),
     })),
   );

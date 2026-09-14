@@ -6,6 +6,7 @@ import { closeWithGrace, trackConnections } from '@dormice/server/shutdown';
 import { pino } from 'pino';
 import { z } from 'zod';
 import { buildGatewayApp } from './app';
+import { httpAskNode } from './ask';
 import { NameCache } from './cache';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
@@ -13,7 +14,6 @@ import { ensureSettings } from './db/settings';
 import { Finder } from './find';
 import { Fleet } from './fleet';
 import { Ingress } from './ingress';
-import { httpAskNode } from './lookup';
 import { readBuildInfo } from './version';
 
 const log = pino();

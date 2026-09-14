@@ -6,11 +6,11 @@
  * gateway lives in main.ts.
  */
 export { buildGatewayApp, type GatewayAppDeps } from './app';
+export { type AskNode, type AskVerb, httpAsk, httpAskNode } from './ask';
 export { NameCache } from './cache';
 export { type Config, loadConfig } from './config';
 export { type Db, migrateDb, openDb } from './db/db';
 export { ensureSettings } from './db/settings';
 export { Finder } from './find';
 export { Fleet } from './fleet';
-export { type AskNode, type AskVerb, httpAsk, httpAskNode } from './lookup';
 export { checkInOf, reading, TEST_TOKEN, testGateway } from './testing';

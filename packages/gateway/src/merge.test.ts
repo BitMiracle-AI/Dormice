@@ -1,9 +1,9 @@
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import type { AskVerb } from './ask';
 import { migrateDb, openDb } from './db/db';
 import { Fleet, STARTUP_GRACE_MS } from './fleet';
-import type { AskVerb } from './lookup';
 import { askability, askEach, MERGE_TIMEOUT_MS } from './merge';
 import { checkInOf } from './testing';
 
@@ -100,14 +100,12 @@ describe('askEach', () => {
         headers: new Headers({ 'x-next-token': '7' }),
       };
     };
-    const merged = await askEach(
-      fleet,
-      ask,
-      NOW,
-      (node) => `list?node=${node.id}`,
-      {},
-      answerSchema,
-    );
+    const merged = await askEach(fleet, ask, {
+      verb: (node) => `list?node=${node.id}`,
+      body: {},
+      schema: answerSchema,
+      now: NOW,
+    });
     expect(asked).toEqual([
       { id: 'c', verb: 'list?node=c', timeoutMs: MERGE_TIMEOUT_MS },
       { id: 'a', verb: 'list?node=a', timeoutMs: MERGE_TIMEOUT_MS },
@@ -128,10 +126,7 @@ describe('askEach', () => {
       async () => {
         throw new Error('nobody to ask');
       },
-      NOW,
-      'list',
-      {},
-      answerSchema,
+      { verb: 'list', body: {}, schema: answerSchema, now: NOW },
     );
     expect(merged).toEqual({ answers: [], silent: [] });
   });
