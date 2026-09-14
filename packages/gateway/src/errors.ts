@@ -99,6 +99,8 @@ export async function relay(
   log: ErrorLog,
   step: () => Promise<void>,
   unreachable: (error: UnreachableError) => RenderedError,
+  /** CORS on the 500 too; the browser-consumable faces (connect, and the proxy's browser-direct file form) need it to read any answer. */
+  cors: boolean = dialect === 'connect',
 ): Promise<void> {
   try {
     await step();
@@ -111,7 +113,7 @@ export async function relay(
     renderError(res, dialect, {
       status: 500,
       message: 'the gateway failed while forwarding — see its log',
-      cors: dialect === 'connect',
+      cors,
     });
   }
 }

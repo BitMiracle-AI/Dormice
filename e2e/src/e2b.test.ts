@@ -1,8 +1,7 @@
-import http from 'node:http';
 import { Dormice } from '@dormice/sdk';
 import { CommandExitError, Sandbox } from 'e2b';
 import { describe, expect, inject, it } from 'vitest';
-import { door, until as poll, settled } from './helpers';
+import { door, until as poll, settled, spoofHost } from './helpers';
 
 // The compatibility promise, verified with the promise's own artifact: the
 // OFFICIAL e2b package, pointed at the daemon by exactly two URLs (plus its
@@ -29,36 +28,12 @@ async function until(check: () => boolean, timeoutMs = 8_000) {
   }
 }
 
-/**
- * A GET at the daemon with a spoofed Host header — exactly what traffic
- * from a wildcard-DNS reverse proxy looks like, no DNS needed (fetch
- * refuses to set Host, so this speaks node:http directly).
- */
-function throughProxy(
+/** A GET with a spoofed Host header, at node A by default or at the door (helpers.ts spoofHost). */
+const throughProxy = (
   host: string,
   path = '/',
-): Promise<{ status: number; body: string }> {
-  const endpoint = new URL(inject('dormiceEndpoint'));
-  return new Promise((resolve, reject) => {
-    const req = http.request(
-      {
-        host: endpoint.hostname,
-        port: endpoint.port,
-        path,
-        headers: { host },
-      },
-      (res) => {
-        let body = '';
-        res.on('data', (chunk) => {
-          body += chunk;
-        });
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
-      },
-    );
-    req.on('error', reject);
-    req.end();
-  });
-}
+  via = inject('dormiceEndpoint'),
+) => spoofHost(via, host, path);
 
 describe('official e2b SDK against the daemon', () => {
   it('creates a sandbox and runs a command', async () => {
@@ -777,6 +752,17 @@ describe.runIf(process.env.DORMICE_EXECUTOR !== 'docker')(
         expect(echo.sandboxId).toBe(sbx.sandboxId);
         expect(echo.path).toBe('/hello?from=e2e');
         expect(echo.host).toBe(host);
+        // The same URL at the door: the gateway reads the id off the Host,
+        // finds the node holding it and forwards, Host kept — getHost()
+        // works through the fleet's one door, which is where the wildcard
+        // DNS points in production.
+        const viaDoor = await throughProxy(host, '/hello?from=door', door());
+        expect(viaDoor.status).toBe(200);
+        expect(JSON.parse(viaDoor.body)).toMatchObject({
+          sandboxId: sbx.sandboxId,
+          path: '/hello?from=door',
+          host,
+        });
       } finally {
         await sbx.kill();
       }

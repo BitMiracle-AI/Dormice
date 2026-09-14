@@ -1,5 +1,6 @@
 import http from 'node:http';
 import type { KeyedQueue } from '@dormice/server/keyed-queue';
+import { sandboxDomainsInForce } from '@dormice/shared';
 import fastifyCookie from '@fastify/cookie';
 import fastify, { type FastifyError, type FastifyServerFactory } from 'fastify';
 import {
@@ -15,6 +16,7 @@ import { type Config, type ConfigSources, configSources } from './config';
 import { getConsoleAccount } from './db/account';
 import { isLiveApiKey, verifyApiKeyToken } from './db/api-keys';
 import type { Db } from './db/db';
+import { readSettings } from './db/settings';
 import { renderError } from './errors';
 import type { Finder } from './find';
 import type { Fleet } from './fleet';
@@ -119,12 +121,17 @@ export function buildGatewayApp({
     typeof logger === 'boolean' ? pino({ enabled: logger }) : logger;
   const token = config.DORMICE_API_TOKEN;
 
-  // The face keyed on a header sits in front of Fastify, exactly as the
+  // The faces keyed on a header sit in front of Fastify, exactly as the
   // daemon's port proxy does (server/app.ts): refuse what is not an
   // origin-form target (classify.ts isOriginForm), triage the raw
   // request, hand the rest to Fastify. app.inject() bypasses the factory,
-  // so that face is exercised over real sockets only.
+  // so those faces are exercised over real sockets only.
   const raw = createRawFaces({ finder, token, log: loggerInstance });
+  // The domain group the proxy face keys on is the gateway's own setting
+  // (the sandbox domain and its inbound aliases), read per request — a
+  // point read, and a console edit applies to the very next request here,
+  // as it does on a node once its copy has arrived.
+  const domains = () => sandboxDomainsInForce(readSettings(db));
   const serverFactory: FastifyServerFactory = (handler) => {
     const server = http.createServer((req, res) => {
       if (!isOriginForm(req)) {
@@ -135,12 +142,12 @@ export function buildGatewayApp({
         });
         return;
       }
-      const kind = classify(req);
+      const kind = classify(req, domains());
       if (kind.face === 'fastify') handler(req, res);
       else raw.handleRequest(kind, req, res);
     });
-    server.on('upgrade', (req, socket) => {
-      raw.handleUpgrade(classify(req), req, socket);
+    server.on('upgrade', (req, socket, head) => {
+      raw.handleUpgrade(classify(req, domains()), req, socket, head);
     });
     // The gateway only relays; the node's own request timeout is the one
     // that should fire on a slow upload, not a second one in front of it.

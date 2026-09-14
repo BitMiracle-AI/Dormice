@@ -15,6 +15,7 @@ export * from './metrics';
 export * from './policy';
 export * from './rebuild';
 export * from './sandbox';
+export * from './sandbox-host';
 export * from './settings';
 export * from './spec';
 export * from './states';

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
+import { parseSandboxHost } from '@dormice/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app';
 import { loadConfig } from './config';
@@ -11,7 +12,6 @@ import { getOrCreateSigningSecret } from './db/secrets';
 import { mintEnvdToken } from './e2b/protocol';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
-import { parseSandboxHost } from './sandbox-proxy';
 import { scanOnce } from './scanner';
 import { configureNode } from './testing';
 
@@ -131,13 +131,15 @@ describe('sandbox port proxy', () => {
     return created.sandboxID;
   }
 
+  // The parser lives in @dormice/shared since the gateway's proxy face
+  // reads the same header; its unit exam stays beside the proxy it serves.
   it('parses sandbox hosts and nothing else', () => {
     const id = '01234567-89ab-cdef-0123-456789abcdef';
     expect(parseSandboxHost(`8000-${id}.${DOMAIN}`, [DOMAIN])).toEqual({
       port: 8000,
       sandboxId: id,
     });
-    // The header's own :port tail is the daemon's port, not the sandbox's.
+    // The header's own :port tail is the door's port, not the sandbox's.
     expect(parseSandboxHost(`8000-${id}.${DOMAIN}:3676`, [DOMAIN])).toEqual({
       port: 8000,
       sandboxId: id,

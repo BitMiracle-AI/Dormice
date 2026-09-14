@@ -3,6 +3,7 @@ import http from 'node:http';
 import net, { type AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '@dormice/server/keyed-queue';
+import { parseSandboxHost } from '@dormice/shared';
 import { pino } from 'pino';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildGatewayApp } from './app';
@@ -17,6 +18,9 @@ import { checkInOf, type reading } from './testing';
 
 const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
 const TOKEN = 'fleet-token-fleet-token-fleet-token-fleet';
+/** The sandbox domain group the fake nodes' proxies key on — a canonical domain and one inbound alias. */
+const DOMAINS = ['sbx.test', 'alias.test'];
+const DOMAIN = DOMAINS[0] as string;
 
 /**
  * A node as the gateway sees one: the daemon's wire for the handful of
@@ -28,7 +32,13 @@ class FakeNode {
     string,
     { id: string; name: string; files: Map<string, string> }
   >();
-  readonly hits: Array<{ path: string; auth: string | undefined }> = [];
+  readonly hits: Array<{
+    path: string;
+    auth: string | undefined;
+    /** Set on a hit the node's port proxy took (a sandbox Host) — and whether it was an upgrade. */
+    host?: string | undefined;
+    upgrade?: boolean;
+  }> = [];
   creates = 0;
   endpoint = '';
   /** How long a destroy takes to answer — a slow node holding the name's slot. */
@@ -42,6 +52,27 @@ class FakeNode {
         text += c;
       });
       req.on('end', () => this.answer(req, res, text));
+    });
+    // The daemon's port proxy takes upgrades for sandbox hosts (a dev
+    // server's WebSocket); this double's "container" echoes bytes after a
+    // bare 101. Anything else is cut, as the daemon cuts it.
+    this.server.on('upgrade', (req, socket) => {
+      socket.on('error', () => socket.destroy());
+      const sandbox = parseSandboxHost(req.headers.host, DOMAINS);
+      this.hits.push({
+        path: req.url ?? '/',
+        auth: req.headers.authorization,
+        host: req.headers.host,
+        upgrade: true,
+      });
+      if (!sandbox || !this.byId(sandbox.sandboxId)) {
+        socket.end('HTTP/1.1 502 Bad Gateway\r\nconnection: close\r\n\r\n');
+        return;
+      }
+      socket.write(
+        'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n',
+      );
+      socket.pipe(socket);
     });
   }
 
@@ -78,11 +109,33 @@ class FakeNode {
     const auth =
       req.headers.authorization ??
       (req.headers['x-api-key'] as string | undefined);
-    this.hits.push({ path, auth });
     const json = (status: number, body: unknown) => {
       res.writeHead(status, { 'content-type': 'application/json' });
       res.end(JSON.stringify(body));
     };
+    // The daemon's port proxy as the gateway meets it: keyed on the Host
+    // it was sent, dialing the sandbox it holds — here an echo of what
+    // arrived (the fake executor's upstream does the same), or the
+    // daemon's own 502 for an id it lacks. Unauthenticated, as the real
+    // one is.
+    const sandboxHost = parseSandboxHost(req.headers.host, DOMAINS);
+    if (sandboxHost) {
+      this.hits.push({ path, auth, host: req.headers.host });
+      const sandbox = this.byId(sandboxHost.sandboxId);
+      if (!sandbox) {
+        return json(502, {
+          message: `sandbox ${sandboxHost.sandboxId} not found`,
+        });
+      }
+      return json(200, {
+        proxied: this.id,
+        host: req.headers.host,
+        port: sandboxHost.port,
+        url,
+        auth: auth ?? null,
+      });
+    }
+    this.hits.push({ path, auth });
     const body = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     if (path.startsWith('/e2b/envd/')) {
       return json(200, {
@@ -1086,5 +1139,197 @@ describe('the E2B faces', () => {
     expect(((await bare.json()) as { code: string }).code).toBe(
       'unimplemented',
     );
+  });
+});
+
+/**
+ * A request at the door with a spoofed Host — wildcard-DNS traffic as the
+ * reverse proxy hands it over (fetch refuses to set Host, so node:http
+ * speaks).
+ */
+function viaHost(
+  h: Harness,
+  host: string,
+  path = '/',
+): Promise<{
+  status: number;
+  headers: http.IncomingHttpHeaders;
+  body: string;
+}> {
+  const endpoint = new URL(h.endpoint);
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: endpoint.hostname, port: endpoint.port, path, headers: { host } },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () =>
+          resolve({ status: res.statusCode ?? 0, headers: res.headers, body }),
+        );
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/**
+ * An upgrade handshake at the door, raw: what came back before the socket
+ * closed — a 101 and the echo of `marco`, a refusal's status line, or
+ * nothing at all for a socket the gateway cut.
+ */
+function rawUpgrade(h: Harness, host: string): Promise<string> {
+  const port = Number(new URL(h.endpoint).port);
+  return new Promise((resolve, reject) => {
+    let buffer = '';
+    const socket = net.connect(port, '127.0.0.1', () => {
+      socket.write(
+        [
+          'GET /ws HTTP/1.1',
+          `Host: ${host}`,
+          'Connection: Upgrade',
+          'Upgrade: websocket',
+          '',
+          '',
+        ].join('\r\n'),
+      );
+    });
+    socket.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      // Handshake done — the fake node's "container" echoes raw bytes back.
+      if (buffer.includes(' 101 ') && !buffer.includes('marco')) {
+        socket.write('marco');
+      }
+      if (buffer.includes('marco')) socket.end();
+    });
+    socket.on('close', () => resolve(buffer));
+    socket.on('error', reject);
+    setTimeout(() => reject(new Error('upgrade timed out')), 5_000);
+  });
+}
+
+describe('the sandbox port proxy face', () => {
+  it('a sandbox host is forwarded to the node holding the id — Host kept, no credential added, the answer relayed as it came; the path is the sandbox’s whatever it spells', async () => {
+    const h = await gateway(['a', 'b'], { DORMICE_SANDBOX_DOMAIN: DOMAIN });
+    const created = sandboxOf(await rpc(h, '/acquireSandbox', { name: 'web' }));
+    const host = `8000-${created.id}.${DOMAIN}`;
+    const res = await viaHost(h, host, '/hello?x=1');
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({
+      proxied: created.nodeId,
+      host,
+      port: 8000,
+      url: '/hello?x=1',
+      auth: null,
+    });
+    // A native verb's path under a sandbox host is a path inside the
+    // sandbox: the door's own router never sees it, exactly as the
+    // daemon's proxy stands in front of its router.
+    const verb = await viaHost(h, host, '/acquireSandbox');
+    expect(JSON.parse(verb.body)).toMatchObject({
+      proxied: created.nodeId,
+      url: '/acquireSandbox',
+    });
+    // The id was cached by the placement: the other node was never asked.
+    const elsewhere = h.nodes.find((n) => n.id !== created.nodeId);
+    expect(elsewhere?.hits.some((hit) => hit.host !== undefined)).toBe(false);
+  });
+
+  it('a sandbox built behind the gateway’s back is found by asking; an id on no node gets the daemon’s proxy answer, 502 { message } without CORS — except on the browser-direct file form, which carries it', async () => {
+    const h = await gateway(['a', 'b'], { DORMICE_SANDBOX_DOMAIN: DOMAIN });
+    const staged = await stage(h.nodes[1] as FakeNode, 'behind');
+    const res = await viaHost(h, `3000-${staged.id}.${DOMAIN}`, '/');
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({ proxied: 'b', port: 3000 });
+
+    const nobody = await viaHost(h, `8000-${randomUUID()}.${DOMAIN}`, '/');
+    expect(nobody.status).toBe(502);
+    expect(JSON.parse(nobody.body)).toEqual({
+      message: expect.stringMatching(/on no node/),
+    });
+    expect(nobody.headers['access-control-allow-origin']).toBeUndefined();
+
+    // 49983 /files is the signed-URL form a browser posts to directly; the
+    // daemon promises CORS on every answer to it, and the door keeps the
+    // promise on its own refusals.
+    const files = await viaHost(
+      h,
+      `49983-${randomUUID()}.${DOMAIN}`,
+      '/files?signature=x',
+    );
+    expect(files.status).toBe(502);
+    expect(files.headers['access-control-allow-origin']).toBe('*');
+    // For a sandbox that exists the form rides to its node whole — the
+    // carve-out onto the signed door is the node's own.
+    const carved = await viaHost(
+      h,
+      `49983-${staged.id}.${DOMAIN}`,
+      '/files?signature=x',
+    );
+    expect(JSON.parse(carved.body)).toMatchObject({
+      proxied: 'b',
+      port: 49983,
+      url: '/files?signature=x',
+    });
+  });
+
+  it('WebSocket upgrades ride through to the node both ways, Host kept; an upgrade for an id on no node is refused with a status line; any other upgrade is cut', async () => {
+    const h = await gateway(['a'], { DORMICE_SANDBOX_DOMAIN: DOMAIN });
+    const created = sandboxOf(await rpc(h, '/acquireSandbox', { name: 'ws' }));
+    const host = `5173-${created.id}.${DOMAIN}`;
+    const echoed = await rawUpgrade(h, host);
+    expect(echoed).toContain(' 101 ');
+    expect(echoed).toContain('marco');
+    expect(
+      h.nodes[0]?.hits.some((hit) => hit.upgrade === true && hit.host === host),
+    ).toBe(true);
+
+    const refused = await rawUpgrade(h, `5173-${randomUUID()}.${DOMAIN}`);
+    expect(refused).toMatch(/^HTTP\/1\.1 502 /);
+    expect(refused).toContain('on no node');
+
+    // Not a sandbox host: nothing said, the socket closed — stock
+    // Fastify's behavior for an upgrade it never handles.
+    expect(await rawUpgrade(h, 'door.example')).toBe('');
+  });
+
+  it('with no domain in force a sandbox host is plain traffic at the router; a domain written at the door engages on the very next request, an alias joins inbound, and clearing disengages — no restart, no check-in to wait for', async () => {
+    const h = await gateway(['a']);
+    const created = sandboxOf(
+      await rpc(h, '/acquireSandbox', { name: 'live' }),
+    );
+    const host = `8000-${created.id}.${DOMAIN}`;
+    const off = await viaHost(h, host, '/x');
+    expect(off.status).toBe(404);
+    expect(JSON.parse(off.body).message).toMatch(/^route GET \/x not found/);
+
+    expect(
+      (await rpc(h, '/updateSettings', { sandboxDomain: DOMAIN })).status,
+    ).toBe(200);
+    expect(JSON.parse((await viaHost(h, host, '/x')).body)).toMatchObject({
+      proxied: 'a',
+      url: '/x',
+    });
+
+    const alias = DOMAINS[1] as string;
+    expect(
+      (await rpc(h, '/updateSettings', { sandboxDomainAliases: [alias] }))
+        .status,
+    ).toBe(200);
+    expect(
+      JSON.parse((await viaHost(h, `8000-${created.id}.${alias}`, '/y')).body),
+    ).toMatchObject({ proxied: 'a', url: '/y' });
+
+    expect(
+      (
+        await rpc(h, '/updateSettings', {
+          sandboxDomain: null,
+          sandboxDomainAliases: [],
+        })
+      ).status,
+    ).toBe(200);
+    expect((await viaHost(h, host, '/x')).status).toBe(404);
   });
 });

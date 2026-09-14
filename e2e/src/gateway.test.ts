@@ -11,6 +11,7 @@ import {
   configSettled,
   listNodes as listFleetNodes,
   rpc as post,
+  spoofHost,
   until,
 } from './helpers';
 
@@ -171,6 +172,72 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
       expect(stranger.status).not.toBe(200);
     } finally {
       await viaGateway().destroySandbox('gw-envd');
+    }
+  });
+
+  it('a sandbox host at the fleet door reaches the node holding the sandbox — getHost() through the gateway, over HTTP and a WebSocket upgrade; an id on no node is the proxy’s own 502', async () => {
+    const created = await viaGateway().acquireSandbox('gw-host');
+    try {
+      const id = created.sandbox.id;
+      const host = `8000-${id}.sbx.dormice.test`;
+      // The fake executor's upstream echoes what reached the sandbox: the
+      // id proves which sandbox answered, the host that the Host was kept.
+      const res = await spoofHost(gateway(), host, '/hello?via=door');
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body)).toMatchObject({
+        sandboxId: id,
+        path: '/hello?via=door',
+        host,
+      });
+      // The node that does not hold it says so directly — the door asked
+      // the right one.
+      const elsewhere = await spoofHost(
+        nodes().find((n) => n.id !== created.sandbox.nodeId)?.endpoint ?? '',
+        host,
+        '/',
+      );
+      expect(elsewhere.status).toBe(502);
+      expect(JSON.parse(elsewhere.body).message).toContain('not found');
+
+      // The upgrade half: a raw handshake through the door, the echo back.
+      const url = new URL(gateway());
+      const echoed = await new Promise<string>((resolve, reject) => {
+        let buffer = '';
+        const socket = net.connect(Number(url.port), url.hostname, () => {
+          socket.write(
+            [
+              'GET /ws HTTP/1.1',
+              `Host: 5173-${id}.sbx.dormice.test`,
+              'Connection: Upgrade',
+              'Upgrade: websocket',
+              '',
+              '',
+            ].join('\r\n'),
+          );
+        });
+        socket.on('data', (chunk) => {
+          buffer += chunk.toString('utf8');
+          if (buffer.includes(' 101 ') && !buffer.includes('marco')) {
+            socket.write('marco');
+          }
+          if (buffer.includes('marco')) socket.end();
+        });
+        socket.on('close', () => resolve(buffer));
+        socket.on('error', reject);
+        setTimeout(() => reject(new Error('upgrade timed out')), 5_000);
+      });
+      expect(echoed).toContain(' 101 ');
+      expect(echoed).toContain('marco');
+
+      const nobody = await spoofHost(
+        gateway(),
+        `8000-${randomUUID()}.sbx.dormice.test`,
+        '/',
+      );
+      expect(nobody.status).toBe(502);
+      expect(JSON.parse(nobody.body).message).toMatch(/on no node/);
+    } finally {
+      await viaGateway().destroySandbox('gw-host');
     }
   });
 

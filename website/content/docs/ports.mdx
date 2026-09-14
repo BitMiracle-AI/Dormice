@@ -5,8 +5,9 @@ description: Learn how to reach a server running inside a sandbox from the outsi
 
 Anything listening on a port inside a sandbox — a dev server, a
 notebook, an agent's UI — can be reached from outside through the
-daemon's sandbox proxy: each sandbox port gets its own preview URL like
-`8000-<sandboxId>.sbx.example.com`.
+sandbox port proxy: each sandbox port gets its own preview URL like
+`8000-<sandboxId>.sbx.example.com`. The gateway serves these URLs and
+forwards each one to the node running that sandbox.
 
 Setting this up takes three ingredients, each explained in [Core
 concepts](/docs/core-concepts#reverse-proxies-domains-and-https): a
@@ -54,17 +55,18 @@ path and operation — never the domain.
 
 ## 2. Point DNS and a reverse proxy at the host
 
-The daemon itself only binds `127.0.0.1`. The internet-facing half is
+The gateway itself only binds `127.0.0.1`. The internet-facing half is
 one wildcard DNS record plus a reverse proxy that terminates TLS — pointed
-at the daemon, which serves the sandbox port proxy (the gateway takes
-this face over in a later step):
+at the gateway (`3677`), which reads the sandbox id off the `Host`,
+forwards the request with the `Host` intact to the node running that
+sandbox, and the node's own proxy dials the port:
 
 ```text
 *.sbx.example.com → your host
 
 # Caddyfile
 *.sbx.example.com {
-  reverse_proxy 127.0.0.1:3676 {
+  reverse_proxy 127.0.0.1:3677 {
     flush_interval -1
   }
 }
@@ -88,10 +90,11 @@ const host = sbx.getHost(8000); // '8000-<sandboxId>.sbx.example.com'
 await fetch(`https://${host}/`);
 ```
 
-Requests arriving with such a `Host` header are proxied straight into
-the sandbox — headers untouched, WebSocket upgrades passed through both
-ways. If nothing listens on the port, the proxy answers a 502 naming the
-port, not a hang.
+Requests arriving with such a `Host` header — at the gateway, or at a
+daemon directly — are proxied straight into the sandbox: headers
+untouched, WebSocket upgrades passed through both ways. If nothing
+listens on the port, the proxy answers a 502 naming the port, not a
+hang; a sandbox id no node holds is a 502 too.
 
 With no sandbox domain configured, the feature is off: responses
 carry no domain and the SDK has nothing to build URLs from.
@@ -109,5 +112,5 @@ Preview URLs are unauthenticated — the same call E2B made, because these
 URLs exist to be opened in browsers and shared. The sandbox ID in the
 hostname is unguessable (a UUID), but that is obscurity, not access
 control: **treat a preview URL as public while the port is open.**
-Everything else on the daemon — native API, E2B API, console — stays
+Everything else at both doors — native API, E2B API, console — stays
 authenticated; only sandbox port traffic passes free.

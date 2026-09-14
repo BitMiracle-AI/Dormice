@@ -1,7 +1,6 @@
-import http from 'node:http';
 import { Dormice } from '@dormice/sdk';
 import { describe, expect, inject, it } from 'vitest';
-import { door, listNodes, settled, until } from './helpers';
+import { door, listNodes, settled, spoofHost, until } from './helpers';
 
 // The fleet-settings hot path for the two knobs that moved into the ledger
 // on 2026-07-26 — the S3 archive store and the sandbox domain — as they
@@ -31,27 +30,12 @@ function sleep(seconds: number) {
   return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 }
 
-/** A GET at the daemon with a spoofed Host header (fetch refuses to set Host). */
-function throughProxy(
+/** A GET with a spoofed Host header, at node A by default or at the door (helpers.ts spoofHost). */
+const throughProxy = (
   host: string,
   path = '/',
-): Promise<{ status: number; body: string }> {
-  const endpoint = new URL(inject('dormiceEndpoint'));
-  return new Promise((resolve, reject) => {
-    const req = http.request(
-      { host: endpoint.hostname, port: endpoint.port, path, headers: { host } },
-      (res) => {
-        let body = '';
-        res.on('data', (chunk) => {
-          body += chunk;
-        });
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
-      },
-    );
-    req.on('error', reject);
-    req.end();
-  });
-}
+  via = inject('dormiceEndpoint'),
+) => spoofHost(via, host, path);
 
 describe('the S3 archive store as a live ledger setting', () => {
   it('reports the store keyless and accepts a probed credential rotation', async () => {
@@ -215,15 +199,30 @@ describe('the sandbox domain as a live ledger setting', () => {
         // The seed domain is out of force: its hosts are plain Fastify
         // traffic now, and the router answers 404, not the proxy.
         expect((await throughProxy(seededHost, '/hot')).status).toBe(404);
+        // The same two hosts at the door: the gateway keys on its own copy
+        // of the domain group (in force the moment the write returned) and
+        // forwards a sandbox host to node A, Host kept — so what the door
+        // says is what the node says, one hop later.
+        expect(
+          (await throughProxy(altHost, '/hot?x=1', door())).status,
+        ).toSatisfy(proxied);
+        expect((await throughProxy(seededHost, '/hot', door())).status).toBe(
+          404,
+        );
       } finally {
         await dormice.updateSettings({ sandboxDomain: seeded });
         await settled();
       }
-      // Restored: the seed domain proxies again, the alt one is gone.
+      // Restored: the seed domain proxies again, the alt one is gone — at
+      // both doors.
       expect((await throughProxy(seededHost, '/hot')).status).toSatisfy(
         proxied,
       );
       expect((await throughProxy(altHost, '/hot')).status).toBe(404);
+      expect((await throughProxy(seededHost, '/hot', door())).status).toSatisfy(
+        proxied,
+      );
+      expect((await throughProxy(altHost, '/hot', door())).status).toBe(404);
     } finally {
       await node().destroySandbox('settings-hot-domain');
     }

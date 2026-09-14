@@ -54,11 +54,12 @@ export interface ForwardOptions {
   /** The request body when Fastify already consumed the stream; omit to stream req itself. */
   body?: Buffer | undefined;
   /**
-   * Keep the caller's Host header. Only a face keyed on the Host wants
-   * this (the sandbox port proxy, once it routes through the gateway).
-   * Everywhere else the Host names the gateway, and carrying it to a node
-   * whose Caddy binds that very domain gets a 308 to https instead of the
-   * daemon — so the default lets undici name the node's own endpoint.
+   * Keep the caller's Host header. Only the face keyed on the Host wants
+   * this (the sandbox port proxy, raw.ts: the node's own proxy keys on the
+   * same header). Everywhere else the Host names the gateway, and carrying
+   * it to a node whose Caddy binds that very domain gets a 308 to https
+   * instead of the daemon — so the default lets undici name the node's
+   * own endpoint.
    */
   preserveHost?: boolean;
 }
@@ -306,12 +307,12 @@ export function replay(
 }
 
 /**
- * The upgrade path (sandbox WebSockets, once the port proxy routes
- * through the gateway): the daemon's own replay (sandbox-proxy.ts
- * handleUpgrade) — dial the node, write the request line and rawHeaders
- * verbatim, then pipe both ways. Plain TCP: node endpoints are
- * private-network http, and a TLS node endpoint is refused here rather
- * than half-supported.
+ * The upgrade path (sandbox WebSockets through the proxy face, raw.ts):
+ * the daemon's own replay (sandbox-proxy.ts handleUpgrade) — dial the
+ * node, write the request line and rawHeaders verbatim (the Host among
+ * them, which the node's proxy keys on), then pipe both ways. Plain TCP:
+ * node endpoints are private-network http, and a TLS node endpoint is
+ * refused here rather than half-supported.
  */
 export function forwardUpgrade(
   req: http.IncomingMessage,

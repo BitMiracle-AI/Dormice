@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { inject } from 'vitest';
 
 /**
@@ -20,6 +21,35 @@ export async function until<T>(
     if (Date.now() > deadline) throw new Error('condition never became true');
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+}
+
+/**
+ * A GET at `via` with a spoofed Host header — exactly what traffic from a
+ * wildcard-DNS reverse proxy looks like, no DNS needed (fetch refuses to
+ * set Host, so this speaks node:http directly). Both doors key on the
+ * Host: the daemon's port proxy dials the sandbox, the gateway's proxy
+ * face forwards to the node holding it.
+ */
+export function spoofHost(
+  via: string,
+  host: string,
+  path = '/',
+): Promise<{ status: number; body: string }> {
+  const endpoint = new URL(via);
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: endpoint.hostname, port: endpoint.port, path, headers: { host } },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 export async function rpc(

@@ -1,8 +1,17 @@
+import { parseSandboxHost } from '@dormice/shared';
+
 /**
  * Which face a raw request belongs to — the gateway's serverFactory
- * triages every request before Fastify's router sees it, because one face
- * is keyed on something Fastify cannot route on (a header, on any path).
- * Pure, so the order of the tests is a fact here and nowhere else:
+ * triages every request before Fastify's router sees it, because three
+ * faces are keyed on something Fastify cannot route on (a header, on any
+ * path). Pure, so the order of the tests is a fact here and nowhere else:
+ *   proxy       Host `<port>-<sandboxId>.<domain>`, for a domain in the
+ *               group in force (the gateway's own settings: the sandbox
+ *               domain and its inbound aliases, handed in per request) —
+ *               E2B's getHost() URL, the sandbox port proxy. Judged first,
+ *               as on the daemon, where the proxy stands in front of the
+ *               router: whatever path a sandbox host spells is the
+ *               sandbox's, never a verb of the door.
  *   envd        /e2b/envd/* — E2B's in-sandbox API, keyed by the
  *               E2b-Sandbox-Id header.
  *   signedRoot  exactly /files at the root — the bare signed-URL form,
@@ -10,10 +19,9 @@
  *               without the node's signing secret.
  *   fastify     everything else — the native verbs, /e2b/api, /healthz,
  *               the gateway's own verbs.
- * The sandbox port proxy (Host `<port>-<id>.<domain>`) joins this list
- * when the sandbox domain moves into the gateway's settings.
  */
 export type Classified =
+  | { face: 'proxy'; port: number; sandboxId: string }
   | { face: 'envd' }
   | { face: 'signedRoot' }
   | { face: 'fastify' };
@@ -38,7 +46,12 @@ export function isOriginForm(req: { url?: string }): boolean {
   return (req.url ?? '').startsWith('/');
 }
 
-export function classify(req: { url?: string }): Classified {
+export function classify(
+  req: { url?: string; headers: { host?: string } },
+  domains: readonly string[],
+): Classified {
+  const sandbox = parseSandboxHost(req.headers.host, domains);
+  if (sandbox) return { face: 'proxy', ...sandbox };
   const url = req.url ?? '';
   const q = url.indexOf('?');
   const path = q === -1 ? url : url.slice(0, q);
