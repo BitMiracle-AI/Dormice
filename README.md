@@ -256,6 +256,15 @@ pnpm lint
 pnpm test
 ```
 
+## Contributing
+
+Dormice runs production fleets for several commercial services, so code
+changes come from the maintaining team only. **Issues are welcome and are
+how outside fixes reach the project**: report the bug, describe the fix you
+have in mind, and a maintainer will implement it and credit you. Pull
+requests are not accepted; see [CONTRIBUTING.md](CONTRIBUTING.md) for the
+reasoning.
+
 ## License
 
 [Apache-2.0](LICENSE)

@@ -1,3 +1,13 @@
+<!--
+Dormice does not accept pull requests from outside the maintaining team.
+Please read CONTRIBUTING.md before opening one. If you found a bug or have
+a fix in mind, open an issue instead: a maintainer will implement it, test
+it on a real host, and credit you.
+
+Pull requests opened without that context will be closed with a pointer
+to CONTRIBUTING.md.
+-->
+
 ## What & why
 
 <!-- What changed, and the reasoning. Link the issue if one exists. -->
