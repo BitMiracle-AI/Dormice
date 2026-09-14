@@ -74,6 +74,21 @@ describe('the metrics sampler knobs', () => {
       loadConfig({ ...TOKEN, DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS: '0' }),
     ).toThrow();
   });
+
+  it('refuses an interval past a day on every ticker knob — past 2^31-1 ms Node would fire it every millisecond instead', () => {
+    for (const knob of [
+      'DORMICE_SCAN_INTERVAL_SECONDS',
+      'DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS',
+      'DORMICE_CHECK_IN_INTERVAL_SECONDS',
+    ]) {
+      const atTheCeiling = loadConfig({ ...TOKEN, [knob]: '86400' }) as Record<
+        string,
+        unknown
+      >;
+      expect(atTheCeiling[knob]).toBe(86_400);
+      expect(() => loadConfig({ ...TOKEN, [knob]: '86401' })).toThrow();
+    }
+  });
 });
 
 describe('the knobs that moved to the gateway', () => {

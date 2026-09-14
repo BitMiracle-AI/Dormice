@@ -149,10 +149,15 @@ let closing = false;
 // daemon's metrics ticker in shape (server/main.ts): every interval one
 // row of the fleet's census, summed from the readings the check-ins left
 // in memory (db/fleet-samples.ts says when no row is true enough to
-// write). The first shot fires at once, like the daemon's: a restart's
-// gap in the curve should equal the downtime, not downtime plus an
-// interval. Same failure stance: log, never fatal, the next tick retries —
-// and no check-in ever waits on this write.
+// write). The first shot fires at once and, on a gateway just started,
+// writes nothing: the readings are the nodes' to report, and none has
+// yet. So the first row after a restart lands at the first tick after
+// every known node has checked in, and the curve's gap is the downtime
+// plus at most one check-in interval and one sample interval (measured
+// 2026-09-15: 0.6s down, a 54s gap) — not the daemon's "gap equals
+// downtime", whose figures sit in its own ledger at boot where the
+// gateway's sit in the nodes' mouths. Same failure stance: log, never
+// fatal, the next tick retries — and no check-in ever waits on this write.
 let sampleTimer: NodeJS.Timeout | undefined;
 function sampleTick() {
   try {

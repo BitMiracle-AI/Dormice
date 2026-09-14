@@ -56,5 +56,19 @@ describe('loadConfig', () => {
     expect(() =>
       loadConfig({ ...TOKEN, DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS: '0' }),
     ).toThrow();
+    // Past 2^31-1 ms Node's setTimeout fires after one millisecond instead
+    // of waiting: a day is the ceiling, refused at boot.
+    expect(
+      loadConfig({
+        ...TOKEN,
+        DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS: '86400',
+      }).DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS,
+    ).toBe(86_400);
+    expect(() =>
+      loadConfig({
+        ...TOKEN,
+        DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS: '86401',
+      }),
+    ).toThrow();
   });
 });

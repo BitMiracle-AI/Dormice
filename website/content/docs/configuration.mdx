@@ -49,7 +49,7 @@ first-boot seeds of the fleet settings.
 | `DORMICE_GATEWAY_NODE_CPU_LIMIT_PCT` | `70` | Placement gate: a node whose last check-in reported whole-machine CPU above this takes no new sandboxes. |
 | `DORMICE_GATEWAY_NODE_ACTIVE_LIMIT` | `400` | Placement gate: a node with this many active sandboxes (placements since its check-in included) takes no more; frozen ones are not counted. |
 | `DORMICE_GATEWAY_NODE_MIN_DISK_GB` | `10` | Placement gate: a node whose data disk has less than this free takes no new sandboxes — a full data disk stops every sandbox on the node at once. |
-| `DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS` | `30` | How often the gateway writes one row of the fleet's state census (the overview's concurrency curve, `getFleetStateHistory`), summed from the nodes' last check-ins. One row per tick whatever the fleet's size; kept 30 days. |
+| `DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS` | `30` | How often the gateway writes one row of the fleet's state census (the overview's concurrency curve, `getFleetStateHistory`), summed from the nodes' last check-ins. One row per tick whatever the fleet's size; kept 30 days. At most `86400` (a day). |
 
 ### Fleet settings — first-boot seeds
 
@@ -115,7 +115,7 @@ is a fleet setting.
 | `DORMICE_NODE_ID` | `node-1` | This node's name — in its sandboxes' rows and to its gateway, which tells nodes apart by it. The default serves a node beside its gateway; a node whose gateway is on another machine must state its own. |
 | `DORMICE_GATEWAY_ENDPOINT` | `http://127.0.0.1:3677` | The gateway this daemon is a node of. It checks in there every `DORMICE_CHECK_IN_INTERVAL_SECONDS` — readings, build, where it can be reached, which configuration version it runs — and takes the fleet's configuration from the answer. A daemon with no copy yet waits for its gateway before it listens. |
 | `DORMICE_NODE_ENDPOINT` | `http://127.0.0.1:<port>` | Where the gateway reaches this node. Required (an origin: scheme, host, port — no path) when the gateway is on another machine. |
-| `DORMICE_CHECK_IN_INTERVAL_SECONDS` | `15` | How often the node checks in; the gateway reads two missed check-ins as down. |
+| `DORMICE_CHECK_IN_INTERVAL_SECONDS` | `15` | How often the node checks in; the gateway reads two missed check-ins as down. At most `86400` (a day). |
 
 ### Executor
 
@@ -129,7 +129,7 @@ is a fleet setting.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `DORMICE_SCAN_INTERVAL_SECONDS` | `60` | How often the idle scanner runs. Each sweep moves an idle sandbox down at most one state — see [Sandbox lifecycle](/docs/lifecycle). |
+| `DORMICE_SCAN_INTERVAL_SECONDS` | `60` | How often the idle scanner runs. Each sweep moves an idle sandbox down at most one state — see [Sandbox lifecycle](/docs/lifecycle). At most `86400` (a day). |
 | `DORMICE_RECLAIM_TIMEOUT_SECONDS` | `45` | Upper bound on the memory-reclaim step of a freeze. Hitting it is expected on stubborn workloads, not a failure. |
 
 ## Client-side variables

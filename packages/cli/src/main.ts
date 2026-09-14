@@ -54,9 +54,13 @@ sandbox
   .action(async () => {
     const { table, warnings } = await sandboxLs(clientFromEnv(process.env));
     console.log(table);
-    // A node the list lacks is said on stderr: the table stays a table for
-    // a pipe, and the warning still reaches the operator's terminal.
+    // A node the list lacks is said on stderr, and in the exit code: the
+    // table stays a table for a pipe, the warning still reaches the
+    // operator's terminal, and a script counting rows is told the list is
+    // partial — as ls exits 1 for a directory it could not read, with the
+    // rest listed.
     for (const warning of warnings) console.error(warning);
+    if (warnings.length > 0) process.exitCode = 1;
   });
 
 sandbox

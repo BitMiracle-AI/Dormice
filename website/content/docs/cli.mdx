@@ -15,8 +15,10 @@ export DORMICE_API_TOKEN=<token>   # on the host: grep ^DORMICE_API_TOKEN /etc/d
 
 Everything on this page goes to the gateway. `dor sandbox ls` lists
 every node's sandboxes; when a node did not answer, a `warning:` line
-on stderr names it and says its sandboxes are not listed — the table on
-stdout stays a table, so a pipe never reads the warning as a row.
+on stderr names it and says its sandboxes are not listed, and the
+command exits 1 — the table on stdout stays a table, so a pipe never
+reads the warning as a row, and a script never takes the partial list
+for the whole fleet.
 
 Errors print as one line on stderr (no stack traces at a shell prompt)
 and exit 1.

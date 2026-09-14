@@ -1,9 +1,11 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import net, { type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { Dormice } from '@dormice/sdk';
 import { Sandbox } from 'e2b';
 import { describe, expect, inject, it } from 'vitest';
@@ -34,6 +36,19 @@ function direct(id: string) {
   return new Dormice({ endpoint: node.endpoint, token: token() });
 }
 const other = (id: string) => (id === 'node-b' ? 'node-c' : 'node-b');
+
+/** The built CLI, run as an operator runs it, pointed at the fleet's door. */
+const CLI = fileURLToPath(
+  new URL('../../packages/cli/dist/main.js', import.meta.url),
+);
+const dor = (...args: string[]) =>
+  promisify(execFile)('node', [CLI, ...args], {
+    env: {
+      ...process.env,
+      DORMICE_ENDPOINT: gateway(),
+      DORMICE_API_TOKEN: token(),
+    },
+  });
 
 const rpc = (
   path: string,
@@ -445,8 +460,13 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
     );
     // The gateway samples every second in the exam: a couple of ticks
     // bring points and a peak.
+    // Over the last ten seconds, not the default day: what is asserted of
+    // bucketing below is true of a window, not of how long the fleet's
+    // gateway has lived (a row a second) by the time the suite is here.
     const history = await until(async () => {
-      const h = await viaGateway().getFleetStateHistory();
+      const h = await viaGateway().getFleetStateHistory({
+        start: new Date(Date.now() - 10_000).toISOString(),
+      });
       return h.points.length >= 2 && h.peak !== null ? h : undefined;
     });
     for (const point of history.points) {
@@ -719,6 +739,17 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
       expect((await e2bList.json()) as object).toMatchObject({
         code: 503,
         message: expect.stringMatching(/node node-d did not answer/),
+      });
+      // The CLI at the same door: the table on stdout without the warning
+      // in it, the warning on stderr naming d, and exit 1 — a partial
+      // listing is not a success, as ls exits 1 for a directory it could
+      // not read.
+      await expect(dor('sandbox', 'ls')).rejects.toMatchObject({
+        code: 1,
+        stdout: expect.not.stringContaining('warning:'),
+        stderr: expect.stringMatching(
+          /^warning: node node-d did not answer \(has not checked in for \d+s\) — its sandboxes are not listed\n$/,
+        ),
       });
 
       expect((await rpc('/removeNode', { id: 'node-d' })).body).toEqual({

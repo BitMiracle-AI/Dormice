@@ -22,6 +22,18 @@ import { z } from 'zod';
  * namespace — bare names like PORT collide with whatever else the operator
  * has exported.
  */
+
+/**
+ * The ceiling on the three interval knobs: one day. A tick a day is the
+ * slowest cadence that still means anything — and past 2^31-1 ms (24.8
+ * days) Node's setTimeout does not wait at all: it warns and fires after
+ * one millisecond (TimeoutOverflowWarning) — a sweep, a sample or a
+ * check-in every millisecond. Refused at boot instead (found by review,
+ * 2026-09-15; the gateway's sampler knob carries the same rule,
+ * gateway/config.ts).
+ */
+const MAX_INTERVAL_SECONDS = 86_400;
+
 const envSchema = z.object({
   DORMICE_PORT: z.coerce.number().int().min(1).max(65535).default(3676),
   DORMICE_DB_PATH: z.string().default('data/dormice.db'),
@@ -33,7 +45,12 @@ const envSchema = z.object({
    */
   DORMICE_NODE_ID: z.string().min(1).default('node-1'),
   /** How often the idle scanner sweeps the ledger. */
-  DORMICE_SCAN_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
+  DORMICE_SCAN_INTERVAL_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(MAX_INTERVAL_SECONDS)
+    .default(60),
   /**
    * How often the metrics sampler persists a reading per measurable sandbox
    * plus one fleet state-count row — the resolution of every history curve.
@@ -42,6 +59,7 @@ const envSchema = z.object({
     .number()
     .int()
     .positive()
+    .max(MAX_INTERVAL_SECONDS)
     .default(30),
   /**
    * How long per-sandbox samples live (fleet rows are fixed at 30 days —
@@ -136,6 +154,7 @@ const envSchema = z.object({
     .number()
     .int()
     .positive()
+    .max(MAX_INTERVAL_SECONDS)
     .default(15),
 });
 

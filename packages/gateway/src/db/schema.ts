@@ -210,7 +210,7 @@ export type ConsoleAccountRow = typeof consoleAccount.$inferSelect;
 export const fleetStateSamples = sqliteTable(
   'fleet_state_samples',
   {
-    /** ISO 8601 UTC — when the check-in that produced this sum arrived. */
+    /** ISO 8601 UTC — the instant of the sampler tick that summed the readings. */
     at: text('at').notNull(),
     active: integer('active').notNull(),
     frozen: integer('frozen').notNull(),
