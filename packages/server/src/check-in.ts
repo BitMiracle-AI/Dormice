@@ -59,16 +59,31 @@ const CHECK_IN_TIMEOUT_MS = 10_000;
  * Chained setTimeout, the daemon's discipline: the next tick is scheduled
  * when this one is done, so a slow gateway never has ticks pile up.
  * Failures are logged on the change — once when the gateway stops
- * answering, once when it answers again — never every tick: a gateway
- * down for an hour is one event, not two hundred and forty lines. Never
- * fatal: the gateway is the fleet's front door and configuration
- * authority, not the node's reason to live; the node keeps running its
- * sandboxes and keeps trying.
+ * answering, once more when what is wrong changes (a gateway that was
+ * unreachable and now refuses this node is news), once when it answers
+ * again — never every tick: a gateway down for an hour is one event, not
+ * two hundred and forty lines. Never fatal: the gateway is the fleet's
+ * front door and configuration authority, not the node's reason to live;
+ * the node keeps running its sandboxes and keeps trying.
  */
+/**
+ * A failure in the operator's words. fetch says "fetch failed" and keeps
+ * the reason (ECONNREFUSED, ENOTFOUND, a TLS error) in `cause`; a
+ * timeout is a DOMException whose only code is a legacy number. The
+ * transport's word is the one the operator acts on, so it is appended.
+ */
+function describe(error: unknown): string {
+  const e = error as { message?: string; cause?: unknown };
+  const cause = e.cause as { code?: unknown; message?: string } | undefined;
+  const message = e.message ?? String(error);
+  const why = typeof cause?.code === 'string' ? cause.code : cause?.message;
+  return why === undefined ? message : `${message} (${why})`;
+}
+
 export class CheckIn {
   private timer: NodeJS.Timeout | undefined;
   private closing = false;
-  /** The failure the gateway is currently in, or null while it answers. */
+  /** The failure the gateway is currently in (its sentence with the numbers blanked, so a 409 that says "3s ago" and then "4s ago" is one failure), or null while it answers. */
   private failing: string | null = null;
 
   constructor(private readonly opts: CheckInOptions) {}
@@ -130,14 +145,17 @@ export class CheckIn {
         this.failing = null;
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (this.failing === null) {
+      const message = describe(error);
+      const failure = message.replace(/\d+/g, '#');
+      if (failure !== this.failing) {
         opts.log.warn(
           { gateway: opts.gateway, error: message },
-          'check-in failed; the gateway places nothing here and forwards no new names to this node until it answers again — retrying every interval',
+          this.failing === null
+            ? 'check-in failed; the gateway places nothing here and forwards no new names to this node until it answers again — retrying every interval'
+            : 'check-in still failing, differently — retrying every interval',
         );
       }
-      this.failing = message;
+      this.failing = failure;
     }
   }
 

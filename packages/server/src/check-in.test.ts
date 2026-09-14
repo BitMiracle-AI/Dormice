@@ -197,11 +197,42 @@ describe('CheckIn', () => {
     );
   });
 
-  it('a gateway that is not there is a logged failure, never a throw', async () => {
-    const { log, warns } = logSpy();
-    const checkIn = new CheckIn(options('http://127.0.0.1:9', log));
+  it('a failure that changes is logged again — unreachable, then refused, are two events — while the same refusal with another number in it is not', async () => {
+    let answer = { status: 500, body: '{"message":"boom"}' };
+    const gw = await gateway(() => answer);
+    const { log, warns, details } = logSpy();
+    const checkIn = new CheckIn(options(gw.endpoint, log));
+    await checkIn.once();
+    await checkIn.once();
+    expect(warns).toHaveLength(1);
+    const refusal = (ago: number) =>
+      JSON.stringify({
+        message: `node node-7 checked in from http://10.0.0.7:80 ${ago}s ago and now from http://10.0.0.8:80 — two daemons share one DORMICE_NODE_ID`,
+      });
+    answer = { status: 409, body: refusal(3) };
+    await checkIn.once();
+    answer = { status: 409, body: refusal(4) };
+    await checkIn.once();
+    expect(warns).toHaveLength(2);
+    expect(warns[1]).toMatch(/still failing, differently/);
+    expect((details[1] as { error: string }).error).toMatch(
+      /gateway answered 409: .*3s ago/,
+    );
+  });
+
+  it("a gateway that is not there is a logged failure, never a throw, and the log says why in the transport's word", async () => {
+    // A port the OS just released: dialling it is refused, not black-holed.
+    const probe = http.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const port = (probe.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    const { log, warns, details } = logSpy();
+    const checkIn = new CheckIn(options(`http://127.0.0.1:${port}`, log));
     await expect(checkIn.once()).resolves.toBeUndefined();
     expect(warns).toHaveLength(1);
+    expect((details[0] as { error: string }).error).toMatch(
+      /fetch failed \(ECONNREFUSED\)/,
+    );
   });
 
   it('ticks on its interval from start() and stops on stop()', async () => {
