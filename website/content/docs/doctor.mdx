@@ -114,8 +114,21 @@ know why; the Linux terms in it are covered in
   config file that doesn't exist yet is a *warn* (the first bind
   creates it), and so is one the gateway did not write: `setIngress`
   refuses to overwrite it, so web domain binding is effectively off.
-- **base image available** — present locally; the fix names
-  `images/Dockerfile`, and doctor never pulls.
+- **base image available** — present locally. The base image is the
+  fleet's setting (`DORMICE_BASE_IMAGE` in the gateway's env seeds it,
+  the console edits it); `install.sh` runs doctor with that value on
+  both roles — on a node, the value it learned from the gateway for the
+  run. Skipped with directions when the environment has none. The fix
+  names the pull from the fleet registry when there is one (the daemon
+  does that pull itself at its next configuration bundle), else
+  `images/Dockerfile`; doctor never pulls.
+- **fleet image registry reachable** — skipped when
+  `DORMICE_REGISTRY_ADDRESS` is not set (no fleet registry; every node
+  then needs its images staged by hand). Set, the registry's certificate
+  must be pinned at `/etc/docker/certs.d/<address>/ca.crt` (or docker
+  cannot pull from it at all — re-run `install.sh`) and
+  `https://<address>/v2/` must answer over TLS: a `401` asking for the
+  credential is the pass, without a credential on any command line.
 - **docker-mode paths absolute** — a relative `DORMICE_DB_PATH` depends
   on the start directory, and a wrong start directory opens an *empty
   database next to real sandboxes* — the exact mismatch the daemon's

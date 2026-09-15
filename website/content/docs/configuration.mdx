@@ -13,10 +13,11 @@ A Dormice host runs two processes, each with its own environment file:
   and keeps a copy in its own database, so it keeps serving while the
   gateway is away. `/etc/dormice/env`.
 
-A single machine runs both — a fleet of one. All variables are
-`DORMICE_*`, validated once at startup: a bad value refuses to boot with
-a named error instead of surfacing later as confusing runtime behavior.
-Edit a file and restart its process:
+A single machine runs both — a fleet of one; a node machine
+(`install.sh --role node`) runs the daemon alone, its env naming the
+gateway. All variables are `DORMICE_*`, validated once at startup: a
+bad value refuses to boot with a named error instead of surfacing later
+as confusing runtime behavior. Edit a file and restart its process:
 
 ```sh
 systemctl restart dormice-gateway   # after editing gateway.env
@@ -103,6 +104,13 @@ sandboxes [archive](/docs/archiving) after 7 more idle days by default.
 | `DORMICE_S3_REGION` | `us-east-1` | Region, if your store cares. |
 | `DORMICE_S3_FORCE_PATH_STYLE` | `false` | Path-style addressing: MinIO needs `true`; the clouds route by subdomain. |
 
+#### Images
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DORMICE_BASE_IMAGE` | — | Seed for the fleet's **base image**, the image a sandbox without a template boots from — a bare reference like `dormice-base:20260831`. `install.sh` builds one on the gateway's machine, pushes it to the fleet registry and records it here; the console's settings page re-points it (existing template-less sandboxes swap onto the new image at their next cold wake). A node that lacks the image pulls it from the registry. |
+| `DORMICE_REGISTRY_ADDRESS` | — | Seed for the fleet's image registry, `host:port` (no scheme) — where a node pulls an image it lacks, prefixing this to the bare name and tagging it back. `install.sh` runs the registry beside the gateway on the machine's private address, port 5000, over TLS with a self-signed certificate (trusted through `/etc/docker/certs.d`, pinned on each node when it joins), user `dormice` and the fleet token as the password. Read-only over the wire. |
+
 ## Daemon (node)
 
 `/etc/dormice/env` — the node's identity and its machine. Nothing here
@@ -112,9 +120,9 @@ is a fleet setting.
 | --- | --- | --- |
 | `DORMICE_PORT` | `3676` | The daemon's port: the sandbox verbs, the E2B surface, the sandbox port proxy. Always bound to 127.0.0.1. |
 | `DORMICE_DB_PATH` | `data/dormice.db` | Where the node's SQLite database lives (sandboxes, metrics history, its copy of the fleet configuration). Must be an **absolute path** in docker mode — a relative path depends on the start directory, and a wrong start directory means an empty database facing real sandboxes. |
-| `DORMICE_NODE_ID` | `node-1` | This node's name — in its sandboxes' rows and to its gateway, which tells nodes apart by it. The default serves a node beside its gateway; a node whose gateway is on another machine must state its own. |
-| `DORMICE_GATEWAY_ENDPOINT` | `http://127.0.0.1:3677` | The gateway this daemon is a node of. It checks in there every `DORMICE_CHECK_IN_INTERVAL_SECONDS` — readings, build, where it can be reached, which configuration version it runs — and takes the fleet's configuration from the answer. A daemon with no copy yet waits for its gateway before it listens. |
-| `DORMICE_NODE_ENDPOINT` | `http://127.0.0.1:<port>` | Where the gateway reaches this node. Required (an origin: scheme, host, port — no path) when the gateway is on another machine. |
+| `DORMICE_NODE_ID` | `node-1` | This node's name — in its sandboxes' rows and to its gateway, which tells nodes apart by it. The default serves a node beside its gateway; a node whose gateway is on another machine must state its own (`install.sh --role node` writes the hostname, or `--node-id`). |
+| `DORMICE_GATEWAY_ENDPOINT` | `http://127.0.0.1:3677` | The gateway this daemon is a node of. It checks in there every `DORMICE_CHECK_IN_INTERVAL_SECONDS` — readings, build, where it can be reached, which configuration version it runs, whether it can upgrade itself — and takes the fleet's configuration (and, its turn come, the order to upgrade) from the answer. A daemon with no copy yet waits for its gateway before it listens. A remote address here is what makes the machine a node machine to `install.sh`. |
+| `DORMICE_NODE_ENDPOINT` | `http://127.0.0.1:<port>` | Where the gateway reaches this node. Required (an origin: scheme, host, port — no path) when the gateway is on another machine; `install.sh --role node` writes this machine's address toward the gateway on port 80, where its Caddy forwards to the daemon. |
 | `DORMICE_CHECK_IN_INTERVAL_SECONDS` | `15` | How often the node checks in; the gateway reads two missed check-ins as down. At most `86400` (a day). |
 
 ### Executor
@@ -122,7 +130,7 @@ is a fleet setting.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `DORMICE_EXECUTOR` | `fake` | What runs the sandboxes: `fake` is an in-memory executor so a bare checkout works on any machine (development, tests); `docker` runs real gVisor sandboxes and needs a prepared Linux host — see [Installation](/docs/installation). |
-| `DORMICE_BASE_IMAGE` | — | The image sandboxes boot from. **Required in docker mode**; `install.sh` builds one and records it here. |
+| `DORMICE_BASE_IMAGE` | — | The node's **fallback** for the fleet's base image while the fleet's settings name none (the knob's home until 2026-09-15; see the gateway's `DORMICE_BASE_IMAGE` above). A node whose fleet names one logs at boot that this line can go; a node with neither refuses to build a template-less sandbox, naming where to set it. |
 | `DORMICE_DATA_DIR` | `/var/lib/dormice` | Sandbox disk images and their mount points (docker mode). Must be an absolute path in docker mode. |
 
 ### Lifecycle engine
@@ -138,5 +146,5 @@ The `dor` CLI (and nothing else) reads two variables to find Dormice:
 
 | Variable | What it does |
 | --- | --- |
-| `DORMICE_ENDPOINT` | A base URL: the gateway (`http://127.0.0.1:3677`) for the template and API-key commands and everything the gateway forwards; the daemon (`http://127.0.0.1:3676`) for `sandbox ls` and the other list/observation commands the gateway does not answer yet. |
+| `DORMICE_ENDPOINT` | A base URL: the gateway (`http://127.0.0.1:3677`) — the door for every verb, `sandbox ls` and the upgrade included; a node's own address (`http://127.0.0.1:3676`) only to ask that one node about itself. |
 | `DORMICE_API_TOKEN` | The fleet's token, or a key minted at the gateway (keys open the gateway, not the daemon). |

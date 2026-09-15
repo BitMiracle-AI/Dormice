@@ -28,18 +28,54 @@ The installer sets up everything —
 runtime), [gVisor](/docs/core-concepts#gvisor) (the extra isolation
 layer around each sandbox),
 [swap](/docs/core-concepts#swap-and-freezing) (the disk-as-overflow-memory
-that makes freezing work), the network hardening, and Dormice's two
+that makes freezing work), the network hardening, and Dormice's
 processes as systemd services (so they start on boot and restart after
 a crash): the **gateway** — the front door that serves the web console
-and holds the fleet's settings and API keys — and the **daemon** — the
-node that runs the sandboxes. On one machine they are a fleet of one;
-more machines can join the same gateway later.
+and holds the fleet's settings and API keys — the **image registry** —
+the fleet's store for the sandbox base image and your template images,
+which every node pulls from — and the **daemon** — the node that runs
+the sandboxes. On one machine they are a fleet of one; more machines
+join the same gateway with one more command, below.
 It finishes by running `dor doctor`, a battery of read-only checks that
 verifies the install actually works. You can re-run `dor doctor` at any
 time.
 
 **The installer is safe to re-run.** Running it again upgrades the code
 and repairs anything that drifted, and never rotates your API token.
+
+## Add a second machine
+
+A fleet grows one machine at a time, and every machine after the first
+is a **node**: a daemon that runs sandboxes and belongs to the gateway
+on the first machine. It needs no settings of its own — the fleet's
+settings, the base image and the templates come from the gateway at its
+first check-in, and any image it lacks comes from the fleet's image
+registry, which the first machine runs beside the gateway.
+
+On the new machine (same private network as the gateway; its cloud
+firewall must let it reach the gateway machine's ports `3677` and
+`5000`, and let the gateway machine reach its port `80`):
+
+```sh
+export DORMICE_API_TOKEN=<the value in the gateway machine's /etc/dormice/env>
+curl -fsSL https://raw.githubusercontent.com/BitMiracle-AI/Dormice/main/deploy/install.sh \
+  | bash -s -- --role node --gateway http://<gateway machine's private IP>:3677
+```
+
+The token travels in the environment, never as a flag (flags show in
+`ps`). The installer prepares the machine the same way, writes an env
+file naming the gateway, pins the registry's certificate on first sight
+(printing its fingerprint — compare it with the gateway machine's), pulls
+the base image, and starts the daemon, which checks in and appears on
+the console's nodes page within fifteen seconds. Two optional flags:
+`--node-id` (the node's name in the fleet; default: the hostname) and
+`--node-endpoint` (where the gateway reaches it; default: this machine's
+address toward the gateway, port 80 — the installer's Caddy forwards
+that port to the daemon).
+
+Re-running the installer on a node needs no flags: the env file says
+which gateway it belongs to. Upgrades come from the gateway — see
+[Upgrading](/docs/upgrading#upgrade-a-fleet).
 
 ## Get your API token
 
@@ -70,9 +106,9 @@ ssh -L 3677:127.0.0.1:3677 -L 3676:127.0.0.1:3676 root@your-host
 ```
 
 Keep that command running, and use `http://127.0.0.1:3677` (the
-gateway: console, keys, settings, and every sandbox verb) and
-`http://127.0.0.1:3676` (the daemon, for the list and observation verbs
-the gateway does not answer yet) as if they were local.
+gateway — the door for every verb: console, keys, settings, sandboxes,
+the upgrade) as if it were local; `3676` is the daemon's own address,
+for asking that one node about itself.
 
 **Option 2: Bind a domain** — serves the API, the E2B surface, and the
 web console at once, over HTTPS. The installer already placed a reverse

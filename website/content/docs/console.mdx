@@ -149,6 +149,10 @@ Three more pages round out the operator view:
   else is the effective environment configuration, read-only, with
   secrets shown as present-or-absent only; changing those happens in
   `/etc/dormice/env` plus a restart, never from the browser.
+- **Settings** also carries the fleet's **base image** row: the image a
+  template-less sandbox boots from, re-pointed here (push the new image
+  to the fleet registry first; every node pulls it ahead and swaps each
+  template-less sandbox at its next cold wake).
 - **Version** — the build the gateway is running (a git commit — trunk
   commit titles are the changelog) compared against the latest, with a
   one-click [fleet upgrade](/docs/upgrading#upgrade-a-fleet) and live

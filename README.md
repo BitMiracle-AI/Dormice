@@ -31,6 +31,13 @@ a battery of read-only checks — three of them boot a real gVisor
 container — that decides whether the install actually succeeded;
 `dor doctor` can be re-run on its own at any time.
 
+A second machine joins the same fleet with one more command
+(`--role node --gateway http://<first machine>:3677`, the token in the
+environment) and needs no settings of its own; upgrades then run from
+the gateway, one node at a time. See the
+[installation](website/content/docs/installation.mdx) and
+[upgrading](website/content/docs/upgrading.mdx) docs.
+
 ## Quick start
 
 `@dormice/sdk` is the native TypeScript client. (Not on npm yet — the

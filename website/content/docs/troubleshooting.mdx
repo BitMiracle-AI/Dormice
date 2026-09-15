@@ -138,8 +138,25 @@ image probe warns about exactly this.
 
 By design: [registration is configuration](/docs/templates) — the image
 is not checked when a name is registered, so the error surfaces at
-create time, named. `docker pull` or build the image on the daemon host,
-then retry.
+create time, named. A node first tries the fleet's image registry; the
+message says which failed. No registry in the fleet: build or
+`docker pull` the image on that node under the bare name. A registry
+that lacks it: run the push command the message spells out from a
+machine that has the image. A pull that fails otherwise: the node's
+`/etc/docker/certs.d/<registry>/ca.crt` must be the registry's
+certificate (re-run the installer to pin it) and the fleet token its
+credential.
+
+## A node shows "stuck" on the version page
+
+The gateway told the node to upgrade itself, and twenty minutes later
+it still reports the old build. The gateway never tells it again on its
+own (a build that fails every time must not rebuild every twenty
+minutes on the sandboxes' CPU). On that node read `journalctl -u
+dormice-upgrade` and `/var/lib/dormice/upgrade/upgrade.log`, fix the
+cause — a mirror that hung, a full disk — and press **Try again** on the
+version page, which tells the node once more at its next check-in.
+See [Upgrade a fleet](/docs/upgrading#upgrade-a-fleet).
 
 ## A paused container won't `docker rm` by hand
 

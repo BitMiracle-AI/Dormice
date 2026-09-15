@@ -126,10 +126,13 @@ older than their template's current one; the console shows it as an
 
 Pick something else if:
 
-- **You need a fleet.** One machine, one daemon, by design — that is
-  where the simplicity comes from. Multi-machine sharding is a future
-  direction (the schema already carries the fields), not a current
-  feature.
+- **You need one giant sandbox pool with cross-machine scheduling.** A
+  Dormice fleet is one gateway in front of independent nodes, each a
+  complete single-machine daemon: the gateway places a new sandbox on a
+  node and keeps finding it there for the rest of its life. Nothing
+  moves a live sandbox between machines, and nothing shares state
+  between nodes but the gateway's configuration and the image registry.
+  That is where the simplicity comes from.
 - **You want a managed service.** No hosted anything, no SLA. That is
   E2B's product, and it is good at it.
 - **Your threat model demands hardware virtualization.** Sandboxes are
