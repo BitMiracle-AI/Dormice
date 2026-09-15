@@ -662,7 +662,21 @@ fi
 # the same path for the fresh install, the upgrade, and the rollback.
 build_repo() {
   cd "$INSTALL_DIR"
+  # better-sqlite3 is a native module: its install fetches a prebuilt binary
+  # from GitHub and, failing that, compiles — for which node-gyp fetches this
+  # Node's headers from nodejs.org. Two hosts a mainland machine may not
+  # reach: both timed out on a fresh cn-beijing VM and the install died in
+  # the build (2026-09-16). The headers ship inside the Node tarball this
+  # script unpacks into /opt, so node-gyp is pointed there whenever that Node
+  # is the one running (a host whose own Node passed the version check has
+  # no headers here and fetches as before); under --mirror cn the prebuilt
+  # binary comes from npmmirror's copy of the GitHub releases.
+  local node_home="/opt/node-$NODE_VERSION-linux-x64"
+  if [ -f "$node_home/include/node/node.h" ] && [ "$(readlink -f "$(command -v node)")" = "$node_home/bin/node" ]; then
+    export npm_config_nodedir="$node_home"
+  fi
   if [ "$MIRROR" = cn ]; then
+    export npm_config_better_sqlite3_binary_host_mirror=https://npmmirror.com/mirrors/better-sqlite3
     npm_config_registry=https://registry.npmmirror.com pnpm install --frozen-lockfile
   else
     pnpm install --frozen-lockfile
