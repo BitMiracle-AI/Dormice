@@ -124,6 +124,49 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
     }
   });
 
+  it("the fleet's base image is a setting: re-pointed at the gateway, it reaches the nodes' copies within a check-in and every template-less sandbox reads as upgradable", async () => {
+    const before = (await rpc('/getConfig')).body as {
+      configVersion: number;
+      settings: { baseImage: string | null; registryAddress: string | null };
+    };
+    // The exam's gateway seeds the fake's own base and no registry.
+    expect(before.settings.baseImage).toBe('fake-base');
+    expect(before.settings.registryAddress).toBeNull();
+    const staged = await direct('node-b').acquireSandbox('gw-base');
+    try {
+      const { status } = await rpc('/updateSettings', {
+        baseImage: 'fake-base-2',
+      });
+      expect(status).toBe(200);
+      await configSettled(gateway(), token());
+      // The node's own copy resolves the next image; the merged list at
+      // the door reads the same verdict.
+      const onNode = await direct('node-b').listSandboxImages();
+      const row = onNode.images.find((i) => i.sandboxId === staged.sandbox.id);
+      expect(row).toMatchObject({
+        image: 'fake-base',
+        nextImage: 'fake-base-2',
+        upgradable: true,
+      });
+      const atDoor = await viaGateway().listSandboxImages();
+      expect(
+        atDoor.images.find((i) => i.sandboxId === staged.sandbox.id)?.nextImage,
+      ).toBe('fake-base-2');
+      // Back, and the verdict follows.
+      await rpc('/updateSettings', { baseImage: 'fake-base' });
+      await configSettled(gateway(), token());
+      expect(
+        (await direct('node-b').listSandboxImages()).images.find(
+          (i) => i.sandboxId === staged.sandbox.id,
+        )?.upgradable,
+      ).toBe(false);
+    } finally {
+      await direct('node-b').destroySandbox('gw-base');
+      await rpc('/updateSettings', { baseImage: 'fake-base' });
+      await configSettled(gateway(), token());
+    }
+  });
+
   it('a template registered at the gateway is usable on every node; removal asks the nodes and is refused while one holds a sandbox on it', async () => {
     await viaGateway().registerTemplate('gw-tpl', 'img:gw-tpl');
     await configSettled(gateway(), token());

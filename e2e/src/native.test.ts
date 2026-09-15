@@ -808,6 +808,12 @@ describe('the observability verbs over a real daemon', () => {
       defaultSeconds: 7 * 24 * 60 * 60,
     });
     expect(config.configVersion).toBeGreaterThanOrEqual(1);
+    // The fleet's base image and registry are settings since the fourth
+    // cut: seeded by the exam's gateway env (an image name, no registry).
+    expect(config.settings.baseImage).toBe(
+      process.env.DORMICE_BASE_IMAGE ?? 'fake-base',
+    );
+    expect(config.settings.registryAddress).toBeNull();
     // The node answers no configuration verb of its own anymore.
     await expect(client().getConfig()).rejects.toMatchObject({ status: 404 });
   });
