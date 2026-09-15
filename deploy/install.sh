@@ -333,17 +333,44 @@ if [ ! -x /usr/local/bin/node ]; then
 fi
 
 # ---- Docker ----------------------------------------------------------------
+# The packages Docker's install script installs, from a mirror of its apt
+# repository — the fallback for the script's own mainland mirrors (below).
+install_docker_from_mirror() {
+  local base="$1" id codename
+  # shellcheck disable=SC1091 # the host's own os-release, not a script of ours
+  read -r id codename < <(. /etc/os-release && echo "$ID $VERSION_CODENAME")
+  note "Docker's install script could not install from its mainland mirror — installing the same packages from $base"
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL --retry 3 --retry-all-errors -o /etc/apt/keyrings/docker.asc "$base/linux/$id/gpg"
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] $base/linux/$id $codename stable" >/etc/apt/sources.list.d/docker.list
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+}
+
 log 'Docker'
 if docker version --format '{{.Server.Version}}' >/dev/null 2>&1; then
   note "[skip] dockerd $(docker version --format '{{.Server.Version}}') is running"
 else
-  curl -fsSL -o /tmp/get-docker.sh https://get.docker.com
-  if [ "$MIRROR" = cn ]; then
-    sh /tmp/get-docker.sh --mirror Aliyun
+  # Two things fail on a mainland VM, found on two fresh ones an hour apart
+  # (2026-09-16): get.docker.com resets the connection now and then (the third
+  # attempt got through), and Docker's own mainland mirror of its apt
+  # repository is not always in sync ("File has unexpected size … Mirror sync
+  # in progress?" for over an hour; the script's other mainland mirror lagged
+  # the package list the script installs). So under --mirror cn the script is
+  # a first attempt, and the same packages come from USTC's mirror of the
+  # repository when it fails — or when the script cannot be fetched at all.
+  if curl -fsSL --retry 3 --retry-all-errors -o /tmp/get-docker.sh https://get.docker.com; then
+    if [ "$MIRROR" = cn ]; then
+      sh /tmp/get-docker.sh --mirror Aliyun || install_docker_from_mirror https://mirrors.ustc.edu.cn/docker-ce
+    else
+      sh /tmp/get-docker.sh
+    fi
+    rm -f /tmp/get-docker.sh
+  elif [ "$MIRROR" = cn ]; then
+    install_docker_from_mirror https://mirrors.ustc.edu.cn/docker-ce
   else
-    sh /tmp/get-docker.sh
+    die 'could not fetch https://get.docker.com — install Docker Engine by hand (https://docs.docker.com/engine/install/), then re-run'
   fi
-  rm /tmp/get-docker.sh
   systemctl enable --now docker
   note "installed dockerd $(docker version --format '{{.Server.Version}}')"
 fi
