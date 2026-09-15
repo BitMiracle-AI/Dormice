@@ -1,6 +1,5 @@
 import { mkdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { recordActivity } from '../db/activity';
 import type { Db } from '../db/db';
 import { findById, setPausedByUser, touch, transition } from '../db/ledger';
 import type { SandboxRow } from '../db/schema';
@@ -60,7 +59,11 @@ function clampPercent(fraction: number): number {
  * evented, because the writer (tar) offers no progress hooks and a growing
  * output file IS its progress. Only actual growth pulses: a wedged writer
  * goes silent, and the heartbeat watchdog hears exactly that. A file not
- * born yet is no growth either.
+ * born yet is no growth either. stop() ends the sampling for good: a stat
+ * already in flight when it is called delivers nothing — clearing the
+ * interval alone let that last sample pulse after stop() whenever the
+ * file had grown meanwhile (seen as a flaky test under a full parallel
+ * run, 2026-09-16).
  */
 export function pulseFileGrowth(
   filePath: string,
@@ -68,10 +71,11 @@ export function pulseFileGrowth(
   everyMs = 15_000,
 ): { stop(): void } {
   let lastSize = -1;
+  let stopped = false;
   const timer = setInterval(() => {
     void stat(filePath).then(
       ({ size }) => {
-        if (size > lastSize) {
+        if (!stopped && size > lastSize) {
           lastSize = size;
           onPulse();
         }
@@ -81,7 +85,12 @@ export function pulseFileGrowth(
   }, everyMs);
   // Sampling must never be what keeps the process alive.
   timer.unref();
-  return { stop: () => clearInterval(timer) };
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
 }
 
 /**
@@ -201,13 +210,7 @@ export class Archiver {
       await rm(tmp, { force: true });
     }
     const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
-    recordActivity(this.db, {
-      kind: 'archived',
-      sandboxName: row.name,
-      sandboxId: row.id,
-      detail: `disk shipped to S3 in ${seconds}s; local copy freed`,
-    });
-    this.log(`archived ${row.id} in ${seconds}s`);
+    this.log(`archived ${row.id} (${row.name}) in ${seconds}s`);
   }
 
   /**
@@ -224,12 +227,7 @@ export class Archiver {
       );
     }
     transition(this.db, row.id, 'restoring');
-    recordActivity(this.db, {
-      kind: 'restore-started',
-      sandboxName: row.name,
-      sandboxId: row.id,
-      detail: 'restore from S3 began',
-    });
+    this.log(`restoring ${row.id} (${row.name}) from S3`);
     // Captured here, kept for the whole task: a settings edit mid-restore
     // must not switch clients under a running download (the moving-store
     // guard in updateSettings means only credentials can change here, and
@@ -341,12 +339,7 @@ export class Archiver {
         }
         transition(this.db, sandboxId, 'active');
         touch(this.db, sandboxId);
-        recordActivity(this.db, {
-          kind: 'restored',
-          sandboxName: name,
-          sandboxId,
-          detail: 'disk back from S3, sandbox active; archive object deleted',
-        });
+        this.log(`restored ${sandboxId} (${name}): disk back from S3, active`);
       });
       // The object's job is done — the disk is local again, so from here
       // "an object exists" means "the row is archived", and destroy never
@@ -362,14 +355,6 @@ export class Archiver {
         const fresh = findById(this.db, sandboxId);
         if (fresh?.state === 'restoring') {
           transition(this.db, sandboxId, 'archived');
-          recordActivity(this.db, {
-            kind: 'restore-failed',
-            sandboxName: name,
-            sandboxId,
-            detail: `back to archived, S3 object intact — ${
-              err instanceof Error ? err.message : String(err)
-            }`.slice(0, 300),
-          });
         }
       });
       throw err;

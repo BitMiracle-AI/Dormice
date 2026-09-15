@@ -112,5 +112,6 @@
   "sandboxes_cpu_value": "{v}%(vCPU 1 基あたり)",
   "sandboxes_footer_live": "現在値は 5 秒ごとに更新されます。今回の読み取りは {ago} のものです。",
   "sandboxes_footer_history": "履歴は daemon がバックグラウンドでサンプリングして保存します。スリープ中のサンドボックスも計測され(観察してもウェイクアップしません)、停止後は曲線が正直に途切れます。",
-  "sandboxes_footer_bucketed": "期間が長いため {n} 分単位のバケットに集約しています。各点はバケット内のピーク値です。"
+  "sandboxes_footer_bucketed": "期間が長いため {n} 分単位のバケットに集約しています。各点はバケット内のピーク値です。",
+  "sandboxes_silent_nodes": "ノード {nodes} が応答しませんでした。その上のサンドボックスは一覧にありません"
 }

@@ -1,5 +1,6 @@
 import { readFile, statfs } from 'node:fs/promises';
 import os from 'node:os';
+import type { NodeReading } from '@dormice/shared';
 
 /**
  * Host-side readings for getHostMetrics — the machine's own health, which
@@ -156,5 +157,30 @@ export async function readDiskSpace(
     totalBytes: s.blocks * s.bsize,
     usedBytes: (s.blocks - s.bfree) * s.bsize,
     availableBytes: s.bavail * s.bsize,
+  };
+}
+
+/**
+ * The host half of a node's reading — what getHostMetrics answers and
+ * what a check-in reports, from one function so the two never disagree on
+ * a field: the machine's cores and CPU delta, its memory and swap, and
+ * the data disk that holds the sandbox disks (null until it exists). The
+ * CpuSampler is the caller's: a delta spans "since this instance's last
+ * sample", so each reader owns one (host-metrics route, metrics sampler,
+ * check-in) and none steals another's window.
+ */
+export async function readHostReading(
+  cpu: CpuSampler,
+  dataDir: string,
+): Promise<Pick<NodeReading, 'host' | 'dataDisk'>> {
+  const memory = await readHostMemory();
+  const disk = await readDiskSpace(dataDir);
+  return {
+    host: {
+      cpuCount: os.cpus().length,
+      cpuUsedPct: cpu.sample(),
+      ...memory,
+    },
+    dataDisk: disk ? { path: dataDir, ...disk } : null,
   };
 }

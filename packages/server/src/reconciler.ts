@@ -1,5 +1,4 @@
 import type { SandboxState } from '@dormice/shared';
-import { recordActivity } from './db/activity';
 import type { Db } from './db/db';
 import {
   deleteSandbox,
@@ -138,16 +137,6 @@ export async function reconcile(
       }
     });
 
-  // Every applied repair is history worth explaining: reconciliation is
-  // the actor an operator least expects, so its moves go on the record.
-  const note = (row: SandboxRow, detail: string) =>
-    recordActivity(db, {
-      kind: 'reconciled',
-      sandboxName: row.name,
-      sandboxId: row.id,
-      detail,
-    });
-
   for (const row of rows) {
     onProgress?.();
     const observed = containers.get(row.id);
@@ -158,13 +147,11 @@ export async function reconcile(
         await repairUnderLock(row, async () => {
           await executor.destroy(row.id);
           result.archivedSwept += 1;
-          note(row, 'leftover container of an archived sandbox destroyed');
         });
       } else if (disks.has(row.id)) {
         await repairUnderLock(row, async () => {
           await executor.removeDisk(row.id);
           result.archivedSwept += 1;
-          note(row, 'leftover disk of an archived sandbox removed');
         });
       }
       continue;
@@ -178,20 +165,12 @@ export async function reconcile(
         await repairUnderLock(row, () => {
           overwriteState(db, row.id, LEDGER_STATE[observed]);
           result.repairedStates += 1;
-          note(
-            row,
-            `crashed restore had finished — recorded ${LEDGER_STATE[observed]}`,
-          );
         });
       } else {
         await repairUnderLock(row, async () => {
           await executor.removeDisk(row.id);
           overwriteState(db, row.id, 'archived');
           result.repairedStates += 1;
-          note(
-            row,
-            'crashed restore: half-built disk removed, back to archived',
-          );
         });
       }
       continue;
@@ -206,21 +185,17 @@ export async function reconcile(
           // the shell (the other reader of deaths) is seen as the live
           // container it left, not repaired over from this pass's stale
           // snapshot. recordShellDeath writes what the wake would have:
-          // state, lastExit and the reconciled event, one story.
+          // state and lastExit, one story.
           if (observed === 'stopped') {
             const exit = await executor.exitOf(row.id);
             // Revived under us (or gone — the next pass sees that shape).
             if (exit === null) return;
-            recordShellDeath(db, row, exit, 'by the reconciler', watchers);
+            recordShellDeath(db, row, exit, watchers);
             result.repairedStates += 1;
             return;
           }
           overwriteState(db, row.id, LEDGER_STATE[observed]);
           result.repairedStates += 1;
-          note(
-            row,
-            `container is ${observed} — state ${row.state} corrected to ${LEDGER_STATE[observed]}`,
-          );
         });
       }
     } else if (disks.has(row.id)) {
@@ -230,10 +205,6 @@ export async function reconcile(
           watchers?.disposeSandbox(row.id);
           overwriteState(db, row.id, 'stopped');
           result.repairedStates += 1;
-          note(
-            row,
-            `container gone but disk survives (docker prune?) — recorded stopped, was ${row.state}`,
-          );
         });
       }
     } else {
@@ -241,7 +212,6 @@ export async function reconcile(
         watchers?.disposeSandbox(row.id);
         deleteSandbox(db, row.id);
         result.deletedRows += 1;
-        note(row, 'container and disk both gone — row deleted, key freed');
       });
     }
   }
@@ -254,11 +224,6 @@ export async function reconcile(
     if (priorSuspects === undefined || priorSuspects.has(sandboxId)) {
       await executor.destroy(sandboxId);
       result.destroyedOrphans += 1;
-      recordActivity(db, {
-        kind: 'reconciled',
-        sandboxId,
-        detail: 'unowned container destroyed — no ledger row points at it',
-      });
     } else {
       result.suspects.push(sandboxId);
     }
@@ -271,11 +236,6 @@ export async function reconcile(
     if (priorSuspects === undefined || priorSuspects.has(sandboxId)) {
       await executor.removeDisk(sandboxId);
       result.removedDisks += 1;
-      recordActivity(db, {
-        kind: 'reconciled',
-        sandboxId,
-        detail: 'unowned disk removed — neither a row nor a container owns it',
-      });
     } else {
       result.suspects.push(sandboxId);
     }

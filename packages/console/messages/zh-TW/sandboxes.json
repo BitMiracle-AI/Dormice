@@ -112,5 +112,6 @@
   "sandboxes_cpu_value": "{v}%(以單一 vCPU 計)",
   "sandboxes_footer_live": "目前值每 5 秒重新整理,本次讀數取自 {ago}。",
   "sandboxes_footer_history": "歷史由 daemon 在背景取樣並寫入資料庫;沙箱睡著照樣量測(觀察不喚醒),停止後曲線如實中斷。",
-  "sandboxes_footer_bucketed": "時間範圍較長,已以每 {n} 分鐘為一桶彙整,每點為桶內尖峰。"
+  "sandboxes_footer_bucketed": "時間範圍較長,已以每 {n} 分鐘為一桶彙整,每點為桶內尖峰。",
+  "sandboxes_silent_nodes": "節點 {nodes} 沒有回應,它們上面的沙箱未列出"
 }

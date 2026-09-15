@@ -19,6 +19,12 @@ import { KeyedQueue } from '../keyed-queue';
 import { freezeSandbox, stopSandbox } from '../lifecycle';
 import { sampleOnce } from '../metrics-sampler';
 import { scanOnce } from '../scanner';
+import {
+  configureNode,
+  registerTestTemplate,
+  TEST_S3,
+  type TestConfig,
+} from '../testing';
 import { mintEnvdToken } from './protocol';
 import { WatcherTable } from './watcher-table';
 
@@ -36,6 +42,7 @@ function tickOpts() {
 
 function testApp(
   executor: FakeExecutor = new FakeExecutor(),
+  configured: TestConfig = {},
   env: Record<string, string> = {},
 ) {
   const db = openDb(':memory:');
@@ -46,6 +53,9 @@ function testApp(
     DORMICE_API_TOKEN: TOKEN,
     ...env,
   });
+  // The configuration copy a check-in would have applied (testing.ts);
+  // `env` is for the node's own identity (its base image), nothing else.
+  configureNode(db, configured);
   const locks = new KeyedQueue();
   const watchers = new WatcherTable();
   const app = buildApp({
@@ -86,14 +96,9 @@ async function createSandbox(
   return res.json();
 }
 
-async function registerTemplate(t: TestApp, name: string, image: string) {
-  const res = await t.app.inject({
-    method: 'POST',
-    url: '/registerTemplate',
-    headers: { authorization: `Bearer ${TOKEN}` },
-    payload: { name, image },
-  });
-  expect(res.statusCode).toBe(200);
+/** A template as the gateway's registerTemplate then the next bundle would leave it here. */
+function registerTemplate(t: TestApp, name: string, image: string) {
+  registerTestTemplate(t.db, name, image);
 }
 
 // The envd token derives from the app's ledger-stored signing secret, not
@@ -239,120 +244,6 @@ describe('E2B control plane', () => {
       payload: {},
     });
     expect(bare.statusCode).toBe(201);
-  });
-
-  it('a ledger API key opens the X-API-KEY door too, until revoked', async () => {
-    const t = testApp();
-    // Minted over the native face — the same credential truth serves both.
-    const minted = await t.app.inject({
-      method: 'POST',
-      url: '/createApiKey',
-      headers: { authorization: `Bearer ${TOKEN}` },
-      payload: { name: 'e2b-client' },
-    });
-    const { token, apiKey } = minted.json();
-
-    const prefixed = await t.app.inject({
-      method: 'POST',
-      url: '/e2b/api/sandboxes',
-      headers: { 'x-api-key': `e2b_${token}` },
-      payload: {},
-    });
-    expect(prefixed.statusCode).toBe(201);
-
-    await t.app.inject({
-      method: 'POST',
-      url: '/revokeApiKey',
-      headers: { authorization: `Bearer ${TOKEN}` },
-      payload: { id: apiKey.id },
-    });
-    const revoked = await t.app.inject({
-      method: 'POST',
-      url: '/e2b/api/sandboxes',
-      headers: { 'x-api-key': `e2b_${token}` },
-      payload: {},
-    });
-    expect(revoked.statusCode).toBe(401);
-    expect(revoked.json()).toEqual({ code: 401, message: 'invalid API key' });
-  });
-
-  it('disabled and expired ledger keys are rejected on the X-API-KEY face too', async () => {
-    const t = testApp();
-    const native = { authorization: `Bearer ${TOKEN}` };
-    const useE2b = (token: string) =>
-      t.app.inject({
-        method: 'POST',
-        url: '/e2b/api/sandboxes',
-        headers: { 'x-api-key': `e2b_${token}` },
-        payload: {},
-      });
-
-    const parked = (
-      await t.app.inject({
-        method: 'POST',
-        url: '/createApiKey',
-        headers: native,
-        payload: { name: 'parked' },
-      })
-    ).json();
-    await t.app.inject({
-      method: 'POST',
-      url: '/updateApiKey',
-      headers: native,
-      payload: { id: parked.apiKey.id, disabled: true },
-    });
-    const disabled = await useE2b(parked.token);
-    expect(disabled.statusCode).toBe(401);
-    expect(disabled.json()).toEqual({ code: 401, message: 'invalid API key' });
-
-    const stale = (
-      await t.app.inject({
-        method: 'POST',
-        url: '/createApiKey',
-        headers: native,
-        payload: {
-          name: 'stale',
-          expiresAt: new Date(Date.now() - 1000).toISOString(),
-        },
-      })
-    ).json();
-    const expired = await useE2b(stale.token);
-    expect(expired.statusCode).toBe(401);
-    expect(expired.json()).toEqual({ code: 401, message: 'invalid API key' });
-  });
-
-  it('E2B-created sandboxes attribute to the key that asked', async () => {
-    const t = testApp();
-    const minted = (
-      await t.app.inject({
-        method: 'POST',
-        url: '/createApiKey',
-        headers: { authorization: `Bearer ${TOKEN}` },
-        payload: { name: 'e2b-agent' },
-      })
-    ).json();
-
-    const created = await t.app.inject({
-      method: 'POST',
-      url: '/e2b/api/sandboxes',
-      headers: { 'x-api-key': `e2b_${minted.token}` },
-      payload: {},
-    });
-    expect(created.statusCode).toBe(201);
-
-    // Both faces feed the same identity closure, so the created event names
-    // the key — the same attribution the native Bearer face gets.
-    const events = (
-      await t.app.inject({
-        method: 'POST',
-        url: '/listActivity',
-        headers: { authorization: `Bearer ${TOKEN}` },
-        payload: {},
-      })
-    ).json().events as Array<{ kind: string; actor: string | null }>;
-    expect(events.find((e) => e.kind === 'created')?.actor).toBe(
-      `apikey:${minted.apiKey.id}`,
-    );
   });
 
   it('creates a fresh sandbox per call — E2B semantics, no key given', async () => {
@@ -2395,7 +2286,7 @@ describe('signed file URLs at the daemon root', () => {
 describe('browser-direct signed files: the 49983 subdomain form and CORS', () => {
   const DOMAIN = 'sbx.dormice.test';
   const subdomainApp = () =>
-    testApp(new FakeExecutor(), { DORMICE_SANDBOX_DOMAIN: DOMAIN });
+    testApp(new FakeExecutor(), { sandboxDomain: DOMAIN });
 
   it('answers the preflight open and cacheable — it carries no credentials to judge', async () => {
     const t = testApp();
@@ -2495,13 +2386,8 @@ describe('browser-direct signed files: the 49983 subdomain form and CORS', () =>
   it('an alias domain pins the sandbox at full strength, and never leaks outbound', async () => {
     const t = subdomainApp();
     const ALIAS = 'alias.dormice.test';
-    const set = await t.app.inject({
-      method: 'POST',
-      url: '/updateSettings',
-      headers: { authorization: `Bearer ${TOKEN}` },
-      payload: { sandboxDomainAliases: [ALIAS] },
-    });
-    expect(set.statusCode).toBe(200);
+    // An alias added at the gateway arrives with the next bundle.
+    configureNode(t.db, { sandboxDomainAliases: [ALIAS] });
 
     // Aliases are inbound-only: create responses keep the canonical domain.
     const a = await createSandbox(t);
@@ -2704,20 +2590,20 @@ describe('E2B templates', () => {
     });
   });
 
-  it("'base', the configured base image name, and absence all mean the base image", async () => {
-    const t = testApp(new FakeExecutor(), {
-      DORMICE_BASE_IMAGE: 'dormice-base:test',
-    });
+  it("'base', the fleet's base image name, and absence all mean the base image", async () => {
+    // The fake's own base stands in for the fleet's (the executor's live
+    // view is what the face asks; main.ts wires the copy behind it).
+    const t = testApp();
     for (const payload of [
       {},
       { templateID: 'base' },
-      { templateID: 'dormice-base:test' },
+      { templateID: FAKE_BASE_IMAGE },
     ]) {
       const res = await control(t, 'POST', '/sandboxes', payload);
       expect(res.statusCode).toBe(201);
       const body = res.json();
       // Echo keeps the pre-templates shape: the base image name, no alias.
-      expect(body.templateID).toBe('dormice-base:test');
+      expect(body.templateID).toBe(FAKE_BASE_IMAGE);
       expect(body.alias).toBeUndefined();
       expect(await t.executor.imageOf(body.sandboxID)).toBe(FAKE_BASE_IMAGE);
     }
@@ -2765,9 +2651,9 @@ describe('E2B templates', () => {
 
 describe('E2B surface vs the archiver', () => {
   /**
-   * testApp plus a MemStore-backed archiver — the S3-configured daemon.
-   * The env S3 seed flips the ledger's live adjudication (archiveEnabled);
-   * the MemStore stands in for the S3 those settings describe.
+   * testApp plus a MemStore-backed archiver — the S3-configured node. The
+   * copy's S3 store flips the live adjudication (archiveEnabled); the
+   * MemStore stands in for the S3 those settings describe.
    */
   function archiverTestApp(executor: FakeExecutor = new FakeExecutor()) {
     const db = openDb(':memory:');
@@ -2776,11 +2662,8 @@ describe('E2B surface vs the archiver', () => {
       DORMICE_DB_PATH: ':memory:',
       DORMICE_NODE_ID: 'node-test',
       DORMICE_API_TOKEN: TOKEN,
-      DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
-      DORMICE_S3_BUCKET: 'exam',
-      DORMICE_S3_ACCESS_KEY_ID: 'exam-key',
-      DORMICE_S3_SECRET_ACCESS_KEY: 'exam-secret',
     });
+    configureNode(db, { s3: TEST_S3 });
     const locks = new KeyedQueue();
     const watchers = new WatcherTable();
     const store = new MemStore();

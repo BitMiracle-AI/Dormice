@@ -6,7 +6,7 @@ import { queryClient } from '@/lib/queryClient';
 
 /**
  * updateSettings 的提交半件,运营旋钮卡与归档卡共用:pending/error 状态
- * + 成功 toast 关窗。失败也刷新 config — swap 的 500 语义是"目标已存但
+ * + 成功 toast 关窗。失败也刷新 config — pids 上限的 500 语义是"目标已存但
  * 应用失败",账本真的变了,行里必须立刻说真话;设置页读 config,总览的
  * 容量卡走 getHostMetrics 自己的轮询。
  */

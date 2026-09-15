@@ -1,13 +1,13 @@
 ---
 title: Web console
-description: The daemon serves its own web UI at /console — watch every sandbox live, open terminals, browse files, and manage templates.
+description: The gateway serves the web UI at /console — watch every sandbox live, open terminals, browse files, and manage templates.
 ---
 
-The daemon hosts a web console at `http://127.0.0.1:3676/console` — same
-process, same port, nothing extra to run. Everything it shows comes from
-the same API documented in this section, and it follows the same rule:
-**watching never wakes a sandbox; using one does, and only behind an
-explicit click.**
+The gateway hosts a web console at `http://127.0.0.1:3677/console` —
+same process, same port, nothing extra to run. Everything it shows comes
+from the same API documented in this section, and it follows the same
+rule: **watching never wakes a sandbox; using one does, and only behind
+an explicit click.**
 
 (The console UI is currently Chinese-language.)
 
@@ -29,14 +29,28 @@ account (via the token) invalidates every existing session.
 
 ## Overview
 
-The "is this machine healthy" page: CPU, memory, **swap** and the **data
-disk** as first-class cards — swap filling up means "idle is free" is
-ending, and a full data disk is the real capacity ceiling. Below them:
-sandbox counts by lifecycle state and the disk-overcommit figure
-(promised vs actually occupied — the same numbers as
-[`getHostMetrics`](/docs/metrics)). Usage bars turn amber at 75% and red
-at 90%; a host without swap gets an amber warning pointing at
-`dor doctor`.
+The "how busy is the fleet" page: sandboxes active now, the window's
+concurrency peak, the total by lifecycle state and the disk-overcommit
+figure (promised vs actually occupied — the same numbers as
+[`getFleetMetrics`](/docs/metrics)), the stacked concurrency curve over
+the chosen window, and a nodes card with each machine's CPU, memory and
+data-disk levels. A node that is not checking in is marked as such —
+the figures above are then a lower bound.
+
+## Nodes
+
+Every node that has ever checked in, one row each: reachable or not,
+the build it runs (marked when it differs from the gateway's), CPU,
+memory and data-disk levels, its sandbox census, and its configuration
+version against the gateway's — in sync, behind, or not open yet. The
+row menu sets the one per-node knob (extra swap the node's daemon
+manages on its own data disk) and removes a node that is gone for good;
+the gateway refuses to remove one still checking in. A node's own page
+shows its **swap** and **data disk** beside CPU and memory, each with
+its trend and the window's CPU peak — swap filling up means "idle is
+free" is ending, and a full data disk is the real capacity ceiling.
+Usage bars turn amber at 75% and red at 90%; a host without swap gets an
+amber warning pointing at `dor doctor`.
 
 ## Sandboxes
 
@@ -73,8 +87,8 @@ middle, and a monitor rail on the right, with draggable dividers:
   without waking: the lifecycle card, CPU/memory/disk vitals with
   one-hour sparklines (full 1h/24h/7d trend charts from the daemon's
   [metrics history](/docs/metrics) open in a dialog), the E2B process
-  table (a stopped sandbox honestly shows none), this sandbox's recent
-  lifecycle events, and its identity details.
+  table (a stopped sandbox honestly shows none), and its identity
+  details.
 
 ## Templates
 
@@ -88,7 +102,7 @@ with the daemon's own message naming the sandboxes.
 Mint revocable credentials without leaving the browser
 ([what they are](/docs/http-api#api-keys)). The create dialog takes a
 name and an optional expiry date, then shows the key **exactly once** —
-the daemon stores only a hash — with a copy button, a "copy connection
+the gateway stores only a hash — with a copy button, a "copy connection
 config" button (endpoint + credential, ready for CI secrets), and no
 second chance. The table keeps every key ever minted, revoked ones
 included, as your rotation history: name, masked prefix, creation time,
@@ -97,23 +111,16 @@ revoking), and status. Rows can be edited in place (rename, change or
 clear the expiry), selected in bulk for revocation, and revoking takes
 effect on the key's next request. `DORMICE_API_TOKEN` itself appears as
 a pinned, read-only "default" row so all credentials are visible in one
-table — but it lives in the server's environment, so retiring it means
-editing `/etc/dormice/env`, and it (or a console session) is also the
-only credential the key-management actions themselves accept: keys
-cannot manage keys.
+table — but it lives in the env files (`/etc/dormice/gateway.env` and
+every node's `/etc/dormice/env`), so retiring it means editing those,
+and it (or a console session) is also the only credential the
+key-management actions themselves accept: keys cannot manage keys.
 
-## Activity, domains, settings, and version
+## Domains, settings, and version
 
-Four more pages round out the operator view:
+Three more pages round out the operator view:
 
-- **Activity** — the daemon's recent history (who was created, frozen,
-  destroyed, what the reconciler repaired, which API key was minted or
-  revoked), each event attributed to the credential that asked — an API
-  key by name, the env token, a console session, or "system" for the
-  daemon's own moves. Filterable by event kind, actor, and sandbox
-  name: filtering by a key is how you read a leaked key's blast radius
-  before revoking it. A bounded window, not an audit log.
-- **Domains** — two sections. Console domains bind to the daemon's
+- **Domains** — two sections. Console domains bind to the gateway's
   front door (the managed reverse proxy), with a copyable DNS record
   guide and a live per-domain probe that shows DNS and certificate
   progress until each one turns green — see
@@ -123,28 +130,32 @@ Four more pages round out the operator view:
   URL speaks, plus inbound-only aliases with a "make canonical" action
   for zero-downtime domain switches; a copyable wildcard DNS record
   guide, applied live, no dependency on the managed reverse proxy.
-- **Settings** — two halves. The operational knobs (sandbox capacity
-  cap, default resources for new sandboxes, default lifecycle policy,
-  extra managed [swap](/docs/core-concepts#swap-and-freezing), and the
-  S3 [archive store](/docs/archiving)) live in
-  the daemon's database and are edited right here, taking effect
-  immediately — no restart, no sandbox touched. The swap knob is the one
-  with an asymmetry: growing mounts new swap in seconds, shrinking waits
-  for the next host reboot — active swap is never unmounted, because
-  that would drag every frozen sandbox's memory back into RAM. The
-  archive store card probes the bucket with a real write-read-delete
+- **Settings** — two halves. The operational knobs (default resources
+  for new sandboxes, default lifecycle policy, and the S3
+  [archive store](/docs/archiving)) live in the platform's database and
+  are edited right here, taking effect immediately — no restart, no
+  sandbox touched. The extra managed
+  [swap](/docs/core-concepts#swap-and-freezing) a machine keeps is that
+  machine's own setting, edited per node. The archive store card probes the bucket with a real write-read-delete
   round trip before saving, never shows the keys back, and refuses to
   move or clear the store while sandboxes are archived in it. Everything
   else is the effective environment configuration, read-only, with
   secrets shown as present-or-absent only; changing those happens in
   `/etc/dormice/env` plus a restart, never from the browser.
-- **Version** — the build the daemon is running (a git commit — trunk
+- **Settings** also carries the fleet's **base image** row: the image a
+  template-less sandbox boots from, re-pointed here (push the new image
+  to the fleet registry first; every node pulls it ahead and swaps each
+  template-less sandbox at its next cold wake).
+- **Version** — the build the gateway is running (a git commit — trunk
   commit titles are the changelog) compared against the latest, with a
-  one-click [upgrade](/docs/upgrading) and live progress where the host
-  supports it. The console also checks once when you open it: if an
-  upgrade is available, a dialog shows what it would bring — dismiss it
-  for this visit, or ignore that version until a newer one appears. The
-  sidebar badge stays lit either way, until you actually upgrade.
+  one-click [fleet upgrade](/docs/upgrading#upgrade-a-fleet) and live
+  progress where the host supports it, and a table of every node's
+  standing against the gateway's build: current, behind, upgrading,
+  stuck (with a **Try again** button), or why it cannot upgrade itself.
+  The console also checks once when you open it: if an upgrade is
+  available, a dialog shows what it would bring — dismiss it for this
+  visit, or ignore that version until a newer one appears. The sidebar
+  badge stays lit either way, until you actually upgrade.
 
 A command palette (⌘K) jumps to any page or sandbox.
 
@@ -153,8 +164,8 @@ A command palette (⌘K) jumps to any page or sandbox.
 Copy-paste snippets for the SDK, the official E2B packages, and curl,
 pre-filled with the endpoint the browser itself is using. The API token
 is never displayed — the console does not hold it and cannot read it
-back; fetch it from the daemon host
-(`grep ^DORMICE_API_TOKEN /etc/dormice/env`).
+back; fetch it from the gateway machine
+(`grep ^DORMICE_API_TOKEN /etc/dormice/gateway.env`).
 
 ## What you will not find
 

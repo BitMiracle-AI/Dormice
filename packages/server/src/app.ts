@@ -1,8 +1,11 @@
 import http from 'node:http';
 import nodePath from 'node:path';
-import { apiKeyActor, ENV_TOKEN_ACTOR } from '@dormice/shared';
-import fastifyCookie from '@fastify/cookie';
-import fastify, { type FastifyError, type FastifyServerFactory } from 'fastify';
+import { GATEWAY_ONLY_VERBS } from '@dormice/shared';
+import fastify, {
+  type FastifyError,
+  type FastifyServerFactory,
+  LogController,
+} from 'fastify';
 import {
   serializerCompiler,
   validatorCompiler,
@@ -11,37 +14,28 @@ import {
 import { type Logger, pino } from 'pino';
 import { z } from 'zod';
 import type { Archiver } from './archive/archiver';
-import type { S3Settings } from './archive/s3-store';
-import { requireAdminAuth, requireApiAuth, tokensEqual } from './auth';
-import { type Config, type ConfigSources, configSources } from './config';
-import { getConsoleAccount } from './db/account';
-import { isLiveApiKey, verifyApiKeyToken } from './db/api-keys';
+import { requireApiAuth, tokensEqual } from './auth';
+import type { Config } from './config';
 import type { Db } from './db/db';
 import { getOrCreateSigningSecret } from './db/secrets';
-import { ensureRuntimeSettings } from './db/settings';
 import { registerE2bCompat } from './e2b';
 import { ProcessTable } from './e2b/process-table';
 import { WatcherTable } from './e2b/watcher-table';
 import type { Executor } from './executor/executor';
-import type { Ingress } from './ingress';
 import type { KeyedQueue } from './keyed-queue';
-import { activityRoutes } from './routes/activity';
-import { apiKeyRoutes } from './routes/api-keys';
-import { configRoutes } from './routes/config';
-import { consoleRoutes } from './routes/console';
+import { envdTokenRoutes } from './routes/envd-token';
 import { hostRoutes } from './routes/host';
-import { ingressRoutes } from './routes/ingress';
+import { lookupRoutes } from './routes/lookup';
 import { sandboxRoutes } from './routes/sandboxes';
-import { settingsRoutes } from './routes/settings';
-import { templateRoutes } from './routes/templates';
+import { templateUsersRoutes } from './routes/template-users';
 import { upgradeRoutes } from './routes/upgrade';
 import { createSandboxProxy } from './sandbox-proxy';
-import type { SwapControl } from './swap';
 import { Updater } from './updater';
 import { readBuildInfo } from './version';
 
 export interface AppDeps {
   config: Config;
+  /** The ledger, holding a configuration copy (db/settings.ts applyNodeConfig) — main.ts waits for one before building the app; tests apply one. */
   db: Db;
   executor: Executor;
   /**
@@ -59,44 +53,14 @@ export interface AppDeps {
   /** Tests may inspect the one daemon-wide watcher registry. */
   watchers?: WatcherTable;
   /**
-   * Where the built web console lives; main.ts resolves the monorepo
-   * layout, tests inject a fixture. Absent means /console answers an
-   * honest 404.
-   */
-  consoleDistDir?: string;
-  /**
    * The archive/restore engine. Whether archiving is AVAILABLE is not its
-   * presence but its enabled() — a live read of the ledger's S3 settings,
-   * so the console can switch archiving on and off without a restart.
+   * presence but its enabled() — a live read of the copy's S3 settings,
+   * so a bundle that turns archiving on applies without a restart.
    * Optional purely as a test convenience: many app tests exercise no
    * archive path, and to them an absent archiver equals a disabled one
    * (both make archiveEnabled(db) the sole adjudicator refuse).
    */
   archiver?: Archiver;
-  /**
-   * The managed reverse-proxy front door, present exactly when
-   * DORMICE_INGRESS_FILE is set (same rule as the archiver). Absent,
-   * getIngress answers { managed: false } and setIngress refuses.
-   */
-  ingress?: Ingress;
-  /**
-   * The managed-swap surface, present exactly when the daemon can manage
-   * swap — main.ts builds one on Linux with the docker executor. Absent,
-   * getConfig reports { supported: false } and a swapGb patch is refused.
-   */
-  swap?: SwapControl;
-  /**
-   * Test seam over updateSettings' S3 round-trip probe (routes/settings.ts)
-   * — a unit test forges S3's answers instead of needing a live store.
-   * Production omits it and probes for real.
-   */
-  probeS3?: (s3: S3Settings) => Promise<void>;
-  /**
-   * Which knobs came from the environment versus defaults, for getConfig.
-   * Defaults to reading process.env — right for the daemon; tests that
-   * assert on sources inject a fixed map instead of trusting the shell.
-   */
-  sources?: ConfigSources;
   /**
    * The daemon's own upgrade window. main.ts injects one that knows the
    * checkout the daemon runs from; the default knows no checkout, so
@@ -113,9 +77,31 @@ export interface AppDeps {
  * exports), so request validation, TypeScript types and — later — OpenAPI
  * docs all derive from a single definition.
  *
+ * The node's face (design record #22, 2026-09-14): the sandbox verbs, the
+ * host's observation verbs, its own upgrade, and the two read-only
+ * questions its gateway asks on its own account (lookupSandbox,
+ * templateUsers) — behind one credential, the fleet token. Everything
+ * that configures the fleet (settings, templates, API keys, domains, the
+ * console and its sessions) is the gateway's; a key a caller presents is
+ * judged there, and toward this node the gateway speaks the fleet token.
+ *
  * Building the app is separate from listening so tests can inject requests
  * without opening a port.
  */
+/**
+ * The daemon's own reason one-click is off: an upgrade is a real
+ * install's move (install.sh, systemd, a Docker host), never a test
+ * double's — an e2e daemon on the fake executor must not be able to
+ * re-run install.sh on a developer's machine.
+ */
+export function fakeExecutorUnavailable(
+  executor: 'fake' | 'docker',
+): string | undefined {
+  return executor === 'docker'
+    ? undefined
+    : 'one-click upgrade is for a real install (docker executor) — this daemon runs the fake executor';
+}
+
 export function buildApp({
   config,
   db,
@@ -123,25 +109,14 @@ export function buildApp({
   locks,
   logger = true,
   watchers = new WatcherTable(),
-  consoleDistDir,
   archiver,
-  ingress,
-  swap,
-  probeS3,
-  sources = configSources(),
   updater = new Updater({
     repoDir: null,
     build: readBuildInfo(),
     statusDir: nodePath.join(config.DORMICE_DATA_DIR, 'upgrade'),
-    executor: config.DORMICE_EXECUTOR,
+    unavailable: fakeExecutorUnavailable(config.DORMICE_EXECUTOR),
   }),
 }: AppDeps) {
-  // Idempotent get-or-seed: main.ts already ran it (the executor reads
-  // settings before buildApp), tests build the app directly and need it here.
-  // "Is archiving available" is no longer adjudicated here — it lives in the
-  // ledger settings and every consumer reads it live (db/settings.ts
-  // archiveEnabled), so a console edit applies without a restart.
-  ensureRuntimeSettings(db, config);
   // Always a pino instance (booleans are normalized into one): two fastify()
   // call shapes would give the instance two different types.
   const loggerInstance =
@@ -153,8 +128,8 @@ export function buildApp({
   // The sandbox port proxy sits in front of routing — it triages by Host
   // header, so it must see the request before Fastify's router 404s a
   // wildcard host's arbitrary path. Mounted unconditionally: the domain is
-  // a live ledger setting now, so the proxy must already be in the path
-  // when the operator sets one — with no domain in force, matches() is
+  // a live setting of the copy, so the proxy must already be in the path
+  // when a bundle sets one — with no domain in force, matches() is
   // constantly false and the upgrade hook destroys non-matching sockets
   // exactly as stock Fastify (which never handles upgrades) would.
   // app.inject() bypasses the factory, so the proxy is exercised over real
@@ -176,6 +151,10 @@ export function buildApp({
   const app = fastify({
     loggerInstance,
     serverFactory,
+    // Fastify's two lines per request ("incoming request", "request
+    // completed") are off; the onResponse hook below says what a request
+    // is worth saying.
+    logController: new LogController({ disableRequestLogging: true }),
   }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -206,10 +185,50 @@ export function buildApp({
     }
     reply.code(status).send({ message: error.message });
   });
+
+  // One line per request that ended in an error status, none for the
+  // rest: a healthy daemon's log is what happened to it, not every poll
+  // it answered (with Fastify's own two lines per request the Beijing
+  // node wrote 74 a second and journald kept 22 hours, measured
+  // 2026-09-15; they are off above). A 4xx names the caller's mistake
+  // (info); a 5xx is ours (warn) — its error and stack are the error
+  // handler's line, this one carries what that line lacks with the
+  // request logging off: which request. The path without its query: a
+  // signed URL's signature and an envd access token travel there
+  // (security rule 5). Nothing about slow requests, on purpose: an
+  // execCommand or an attached process stream is legitimately long, and
+  // a Docker that hangs surfaces as a 5xx through the deadlines
+  // (executor/deadline.ts).
+  app.addHook('onResponse', async (request, reply) => {
+    const status = reply.statusCode;
+    if (status < 400) return;
+    request.log[status >= 500 ? 'warn' : 'info'](
+      {
+        method: request.method,
+        path: request.url.split('?')[0],
+        statusCode: status,
+        elapsedMs: Math.round(reply.elapsedTime),
+      },
+      'request ended in an error status',
+    );
+  });
+  // A verb that answers at the gateway alone, asked of a node: the 404
+  // names the door. The emergency path is ssh to a node and curl its
+  // loopback with the fleet token, and an operator on it asking for the
+  // keys or the settings should be sent to where they live, not left
+  // with a plain "not found" (shared GATEWAY_ONLY_VERBS; the console too,
+  // which a node has not served since the second cut).
   app.setNotFoundHandler((request, reply) => {
-    reply
-      .code(404)
-      .send({ message: `route ${request.method} ${request.url} not found` });
+    const path = request.url.split('?')[0] ?? request.url;
+    const atGateway =
+      (GATEWAY_ONLY_VERBS as readonly string[]).includes(path.slice(1)) ||
+      path === '/console' ||
+      path.startsWith('/console/');
+    reply.code(404).send({
+      message: atGateway
+        ? `${path} answers at the gateway (${config.DORMICE_GATEWAY_ENDPOINT}), not on a node`
+        : `route ${request.method} ${request.url} not found`,
+    });
   });
 
   // Liveness probe: open by design (probes have no secrets), everything
@@ -226,51 +245,18 @@ export function buildApp({
     async () => ({ status: 'ok' as const }),
   );
 
-  // Cookie parsing app-wide: the auth arbiter reads the console's session
-  // cookie on the native routes, the /console surface mints and clears it.
-  app.register(fastifyCookie);
+  // The one adjudication of "does this bare credential open the door":
+  // the fleet token, constant-time compared — the only credential a node
+  // knows. Minted API keys are the gateway's to judge; it forwards under
+  // this token. Both faces — the native Bearer header and the E2B
+  // X-API-KEY hook — feed this same closure: one truth, two dialects. No
+  // session leg: the console lives at the gateway, so no cookie is ever
+  // valid here.
+  const isCredential = (bare: string): boolean =>
+    tokensEqual(bare, config.DORMICE_API_TOKEN);
+  const apiAuth = requireApiAuth(isCredential, () => null);
 
-  // Attribution rides the request from the auth hook that admitted it into
-  // every recordActivity the handler reaches. Declared once so the property
-  // shape is stable; null is what unauthenticated surfaces keep.
-  app.decorateRequest('actor', null);
-
-  // The one adjudication of "does this bare credential open the door" —
-  // and of who it is (the two are the same act, so identity is captured
-  // here, not re-derived later): the env token (constant-time compare —
-  // the bootstrap credential, always valid) or any active ledger API key
-  // (sha256 indexed lookup, judged per request so a mint or revoke takes
-  // effect on the very next call). Both faces — the native Bearer header
-  // and the E2B X-API-KEY hook — feed this same closure: one truth, two
-  // dialects.
-  const identifyCredential = (bare: string): string | null => {
-    if (tokensEqual(bare, config.DORMICE_API_TOKEN)) {
-      return ENV_TOKEN_ACTOR;
-    }
-    const keyId = verifyApiKeyToken(db, bare);
-    return keyId === null ? null : apiKeyActor(keyId);
-  };
-
-  // Built once, used by every guarded surface. The secret getter reads the
-  // ledger per request because setup can replace the account (and void its
-  // sessions) while the daemon runs — a captured value would keep dead
-  // sessions alive until restart.
-  const apiAuth = requireApiAuth(
-    identifyCredential,
-    () => getConsoleAccount(db)?.sessionSecret ?? null,
-  );
-
-  // The apiKey verbs are admin-only: a credential must not be able to
-  // manage the credential ledger it lives in (key-manages-key is a
-  // self-replication ladder for a leaked key). Env token or console
-  // session only; a live ledger key gets an honest 403, not a silent 401.
-  const adminAuth = requireAdminAuth(
-    (bare) => tokensEqual(bare, config.DORMICE_API_TOKEN),
-    (bare) => isLiveApiKey(db, bare),
-    () => getConsoleAccount(db)?.sessionSecret ?? null,
-  );
-
-  // The envd/signed-URL derivation base. Captured once — unlike the session
+  // The envd/signed-URL derivation base. Captured once — unlike a session
   // secret there is no verb that rotates it (see db/secrets.ts) — and NOT
   // the API token: the two credentials must rotate independently.
   const envdSigningSecret = getOrCreateSigningSecret(db);
@@ -285,47 +271,11 @@ export function buildApp({
       watchers,
       archiver,
     });
-    await api.register(templateRoutes, { db });
+    await api.register(lookupRoutes, { db, locks, envdSigningSecret });
+    await api.register(templateUsersRoutes, { db });
     await api.register(hostRoutes, { config, db, executor });
-    await api.register(activityRoutes, { db });
-    await api.register(ingressRoutes, { db, ingress });
-    await api.register(configRoutes, {
-      config,
-      db,
-      sources,
-      swap,
-    });
-    await api.register(upgradeRoutes, { updater, db });
-  });
-
-  // The apiKey management verbs and updateSettings sit behind the stricter
-  // admin gate — their own scope, because a Fastify hook guards a whole
-  // scope and these verbs share a different answer to "who may call":
-  // credentials must not manage credentials, and a leaked automation key
-  // must not be able to raise the very limits that contain it.
-  app.register(async (admin) => {
-    admin.addHook('onRequest', adminAuth);
-    await admin.register(apiKeyRoutes, { db });
-    await admin.register(settingsRoutes, {
-      db,
-      executor,
-      locks,
-      swap,
-      ...(probeS3 ? { probeS3 } : {}),
-    });
-  });
-
-  // The web console: account + session endpoints (open — setup and login
-  // carry the credentials themselves) and the static SPA. Its API calls go
-  // through the routes above.
-  app.register(async (scope) => {
-    await scope.register(consoleRoutes, {
-      config,
-      db,
-      apiAuth,
-      consoleDistDir,
-      envdSigningSecret,
-    });
+    await api.register(upgradeRoutes, { updater });
+    await api.register(envdTokenRoutes, { envdSigningSecret });
   });
 
   // The E2B compatibility surface lives beside the native API with its own
@@ -340,7 +290,7 @@ export function buildApp({
       watchers,
       archiver,
       envdSigningSecret,
-      identifyCredential,
+      isCredential,
     });
   });
 

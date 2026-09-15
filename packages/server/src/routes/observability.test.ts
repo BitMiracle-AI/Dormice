@@ -1,71 +1,44 @@
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  type ActivityEvent,
-  type ConfigEntry,
-  getConfigResponseSchema,
-  getFleetTimelineResponseSchema,
   getHostMetricsHistoryResponseSchema,
   getSandboxMetricsHistoryResponseSchema,
   getSandboxMetricsResponseSchema,
-  listActivityResponseSchema,
   listSandboxImagesResponseSchema,
   listSandboxMetricsResponseSchema,
 } from '@dormice/shared';
-import { count } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from '../app';
-import { Archiver } from '../archive/archiver';
-import { MemStore } from '../archive/mem-store';
-import { CONFIG_KEYS, type ConfigSources, loadConfig } from '../config';
-import { ACTIVITY_KEEP, recordActivity } from '../db/activity';
+import { loadConfig } from '../config';
 import { migrateDb, openDb } from '../db/db';
-import { insertMetricsTick, MAX_POINTS } from '../db/metrics';
-import { activity } from '../db/schema';
+import { insertMetricsTick } from '../db/metrics';
 import { FAKE_BASE_IMAGE, FakeExecutor } from '../executor/fake';
+import { MAX_POINTS } from '../history';
 import { CpuSampler, type HostSample } from '../host-metrics';
 import { KeyedQueue } from '../keyed-queue';
 import { freezeSandbox, stopSandbox } from '../lifecycle';
 import { sampleOnce } from '../metrics-sampler';
-import { ARCHIVE_DEFAULT_SECONDS } from '../policy';
-import { reconcile } from '../reconciler';
-import { scanOnce } from '../scanner';
+import { configureNode, registerTestTemplate } from '../testing';
 
-// The three observability verbs, app-level: getConfig, listActivity,
-// getSandboxMetrics — the console's food, so the tests eat exactly what a
-// browser would.
+// The observability verbs, app-level: getSandboxMetrics, the history
+// windows and the image lineage — the console's food, so the tests eat
+// exactly what a browser would.
 
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
 const authed = { authorization: `Bearer ${TOKEN}` };
 
-/** All-defaults source map; tests override the keys they assert on. */
-function fixedSources(overrides: Partial<ConfigSources> = {}): ConfigSources {
-  const all = Object.fromEntries(
-    Object.keys(CONFIG_KEYS).map((key) => [key, 'default']),
-  ) as ConfigSources;
-  return { ...all, ...overrides, DORMICE_API_TOKEN: 'env' };
-}
-
-function testApp(env: Record<string, string> = {}) {
+function testApp() {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
   const config = loadConfig({
     DORMICE_DB_PATH: ':memory:',
     DORMICE_NODE_ID: 'node-test',
     DORMICE_API_TOKEN: TOKEN,
-    ...env,
   });
+  configureNode(db);
   const executor = new FakeExecutor();
   const locks = new KeyedQueue();
-  const sources = fixedSources(
-    Object.fromEntries(
-      Object.keys(env).map((key) => [key, 'env']),
-    ) as Partial<ConfigSources>,
-  );
-  const app = buildApp({ config, db, executor, locks, logger: false, sources });
+  const app = buildApp({ config, db, executor, locks, logger: false });
   return { app, db, executor, locks };
 }
 
@@ -73,12 +46,6 @@ type App = ReturnType<typeof testApp>['app'];
 
 function rpc(app: App, url: string, payload: Record<string, unknown> = {}) {
   return app.inject({ method: 'POST', url, headers: authed, payload });
-}
-
-async function events(app: App): Promise<ActivityEvent[]> {
-  const res = await rpc(app, '/listActivity');
-  expect(res.statusCode).toBe(200);
-  return listActivityResponseSchema.parse(res.json()).events;
 }
 
 // One tick's non-sandbox inputs. A fresh CpuSampler per call is fine: its
@@ -108,175 +75,6 @@ function hostReading(cpuUsedPct: number | null): HostSample {
     diskAvailableBytes: null,
   };
 }
-
-describe('getConfig', () => {
-  it('reports every knob with value and source, and validates', async () => {
-    const { app } = testApp({ DORMICE_MAX_SANDBOXES: '7' });
-    const res = await rpc(app, '/getConfig');
-    expect(res.statusCode).toBe(200);
-    const body = getConfigResponseSchema.parse(res.json());
-
-    const byKey = new Map(body.entries.map((e: ConfigEntry) => [e.key, e]));
-    // Complete: one entry per knob the config schema knows.
-    expect(body.entries).toHaveLength(Object.keys(CONFIG_KEYS).length);
-    expect(byKey.get('DORMICE_MAX_SANDBOXES')).toMatchObject({
-      value: '7',
-      source: 'env',
-    });
-    expect(byKey.get('DORMICE_PORT')).toMatchObject({
-      value: '3676',
-      source: 'default',
-    });
-    // Optional and unset: honestly null, not invented.
-    expect(byKey.get('DORMICE_SANDBOX_DOMAIN')).toMatchObject({ value: null });
-  });
-
-  it('withholds secrets, reporting only their presence', async () => {
-    const { app } = testApp();
-    const body = getConfigResponseSchema.parse(
-      (await rpc(app, '/getConfig')).json(),
-    );
-    const token = body.entries.find(
-      (e: ConfigEntry) => e.key === 'DORMICE_API_TOKEN',
-    );
-    expect(token).toMatchObject({ value: null, redacted: true });
-    // The raw token must appear nowhere in the whole response.
-    expect(JSON.stringify(body)).not.toContain(TOKEN);
-  });
-
-  it('adjudicates archive availability: off without an archiver', async () => {
-    const { app } = testApp();
-    const body = getConfigResponseSchema.parse(
-      (await rpc(app, '/getConfig')).json(),
-    );
-    expect(body.archive).toEqual({ enabled: false, defaultSeconds: null });
-  });
-
-  it('reports the archive default when an S3 store is configured', async () => {
-    // The adjudication is the ledger's, seeded here from the env S3 set.
-    const db = openDb(':memory:');
-    migrateDb(db, MIGRATIONS);
-    const executor = new FakeExecutor();
-    const locks = new KeyedQueue();
-    const config = loadConfig({
-      DORMICE_DB_PATH: ':memory:',
-      DORMICE_API_TOKEN: TOKEN,
-      DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
-      DORMICE_S3_BUCKET: 'exam',
-      DORMICE_S3_ACCESS_KEY_ID: 'exam-key',
-      DORMICE_S3_SECRET_ACCESS_KEY: 'exam-secret',
-    });
-    const archiver = new Archiver({
-      db,
-      executor,
-      locks,
-      store: new MemStore(),
-      tmpDir: mkdtempSync(path.join(tmpdir(), 'dormice-obs-')),
-    });
-    const app = buildApp({
-      config,
-      db,
-      executor,
-      locks,
-      logger: false,
-      sources: fixedSources(),
-      archiver,
-    });
-    const body = getConfigResponseSchema.parse(
-      (await rpc(app, '/getConfig')).json(),
-    );
-    expect(body.archive).toEqual({
-      enabled: true,
-      defaultSeconds: ARCHIVE_DEFAULT_SECONDS,
-    });
-  });
-});
-
-describe('listActivity', () => {
-  it('records create, wake, cooling and release, newest first', async () => {
-    const { app, db, executor, locks } = testApp();
-    const res = await rpc(app, '/acquireSandbox', {
-      name: 'story',
-      policy: { freezeAfterSeconds: 5, stopAfterSeconds: 10 },
-    });
-    expect(res.statusCode).toBe(200);
-    const created = res.json().sandbox;
-
-    // Cool it two rungs by time travel, then wake it back through acquire.
-    await scanOnce(
-      db,
-      executor,
-      locks,
-      new Date(Date.parse(created.lastActiveAt) + 6_000),
-    );
-    await scanOnce(
-      db,
-      executor,
-      locks,
-      new Date(Date.parse(created.lastActiveAt) + 11_000),
-    );
-    await rpc(app, '/acquireSandbox', { name: 'story' });
-    await rpc(app, '/destroySandbox', { name: 'story' });
-
-    const log = await events(app);
-    expect(log.map((e) => e.kind)).toEqual([
-      'destroyed',
-      'woken',
-      'stopped',
-      'frozen',
-      'created',
-    ]);
-    // Every event names its sandbox, and the scanner names its threshold.
-    expect(new Set(log.map((e) => e.sandboxName))).toEqual(new Set(['story']));
-    expect(log.find((e) => e.kind === 'frozen')?.detail).toContain('scanner');
-    expect(log.find((e) => e.kind === 'created')?.detail).toContain(
-      'acquireSandbox',
-    );
-  });
-
-  it('records what reconciliation repaired', async () => {
-    const { app, db, executor, locks } = testApp();
-    await rpc(app, '/acquireSandbox', { name: 'doomed' });
-    const { sandboxes } = (await rpc(app, '/listSandboxes')).json();
-    // Reality loses both container and disk behind the ledger's back.
-    await executor.destroy(sandboxes[0].id);
-    await reconcile(db, executor, locks);
-
-    const log = await events(app);
-    expect(log[0]).toMatchObject({ kind: 'reconciled', sandboxName: 'doomed' });
-    expect(log[0]?.detail).toContain('row deleted');
-  });
-
-  it('honors the limit and keeps the ring bounded', async () => {
-    const { app, db } = testApp();
-    for (let i = 0; i < ACTIVITY_KEEP + 50; i += 1) {
-      recordActivity(db, { kind: 'daemon-started', detail: `tick ${i}` });
-    }
-    const page = listActivityResponseSchema.parse(
-      (await rpc(app, '/listActivity', { limit: 3 })).json(),
-    ).events;
-    expect(page).toHaveLength(3);
-    expect(page[0]?.detail).toBe(`tick ${ACTIVITY_KEEP + 49}`);
-
-    // The bound must live in the TABLE, not in the page clamp: a missing
-    // prune with limit=1000 would return the same page — count the rows.
-    const total = db.select({ n: count() }).from(activity).get() as {
-      n: number;
-    };
-    expect(total.n).toBe(ACTIVITY_KEEP);
-    const all = listActivityResponseSchema.parse(
-      (await rpc(app, '/listActivity', { limit: 1000 })).json(),
-    ).events;
-    // The oldest 50 fell off the ring.
-    expect(all.at(-1)?.detail).toBe('tick 50');
-  });
-
-  it('rejects an out-of-range limit', async () => {
-    const { app } = testApp();
-    const res = await rpc(app, '/listActivity', { limit: 0 });
-    expect(res.statusCode).toBe(400);
-  });
-});
 
 describe('getSandboxMetrics', () => {
   it('answers a single sample for a running sandbox', async () => {
@@ -397,14 +195,6 @@ describe('getSandboxMetricsHistory', () => {
       insertMetricsTick(db, {
         at: new Date(t0 + i * 30_000).toISOString(),
         host: HOST,
-        fleetCounts: {
-          active: 1,
-          frozen: 0,
-          stopped: 0,
-          archived: 0,
-          restoring: 0,
-          total: 1,
-        },
         // One reading spikes; every neighbor idles. Averaging would bury it.
         samples: [
           {
@@ -428,103 +218,6 @@ describe('getSandboxMetricsHistory', () => {
     const times = samples.map((s) => Date.parse(s.timestamp));
     expect([...times].sort((a, b) => a - b)).toEqual(times);
     expect(Math.max(...samples.map((s) => s.cpuUsedPct))).toBe(95);
-  });
-});
-
-describe('getFleetTimeline', () => {
-  it('answers an empty window with no points and a null peak', async () => {
-    const { app } = testApp();
-    const res = await rpc(app, '/getFleetTimeline', {});
-    expect(res.statusCode).toBe(200);
-    const body = getFleetTimelineResponseSchema.parse(res.json());
-    expect(body).toEqual({ points: [], bucketSeconds: null, peak: null });
-  });
-
-  it('returns snapshots ascending with byState summing to total', async () => {
-    const { app, db, executor } = testApp();
-    await rpc(app, '/acquireSandbox', { name: 'one' });
-    const t0 = Date.parse('2026-07-15T10:00:00.000Z');
-    await sampleOnce(db, executor, new Date(t0), tickOpts());
-    await rpc(app, '/acquireSandbox', { name: 'two' });
-    await sampleOnce(db, executor, new Date(t0 + 30_000), tickOpts());
-
-    const res = await rpc(app, '/getFleetTimeline', {
-      start: new Date(t0 - 1000).toISOString(),
-      end: new Date(t0 + 60_000).toISOString(),
-    });
-    const { points, bucketSeconds, peak } =
-      getFleetTimelineResponseSchema.parse(res.json());
-    expect(bucketSeconds).toBe(null);
-    expect(points.map((p) => p.at)).toEqual([
-      new Date(t0).toISOString(),
-      new Date(t0 + 30_000).toISOString(),
-    ]);
-    for (const point of points) {
-      const sum = Object.values(point.byState).reduce((a, b) => a + b, 0);
-      expect(sum).toBe(point.total);
-    }
-    expect(peak).toEqual({
-      active: 2,
-      at: new Date(t0 + 30_000).toISOString(),
-    });
-  });
-
-  it('computes the peak from raw rows — bucketing cannot flatten it', async () => {
-    const { app, db } = testApp();
-    const t0 = Date.parse('2026-07-15T00:00:00.000Z');
-    const counts = (active: number) => ({
-      active,
-      frozen: 0,
-      stopped: 0,
-      archived: 0,
-      restoring: 0,
-      total: active,
-    });
-    const rows = MAX_POINTS + 40;
-    for (let i = 0; i < rows; i += 1) {
-      insertMetricsTick(db, {
-        at: new Date(t0 + i * 30_000).toISOString(),
-        host: HOST,
-        fleetCounts: counts(1),
-        samples: [],
-        retentionHours: 168,
-      });
-    }
-    // A spike squeezed between two grid rows of its own bucket: the bucket
-    // keeps its LAST whole snapshot, so no point ever shows 9 — the peak
-    // field is the only honest carrier.
-    insertMetricsTick(db, {
-      at: new Date(t0 + 200 * 30_000 + 1000).toISOString(),
-      host: HOST,
-      fleetCounts: counts(9),
-      samples: [],
-      retentionHours: 168,
-    });
-    insertMetricsTick(db, {
-      at: new Date(t0 + 200 * 30_000 + 2000).toISOString(),
-      host: HOST,
-      fleetCounts: counts(1),
-      samples: [],
-      retentionHours: 168,
-    });
-
-    const res = await rpc(app, '/getFleetTimeline', {
-      start: new Date(t0).toISOString(),
-      end: new Date(t0 + rows * 30_000).toISOString(),
-    });
-    const { points, bucketSeconds, peak } =
-      getFleetTimelineResponseSchema.parse(res.json());
-    expect(bucketSeconds).not.toBe(null);
-    expect(points.length).toBeLessThanOrEqual(MAX_POINTS);
-    expect(peak).toEqual({
-      active: 9,
-      at: new Date(t0 + 200 * 30_000 + 1000).toISOString(),
-    });
-    // Whole-snapshot buckets: sums still hold after bucketing.
-    for (const point of points) {
-      const sum = Object.values(point.byState).reduce((a, b) => a + b, 0);
-      expect(sum).toBe(point.total);
-    }
   });
 });
 
@@ -582,14 +275,6 @@ describe('getHostMetricsHistory', () => {
         at: new Date(t0 + i * 30_000).toISOString(),
         // One reading spikes; every neighbor idles. Averaging would bury it.
         host: hostReading(i === 200 ? 95 : 5),
-        fleetCounts: {
-          active: 0,
-          frozen: 0,
-          stopped: 0,
-          archived: 0,
-          restoring: 0,
-          total: 0,
-        },
         samples: [],
         retentionHours: 168,
       });
@@ -617,25 +302,15 @@ describe('getHostMetricsHistory', () => {
   it('a null-CPU tick never competes for the peak', async () => {
     const { app, db } = testApp();
     const t0 = Date.parse('2026-07-15T10:00:00.000Z');
-    const counts = {
-      active: 0,
-      frozen: 0,
-      stopped: 0,
-      archived: 0,
-      restoring: 0,
-      total: 0,
-    };
     insertMetricsTick(db, {
       at: new Date(t0).toISOString(),
       host: hostReading(null),
-      fleetCounts: counts,
       samples: [],
       retentionHours: 168,
     });
     insertMetricsTick(db, {
       at: new Date(t0 + 30_000).toISOString(),
       host: hostReading(40),
-      fleetCounts: counts,
       samples: [],
       retentionHours: 168,
     });
@@ -718,8 +393,8 @@ describe('listSandboxImages', () => {
   }
 
   it('walks a template upgrade: in sync, left behind, rebuilt, in sync again', async () => {
-    const { app } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const { app, db } = testApp();
+    registerTestTemplate(db, 'py', 'img-v1');
     const created = (
       await rpc(app, '/acquireSandbox', { name: 'alice', template: 'py' })
     ).json().sandbox;
@@ -735,8 +410,9 @@ describe('listSandboxImages', () => {
       },
     ]);
 
-    // Re-registering moves nextImage; the live shell honestly stays behind.
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+    // Re-pointing the template (the gateway's registerTemplate, arriving
+    // with the next bundle) moves nextImage; the live shell stays behind.
+    registerTestTemplate(db, 'py', 'img-v2');
     expect(await images(app)).toMatchObject([
       { image: 'img-v1', nextImage: 'img-v2', upgradable: true },
     ]);
@@ -765,13 +441,13 @@ describe('listSandboxImages', () => {
 
   it('answers every row: a stopped shell keeps its old image, honestly upgradable', async () => {
     const { app, db, executor } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    registerTestTemplate(db, 'py', 'img-v1');
     const created = (
       await rpc(app, '/acquireSandbox', { name: 'cold', template: 'py' })
     ).json().sandbox;
     await freezeSandbox(db, executor, created.id);
     await stopSandbox(db, executor, created.id);
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+    registerTestTemplate(db, 'py', 'img-v2');
 
     // The exited container is still the shell: waking it would boot the old
     // image, so the row is honestly reported as upgradable.

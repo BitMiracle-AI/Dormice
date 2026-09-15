@@ -112,5 +112,6 @@
   "sandboxes_cpu_value": "{v}% (per single vCPU)",
   "sandboxes_footer_live": "Live values refresh every 5 seconds; this reading is from {ago}.",
   "sandboxes_footer_history": "History is sampled and stored by the daemon in the background; a sleeping sandbox is still measured (observing never wakes it), and after a stop the curve honestly cuts off.",
-  "sandboxes_footer_bucketed": "Long window: aggregated into {n}-minute buckets, each point is the peak within its bucket."
+  "sandboxes_footer_bucketed": "Long window: aggregated into {n}-minute buckets, each point is the peak within its bucket.",
+  "sandboxes_silent_nodes": "Node {nodes} did not answer; its sandboxes are not listed"
 }

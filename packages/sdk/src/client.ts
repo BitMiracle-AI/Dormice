@@ -1,6 +1,5 @@
 import {
   type AcquireResponse,
-  type ActivityEvent,
   type ApiKey,
   type ApplyUpgradeResponse,
   acquireResponseSchema,
@@ -17,13 +16,15 @@ import {
   execCommandResponseSchema,
   expandDiskResponseSchema,
   type GetConfigResponse,
-  type GetFleetTimelineResponse,
+  type GetFleetMetricsResponse,
+  type GetFleetStateHistoryResponse,
   type GetHostMetricsHistoryResponse,
   type GetIngressResponse,
   type GetSandboxMetricsHistoryResponse,
   type GetUpgradeStatusResponse,
   getConfigResponseSchema,
-  getFleetTimelineResponseSchema,
+  getFleetMetricsResponseSchema,
+  getFleetStateHistoryResponseSchema,
   getHostMetricsHistoryResponseSchema,
   getIngressResponseSchema,
   getSandboxMetricsHistoryResponseSchema,
@@ -32,9 +33,9 @@ import {
   type HostMetricsResponse,
   hostMetricsResponseSchema,
   type LifecyclePolicyOverride,
+  type ListSandboxesResponse,
   type ListSandboxImagesResponse,
   type ListSandboxMetricsResponse,
-  listActivityResponseSchema,
   listApiKeysResponseSchema,
   listSandboxesResponseSchema,
   listSandboxImagesResponseSchema,
@@ -50,7 +51,6 @@ import {
   registerTemplateResponseSchema,
   removeTemplateResponseSchema,
   revokeApiKeyResponseSchema,
-  type Sandbox,
   type SandboxMetadata,
   type SandboxMetricsSample,
   type SandboxSpecOverride,
@@ -85,9 +85,9 @@ import { Agent, fetch, type Response } from 'undici';
 const dispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 
 export interface DormiceOptions {
-  /** Base URL of the daemon, e.g. `http://127.0.0.1:3676`. */
+  /** Base URL of the gateway, the fleet's door, e.g. `http://127.0.0.1:3677`. */
   endpoint: string;
-  /** The daemon's DORMICE_API_TOKEN. */
+  /** The fleet's DORMICE_API_TOKEN, or an API key minted at the gateway. */
   token: string;
   /**
    * Per-request timeout. Without one, a wedged daemon would hang the
@@ -193,42 +193,69 @@ export class Dormice {
     return acquireResponseSchema.parse(data);
   }
 
-  /** Every sandbox on the daemon with its current lifecycle state. */
-  async listSandboxes(): Promise<Sandbox[]> {
+  /**
+   * Every sandbox with its current lifecycle state — `sandboxes`. Asked
+   * of the gateway, the list is every node's concatenated, and `silent`
+   * names any node it could not include (down, not listening yet, or too
+   * slow), so a shorter list is never mistaken for the whole fleet; a
+   * node's own answer carries no `silent`.
+   */
+  async listSandboxes(): Promise<ListSandboxesResponse> {
     const data = await this.rpc('listSandboxes', {});
-    return listSandboxesResponseSchema.parse(data).sandboxes;
+    return listSandboxesResponseSchema.parse(data);
   }
 
   /**
-   * The daemon host's own health in one snapshot: CPU, memory and swap
-   * (the freeze mechanism's fuel), the data disk, ledger aggregates, and
-   * what the sparse sandbox disks nominally promise versus actually occupy.
-   * Pure observation — never wakes a sandbox. Readings the platform cannot
-   * produce come back null, never invented.
+   * One machine's own health in one snapshot: CPU, memory and swap (the
+   * freeze mechanism's fuel), the data disk, its ledger aggregates, and
+   * what its sparse sandbox disks nominally promise versus actually
+   * occupy. Pure observation — never wakes a sandbox. Readings the
+   * platform cannot produce come back null, never invented. At the
+   * gateway `nodeId` names the machine (listNodes lists them); a fleet of
+   * one needs none. The fleet's sums are getFleetMetrics.
    */
-  async getHostMetrics(): Promise<HostMetricsResponse> {
-    const data = await this.rpc('getHostMetrics', {});
+  async getHostMetrics(options?: {
+    nodeId?: string;
+  }): Promise<HostMetricsResponse> {
+    const data = await this.rpc('getHostMetrics', {
+      nodeId: options?.nodeId,
+    });
     return hostMetricsResponseSchema.parse(data);
   }
 
   /**
-   * The host machine's sampled history, sliced by an optional ISO window
+   * One machine's sampled history, sliced by an optional ISO window
    * (default: the last 24 hours). Past 360 points the server buckets the
    * answer — `bucketSeconds` says how wide — keeping each field's worst
    * case (max usage, min available), so spikes survive. `peak` carries the
    * window's highest whole-machine CPU percentage from raw rows, immune to
    * bucketing. Nulls inside a point are honest platform gaps, and a window
-   * the daemon was down for shows the gap.
+   * the daemon was down for shows the gap. `nodeId` as in getHostMetrics.
    */
   async getHostMetricsHistory(options?: {
+    nodeId?: string;
     start?: string;
     end?: string;
   }): Promise<GetHostMetricsHistoryResponse> {
     const data = await this.rpc('getHostMetricsHistory', {
+      nodeId: options?.nodeId,
       start: options?.start,
       end: options?.end,
     });
     return getHostMetricsHistoryResponseSchema.parse(data);
+  }
+
+  /**
+   * The fleet's figures that add up, from the nodes' last check-ins: how
+   * many nodes there are, are reachable and have reported; the sandbox
+   * census by state; the sandbox disks' bill. Answered by the gateway
+   * from what it holds — no node is asked. `nodes.reported` says how many
+   * nodes the sums cover; a node that has never checked in is not in
+   * them.
+   */
+  async getFleetMetrics(): Promise<GetFleetMetricsResponse> {
+    const data = await this.rpc('getFleetMetrics', {});
+    return getFleetMetricsResponseSchema.parse(data);
   }
 
   /**
@@ -265,54 +292,45 @@ export class Dormice {
   /**
    * Fleet state counts over time (default window: the last 24 hours) —
    * how many sandboxes sat active/frozen/stopped/archived/restoring at
-   * each sampler tick. Bucketed points are whole raw snapshots (byState
-   * always sums to total); `peak` carries the window's highest active
-   * count from raw rows, immune to bucketing.
+   * each moment, summed over every node; the gateway keeps this history,
+   * one sample every 30 seconds by default. Bucketed points are whole raw samples
+   * (byState always sums to total); `peak` carries the window's highest
+   * active count from raw rows, immune to bucketing.
    */
-  async getFleetTimeline(options?: {
+  async getFleetStateHistory(options?: {
     start?: string;
     end?: string;
-  }): Promise<GetFleetTimelineResponse> {
-    const data = await this.rpc('getFleetTimeline', {
+  }): Promise<GetFleetStateHistoryResponse> {
+    const data = await this.rpc('getFleetStateHistory', {
       start: options?.start,
       end: options?.end,
     });
-    return getFleetTimelineResponseSchema.parse(data);
+    return getFleetStateHistoryResponseSchema.parse(data);
   }
 
   /**
-   * Every measurable sandbox's reading in one answer — a view over N
-   * sandboxes costs one request instead of N. Presence means measured:
-   * only physically running/paused sandboxes appear; colder states are
-   * absent (getSandboxMetrics's null, expressed as absence).
+   * Every measurable sandbox's reading in one answer — `samples` — so a
+   * view over N sandboxes costs one request instead of N. Presence means
+   * measured: only physically running/paused sandboxes appear; colder
+   * states are absent (getSandboxMetrics's null, expressed as absence).
+   * `silent` as in listSandboxes.
    */
-  async listSandboxMetrics(): Promise<ListSandboxMetricsResponse['samples']> {
+  async listSandboxMetrics(): Promise<ListSandboxMetricsResponse> {
     const data = await this.rpc('listSandboxMetrics', {});
-    return listSandboxMetricsResponseSchema.parse(data).samples;
+    return listSandboxMetricsResponseSchema.parse(data);
   }
 
   /**
-   * Every sandbox's image lineage in one answer: the image its current
-   * shell was born from (`image`, null when no shell exists), the image
-   * its next shell would boot (`nextImage`), and whether a rebuild would
-   * change anything (`upgradable`). The window answering "which sandboxes
-   * still run an old image?" after a template is re-registered.
+   * Every sandbox's image lineage in one answer — `images`: the image its
+   * current shell was born from (`image`, null when no shell exists), the
+   * image its next shell would boot (`nextImage`), and whether a rebuild
+   * would change anything (`upgradable`). The window answering "which
+   * sandboxes still run an old image?" after a template is re-registered.
+   * `silent` as in listSandboxes.
    */
-  async listSandboxImages(): Promise<ListSandboxImagesResponse['images']> {
+  async listSandboxImages(): Promise<ListSandboxImagesResponse> {
     const data = await this.rpc('listSandboxImages', {});
-    return listSandboxImagesResponseSchema.parse(data).images;
-  }
-
-  /**
-   * The daemon's recent history, newest first: who was created, cooled,
-   * woken, destroyed, and what reconciliation repaired. A bounded ring —
-   * an explanation window, not an audit log.
-   */
-  async listActivity(options?: { limit?: number }): Promise<ActivityEvent[]> {
-    const data = await this.rpc('listActivity', {
-      limit: options?.limit,
-    });
-    return listActivityResponseSchema.parse(data).events;
+    return listSandboxImagesResponseSchema.parse(data);
   }
 
   /**
@@ -377,8 +395,13 @@ export class Dormice {
    * Expect the daemon to restart near the end: in-flight execs, terminals
    * and watchers break, sandboxes and their disks are untouched.
    */
-  async applyUpgrade(): Promise<ApplyUpgradeResponse> {
-    const data = await this.rpc('applyUpgrade', {});
+  async applyUpgrade(options?: {
+    /** At the gateway: put a stuck node back in line — its tell is forgotten and the roll tells it again at its turn (400 on any other state, 409 while it is upgrading). Absent: upgrade the gateway's machine and roll the fleet. On a node the field is refused (400): a node upgrades only itself. */
+    nodeId?: string;
+  }): Promise<ApplyUpgradeResponse> {
+    const data = await this.rpc('applyUpgrade', {
+      ...(options?.nodeId === undefined ? {} : { nodeId: options.nodeId }),
+    });
     return applyUpgradeResponseSchema.parse(data);
   }
 

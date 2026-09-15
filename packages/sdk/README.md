@@ -16,7 +16,7 @@ npm install @dormice/sdk
 import { Dormice } from '@dormice/sdk';
 
 const client = new Dormice({
-  endpoint: 'http://127.0.0.1:3676', // your daemon
+  endpoint: 'http://127.0.0.1:3677', // the gateway, the fleet's door
   token: process.env.DORMICE_API_TOKEN!,
 });
 
@@ -46,7 +46,7 @@ lifecycle policy is set at creation: `freezeAfterSeconds`, `stopAfterSeconds`
 | Method | What it does |
 | --- | --- |
 | `acquireSandbox(userKey, { policy?, template? })` | Create or wake the sandbox behind a key (idempotent); both options apply only when this call creates it |
-| `listSandboxes()` | Every sandbox with its current lifecycle state |
+| `listSandboxes()` | `{ sandboxes, silent? }` — every sandbox with its current lifecycle state; at the gateway, every node's, `silent` naming a node it could not include |
 | `execCommand(userKey, command, opts?)` | Run a shell command; buffered stdout/stderr and the real exit code |
 | `writeFiles(userKey, files)` | Write files onto the sandbox disk (relative paths land under `/home/user`) |
 | `readFile(userKey, path)` | Read a file back as bytes |
@@ -55,7 +55,9 @@ lifecycle policy is set at creation: `freezeAfterSeconds`, `stopAfterSeconds`
 | `registerTemplate(name, image)` | Name a Docker image on the host as a template (an upsert — re-register to upgrade) |
 | `listTemplates()` | Every registered template |
 | `removeTemplate(name)` | Remove a template's registration; refused (409) while sandboxes use it |
-| `getHostMetrics()` | One snapshot of the host: CPU, memory, swap, data disk, sandbox disks, ledger totals |
+| `getHostMetrics({ nodeId? })` | One machine's snapshot: CPU, memory, swap, data disk, sandbox disks, ledger totals — at the gateway, `nodeId` names the machine |
+| `getFleetMetrics()` | The fleet's sums from the nodes' check-ins: nodes total / reachable / reported, the sandbox census, the disks' bill |
+| `getFleetStateHistory({ start?, end? })` | The fleet's census over time with the window's concurrency peak |
 
 A non-zero exit code is a result, not an error. API failures throw
 `DormiceApiError` carrying the HTTP status and the daemon's message.

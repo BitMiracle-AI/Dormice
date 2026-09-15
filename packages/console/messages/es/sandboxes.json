@@ -112,5 +112,6 @@
   "sandboxes_cpu_value": "{v}% (por vCPU)",
   "sandboxes_footer_live": "Los valores en vivo se actualizan cada 5 segundos; esta lectura es de {ago}.",
   "sandboxes_footer_history": "El daemon toma y guarda las muestras en segundo plano; un sandbox dormido se sigue midiendo (observar nunca lo despierta) y tras una parada la curva se corta con honestidad.",
-  "sandboxes_footer_bucketed": "Ventana larga: se agrupa en tramos de {n} minutos y cada punto es el pico de su tramo."
+  "sandboxes_footer_bucketed": "Ventana larga: se agrupa en tramos de {n} minutos y cada punto es el pico de su tramo.",
+  "sandboxes_silent_nodes": "El nodo {nodes} no respondió; sus sandboxes no aparecen en la lista"
 }

@@ -2,24 +2,31 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pino } from 'pino';
-import { buildApp } from './app';
+import { buildApp, fakeExecutorUnavailable } from './app';
 import { Archiver } from './archive/archiver';
 import { LedgerArchiveStore } from './archive/ledger-store';
-import { type Config, loadConfig } from './config';
-import { recordActivity } from './db/activity';
+import { CheckIn, readNodeReading } from './check-in';
+import { type Config, ignoredEnvKeys, loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
 import { listSandboxes } from './db/ledger';
 import { acquireSingleWriterLock } from './db/lock';
-import { ensureRuntimeSettings, readRuntimeSettings } from './db/settings';
+import {
+  readConfigAppliedAt,
+  readConfigVersion,
+  readNodeConfig,
+  readRuntimeSettings,
+  readSwapTarget,
+} from './db/settings';
+import { resolveBaseImage } from './db/templates';
 import { WatcherTable } from './e2b/watcher-table';
 import { DockerExecutor } from './executor/docker';
 import type { Executor } from './executor/executor';
 import { FakeExecutor } from './executor/fake';
 import { gib, HostDiskGrower } from './host-disk';
 import { CpuSampler } from './host-metrics';
-import { Ingress } from './ingress';
 import { KeyedQueue } from './keyed-queue';
 import { sampleOnce } from './metrics-sampler';
+import { applyConfig } from './node-config';
 import { sweepPidsLimit } from './pids-sweep';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
@@ -42,12 +49,29 @@ function fatal(message: string): never {
 
 const config = loadConfig();
 
+// The fleet's operator knobs left the node's environment for the gateway
+// (config.ts MOVED_TO_GATEWAY). An env file that still carries them is a
+// machine upgraded across the move: say so once, by name, rather than
+// silently run on other values than the operator wrote.
+const ignored = ignoredEnvKeys();
+if (ignored.length > 0) {
+  log.warn(
+    { ignored },
+    `${ignored.length} environment variable${ignored.length === 1 ? '' : 's'} moved to the gateway and ${ignored.length === 1 ? 'does' : 'do'} nothing on a node: ${ignored.join(', ')} — the fleet's settings are the gateway's (its env seeds them once; the console edits them); remove ${ignored.length === 1 ? 'it' : 'them'} from this node's env file`,
+  );
+}
+
 // One ledger, one daemon — enforced, not assumed. A second instance would
 // run its own destructive reconcile against sandboxes this one is still
-// operating, well before it ever loses the race for the port.
+// operating, well before it ever loses the race for the port. The handle
+// is kept for the life of the process: better-sqlite3 closes a handle
+// whose object is garbage collected, and a closed handle drops the file
+// lock — with the return value discarded, a second daemon on the same
+// ledger started fine seconds later (measured 2026-09-11, fake executor).
+let ledgerLock: ReturnType<typeof acquireSingleWriterLock> | undefined;
 if (config.DORMICE_DB_PATH !== ':memory:') {
   try {
-    acquireSingleWriterLock(config.DORMICE_DB_PATH);
+    ledgerLock = acquireSingleWriterLock(config.DORMICE_DB_PATH);
   } catch (error) {
     fatal(error instanceof Error ? error.message : String(error));
   }
@@ -57,12 +81,6 @@ if (config.DORMICE_DB_PATH !== ':memory:') {
 // expect, and a fresh install needs no separate setup step.
 const db = openDb(config.DORMICE_DB_PATH);
 migrateDb(db, fileURLToPath(new URL('../drizzle', import.meta.url)));
-
-// Seed the runtime settings before anything can read a knob (the executor
-// reads them at every disk/container birth). The archive adjudication —
-// "env S3 seed present means new sandboxes archive after a week" — lives
-// inside ensure now, next to the seeding it belongs to.
-ensureRuntimeSettings(db, config);
 
 function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
   // Live from the ledger: a console edit reaches the next birth directly.
@@ -80,16 +98,24 @@ function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
   // Live too: a console edit reaches the next birth and the next wake's
   // in-place convergence without a restart.
   const pidsLimit = () => readRuntimeSettings(db).pidsLimit;
+  // Live, the same way: the fleet's base image from the copy, this node's
+  // DORMICE_BASE_IMAGE while the fleet names none (db/templates.ts
+  // resolveBaseImage has the rule; the boot log below says which is in
+  // force).
+  const baseImage = () => resolveBaseImage(db, cfg.DORMICE_BASE_IMAGE);
   if (cfg.DORMICE_EXECUTOR === 'fake') {
-    return new FakeExecutor(resources, pidsLimit);
-  }
-  if (!cfg.DORMICE_BASE_IMAGE) {
-    // loadConfig already rejected this combination; the check only narrows
-    // the type here.
-    throw new Error('DORMICE_BASE_IMAGE is required for the docker executor');
+    return new FakeExecutor(resources, pidsLimit, baseImage);
   }
   return new DockerExecutor({
-    baseImage: cfg.DORMICE_BASE_IMAGE,
+    baseImage,
+    // Where an image this host lacks comes from: the fleet registry named
+    // in the copy, under the fleet token — the one credential of the fleet
+    // (design record #34), doubling as the registry's password.
+    registry: {
+      address: () => readRuntimeSettings(db).registryAddress,
+      username: 'dormice',
+      password: cfg.DORMICE_API_TOKEN,
+    },
     dataDir: cfg.DORMICE_DATA_DIR,
     resources,
     pidsLimit,
@@ -133,9 +159,9 @@ const locks = new KeyedQueue();
 const watchers = new WatcherTable();
 
 // One Archiver for the daemon's whole life — its restore tracker is daemon
-// memory and must survive settings edits; whether archiving is available
-// is the store provider's live answer from the ledger, not a boot fact.
-// Temp transfers stage next to the disks (same filesystem — they are
+// memory and must survive configuration changes; whether archiving is
+// available is the store provider's live answer from the copy, not a boot
+// fact. Temp transfers stage next to the disks (same filesystem — they are
 // disk-sized, and /tmp may be RAM).
 const archiver = new Archiver({
   db,
@@ -146,92 +172,84 @@ const archiver = new Archiver({
   log: (msg) => log.info(msg),
   watchers,
 });
-if (archiver.enabled()) {
-  await archiver.init();
-  const s3View = readRuntimeSettings(db).s3;
-  log.info(`archiver enabled: bucket ${s3View?.bucket} at ${s3View?.endpoint}`);
-} else {
-  log.info(
-    'archiver disabled: no S3 store in the ledger settings (configure one in the console)',
-  );
-}
-
-// The managed front door exists exactly when its file knob is set (the
-// archiver's rule). The file itself is the source of truth for the bound
-// domains — nothing to reconcile at boot, Caddy is already running it.
-let ingress: Ingress | undefined;
-if (config.DORMICE_INGRESS_FILE) {
-  ingress = new Ingress({
-    filePath: config.DORMICE_INGRESS_FILE,
-    upstreamPort: config.DORMICE_PORT,
-    reloadCommand: config.DORMICE_INGRESS_RELOAD_CMD,
-  });
-  const domains = ingress.domains();
-  log.info(
-    `ingress managed at ${config.DORMICE_INGRESS_FILE}: ${domains.length ? domains.join(', ') : 'no domain bound (IP access only)'}`,
-  );
-} else {
-  log.info('ingress not managed: DORMICE_INGRESS_FILE not configured');
-}
 
 // Managed swap exists exactly where the daemon can honor it: a Linux host
 // (swapon is the kernel's) running the docker executor (the fake executor
 // is a test double — e2e boots real daemons with it, and those must never
-// touch the host's swap). The boot reconcile is what makes shrink-by-
-// reboot converge and puts grown blocks back after a restart; its failure
-// is loud but not fatal — swap is capacity, not correctness, and
-// getConfig's swap.activeGb reports the shortfall honestly.
+// touch the host's swap). Built here, reconciled below once the target is
+// known: the target is this node's row of the fleet configuration (the
+// gateway's updateNodeSettings), and the reading the check-in carries
+// says whether this daemon manages swap at all — null here is how the
+// gateway knows to refuse a target for this node.
 let swap: SwapManager | undefined;
 if (config.DORMICE_EXECUTOR === 'docker' && process.platform === 'linux') {
   swap = new SwapManager({
     dir: path.join(config.DORMICE_DATA_DIR, 'swap'),
     log: (msg) => log.info(msg),
   });
-  try {
-    await swap.reconcile(readRuntimeSettings(db).swapGb);
-  } catch (error) {
-    log.error(error, 'boot swap reconcile failed');
-  }
 } else {
   log.info('managed swap unavailable: requires Linux + the docker executor');
 }
 
-// Same eligibility as managed swap, same reasoning: the data-disk auto-grow
-// touches the host, so only a real deployment (Linux + docker executor)
-// gets one — e2e daemons on the fake executor must never run resize2fs on
-// a developer's machine. Within that gate host-disk.ts judges the layout
-// itself and declines anything it cannot fully reason about.
-const diskGrower =
-  config.DORMICE_EXECUTOR === 'docker' && process.platform === 'linux'
-    ? new HostDiskGrower({
-        dataDir: config.DORMICE_DATA_DIR,
-        log: (msg) => log.info(msg),
-      })
-    : undefined;
+// The build identity, for the check-in and the upgrade window below.
+const build = readBuildInfo();
 
-// The web console ships beside the server in the monorepo; this file sits
-// one level under packages/server both as src/main.ts and as dist/main.js,
-// so the relative hop to packages/console/dist is the same either way. A
-// missing dist is loud but not fatal: the API works without the console.
-const consoleDistDir = fileURLToPath(
-  new URL('../../console/dist', import.meta.url),
-);
-if (!existsSync(consoleDistDir)) {
-  log.warn(`web console not found at ${consoleDistDir} — /console disabled`);
-}
-
+// This node's check-in with its gateway (check-in.ts): its readings, its
+// build, where it can be reached, and which configuration version it
+// runs — and the fleet's configuration comes back with the answer. Every
+// daemon is a node of a gateway (design record #22: a single machine is a
+// fleet of one, the gateway on 127.0.0.1:3677 by default). The CpuSampler
+// is its own — a delta spans "since this instance's last sample", and the
+// route's and the metrics ticker's windows must not be stolen
+// (host-metrics.ts). Not primed: the first check-in then reports
+// cpuUsedPct null — "no interval yet" — which placement lets through as
+// unknown; a sample a few milliseconds before it would make that first
+// reading a percentage over the sliver in between, near 0 or near 100 by
+// luck (found by review, 2026-09-14).
 // The daemon's own upgrade window compares the commit baked into this
 // build against the checkout it runs from — main.js sits at
 // packages/server/dist (src/main.ts at packages/server/src: same depth),
 // so three hops up is the repo root either way. No checkout (a dist
 // copied elsewhere) means checking is honestly unavailable, not guessed.
+// Built before the check-in: the check-in reports whether this node can
+// upgrade itself, and runs the upgrade when the gateway says so.
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
-const build = readBuildInfo();
 const updater = new Updater({
   repoDir: existsSync(path.join(repoRoot, '.git')) ? repoRoot : null,
   build,
   statusDir: path.join(config.DORMICE_DATA_DIR, 'upgrade'),
-  executor: config.DORMICE_EXECUTOR,
+  unavailable: fakeExecutorUnavailable(config.DORMICE_EXECUTOR),
+});
+
+const nodeEndpoint =
+  config.DORMICE_NODE_ENDPOINT ?? `http://127.0.0.1:${config.DORMICE_PORT}`;
+const checkInCpu = new CpuSampler();
+const checkIn = new CheckIn({
+  gateway: config.DORMICE_GATEWAY_ENDPOINT,
+  token: config.DORMICE_API_TOKEN,
+  nodeId: config.DORMICE_NODE_ID,
+  endpoint: nodeEndpoint,
+  intervalSeconds: config.DORMICE_CHECK_IN_INTERVAL_SECONDS,
+  build,
+  readReading: () =>
+    readNodeReading(db, checkInCpu, config.DORMICE_DATA_DIR, executor, swap),
+  configVersion: () => readConfigVersion(db),
+  applyConfig: (bundle) =>
+    applyConfig(bundle, {
+      db,
+      executor,
+      locks,
+      swap,
+      log,
+      beat,
+      baseImageFallback: config.DORMICE_BASE_IMAGE,
+    }),
+  selfUpgrade: async () => {
+    const reason = await updater.availability();
+    return { available: reason === null, reason };
+  },
+  applyUpgrade: () => updater.apply(),
+  log,
 });
 log.info(
   build
@@ -245,10 +263,7 @@ const app = buildApp({
   executor,
   locks,
   logger: log,
-  consoleDistDir: existsSync(consoleDistDir) ? consoleDistDir : undefined,
   archiver,
-  ingress,
-  swap,
   updater,
   watchers,
 });
@@ -266,6 +281,94 @@ const refusal = startupGuard({
 if (refusal !== null) {
   fatal(refusal);
 }
+
+// A node without a configuration copy has nothing to build a sandbox from
+// — no defaults, no templates, no archive store — so it does not listen
+// until it holds one: one check-in now, then one per interval, until the
+// gateway answers with the bundle. After the startup guard on purpose: a
+// daemon that will refuse to start must not first register itself with
+// the fleet. A first install waits for its gateway here (install.sh
+// starts the gateway first); a machine upgraded across the move
+// (2026-09-14) has its old single-machine settings in the row but no
+// copy, and takes the gateway's bundle the same way. The check-ins sent
+// meanwhile report "no configuration", which keeps the gateway from
+// placing sandboxes here before the port is open (gateway placement.ts):
+// listNodes shows such a node with configVersion null until its first
+// check-in after listen. A node that already holds a copy runs it, stale
+// or not, and takes the current one at that check-in — a node whose
+// gateway is away still serves; that is what the copy is for.
+if (readConfigVersion(db) === null) {
+  log.info(
+    `no configuration copy in the ledger — asking gateway ${config.DORMICE_GATEWAY_ENDPOINT} before anything else (retrying every ${config.DORMICE_CHECK_IN_INTERVAL_SECONDS}s until it answers)`,
+  );
+  // The wait beats the watchdog per attempt (check-in.ts untilConfigured);
+  // the ticker started after listen is handed no beat, for the reason the
+  // metrics ticker is not (the watchdog's comment above).
+  await checkIn.untilConfigured(beat);
+}
+{
+  const copy = readNodeConfig(db);
+  log.info(
+    {
+      version: copy.version,
+      appliedAt: readConfigAppliedAt(db),
+      templates: copy.templates.length,
+      pidsLimit: copy.settings.pidsLimit,
+      swapGb: copy.node.swapGb,
+      sandboxDomain: copy.settings.sandboxDomain,
+    },
+    copy.settings.s3 === null
+      ? `running configuration v${copy.version}; archiver disabled: no S3 store in the fleet settings (configure one in the console)`
+      : `running configuration v${copy.version}; archiver enabled: bucket ${copy.settings.s3.bucket} at ${copy.settings.s3.endpoint}`,
+  );
+  // Which base image is in force, and where it came from: the fleet's
+  // (the knob's home since the fourth cut), or this node's own env while
+  // the fleet names none — said at boot, once, so a node running on the
+  // fallback is never a surprise (db/templates.ts resolveBaseImage).
+  if (copy.settings.baseImage !== null) {
+    if (config.DORMICE_BASE_IMAGE !== undefined) {
+      log.info(
+        `base image ${copy.settings.baseImage} (the fleet's setting); DORMICE_BASE_IMAGE in this node's env is a fallback only and can be removed`,
+      );
+    }
+  } else if (config.DORMICE_BASE_IMAGE !== undefined) {
+    log.warn(
+      `the fleet settings name no base image — template-less sandboxes on this node boot DORMICE_BASE_IMAGE=${config.DORMICE_BASE_IMAGE} from its env; set baseImage at the gateway (console › settings) so every node shares one`,
+    );
+  } else {
+    log.warn(
+      'the fleet settings name no base image and DORMICE_BASE_IMAGE is not set — a template-less sandbox cannot be built here until baseImage is set at the gateway (console › settings)',
+    );
+  }
+}
+if (archiver.enabled()) {
+  await archiver.init();
+}
+
+// The boot swap reconcile is what makes shrink-by-reboot converge and puts
+// grown blocks back after a restart; its failure is loud but not fatal —
+// swap is capacity, not correctness. Later moves of the target arrive
+// with a bundle (node-config.ts).
+if (swap !== undefined) {
+  try {
+    await swap.reconcile(readSwapTarget(db));
+  } catch (error) {
+    log.error(error, 'boot swap reconcile failed');
+  }
+}
+
+// Same eligibility as managed swap, same reasoning: the data-disk auto-grow
+// touches the host, so only a real deployment (Linux + docker executor)
+// gets one — e2e daemons on the fake executor must never run resize2fs on
+// a developer's machine. Within that gate host-disk.ts judges the layout
+// itself and declines anything it cannot fully reason about.
+const diskGrower =
+  config.DORMICE_EXECUTOR === 'docker' && process.platform === 'linux'
+    ? new HostDiskGrower({
+        dataDir: config.DORMICE_DATA_DIR,
+        log: (msg) => log.info(msg),
+      })
+    : undefined;
 
 // Repair ledger/reality drift left by a crash — before serving traffic, so
 // every request runs against a ledger that reflects what actually exists.
@@ -292,22 +395,29 @@ app.log.info(repaired, 'startup reconcile');
 // for their next wake would have cost each of them one more death.
 const swept = await sweepPidsLimit(db, executor, locks, beat);
 app.log.info(swept, 'startup pids cap sweep');
-recordActivity(db, {
-  kind: 'daemon-started',
-  detail:
-    `executor ${config.DORMICE_EXECUTOR}; startup reconcile: ` +
-    `${repaired.repairedStates} states repaired, ${repaired.deletedRows} rows deleted, ` +
-    `${repaired.destroyedOrphans} orphan containers destroyed, ${repaired.removedDisks} disks removed; ` +
-    `pids cap: ${swept.updated} running shells brought to ${readRuntimeSettings(db).pidsLimit}` +
-    (swept.failures.length > 0
-      ? `, ${swept.failures.length} refused (daemon log has the names)`
-      : ''),
-});
+app.log.info(
+  {
+    executor: config.DORMICE_EXECUTOR,
+    reconcile: repaired,
+    pidsLimit: readRuntimeSettings(db).pidsLimit,
+    pidsSweep: { updated: swept.updated, refused: swept.failures.length },
+  },
+  'daemon started',
+);
 
 // Red line: the daemon binds to loopback only, and the host is deliberately
 // not configurable — a knob would be one typo away from 0.0.0.0. Exposing
 // the daemon to the outside world is a reverse proxy's job.
 await app.listen({ host: '127.0.0.1', port: config.DORMICE_PORT });
+
+// The check-in ticker starts after listen on purpose: a check-in names
+// where the gateway may forward to and, from now on, reports a
+// configuration copy — placement's cue that this node is open for
+// business — so that door must be open before the gateway hears it.
+checkIn.start();
+log.info(
+  `node ${config.DORMICE_NODE_ID} checks in with gateway ${config.DORMICE_GATEWAY_ENDPOINT} every ${config.DORMICE_CHECK_IN_INTERVAL_SECONDS}s, reachable at ${nodeEndpoint}`,
+);
 
 // systemd stops the daemon with SIGTERM. Shutdown is bounded on purpose
 // (shutdown.ts has the measurements): close the app — preClose ends the
@@ -336,6 +446,7 @@ const close = async (signal: NodeJS.Signals) => {
   process.removeListener('SIGINT', onSigint);
   clearTimeout(heartbeatTimer);
   clearTimeout(metricsTimer);
+  checkIn.stop();
   watchdog.stop();
   app.log.info(
     `${signal} received — shutting down (grace ${SHUTDOWN_GRACE_MS}ms)`,
@@ -352,6 +463,7 @@ const close = async (signal: NodeJS.Signals) => {
     app.log.error(error, `graceful shutdown after ${signal} failed`);
     process.exitCode = 1;
   }
+  ledgerLock?.close();
   process.exit(process.exitCode ?? 0);
 };
 const onSigterm = () => void close('SIGTERM');
@@ -451,12 +563,10 @@ async function metricsTick() {
     // itself stays pure observation.
     const growth = await diskGrower?.check();
     if (growth?.outcome === 'grown') {
-      recordActivity(db, {
-        kind: 'host-disk-grown',
-        detail:
-          `data disk device grew; filesystem resized ` +
-          `${gib(growth.fromBytes)} GiB -> ${gib(growth.toBytes)} GiB`,
-      });
+      app.log.info(
+        { fromGib: gib(growth.fromBytes), toGib: gib(growth.toBytes) },
+        'data disk device grew; filesystem resized to fill it',
+      );
     }
   } catch (error) {
     app.log.error(error, 'metrics sampler tick failed');

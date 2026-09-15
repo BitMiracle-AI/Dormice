@@ -47,6 +47,7 @@
     "undici": "^8.7.0"
   },
   "devDependencies": {
+    "@dormice/gateway": "workspace:*",
     "@dormice/server": "workspace:*"
   }
 }

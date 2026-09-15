@@ -1,7 +1,9 @@
 import { fileURLToPath } from 'node:url';
+import { testGateway } from '@dormice/gateway';
 import { Dormice } from '@dormice/sdk';
 import {
   buildApp,
+  configureNode,
   FakeExecutor,
   KeyedQueue,
   loadConfig,
@@ -40,6 +42,12 @@ const MIGRATIONS = fileURLToPath(
 let app: ReturnType<typeof buildApp>;
 let client: Dormice;
 let endpoint: string;
+// The fleet's door, embedded like the daemon: the apikey and template
+// commands speak to it (design record #22). No node checks in with it —
+// these commands need none.
+let gatewayApp: ReturnType<typeof testGateway>['app'];
+let gatewayClient: Dormice;
+let gatewayEndpoint: string;
 
 beforeAll(async () => {
   const db = openDb(':memory:');
@@ -51,6 +59,8 @@ beforeAll(async () => {
     DORMICE_NODE_ID: 'node-test',
     DORMICE_API_TOKEN: TOKEN,
   });
+  // The configuration copy a check-in would have applied.
+  configureNode(db);
   app = buildApp({
     config,
     db,
@@ -67,10 +77,20 @@ beforeAll(async () => {
   }
   endpoint = `http://127.0.0.1:${address.port}`;
   client = new Dormice({ endpoint, token: TOKEN });
+
+  gatewayApp = testGateway({ DORMICE_API_TOKEN: TOKEN }).app;
+  await gatewayApp.listen({ host: '127.0.0.1', port: 0 });
+  const gatewayAddress = gatewayApp.server.address();
+  if (typeof gatewayAddress !== 'object' || gatewayAddress === null) {
+    throw new Error('expected a TCP address');
+  }
+  gatewayEndpoint = `http://127.0.0.1:${gatewayAddress.port}`;
+  gatewayClient = new Dormice({ endpoint: gatewayEndpoint, token: TOKEN });
 });
 
 afterAll(async () => {
   await app.close();
+  await gatewayApp.close();
 });
 
 describe('clientFromEnv', () => {
@@ -98,7 +118,10 @@ describe('clientFromEnv', () => {
 describe('sandbox commands over real HTTP', () => {
   // Runs first: the daemon starts with an empty ledger.
   it('ls reports an empty daemon honestly', async () => {
-    expect(await sandboxLs(client)).toBe('No sandboxes.');
+    expect(await sandboxLs(client)).toEqual({
+      table: 'No sandboxes.',
+      warnings: [],
+    });
   });
 
   it('ls renders one aligned row per sandbox', async () => {
@@ -107,7 +130,8 @@ describe('sandbox commands over real HTTP', () => {
     });
     await client.acquireSandbox('bob');
 
-    const output = await sandboxLs(client);
+    const { table: output, warnings } = await sandboxLs(client);
+    expect(warnings).toEqual([]);
     const lines = output.split('\n');
     expect(lines[0]).toMatch(
       /^NAME\s{2,}STATE\s{2,}ID\s{2,}LAST ACTIVE\s{2,}METADATA$/,
@@ -142,7 +166,7 @@ describe('sandbox commands over real HTTP', () => {
     // The protocol keeps name opaque, so an ESC sequence is a legal key;
     // printed raw it would rewrite the operator's terminal.
     await client.acquireSandbox('evil\u001b[31mkey');
-    const output = await sandboxLs(client);
+    const { table: output } = await sandboxLs(client);
     expect(output).not.toContain('\u001b');
     expect(output).toContain('evil?[31mkey');
     await client.destroySandbox('evil\u001b[31mkey');
@@ -226,93 +250,95 @@ describe('parseLabels', () => {
 
 describe('apikey commands over real HTTP', () => {
   it('create, ls and revoke walk the rotation life end to end', async () => {
-    expect(await apikeyLs(client)).toBe('No API keys.');
+    expect(await apikeyLs(gatewayClient)).toBe('No API keys.');
 
-    const created = await apikeyCreate(client, 'ci');
+    const created = await apikeyCreate(gatewayClient, 'ci');
     const lines = created.split('\n');
     expect(lines[0]).toMatch(/^Created API key "ci" \(prefix [0-9a-f]{8}\)\.$/);
     expect(lines[1]).toMatch(/^[0-9a-f]{64}$/);
     expect(lines[2]).toBe('Store it now — it will never be shown again.');
 
-    const output = await apikeyLs(client);
+    const output = await apikeyLs(gatewayClient);
     expect(output.split('\n')[0]).toMatch(
       /^NAME\s{2,}PREFIX\s{2,}CREATED\s{2,}LAST USED\s{2,}EXPIRES\s{2,}STATUS$/,
     );
     expect(output).toMatch(/ci\s{2,}[0-9a-f]{8}.*never\s{2,}never\s{2,}active/);
 
-    expect(await apikeyRevoke(client, 'ci')).toBe(
+    expect(await apikeyRevoke(gatewayClient, 'ci')).toBe(
       'Revoked API key "ci" — it stops working immediately.',
     );
-    expect(await apikeyRevoke(client, 'ci')).toBe(
+    expect(await apikeyRevoke(gatewayClient, 'ci')).toBe(
       'No active API key named "ci" — nothing to revoke.',
     );
-    expect(await apikeyLs(client)).toMatch(/ci\s{2,}.*revoked/);
+    expect(await apikeyLs(gatewayClient)).toMatch(/ci\s{2,}.*revoked/);
   });
 
   it('disable parks a key by name; enable resumes it; a disabled key still revokes by name', async () => {
-    await apikeyCreate(client, 'park-me');
+    await apikeyCreate(gatewayClient, 'park-me');
 
-    expect(await apikeyDisable(client, 'park-me')).toBe(
+    expect(await apikeyDisable(gatewayClient, 'park-me')).toBe(
       'Disabled API key "park-me" — it stops working until re-enabled.',
     );
-    expect(await apikeyLs(client)).toMatch(/park-me\s{2,}.*disabled/);
+    expect(await apikeyLs(gatewayClient)).toMatch(/park-me\s{2,}.*disabled/);
 
-    expect(await apikeyEnable(client, 'park-me')).toBe(
+    expect(await apikeyEnable(gatewayClient, 'park-me')).toBe(
       'Enabled API key "park-me".',
     );
-    expect(await apikeyLs(client)).toMatch(/park-me\s{2,}.*active/);
+    expect(await apikeyLs(gatewayClient)).toMatch(/park-me\s{2,}.*active/);
 
     // Disabled keys keep their name — revoke must still reach them by it.
-    await apikeyDisable(client, 'park-me');
-    expect(await apikeyRevoke(client, 'park-me')).toBe(
+    await apikeyDisable(gatewayClient, 'park-me');
+    expect(await apikeyRevoke(gatewayClient, 'park-me')).toBe(
       'Revoked API key "park-me" — it stops working immediately.',
     );
-    await expect(apikeyDisable(client, 'park-me')).rejects.toThrow(
+    await expect(apikeyDisable(gatewayClient, 'park-me')).rejects.toThrow(
       /no API key named "park-me"/,
     );
   });
 
   it('--expires mints a TTL key through end-of-day and refuses garbage dates', async () => {
-    const created = await apikeyCreate(client, 'ttl', '2030-06-15');
+    const created = await apikeyCreate(gatewayClient, 'ttl', '2030-06-15');
     expect(created.split('\n')[0]).toMatch(
       /^Created API key "ttl" \(prefix [0-9a-f]{8}, expires 2030-06-1[56]T.*\)\.$/,
     );
-    expect(await apikeyLs(client)).toMatch(/ttl\s{2,}.*active/);
+    expect(await apikeyLs(gatewayClient)).toMatch(/ttl\s{2,}.*active/);
 
-    await expect(apikeyCreate(client, 'bad', 'next tuesday')).rejects.toThrow(
-      /--expires must be a date like 2026-12-31/,
-    );
-    await expect(apikeyCreate(client, 'bad', '2030-02-31')).rejects.toThrow(
-      /--expires/,
-    );
+    await expect(
+      apikeyCreate(gatewayClient, 'bad', 'next tuesday'),
+    ).rejects.toThrow(/--expires must be a date like 2026-12-31/);
+    await expect(
+      apikeyCreate(gatewayClient, 'bad', '2030-02-31'),
+    ).rejects.toThrow(/--expires/);
   });
 
   it("a minted key is refused on the management verbs with the server's honest 403", async () => {
-    const created = await apikeyCreate(client, 'not-admin');
+    const created = await apikeyCreate(gatewayClient, 'not-admin');
     const token = created.split('\n')[1] ?? '';
     expect(token).toMatch(/^[0-9a-f]{64}$/);
-    const keyed = new Dormice({ endpoint, token });
+    const keyed = new Dormice({ endpoint: gatewayEndpoint, token });
     await expect(apikeyLs(keyed)).rejects.toThrow(
-      /cannot manage API keys or settings — use DORMICE_API_TOKEN or the console/,
+      /cannot manage API keys, settings, templates, domains or nodes — use DORMICE_API_TOKEN or the console/,
     );
   });
 });
 
 describe('template commands over real HTTP', () => {
   it('add, ls and rm walk the registration life end to end', async () => {
-    expect(await templateLs(client)).toBe('No templates.');
+    expect(await templateLs(gatewayClient)).toBe('No templates.');
 
-    expect(await templateAdd(client, 'py311', 'img:py311')).toBe(
+    expect(await templateAdd(gatewayClient, 'py311', 'img:py311')).toBe(
       'Registered template "py311" -> img:py311.',
     );
-    const output = await templateLs(client);
+    const output = await templateLs(gatewayClient);
     expect(output.split('\n')[0]).toMatch(
       /^NAME\s{2,}IMAGE\s{2,}CREATED\s{2,}UPDATED$/,
     );
     expect(output).toMatch(/py311\s{2,}img:py311/);
 
-    expect(await templateRm(client, 'py311')).toBe('Removed template "py311".');
-    expect(await templateRm(client, 'py311')).toBe(
+    expect(await templateRm(gatewayClient, 'py311')).toBe(
+      'Removed template "py311".',
+    );
+    expect(await templateRm(gatewayClient, 'py311')).toBe(
       'No template named "py311" — nothing to remove.',
     );
   });

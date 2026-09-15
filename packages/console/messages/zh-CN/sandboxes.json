@@ -112,5 +112,6 @@
   "sandboxes_cpu_value": "{v}%(按单 vCPU 计)",
   "sandboxes_footer_live": "当前值 5 秒刷新,本次读数取自 {ago}。",
   "sandboxes_footer_history": "历史由 daemon 后台采样落库;沙箱睡着照样测(观察不唤醒),停止后曲线如实断流。",
-  "sandboxes_footer_bucketed": "窗口较长,已按每 {n} 分钟一桶聚合,每点为桶内峰值。"
+  "sandboxes_footer_bucketed": "窗口较长,已按每 {n} 分钟一桶聚合,每点为桶内峰值。",
+  "sandboxes_silent_nodes": "节点 {nodes} 没有应答,它们上面的沙箱未列出"
 }

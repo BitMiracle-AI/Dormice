@@ -211,8 +211,6 @@ class FakeProcessIO {
  * the fake too.
  */
 export class FakeExecutor implements Executor {
-  readonly baseImage = FAKE_BASE_IMAGE;
-
   /**
    * Live view of the resource knobs, the docker executor's own contract:
    * read at each birth, so a ledger edit reaches the next shell and disk.
@@ -229,7 +227,36 @@ export class FakeExecutor implements Executor {
      * the daemons and tests that never move it.
      */
     private readonly pidsLimit: () => number = () => FAKE_PIDS_LIMIT,
+    /**
+     * Live view of the fleet's base image, the docker executor's third
+     * closure (main.ts wires the copy with the env fallback): what a birth
+     * that names no image boots. The default serves the suites, whose
+     * copies mostly name none.
+     */
+    private readonly base: () => string = () => FAKE_BASE_IMAGE,
   ) {}
+
+  baseImage(): string {
+    return this.base();
+  }
+
+  /**
+   * Images "on this host", the docker executor's image store: the base
+   * image is always there (install.sh builds it), and whatever ensureImage
+   * pulled. A birth does not consult it — the fake plays whatever image it
+   * is asked to, and the suites name images freely — so the store exists
+   * for ensureImage's word alone.
+   */
+  private readonly present = new Set<string>();
+  /** Every image ensureImage pulled, in order — the prefetch's footprint, for the suites. */
+  readonly pulled: string[] = [];
+
+  async ensureImage(image: string): Promise<'present' | 'pulled'> {
+    if (image === this.base() || this.present.has(image)) return 'present';
+    this.present.add(image);
+    this.pulled.push(image);
+    return 'pulled';
+  }
 
   /** ShellOptions -> the limits a shell is born with, the docker rounding rules. */
   private bornLimits(opts?: ShellOptions): ShellLimits {
@@ -247,6 +274,13 @@ export class FakeExecutor implements Executor {
   }
   private readonly containers = new Map<string, ContainerState>();
   private readonly disks = new Set<string>();
+  /**
+   * Every removeContainer, in order: the shell swaps a wake made (the one
+   * way a live sandbox loses its container but keeps its disk). Public so
+   * a test can assert a rebuild happened — or, on the fast path, that
+   * none did — now that no activity ring records it.
+   */
+  readonly removedShells: string[] = [];
   /**
    * The image each shell was born from. Keyed like containers, not disks:
    * an image is a property of the shell, set at its birth and gone with it
@@ -403,7 +437,7 @@ export class FakeExecutor implements Executor {
     this.diskNominal.set(sandboxId, this.bornDiskBytes(opts?.diskGb));
     this.fs.set(sandboxId, seededDisk());
     this.containers.set(sandboxId, 'running');
-    this.images.set(sandboxId, opts?.image ?? FAKE_BASE_IMAGE);
+    this.images.set(sandboxId, opts?.image ?? this.base());
     this.limits.set(sandboxId, this.bornLimits(opts));
     this.pids.set(sandboxId, this.pidsLimit());
   }
@@ -444,7 +478,7 @@ export class FakeExecutor implements Executor {
         throw new Error(`disk ${sandboxId} is absent, cannot start`);
       }
       this.containers.set(sandboxId, 'running');
-      this.images.set(sandboxId, opts?.image ?? FAKE_BASE_IMAGE);
+      this.images.set(sandboxId, opts?.image ?? this.base());
       this.limits.set(sandboxId, this.bornLimits(opts));
       this.pids.set(sandboxId, this.pidsLimit());
       this.exits.delete(sandboxId);
@@ -490,6 +524,7 @@ export class FakeExecutor implements Executor {
     if (!hadContainer && !this.disks.has(sandboxId)) {
       throw new Error(`container ${sandboxId} is absent, cannot remove`);
     }
+    this.removedShells.push(sandboxId);
     this.images.delete(sandboxId);
     this.limits.delete(sandboxId);
     this.exits.delete(sandboxId);

@@ -30,6 +30,21 @@ function cli(...args: string[]) {
   });
 }
 
+/**
+ * The same binary pointed at the fleet's door — node A's own gateway: the
+ * template and apikey command groups speak to it (design record #22), the
+ * way an operator's shell would with DORMICE_ENDPOINT set to the gateway.
+ */
+function door(...args: string[]) {
+  return run('node', [CLI, ...args], {
+    env: {
+      ...process.env,
+      DORMICE_ENDPOINT: inject('dormiceGatewayEndpoint'),
+      DORMICE_API_TOKEN: inject('dormiceToken'),
+    },
+  });
+}
+
 describe('dor CLI against a real daemon', () => {
   it('sandbox ls shows a sandbox acquired through the SDK', async () => {
     const sdk = new Dormice({
@@ -42,6 +57,18 @@ describe('dor CLI against a real daemon', () => {
     expect(stdout).toMatch(/NAME\s{2,}STATE\s{2,}ID/);
     expect(stdout).toMatch(/cli-ls-key\s{2,}active/);
     expect(stdout).toContain(created.sandbox.id);
+  });
+
+  it("sandbox ls at the door lists the fleet — node A's sandboxes, nobody silent, no warning line", async () => {
+    const sdk = new Dormice({
+      endpoint: inject('dormiceEndpoint'),
+      token: inject('dormiceToken'),
+    });
+    const created = await sdk.acquireSandbox('cli-ls-door-key');
+    const { stdout } = await door('sandbox', 'ls');
+    expect(stdout).toMatch(/cli-ls-door-key\s{2,}active/);
+    expect(stdout).toContain(created.sandbox.id);
+    expect(stdout).not.toContain('warning:');
   });
 
   it('sandbox meta shows, replaces and clears labels through the real binary', async () => {
@@ -128,22 +155,22 @@ describe('dor CLI against a real daemon', () => {
     expect(pulled.stdout).toBe('through the CLI\n');
   });
 
-  it('template add, ls and rm run the registration life through the real binary', async () => {
-    const added = await cli('template', 'add', 'cli-tpl', 'img:cli');
+  it('template add, ls and rm run the registration life through the real binary, at the door', async () => {
+    const added = await door('template', 'add', 'cli-tpl', 'img:cli');
     expect(added.stdout).toContain('Registered template "cli-tpl" -> img:cli.');
 
-    const listed = await cli('template', 'ls');
+    const listed = await door('template', 'ls');
     expect(listed.stdout).toMatch(/NAME\s{2,}IMAGE\s{2,}CREATED/);
     expect(listed.stdout).toMatch(/cli-tpl\s{2,}img:cli/);
 
-    const removed = await cli('template', 'rm', 'cli-tpl');
+    const removed = await door('template', 'rm', 'cli-tpl');
     expect(removed.stdout).toContain('Removed template "cli-tpl".');
-    const again = await cli('template', 'rm', 'cli-tpl');
+    const again = await door('template', 'rm', 'cli-tpl');
     expect(again.stdout).toContain('nothing to remove');
   });
 
-  it('apikey create, ls and revoke run the rotation life through the real binary', async () => {
-    const created = await cli('apikey', 'create', 'cli-key');
+  it('apikey create, ls and revoke run the rotation life through the real binary, at the door', async () => {
+    const created = await door('apikey', 'create', 'cli-key');
     const lines = created.stdout.trim().split('\n');
     expect(lines[0]).toMatch(
       /^Created API key "cli-key" \(prefix [0-9a-f]{8}\)\./,
@@ -153,55 +180,36 @@ describe('dor CLI against a real daemon', () => {
     expect(lines[2]).toContain('never be shown again');
 
     // The minted key IS a DORMICE_API_TOKEN — same variable, new value:
-    // exactly what rotation looks like from a client's shell.
-    const keyed = await run('node', [CLI, 'sandbox', 'ls'], {
-      env: {
-        ...process.env,
-        DORMICE_ENDPOINT: inject('dormiceEndpoint'),
-        DORMICE_API_TOKEN: token,
-      },
-    });
-    expect(keyed.stdout).toBeDefined();
+    // exactly what rotation looks like from a client's shell, pointed at
+    // the door (a node knows only the fleet token). The probe is a
+    // destroy of a name nobody holds: a named verb the door answers once
+    // the key is through, `nothing to destroy` when it is.
+    const keyed = (extra: string[] = []) =>
+      run('node', [CLI, 'sandbox', 'destroy', 'cli-key-probe', ...extra], {
+        env: {
+          ...process.env,
+          DORMICE_ENDPOINT: inject('dormiceGatewayEndpoint'),
+          DORMICE_API_TOKEN: token,
+        },
+      });
+    expect((await keyed()).stdout).toContain('nothing to destroy');
 
-    const listed = await cli('apikey', 'ls');
+    const listed = await door('apikey', 'ls');
     expect(listed.stdout).toMatch(/NAME\s{2,}PREFIX\s{2,}CREATED/);
     expect(listed.stdout).toMatch(/cli-key\s{2,}[0-9a-f]{8}.*active/);
 
     // Disable parks the credential (next request dies), enable revives it.
-    const disabled = await cli('apikey', 'disable', 'cli-key');
+    const disabled = await door('apikey', 'disable', 'cli-key');
     expect(disabled.stdout).toContain('Disabled API key "cli-key"');
-    await expect(
-      run('node', [CLI, 'sandbox', 'ls'], {
-        env: {
-          ...process.env,
-          DORMICE_ENDPOINT: inject('dormiceEndpoint'),
-          DORMICE_API_TOKEN: token,
-        },
-      }),
-    ).rejects.toMatchObject({ code: 1 });
-    const enabled = await cli('apikey', 'enable', 'cli-key');
+    await expect(keyed()).rejects.toMatchObject({ code: 1 });
+    const enabled = await door('apikey', 'enable', 'cli-key');
     expect(enabled.stdout).toContain('Enabled API key "cli-key"');
-    const revived = await run('node', [CLI, 'sandbox', 'ls'], {
-      env: {
-        ...process.env,
-        DORMICE_ENDPOINT: inject('dormiceEndpoint'),
-        DORMICE_API_TOKEN: token,
-      },
-    });
-    expect(revived.stdout).toBeDefined();
+    expect((await keyed()).stdout).toContain('nothing to destroy');
 
-    const revoked = await cli('apikey', 'revoke', 'cli-key');
+    const revoked = await door('apikey', 'revoke', 'cli-key');
     expect(revoked.stdout).toContain('Revoked API key "cli-key"');
-    await expect(
-      run('node', [CLI, 'sandbox', 'ls'], {
-        env: {
-          ...process.env,
-          DORMICE_ENDPOINT: inject('dormiceEndpoint'),
-          DORMICE_API_TOKEN: token,
-        },
-      }),
-    ).rejects.toMatchObject({ code: 1 });
-    const again = await cli('apikey', 'revoke', 'cli-key');
+    await expect(keyed()).rejects.toMatchObject({ code: 1 });
+    const again = await door('apikey', 'revoke', 'cli-key');
     expect(again.stdout).toContain('nothing to revoke');
   });
 

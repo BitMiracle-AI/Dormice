@@ -4,8 +4,7 @@ import {
   SANDBOX_STATES,
   type SandboxState,
 } from '@dormice/shared';
-import { count, eq } from 'drizzle-orm';
-import { recordActivity } from './activity';
+import { eq } from 'drizzle-orm';
 import type { Db } from './db';
 import { type SandboxRow, sandboxes } from './schema';
 
@@ -60,11 +59,6 @@ export interface CreateSandboxInput {
     deadlineAt: string;
     onDeadline: 'kill' | 'pause';
   };
-  /**
-   * Who asked (request.actor) — every creation is request-caused, so both
-   * faces pass this; absent only in tests that fabricate rows directly.
-   */
-  actor?: string | null;
 }
 
 /** Inserts a new sandbox row in `active` state. Throws if the name is taken. */
@@ -94,16 +88,6 @@ export function createSandbox(db: Db, input: CreateSandboxInput): SandboxRow {
     pausedByUser: false,
   };
   db.insert(sandboxes).values(row).run();
-  // The one place every creation passes through, whichever face asked.
-  recordActivity(db, {
-    kind: 'created',
-    sandboxName: row.name,
-    sandboxId: row.id,
-    actor: input.actor,
-    detail: `${input.e2b ? 'via E2B create' : 'via acquireSandbox'}${
-      input.template ? `, template ${input.template}` : ''
-    }`,
-  });
   return row;
 }
 
@@ -143,11 +127,6 @@ export function countByState(rows: SandboxRow[]): {
   ) as Record<SandboxState, number>;
   for (const row of rows) byState[row.state] += 1;
   return { byState, total: rows.length };
-}
-
-/** How many sandboxes exist, for the capacity check at acquire. */
-export function countSandboxes(db: Db): number {
-  return db.select({ n: count() }).from(sandboxes).get()?.n ?? 0;
 }
 
 /**

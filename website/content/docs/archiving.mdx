@@ -16,14 +16,15 @@ storage.
 Configure the store in the console's settings page (the archive store
 card) — endpoint, bucket, credentials, region, path style. Any
 S3-compatible store works: AWS, Cloudflare R2, MinIO, Alibaba OSS in
-S3-compat mode. Before anything is saved, the daemon writes and reads
+S3-compat mode. Before anything is saved, the gateway writes and reads
 back a probe object against the bucket, so a wrong endpoint or
 credential fails immediately with S3's own error — nothing half-works
-silently. The change applies live; no restart.
+silently. The change applies live: every node takes the store from its
+next check-in; no restart.
 
-(The four `DORMICE_S3_*` environment variables still exist as
-first-boot seeds — [reference](/docs/configuration#archiver-s3) — handy
-for provisioning a fresh machine from a config file.)
+(The four `DORMICE_S3_*` environment variables still exist as the
+gateway's first-boot seeds — [reference](/docs/configuration#archiver-s3)
+— handy for provisioning a fresh machine from a config file.)
 
 With a store configured, stopped sandboxes archive after 7 more idle
 days by default. Tune it per sandbox with the policy:

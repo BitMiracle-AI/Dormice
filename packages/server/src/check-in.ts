@@ -1,0 +1,285 @@
+import {
+  type BuildInfo,
+  type CheckInRequest,
+  checkInResponseSchema,
+  type NodeConfigBundle,
+  type NodeReading,
+} from '@dormice/shared';
+import type { Db } from './db/db';
+import { countByState, listSandboxes } from './db/ledger';
+import type { Executor } from './executor/executor';
+import { type CpuSampler, readHostReading } from './host-metrics';
+import type { SwapControl } from './swap';
+
+/**
+ * A node's reading for its check-in: the host half (host-metrics.ts), the
+ * ledger's census, what the sandbox disks cost (the executor's diskUsage —
+ * a readdir and a stat per disk, what the console's getHostMetrics poll
+ * already asked of this node every five seconds; the gateway sums it for
+ * the fleet instead), and what the daemon-managed swap holds — null where
+ * the daemon manages none (a non-Linux host, the fake executor), which is
+ * how the gateway knows to refuse a swap target for this node.
+ */
+export async function readNodeReading(
+  db: Db,
+  cpu: CpuSampler,
+  dataDir: string,
+  executor: Executor,
+  swap?: SwapControl,
+): Promise<NodeReading> {
+  const { byState, total } = countByState(listSandboxes(db));
+  return {
+    ...(await readHostReading(cpu, dataDir)),
+    sandboxes: { total, byState },
+    sandboxDisks: await executor.diskUsage(),
+    managedSwap:
+      swap === undefined ? null : { activeGb: (await swap.status()).activeGb },
+  };
+}
+
+export interface CheckInLog {
+  info(msg: string): void;
+  warn(obj: unknown, msg: string): void;
+}
+
+export interface CheckInOptions {
+  /** DORMICE_GATEWAY_ENDPOINT. */
+  gateway: string;
+  /** The token gateway and nodes share (DORMICE_API_TOKEN). */
+  token: string;
+  nodeId: string;
+  /** Where the gateway reaches this node (DORMICE_NODE_ENDPOINT or the loopback default). */
+  endpoint: string;
+  intervalSeconds: number;
+  build: BuildInfo | null;
+  readReading: () => Promise<NodeReading>;
+  /** The version of the configuration copy this node runs; null while it holds none (db/settings.ts). */
+  configVersion: () => number | null;
+  /** Makes a bundle the gateway answered with real on this node (node-config.ts applyConfig). */
+  applyConfig: (bundle: NodeConfigBundle) => Promise<void>;
+  /**
+   * Whether this node can upgrade itself when told, and why not (the
+   * updater's availability, updater.ts) — reported at every check-in so
+   * the gateway rolls the fleet upgrade over the nodes that can and names
+   * the rest. Optional for the suites that embed a check-in without an
+   * updater; the daemon always wires it.
+   */
+  selfUpgrade?: () => Promise<{ available: boolean; reason: string | null }>;
+  /** Runs this node's own upgrade (updater.apply) when the gateway's answer says `upgrade: true`. */
+  applyUpgrade?: () => Promise<void>;
+  log: CheckInLog;
+  /** Test seam; production uses the platform's fetch. */
+  fetchImpl?: typeof fetch;
+}
+
+/** A gateway that has not answered within this is a gateway not answering; the next tick tries again. */
+const CHECK_IN_TIMEOUT_MS = 10_000;
+
+/**
+ * The node's check-in ticker: every interval, one POST /checkIn to the
+ * gateway carrying the node's id, where it can be reached, its build, a
+ * fresh reading and the version of the configuration copy it runs
+ * (RULES/协议.md「网关」). The gateway learns of a node from its first
+ * check-in — no registration verb, no nodes file — and reads two missed
+ * check-ins as down. The answer is the gateway's configuration version,
+ * and the whole bundle whenever the node's differs: the check-in IS the
+ * configuration pull (design record #22) — a fresh node, a node that
+ * missed an edit while the gateway was away, an operator's change a
+ * second ago, all one mechanism, and nothing for the gateway to remember.
+ *
+ * Chained setTimeout, the daemon's discipline: the next tick is scheduled
+ * when this one is done, so a slow gateway never has ticks pile up.
+ * Failures are logged on the change — once when the gateway stops
+ * answering, once more when what is wrong changes (a gateway that was
+ * unreachable and now refuses this node is news), once when it answers
+ * again — never every tick: a gateway down for an hour is one event, not
+ * two hundred and forty lines. Never fatal: the gateway is the fleet's
+ * front door and configuration authority, not the node's reason to live;
+ * the node keeps running its sandboxes and keeps trying.
+ */
+/**
+ * A failure in the operator's words. fetch says "fetch failed" and keeps
+ * the reason (ECONNREFUSED, ENOTFOUND, a TLS error) in `cause`; a
+ * timeout is a DOMException whose only code is a legacy number. The
+ * transport's word is the one the operator acts on, so it is appended.
+ */
+function describe(error: unknown): string {
+  const e = error as { message?: string; cause?: unknown };
+  const cause = e.cause as { code?: unknown; message?: string } | undefined;
+  const message = e.message ?? String(error);
+  const why = typeof cause?.code === 'string' ? cause.code : cause?.message;
+  return why === undefined ? message : `${message} (${why})`;
+}
+
+/** The daemon always wires applyUpgrade; a suite that does not, told to upgrade, hears why nothing happened. */
+async function unavailableUpgrade(): Promise<void> {
+  throw new Error('this check-in has no updater to run an upgrade with');
+}
+
+export class CheckIn {
+  private timer: NodeJS.Timeout | undefined;
+  private closing = false;
+  /** The failure the gateway is currently in (its sentence with the numbers blanked, so a 409 that says "3s ago" and then "4s ago" is one failure), or null while it answers. */
+  private failing: string | null = null;
+
+  constructor(private readonly opts: CheckInOptions) {}
+
+  start(): void {
+    this.schedule(0);
+  }
+
+  stop(): void {
+    this.closing = true;
+    clearTimeout(this.timer);
+  }
+
+  /** One check-in. Never throws: a failure is recorded and the next tick retries. */
+  async once(): Promise<void> {
+    const { opts } = this;
+    try {
+      const body: CheckInRequest = {
+        nodeId: opts.nodeId,
+        endpoint: opts.endpoint,
+        intervalSeconds: opts.intervalSeconds,
+        build: opts.build,
+        reading: await opts.readReading(),
+        configVersion: opts.configVersion(),
+        ...(opts.selfUpgrade === undefined
+          ? {}
+          : { selfUpgrade: await opts.selfUpgrade() }),
+      };
+      const res = await (opts.fetchImpl ?? fetch)(`${opts.gateway}/checkIn`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${opts.token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(CHECK_IN_TIMEOUT_MS),
+        // A front that redirects (a Caddy binding the gateway's domain
+        // answers plain http with a 308 to https) is reported as what it
+        // is. Followed, the redirect would cross origins and fetch would
+        // drop the Authorization header on the way (the Fetch standard's
+        // rule), so the gateway would answer 401 — and the operator would
+        // read a wrong token where there is a wrong address (found by
+        // review, 2026-09-14).
+        redirect: 'manual',
+      });
+      if (res.status !== 200) {
+        const text = await res.text();
+        const location = res.headers.get('location');
+        // Whole enough for the gateway's own refusals (its longest, the
+        // 409 naming both endpoints of a shared node id, runs to about 260
+        // characters — cut at 200 it lost its remedy), short enough that
+        // a front's HTML error page does not flood the log.
+        const body = text.slice(0, 400);
+        throw new Error(
+          location === null
+            ? `gateway answered ${res.status}: ${body}`
+            : `gateway answered ${res.status} redirecting to ${location} — DORMICE_GATEWAY_ENDPOINT must be the gateway's own address, not a front that redirects`,
+        );
+      }
+      const answer = checkInResponseSchema.parse(await res.json());
+      if (this.failing !== null) {
+        opts.log.info(`check-in with gateway ${opts.gateway} answers again`);
+        this.failing = null;
+      }
+      if (answer.config !== undefined) {
+        // A bundle that cannot be applied is this tick's failure: the copy
+        // stays what it was, the next check-in reports the old version, and
+        // the gateway answers the bundle again — the retry is the protocol.
+        try {
+          await opts.applyConfig(answer.config);
+        } catch (error) {
+          throw new Error(
+            `configuration v${answer.config.version} from the gateway could not be applied: ${describe(error)}`,
+          );
+        }
+      }
+      if (answer.upgrade === true) {
+        // The gateway's turn for this node in the fleet upgrade: run the
+        // same one-click upgrade an operator would (install.sh in a
+        // systemd unit, updater.ts). Said as its own line, not this tick's
+        // failure: the check-in itself succeeded, and the gateway tells a
+        // node once — a launch that fails here is the operator's to read
+        // (the gateway shows the node as stuck twenty minutes on, and
+        // applyUpgrade {nodeId} at the gateway puts it back in line).
+        opts.log.info(
+          `the gateway says this node's turn to upgrade has come — launching install.sh (systemd unit dormice-upgrade)`,
+        );
+        try {
+          await (opts.applyUpgrade ?? unavailableUpgrade)();
+        } catch (error) {
+          opts.log.warn(
+            { error: describe(error) },
+            'the upgrade the gateway asked for could not be launched; the gateway lists this node as stuck once twenty minutes have passed, and applyUpgrade {nodeId} there puts it back in line',
+          );
+        }
+      }
+    } catch (error) {
+      const message = describe(error);
+      const failure = message.replace(/\d+/g, '#');
+      if (failure !== this.failing) {
+        // What the failure costs depends on where this node stands: one
+        // holding a copy keeps serving and is merely not placed on; one
+        // without (untilConfigured, at boot) is not listening at all, and
+        // "the gateway forwards nothing here" would name the wrong
+        // predicament (found by review, 2026-09-14). "Applied", not
+        // "answered": a gateway that answered a bundle this node could not
+        // apply leaves it in the same predicament, and the error names
+        // which of the two happened.
+        const cost =
+          opts.configVersion() === null
+            ? 'this node holds no configuration copy and does not listen until it has applied one from the gateway'
+            : 'the gateway places nothing here and forwards no new names to this node until it answers again';
+        opts.log.warn(
+          { gateway: opts.gateway, error: message },
+          this.failing === null
+            ? `check-in failed; ${cost} — retrying every interval`
+            : 'check-in still failing, differently — retrying every interval',
+        );
+      }
+      this.failing = failure;
+    }
+  }
+
+  /**
+   * Blocks until this node holds a configuration copy: a check-in now,
+   * then one per interval, until a bundle has been applied. For boot
+   * (main.ts) — a node without configuration has nothing to build a
+   * sandbox from and does not listen. Never gives up: the gateway is the
+   * fleet's configuration and there is no other source; each failure is
+   * logged once by once(), so a gateway down for an hour is one line. The
+   * check-ins sent here carry `configVersion: null`, which is what keeps
+   * the gateway from placing on this node before it listens.
+   *
+   * `beat` is the heartbeat watchdog's ear, and this wait is the only
+   * place the check-in may beat it: each attempt — answered or not,
+   * bounded by CHECK_IN_TIMEOUT_MS — is the wait provably alive, where
+   * the watchdog, started before boot's awaits, otherwise read a node
+   * half an hour into waiting for its gateway as a stalled daemon and
+   * exited it — every thirty minutes, for nothing (found by review,
+   * 2026-09-14). The ticker (start()) is handed no beat, so a ticker's
+   * liveness cannot reassure the watchdog (main.ts has the 2026-08-13
+   * lesson); the lifecycle work a bundle sets off (the pids sweep in
+   * applyConfig) beats per row on its own, as work does everywhere.
+   */
+  async untilConfigured(beat: () => void): Promise<void> {
+    while (!this.closing && this.opts.configVersion() === null) {
+      await this.once();
+      beat();
+      if (this.opts.configVersion() !== null) return;
+      await new Promise((resolve) =>
+        setTimeout(resolve, this.opts.intervalSeconds * 1000),
+      );
+    }
+  }
+
+  private schedule(delayMs: number): void {
+    if (this.closing) return;
+    this.timer = setTimeout(async () => {
+      await this.once();
+      this.schedule(this.opts.intervalSeconds * 1000);
+    }, delayMs);
+  }
+}

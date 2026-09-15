@@ -5,7 +5,9 @@ description: Symptoms, causes, and fixes — every entry here was hit on real ha
 
 Three places answer most questions before this page does: the daemon's
 log (`journalctl -u dormice -f` — error messages are written to be
-read), `dor doctor` (the environment,
+read; a request that succeeded leaves no line, one that ended in a 4xx
+or 5xx leaves exactly one, naming the method, the path and the status),
+`dor doctor` (the environment,
 [check by check](/docs/doctor)), and the console's Overview or
 `getHostMetrics` (the machine's [capacity](/docs/metrics)).
 
@@ -76,14 +78,12 @@ Out-of-memory *inside* the sandbox takes down the whole gVisor container
 next acquire revives the sandbox. Raise the limit if the workload
 honestly needs more.
 
-The activity feed (`listActivity`, or the console's activity page) says
-which it was: the `reconciled` event that recorded the death carries the
-exit code and whether the kernel's memory cgroup OOM-killed the
-container. `OOM-killed` is the kernel's verdict; a plain `exit 137` is a
-SIGKILL from elsewhere. The same verdict rides on the sandbox object as
-[`lastExit`](/docs/http-api#the-sandbox-object) — `cause: "oom-killed"`
-here — so a client that saw its stream end can read it straight from
-the `acquireSandbox` that revives the sandbox.
+The sandbox object says which it was:
+[`lastExit`](/docs/http-api#the-sandbox-object) carries the exit code
+and whether the kernel's memory cgroup OOM-killed the container —
+`cause: "oom-killed"` is the kernel's verdict; a plain `exit 137` is a
+SIGKILL from elsewhere — so a client that saw its stream end can read it
+straight from the `acquireSandbox` that revives the sandbox.
 
 The verdict is read two ways, and one of them depends on the host. A
 wake that arrives while the container's cgroup still exists reads the
@@ -114,20 +114,18 @@ The sandbox hit its pids cap (the `pidsLimit` setting;
 that cap bounds the sandbox's host-side threads and processes, not a
 count the sandbox can see — so nothing inside gets an error; the
 sandbox's kernel simply dies, exit 2, and the host's own kernel log
-shows one line: `fork rejected by pids controller`. The `reconciled`
-activity event names this signature, and the sandbox object's
-[`lastExit`](/docs/http-api#the-sandbox-object) reads
+shows one line: `fork rejected by pids controller`. The sandbox object's
+[`lastExit`](/docs/http-api#the-sandbox-object) names this signature:
 `cause: "runtime-died"`. The disk survives and the next acquire revives
 the sandbox — immediately, even inside the heartbeat's blind spot (see
 the entry above). The default is 4096 (it was 512, runc's
 fork-bomb number — a browser plus a few agent sessions in one sandbox is
-enough to pass it). A daemon upgraded from the old default adopts 4096 at
-that boot and brings its running sandboxes to it right there; only an
-environment that pins `DORMICE_SANDBOX_PIDS_LIMIT` at the old number
-keeps it, and the console's settings page (or `updateSettings`'s
-`pidsLimit`) is where to raise it — no restart, no rebuild: running
-sandboxes are brought to the new value in place as it is saved, frozen or
-stopped ones at their next wake.
+enough to pass it). The cap is a fleet setting at the gateway
+(`DORMICE_SANDBOX_PIDS_LIMIT` in the gateway's env seeds it once), and
+the console's settings page (or `updateSettings`'s `pidsLimit`) is where
+to raise it — no restart, no rebuild: each node takes the new value at
+its next check-in and brings its running sandboxes to it in place,
+frozen or stopped ones at their next wake.
 
 ## E2B `watchDir` refuses to start
 
@@ -136,21 +134,30 @@ The sandbox image predates `inotify-tools`. Rebuild the image from
 [rebuild](/docs/upgrading) the sandboxes that need watching. Doctor's
 image probe warns about exactly this.
 
-## `acquireSandbox` answers 429
-
-The sandbox limit (default 100, seeded from `DORMICE_MAX_SANDBOXES`)
-gates *creation* only — waking an existing sandbox is never blocked.
-Raise it live in the console's settings page (or the `updateSettings`
-verb); no restart needed. Before raising it, look at the disk-overcommit
-figure in [`getHostMetrics`](/docs/metrics): disk is the real ceiling,
-and past full even the daemon's database cannot write.
-
 ## Creating from a template fails: "image … is not on this host"
 
 By design: [registration is configuration](/docs/templates) — the image
 is not checked when a name is registered, so the error surfaces at
-create time, named. `docker pull` or build the image on the daemon host,
-then retry.
+create time, named. A node first tries the fleet's image registry; the
+message says which failed. No registry in the fleet: build or
+`docker pull` the image on that node under the bare name. A registry
+that lacks it: run the push command the message spells out from a
+machine that has the image. A pull that fails otherwise: the node's
+`/etc/docker/certs.d/<registry>/ca.crt` must be the registry's
+certificate (re-run the installer to pin it) and the fleet token its
+credential.
+
+## A node shows "stuck" on the version page
+
+The gateway told the node to upgrade itself, and twenty minutes later
+it still reports the old build. The gateway never tells it again on its
+own (a build that fails every time must not rebuild every twenty
+minutes on the sandboxes' CPU). On that node read `journalctl -u
+dormice-upgrade` and `/var/lib/dormice/upgrade/upgrade.log`, fix the
+cause — a mirror that hung, a full disk — and press **Try again** on the
+version page, which puts the node back in line: it is told once more at
+its next check-in, once no other node is upgrading.
+See [Upgrade a fleet](/docs/upgrading#upgrade-a-fleet).
 
 ## A paused container won't `docker rm` by hand
 

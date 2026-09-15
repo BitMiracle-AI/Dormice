@@ -1,16 +1,10 @@
-import {
-  ACTIVITY_KINDS,
-  SANDBOX_STATES,
-  SHELL_EXIT_CAUSES,
-} from '@dormice/shared';
-import { sql } from 'drizzle-orm';
+import { SANDBOX_STATES, SHELL_EXIT_CAUSES } from '@dormice/shared';
 import {
   index,
   integer,
   real,
   sqliteTable,
   text,
-  uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 
 /**
@@ -92,10 +86,16 @@ export const sandboxes = sqliteTable('sandboxes', {
 export type SandboxRow = typeof sandboxes.$inferSelect;
 
 /**
- * Registered templates: a name for a Docker image that lives on this host.
- * The host's Docker daemon is the image store; this table only records which
- * name points where. Sandboxes reference templates by name (column above),
- * so re-pointing a name upgrades every future shell built for it.
+ * Templates: a name for a Docker image that lives on this host. The host's
+ * Docker daemon is the image store; this table only records which name
+ * points where. Sandboxes reference templates by name (column above), so
+ * re-pointing a name upgrades every future shell built for it.
+ *
+ * Since the configuration moved to the gateway (2026-09-14) this table is
+ * the node's copy: registered and removed there, written here whole with
+ * every configuration bundle (db/settings.ts applyNodeConfig) and read at
+ * every birth and wake — so a node whose gateway is away still resolves
+ * its names.
  */
 export const templates = sqliteTable('templates', {
   name: text('name').primaryKey(),
@@ -108,46 +108,18 @@ export const templates = sqliteTable('templates', {
 export type TemplateRow = typeof templates.$inferSelect;
 
 /**
- * The activity ring: the ledger's recent history, one row per lifecycle
- * event (created, cooled, woken, destroyed, repaired). Bounded by count —
- * recordActivity prunes past the newest N — so it answers "what just
- * happened" without ever becoming a second database to babysit. The
- * autoincrement id is the ring position AND the newest-first sort key;
- * unlike sandbox ids it never leaves this machine, so the UUID rule does
- * not apply.
- */
-export const activity = sqliteTable('activity', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  /** ISO 8601 UTC. */
-  at: text('at').notNull(),
-  kind: text('kind', { enum: ACTIVITY_KINDS }).notNull(),
-  /** Null for events with no owning sandbox (orphan sweeps, daemon start). */
-  sandboxName: text('sandbox_name'),
-  sandboxId: text('sandbox_id'),
-  /**
-   * Which credential asked — the closed vocabulary in shared/activity.ts
-   * ('env-token' | 'console' | 'apikey:<id>'). Null = no credential did:
-   * the daemon's own actors, plus rows from before attribution existed
-   * (the ring prunes those away within days).
-   */
-  actor: text('actor'),
-  detail: text('detail').notNull(),
-});
-
-export type ActivityRow = typeof activity.$inferSelect;
-
-/**
  * Per-sandbox metrics history, written by the background sampler every
  * DORMICE_METRICS_SAMPLE_INTERVAL_SECONDS for each measurable (running or
  * paused) sandbox. The daemon keeps this history because it is a
  * compatibility contract — the E2B metrics endpoint slices by start/end —
  * and because nothing outside the ledger can measure per-sandbox.
  *
- * Three tables, not one: this, fleet_snapshots and host_metrics_samples
- * differ in unit of meaning (one sandbox's resources vs the fleet's state
- * counts vs the machine's own resources), retention
- * (DORMICE_METRICS_RETENTION_HOURS vs a fixed 30 days for the other two)
- * and deletion path (destroy cascades here, never there).
+ * Two tables, not one: this and host_metrics_samples differ in unit of
+ * meaning (one sandbox's resources vs the machine's own), retention
+ * (DORMICE_METRICS_RETENTION_HOURS vs a fixed 30 days) and deletion path
+ * (destroy cascades here, never there). The fleet's state counts are the
+ * gateway's table since the third cut (fleet_snapshots below is the
+ * legacy).
  *
  * Keyed by the sandbox's platform id, not its name: rebuild replaces the
  * shell but keeps the id, so history stays continuous across rebuilds;
@@ -186,38 +158,13 @@ export const sandboxMetricsSamples = sqliteTable(
 export type SandboxMetricsSampleRow = typeof sandboxMetricsSamples.$inferSelect;
 
 /**
- * Fleet state counts over time, one row per sampler tick: the data behind
- * the console's concurrency curve and peak. Owned by no sandbox — destroy
- * never touches it — and kept a fixed 30 days (the dashboard's widest
- * range defines the need; like ACTIVITY_KEEP, nobody tunes the size of an
- * explanation window).
- *
- * Five explicit state columns instead of a JSON blob: the window peak is
- * max(active) in one SQL aggregate, and the stacked chart needs each state
- * addressable. `total` is stored redundantly so readers never re-derive it.
- */
-export const fleetSnapshots = sqliteTable('fleet_snapshots', {
-  /** ISO 8601 UTC; one row per tick, so time itself is the key. */
-  at: text('at').primaryKey(),
-  active: integer('active').notNull(),
-  frozen: integer('frozen').notNull(),
-  stopped: integer('stopped').notNull(),
-  archived: integer('archived').notNull(),
-  restoring: integer('restoring').notNull(),
-  total: integer('total').notNull(),
-});
-
-export type FleetSnapshotRow = typeof fleetSnapshots.$inferSelect;
-
-/**
  * The host machine's own resource history, one row per sampler tick — the
  * historical sibling of getHostMetrics' snapshot. The original ruling
  * ("host trends belong to Prometheus") was overturned 2026-07-21: on a
  * self-hosted single box nobody runs Prometheus, and overcommit-by-
  * observation — the platform's own capacity story — is impossible without
  * a peak to look at. Owned by no sandbox (destroy never touches it), kept
- * a fixed 30 days like fleet_snapshots and for the same reason: the
- * dashboard's widest range defines the need.
+ * a fixed 30 days: the dashboard's widest range defines the need.
  *
  * Nullable columns are honest platform gaps, never zeros: cpu_used_pct is
  * null on the tick after a daemon start (a delta needs two samples), swap
@@ -243,29 +190,6 @@ export const hostMetricsSamples = sqliteTable('host_metrics_samples', {
 export type HostMetricsSampleRow = typeof hostMetricsSamples.$inferSelect;
 
 /**
- * The console's one human account (the fixed id makes "at most one row" a
- * schema fact, not a convention). The API token stays the root of trust:
- * presenting it (re)creates this row — that IS the forgot-password path —
- * while day-to-day console logins are username + password.
- *
- * sessionSecret is the HMAC key for session cookies. It lives here and not
- * in the token so the two credentials rotate independently: re-running
- * setup regenerates it (every session out — correct for a password reset),
- * rotating the API token leaves console sessions alone.
- */
-export const consoleAccount = sqliteTable('console_account', {
-  id: integer('id').primaryKey(),
-  username: text('username').notNull(),
-  /** Self-describing scrypt string: scrypt$N$r$p$<salt b64>$<hash b64>. */
-  passwordHash: text('password_hash').notNull(),
-  sessionSecret: text('session_secret').notNull(),
-  createdAt: text('created_at').notNull(),
-  updatedAt: text('updated_at').notNull(),
-});
-
-export type ConsoleAccountRow = typeof consoleAccount.$inferSelect;
-
-/**
  * The daemon's own secrets — one row, fixed id, same singleton pattern as
  * console_account. envdSigningSecret is the HMAC key behind every envd
  * access token and signed file URL. It is deliberately NOT the API token:
@@ -286,22 +210,34 @@ export const daemonSecrets = sqliteTable('daemon_secrets', {
 export type DaemonSecretsRow = typeof daemonSecrets.$inferSelect;
 
 /**
- * Runtime settings — the operator knobs that must be changeable from the
- * console without shell access and a restart (shared/settings.ts draws the
- * line). One row, fixed id — the console_account singleton pattern. Born at
- * first boot, seeded from the env variables of the same names; from then on
- * the ledger is the single truth and env edits to those knobs are ignored
- * (two live sources for one knob is a standing ambiguity). The discipline
- * is per knob, not per row: a column added by a later migration gets its
- * one env consultation on the first boot that sees it NULL (see
- * ensureRuntimeSettings' adopt step).
+ * Runtime settings — this node's copy of the fleet configuration (design
+ * record #22, 2026-09-14): the gateway holds the settings and every node
+ * keeps a copy, so a node whose gateway is away still knows what a new
+ * sandbox gets and where its archives live. One row, fixed id — the
+ * console_account singleton pattern — written whole by applyNodeConfig
+ * (db/settings.ts) with every bundle the check-in brings, never edited
+ * here: there is no verb on the node that changes a knob.
+ *
+ * config_version says which bundle the row is. NULL means the row is not
+ * a copy at all: the daemon's own settings from before the move (seeded
+ * from the env, edited from the console), never read by the node again —
+ * the node reports "no copy" and takes the gateway's bundle at its first
+ * check-in, which overwrites every column. What such a row held for the
+ * fleet was carried into the gateway by the fourth cut's import
+ * (gateway import-ledger.ts), which install.sh runs before the gateway's
+ * first start; the same cut dropped the three tables that moved with the
+ * authority (api_keys, console_account, fleet_snapshots) and the row's
+ * updated_at, all read by nothing on a node (migration 0027).
  *
  * Typed columns, not a JSON blob: the schema IS the vocabulary, and a knob
  * that exists but is invisible to migrations would drift silently.
  */
 export const runtimeSettings = sqliteTable('runtime_settings', {
   id: integer('id').primaryKey(),
-  maxSandboxes: integer('max_sandboxes').notNull(),
+  /** The bundle's version (shared nodeConfigBundleSchema); NULL = not a copy, see above. */
+  configVersion: integer('config_version'),
+  /** ISO 8601 UTC — when this copy was applied; the boot log's "how old is what I run". */
+  configAppliedAt: text('config_applied_at'),
   sandboxCpus: real('sandbox_cpus').notNull(),
   sandboxMemoryGb: real('sandbox_memory_gb').notNull(),
   sandboxDiskGb: real('sandbox_disk_gb').notNull(),
@@ -310,21 +246,20 @@ export const runtimeSettings = sqliteTable('runtime_settings', {
   defaultStopAfterSeconds: integer('default_stop_after_seconds'),
   /** NULL = never archive — forced when the daemon has no archiver. */
   defaultArchiveAfterSeconds: integer('default_archive_after_seconds'),
-  /** Daemon-managed swap target, GiB (see swap.ts); 0 = manage none. */
+  /** This node's managed-swap target, GiB (swap.ts) — its own row at the gateway (updateNodeSettings); 0 = manage none. */
   swapGb: integer('swap_gb').notNull().default(0),
   /**
-   * The S3 archive store and the sandbox domain (added 2026-07-26). These
-   * columns are per-knob three-state: NULL = the column is younger than
-   * this row and has never been adjudicated (alive only between the
-   * migration and the next boot's ensureRuntimeSettings, which adopts the
-   * env value once); '' on the two decider columns (s3Endpoint,
-   * sandboxDomain) = explicitly off. The sentinel never leaves
-   * db/settings.ts — toView maps '' back to the wire's null.
+   * The S3 archive store and the sandbox domain. In a copy the two
+   * decider columns (s3Endpoint, sandboxDomain) are two-state: a value,
+   * or NULL = off. Rows from before the move used '' for off and NULL for
+   * "never adjudicated"; a copy never writes '' and the readers never see
+   * one — they refuse a row without config_version (db/settings.ts).
    *
    * s3SecretAccessKey is stored plaintext, like envdSigningSecret and
    * sessionSecret above: a credential the daemon must present verbatim to
-   * S3 cannot be hashed. It never crosses the wire (shared/settings.ts
-   * s3ArchiveViewSchema withholds both keys).
+   * S3 cannot be hashed. It never crosses the node's wire (shared
+   * s3ArchiveViewSchema withholds both keys); it arrives with the bundle
+   * over the gateway→node wire under the fleet token.
    */
   s3Endpoint: text('s3_endpoint'),
   s3Bucket: text('s3_bucket'),
@@ -333,80 +268,25 @@ export const runtimeSettings = sqliteTable('runtime_settings', {
   s3Region: text('s3_region'),
   s3ForcePathStyle: integer('s3_force_path_style', { mode: 'boolean' }),
   sandboxDomain: text('sandbox_domain'),
-  /**
-   * Inbound-only alias domains (added 2026-08-31), a JSON string array.
-   * Same NULL-until-adopted three-state as above, but no '' sentinel —
-   * '[]' already says "no aliases", and the adopt step always writes '[]'
-   * without consulting the env: the alias list is console-era operations
-   * editing, not a first-boot identity, so it deliberately has no env
-   * variable.
-   */
+  /** Inbound-only alias domains, a JSON string array ('[]' = none). Nullable only for rows from before the move. */
   sandboxDomainAliases: text('sandbox_domain_aliases'),
   /**
-   * The pids cgroup cap on every sandbox container (added 2026-09-08).
-   * Same NULL-until-adopted three-state; the adopt step consults
-   * DORMICE_SANDBOX_PIDS_LIMIT once, so an upgraded daemon keeps the value
-   * its env has been running with. Never '' — there is no "off": a cap
-   * always exists (shared/settings.ts enforces the floor).
+   * The pids cgroup cap on every sandbox container. Never "off": a cap
+   * always exists (shared/settings.ts enforces the floor). Nullable only
+   * for rows from before the move.
    */
   pidsLimit: integer('pids_limit'),
-  /** Null until the first updateSettings: "still exactly the seed" is information. */
-  updatedAt: text('updated_at'),
+  /**
+   * The fleet's base image (shared settings.ts baseImage), in the copy
+   * since the fourth cut (2026-09-15): what a template-less sandbox boots
+   * from, pulled from the fleet registry when this host lacks it. NULL =
+   * the fleet names none — this node then falls back to its own
+   * DORMICE_BASE_IMAGE, the knob's old home (db/templates.ts
+   * resolveBaseImage).
+   */
+  baseImage: text('base_image'),
+  /** The fleet's image registry, host:port (shared settings.ts registryAddress); NULL = no registry, a missing image is a plain error. */
+  registryAddress: text('registry_address'),
 });
 
 export type RuntimeSettingsRow = typeof runtimeSettings.$inferSelect;
-
-/**
- * Ledger-minted API keys: full-power peers of DORMICE_API_TOKEN that exist
- * so credentials can rotate without an env edit and a restart. The env
- * token itself never lives here — it stays the bootstrap/recovery
- * credential, checked from config.
- *
- * keyHash is sha256 of the key material, not scrypt: a key is 256 random
- * bits, not a human password, so offline brute force is moot and a slow
- * KDF would only tax every authenticated request. Verification is an
- * indexed exact-match lookup on the hash; the timing of that comparison
- * can at worst leak sha256(key) bytes, which preimage resistance makes
- * worthless (the same argument GitHub tokens rest on).
- *
- * Revocation is soft (revokedAt) — the row stays as rotation history and
- * keeps lastUsedAt readable after the credential dies. "At most one ACTIVE
- * key per name" is a schema fact via the partial unique index below (the
- * console_account fixed-id philosophy); a revoked name is free for reuse.
- */
-export const apiKeys = sqliteTable(
-  'api_keys',
-  {
-    /** UUID, never an autoincrement — ids must stay unique across machines. */
-    id: text('id').primaryKey(),
-    name: text('name').notNull(),
-    /** sha256 hex of the bare 64-hex key material. The key itself is never stored. */
-    keyHash: text('key_hash').notNull().unique(),
-    /** First 8 hex chars of the key, for display — 32 bits, no meaningful entropy. */
-    prefix: text('prefix').notNull(),
-    createdAt: text('created_at').notNull(),
-    /** Null = never used. Written with 60s granularity, not per request. */
-    lastUsedAt: text('last_used_at'),
-    /**
-     * Null = never expires. Always written through normalizeIso (exact
-     * toISOString shape) so the liveness filter's string comparison against
-     * "now" is chronologically sound — wire input has variable precision.
-     */
-    expiresAt: text('expires_at'),
-    /**
-     * Null = enabled. The reversible half of revocation: set/cleared by
-     * updateApiKey, and the name stays held while disabled — only revoke
-     * frees a name.
-     */
-    disabledAt: text('disabled_at'),
-    /** Null = active. Set once by revokeApiKey; never cleared. */
-    revokedAt: text('revoked_at'),
-  },
-  (table) => [
-    uniqueIndex('api_keys_active_name_idx')
-      .on(table.name)
-      .where(sql`${table.revokedAt} IS NULL`),
-  ],
-);
-
-export type ApiKeyRow = typeof apiKeys.$inferSelect;

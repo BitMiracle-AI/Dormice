@@ -5,20 +5,23 @@ description: This guide shows you how to acquire your first sandbox, run command
 
 By the end of this page you will have created a sandbox, run a command
 inside it, written a file into it, and destroyed it — from TypeScript,
-from plain `curl`, or from your terminal. It assumes a daemon is
-already running (from [Installation](/docs/installation)).
+from plain `curl`, or from your terminal. It assumes Dormice is already
+installed and running (from [Installation](/docs/installation)).
 
 ## 1. Set your environment variables
 
-Clients find the daemon through two environment variables — named
-values your shell passes to every program you start. You need the
-daemon's address and its [API
-token](/docs/core-concepts#tokens-sdks-and-the-cli):
+Clients find Dormice through two environment variables — named values
+your shell passes to every program you start. You need the gateway's
+address — the fleet's one door, `3677` on the host it runs on — and the
+[API token](/docs/core-concepts#tokens-sdks-and-the-cli):
 
 ```sh
-export DORMICE_ENDPOINT=http://127.0.0.1:3676
-export DORMICE_API_TOKEN=<your token>  # on the daemon host: grep ^DORMICE_API_TOKEN /etc/dormice/env
+export DORMICE_ENDPOINT=http://127.0.0.1:3677
+export DORMICE_API_TOKEN=<your token>  # on the host: grep ^DORMICE_API_TOKEN /etc/dormice/env
 ```
+
+The gateway answers everything this page does, the sandbox list
+included — it merges the lists of every node.
 
 ## 2. Get the SDK
 
@@ -33,7 +36,7 @@ or skip the SDK entirely and use [curl](#use-curl-instead) or the
 import { Dormice } from '@dormice/sdk';
 
 const client = new Dormice({
-  endpoint: 'http://127.0.0.1:3676',
+  endpoint: 'http://127.0.0.1:3677',
   token: process.env.DORMICE_API_TOKEN!,
 });
 
@@ -64,9 +67,9 @@ sent in the `Authorization` header — so curl works anywhere the SDK
 doesn't reach:
 
 ```sh
-curl -X POST http://127.0.0.1:3676/listSandboxes \
+curl -X POST http://127.0.0.1:3677/acquireSandbox \
   -H "Authorization: Bearer $DORMICE_API_TOKEN" \
-  -H "content-type: application/json" -d '{}'
+  -H "content-type: application/json" -d '{"name": "my-agent"}'
 ```
 
 The full wire surface is in the [HTTP API reference](/docs/http-api).
@@ -77,7 +80,7 @@ The `dor` command (long form: `dormice`) covers the same ground from a
 shell. It connects with the two environment variables from step 1:
 
 ```sh
-dor sandbox ls                        # every sandbox, with lifecycle state
+dor sandbox ls                        # every sandbox, with lifecycle state (lists: the daemon's address, step 1)
 dor sandbox exec my-agent 'uname -r'  # run a command, exit code passes through
 dor sandbox push my-agent ./data.csv  # copy a file in…
 dor sandbox pull my-agent notes.txt   # …and out

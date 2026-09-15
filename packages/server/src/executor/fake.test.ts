@@ -28,4 +28,20 @@ describe('FakeExecutor test hooks', () => {
     expect(executor.stateOf('a')).toBe('running');
     expect(executor.stateOf('ghost')).toBeUndefined();
   });
+
+  it('boots the live base image when a birth names none, and ensureImage pulls an image once and answers present after', async () => {
+    let base = 'base:1';
+    const executor = new FakeExecutor(undefined, undefined, () => base);
+    await executor.create('a');
+    expect(await executor.imageOf('a')).toBe('base:1');
+    base = 'base:2';
+    expect(executor.baseImage()).toBe('base:2');
+    await executor.create('b');
+    expect(await executor.imageOf('b')).toBe('base:2');
+    // The base is always on the host; anything else is pulled once.
+    expect(await executor.ensureImage('base:2')).toBe('present');
+    expect(await executor.ensureImage('tpl:1')).toBe('pulled');
+    expect(await executor.ensureImage('tpl:1')).toBe('present');
+    expect(executor.pulled).toEqual(['tpl:1']);
+  });
 });

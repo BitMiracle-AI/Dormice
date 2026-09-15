@@ -112,5 +112,6 @@
   "sandboxes_cpu_value": "{v} % (par vCPU)",
   "sandboxes_footer_live": "Les valeurs en direct se rafraîchissent toutes les 5 secondes ; cette lecture date de {ago}.",
   "sandboxes_footer_history": "L'historique est échantillonné et stocké par le daemon en arrière-plan ; une sandbox endormie est quand même mesurée (observer ne réveille jamais), et après un arrêt la courbe s'interrompt honnêtement.",
-  "sandboxes_footer_bucketed": "Fenêtre longue : agrégation par paniers de {n} minutes, chaque point est le pic de son panier."
+  "sandboxes_footer_bucketed": "Fenêtre longue : agrégation par paniers de {n} minutes, chaque point est le pic de son panier.",
+  "sandboxes_silent_nodes": "Le nœud {nodes} n'a pas répondu ; ses sandbox ne sont pas listées"
 }

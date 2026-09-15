@@ -21,13 +21,27 @@ the rest.
 
 ## Create a template
 
-Build an image (any way you like) and register its name:
+Build an image (any way you like), push it to the fleet's image
+registry, and register its name:
 
 ```sh
 docker build -t my-agent-env:v1 .
+docker tag my-agent-env:v1 <registry address>/my-agent-env:v1
+docker push <registry address>/my-agent-env:v1     # user dormice, password = the API token
 dor template add my-agent-env my-agent-env:v1
 dor template ls
 ```
+
+The template names the **bare** image (`my-agent-env:v1`), never the
+registry-prefixed one: a node that lacks the image pulls it from the
+fleet's registry — prefixing the address itself, and tagging it back
+under the bare name — the moment a configuration bundle names it (ahead
+of any sandbox needing it) and again at creation if it is still missing.
+The registry address is on the console's settings page
+(`DORMICE_REGISTRY_ADDRESS` in the gateway's env). A fleet of one machine
+can skip the push: the image is already on the only node. An image whose
+name carries its own registry (`ghcr.io/you/tool:v1`) is pulled from
+there as written.
 
 ## Create sandboxes from a template
 
@@ -101,12 +115,15 @@ home directory, non-root user at uid 1000.
 
 - **Registration is configuration.** The image is not checked for
   existence when you register — register first, build later, if you
-  like. If it is still missing when a sandbox needs it, creation fails
-  with a named error
-  (`image X is not on this host — docker pull or build it, then retry`).
+  like. A node that lacks the image pulls it from the fleet's registry;
+  if the registry lacks it too, creation fails with a named error
+  (`image X is not on this host, and pulling <registry>/X from the fleet
+  registry failed … — push it from a machine that has it: docker login
+  <registry> -u dormice (the password is the fleet token), then docker
+  tag X <registry>/X && docker push <registry>/X`).
 - **`base` is reserved.** Through the E2B surface, `Sandbox.create()`
-  with no template argument means the daemon's base image; the name
-  `base` cannot be registered.
+  with no template argument means the fleet's base image (a setting on
+  the console's settings page); the name `base` cannot be registered.
 - **Templates apply at creation only.** An acquire with a `template` on
   a name that already has a sandbox keeps the sandbox it finds, template
   unchanged — but an unknown name is still refused, never silently

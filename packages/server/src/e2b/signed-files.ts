@@ -1,8 +1,8 @@
+import { parseSandboxHost, sandboxDomainsInForce } from '@dormice/shared';
 import multipart from '@fastify/multipart';
 import type { FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { readRuntimeSettings } from '../db/settings';
-import { parseSandboxHost, sandboxDomainsInForce } from '../sandbox-proxy';
 import { allowCorsOrigin, sendPreflight } from './cors';
 import type { E2bDeps } from './deps';
 import { serveFileDownload, serveFileUpload } from './envd/files';

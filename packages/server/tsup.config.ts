@@ -24,7 +24,23 @@ function git(args: string): string {
 const commitTime = git('log -1 --format=%cI');
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/main.ts', 'src/archive/mini-s3.ts'],
+  // Subpath entries beyond the root: mini-s3 for the e2e harness; auth,
+  // keyed-queue, lock, shutdown, s3-store, history and updater for the
+  // gateway, which reuses the daemon's small self-contained pieces
+  // without loading its executor (the root's import graph drags
+  // dockerode, execa and the AWS SDK in).
+  entry: [
+    'src/index.ts',
+    'src/main.ts',
+    'src/archive/mini-s3.ts',
+    'src/auth.ts',
+    'src/keyed-queue.ts',
+    'src/db/lock.ts',
+    'src/shutdown.ts',
+    'src/archive/s3-store.ts',
+    'src/history.ts',
+    'src/updater.ts',
+  ],
   format: ['esm'],
   dts: true,
   clean: true,

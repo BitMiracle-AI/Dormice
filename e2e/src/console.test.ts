@@ -1,16 +1,18 @@
 import { describe, expect, inject, it } from 'vitest';
 
-// The web console, black-box: plain fetch against the built daemon, the
-// same requests a browser would make. The daemon serves packages/console/dist
-// (pnpm build ran before this suite), so this also proves the monorepo
-// path hop in main.ts survives the dist layout.
+// The web console, black-box: plain fetch against the built gateway — the
+// console lives at the fleet's door since the configuration moved there
+// (design record #22) — the same requests a browser would make. The
+// gateway serves packages/console/dist (pnpm build ran before this
+// suite), so this also proves the monorepo path hop in its main.ts
+// survives the dist layout.
 //
 // The tests run in file order on purpose: they walk the account's real
 // story — no account, setup with the token, password logins, reset — and
 // only this file touches the account, so the other suites (Bearer-only)
 // never race it.
 
-const endpoint = () => inject('dormiceEndpoint');
+const endpoint = () => inject('dormiceGatewayEndpoint');
 
 const USERNAME = 'operator';
 const PASSWORD = 'e2e console password';
@@ -35,8 +37,9 @@ function cookieOf(res: Response): string {
   return cookie;
 }
 
-async function listSandboxes(cookie: string, withHeader = true) {
-  return fetch(`${endpoint()}/listSandboxes`, {
+/** A session's way through the gates: listNodes sits behind the admin gate, which a console session opens. */
+async function listNodes(cookie: string, withHeader = true) {
+  return fetch(`${endpoint()}/listNodes`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -92,7 +95,7 @@ describe('web console over a real daemon', () => {
       password: PASSWORD,
     });
     expect(res.status).toBe(200);
-    const list = await listSandboxes(cookieOf(res));
+    const list = await listNodes(cookieOf(res));
     expect(list.status).toBe(200);
     const status = await post('/console/auth/status', {});
     expect(await status.json()).toEqual({ accountExists: true });
@@ -107,16 +110,16 @@ describe('web console over a real daemon', () => {
     expect(res.headers.getSetCookie()).toHaveLength(0);
   });
 
-  it('login yields a session cookie that opens the native API', async () => {
+  it('login yields a session cookie that opens the gates: node A is listed', async () => {
     const res = await post('/console/auth/login', {
       username: USERNAME,
       password: PASSWORD,
     });
     expect(res.status).toBe(200);
-    const list = await listSandboxes(cookieOf(res));
+    const list = await listNodes(cookieOf(res));
     expect(list.status).toBe(200);
-    const body = (await list.json()) as { sandboxes: unknown[] };
-    expect(Array.isArray(body.sandboxes)).toBe(true);
+    const body = (await list.json()) as { nodes: Array<{ id: string }> };
+    expect(body.nodes.map((n) => n.id)).toEqual(['node-1']);
   });
 
   it('the cookie without the console header stays locked out', async () => {
@@ -124,7 +127,7 @@ describe('web console over a real daemon', () => {
       username: USERNAME,
       password: PASSWORD,
     });
-    const list = await listSandboxes(cookieOf(res), false);
+    const list = await listNodes(cookieOf(res), false);
     expect(list.status).toBe(401);
   });
 
@@ -143,7 +146,7 @@ describe('web console over a real daemon', () => {
     expect(reset.status).toBe(200);
     // The forgot-password semantics, observed on the wire: the old session
     // and the old password are both dead, the new pair works.
-    expect((await listSandboxes(before)).status).toBe(401);
+    expect((await listNodes(before)).status).toBe(401);
     const oldLogin = await post('/console/auth/login', {
       username: USERNAME,
       password: PASSWORD,
@@ -154,17 +157,20 @@ describe('web console over a real daemon', () => {
       password: 'a brand new password',
     });
     expect(newLogin.status).toBe(200);
-    expect((await listSandboxes(cookieOf(newLogin))).status).toBe(200);
+    expect((await listNodes(cookieOf(newLogin))).status).toBe(200);
   });
 });
 
 describe('browser-side signed download URLs (the Office preview foundation)', () => {
   // The console's preview pane recomputes the file signature in the browser
-  // (envd-client.ts signedDownloadUrl) from the token /console/envdToken
-  // hands it. This pins the whole chain end-to-end — console minting, the
-  // formula REWRITTEN here rather than imported (a black box pins the
-  // formula itself, not a shared implementation's self-consistency), and
-  // the root /files door.
+  // (envd-client.ts signedDownloadUrl) from the token /envdToken
+  // hands it, and opens it on its own origin — the gateway's. This pins
+  // the whole chain end-to-end — console minting at the gateway (which
+  // asks the sandbox's node), the formula REWRITTEN here rather than
+  // imported (a black box pins the formula itself, not a shared
+  // implementation's self-consistency), and the root /files door at the
+  // gateway, which asks every node whose signature it is and forwards to
+  // the one that signed it.
   it('a console-minted token signs a working /files URL with the browser formula', async () => {
     // Continue the account story: re-setup with the token so this describe
     // owns known credentials regardless of what ran before it.
@@ -199,7 +205,7 @@ describe('browser-side signed download URLs (the Office preview foundation)', ()
     });
 
     // Mint the token exactly the way the browser does: cookie + console header.
-    const minted = await fetch(`${endpoint()}/console/envdToken`, {
+    const minted = await fetch(`${endpoint()}/envdToken`, {
       method: 'POST',
       headers: {
         cookie: session,

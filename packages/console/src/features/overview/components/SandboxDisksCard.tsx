@@ -2,16 +2,17 @@ import { Meter } from '@/components/Meter';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { formatBytes, pctOf } from '@/lib/format';
 import { m } from '@/paraglide/messages';
-import { useHostMetrics } from '../hooks/useHostMetrics';
+import { useFleetMetrics } from '../hooks/useFleetMetrics';
 import { StatCard, StatCardSkeleton } from './StatCard';
 
 /**
  * 沙箱磁盘账单卡:这群沙箱的盘许诺了多少、实际占了多少 — 稀疏镜像
  * 只为真实内容付费,这两个数的差就是超卖的空间。机器本身的体征在
- * 宿主健康卡;这张卡讲的是沙箱群欠机器多少。
+ * 各节点页;这张卡讲的是全舰队的沙箱欠机器多少(网关把每台报到读数
+ * 里的账单加总)。
  */
 export function SandboxDisksCard() {
-  const query = useHostMetrics();
+  const query = useFleetMetrics();
 
   if (query.isError) {
     return (

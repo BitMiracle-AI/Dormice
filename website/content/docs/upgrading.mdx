@@ -27,14 +27,49 @@ script file mid-run while bash keeps executing the *old* bytes —
 measured on a real upgrade. Run a local copy twice, or just pipe from
 the repo.
 
+## Upgrade a fleet
+
+A fleet upgrades from its gateway, and one action upgrades every
+machine. On the gateway's machine, re-running the installer — or the
+console's **Upgrade** button, or `POST /applyUpgrade` at the gateway —
+pulls, rebuilds and restarts the gateway and the node on that machine.
+Once the gateway is back on the new build, every other node hears at
+its next check-in (within fifteen seconds) that its turn has come, and
+runs the same installer itself: one node at a time, so the fleet is
+never missing more than one node's sandboxes for the few tens of
+seconds a restart takes. The version page shows each node's standing:
+current, behind, upgrading, stuck — or ahead: a node on a build newer
+than the gateway's (a commit landed on `main` while the fleet was
+rolling, or the installer was run on that node by hand) is left alone,
+and reads current once the gateway itself is upgraded.
+
+A node is told exactly once. If it has not come back on the new build
+twenty minutes later, the gateway marks it **stuck** and leaves it
+alone — a node whose build keeps failing must not rebuild every twenty
+minutes on the CPU its sandboxes run on. Read `journalctl -u
+dormice-upgrade` and `/var/lib/dormice/upgrade/upgrade.log` on that
+node, fix the cause, and press **Try again** on the version page (or
+`POST /applyUpgrade {"nodeId": "..."}`), which puts that node back in
+line: the gateway forgets it was told and tells it again at its next
+check-in once no other node is upgrading — one node at a time holds for
+the retry too. A node that cannot upgrade itself — no git checkout, no
+systemd — is listed with its reason; run the installer on it by hand.
+
 ## What survives an upgrade
 
-- **Your configuration.** `/etc/dormice/env` is never touched once it
-  exists — the API token is never rotated, and the recorded
-  `DORMICE_BASE_IMAGE` is kept (delete the file to regenerate).
-- **The database and every disk.** Everything under `/var/lib/dormice`
-  stays; schema migrations run automatically when the new daemon boots —
-  there is no manual migration step.
+- **Your configuration.** The API token in `/etc/dormice/env` is never
+  rotated, and neither env file is regenerated once it exists. Two
+  edits are made in place and nothing else: a knob born after your
+  install is appended with its default, and on the move to a gateway the
+  fleet knobs the daemon's env used to hold are copied into
+  `/etc/dormice/gateway.env` and commented out where they were.
+- **The databases and every disk.** Everything under `/var/lib/dormice`
+  and `/var/lib/dormice-gateway` stays; schema migrations run
+  automatically when the new processes boot — there is no manual
+  migration step. Before it restarts anything, the installer takes an
+  online snapshot of both databases into `/var/lib/dormice/backups/`
+  (the three most recent are kept): a migration is not reversible by
+  re-running an older installer, and the snapshot is the way back.
 - **The sandboxes.** A daemon restart does not touch containers: active
   ones keep running, frozen ones stay frozen. Before the daemon starts
   listening it reconciles its records against what Docker actually
@@ -55,20 +90,28 @@ already-present gVisor is kept as-is, not upgraded.
 
 ## Upgrade sandbox images
 
-The daemon upgrade above changes no sandbox's image — images move on a
+The Dormice upgrade above changes no sandbox's image — images move on a
 separate, per-sandbox path, because a container swap is visible to
-whoever is using the sandbox and should happen on your schedule:
+whoever is using the sandbox and should happen on your schedule. The
+base image is a fleet setting: build the new one on the gateway
+machine, push it to the fleet's registry, and re-point the setting on
+the console's settings page (or with `updateSettings`):
 
 ```sh
 docker build -t dormice-base:NEW -f images/Dockerfile images/
-# point DORMICE_BASE_IMAGE at the new tag in /etc/dormice/env, then:
-systemctl restart dormice
+docker tag dormice-base:NEW <registry address>/dormice-base:NEW
+docker push <registry address>/dormice-base:NEW    # user dormice, password = the API token
+# then set "Base image" to dormice-base:NEW in console › settings
 dor sandbox rebuild <name>   # per sandbox, when it suits you
 ```
 
-[Rebuild](/docs/persistence#rebuild-a-sandbox) swaps the container and
-keeps `/home/user` — nothing under it is lost. Sandboxes created from a
-[template](/docs/templates) follow the same rhythm, with
+The registry address is on the settings page (`DORMICE_REGISTRY_ADDRESS`
+in `/etc/dormice/gateway.env`). Every node hears the new setting at its
+next check-in, pulls the image ahead of time, and swaps each
+template-less sandbox onto it at its next cold wake — no restart
+anywhere. [Rebuild](/docs/persistence#rebuild-a-sandbox) swaps the
+container and keeps `/home/user` — nothing under it is lost. Sandboxes
+created from a [template](/docs/templates) follow the same rhythm, with
 `dor template add` re-pointing the name first. Sandboxes you never
 rebuild simply keep running on the image they were born with.
 

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -7,12 +8,12 @@ import {
   FILE_SIZE_LIMIT_BYTES,
   hostMetricsResponseSchema,
 } from '@dormice/shared';
+import { pino } from 'pino';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app';
 import { Archiver } from './archive/archiver';
 import { MemStore } from './archive/mem-store';
 import { objectKey } from './archive/store';
-import { CONSOLE_HEADER, SESSION_COOKIE } from './auth';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
 import { findById, transition } from './db/ledger';
@@ -21,12 +22,19 @@ import { KeyedQueue } from './keyed-queue';
 import { ARCHIVE_DEFAULT_SECONDS } from './policy';
 import { reconcile } from './reconciler';
 import { scanOnce } from './scanner';
+import {
+  configureNode,
+  registerTestTemplate,
+  TEST_S3,
+  type TestConfig,
+} from './testing';
 
 const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
 
 function testApp(
   executor: FakeExecutor = new FakeExecutor(),
+  configured: TestConfig = {},
   env: Record<string, string> = {},
 ) {
   const db = openDb(':memory:');
@@ -39,6 +47,11 @@ function testApp(
     DORMICE_API_TOKEN: TOKEN,
     ...env,
   });
+  // The configuration copy a check-in would have applied: the node reads
+  // every knob from it, so a test that wants a domain or a store
+  // configures the node the way the gateway would. `env` is for the
+  // node's own identity (its data dir, its base image), nothing else.
+  configureNode(db, configured);
   const locks = new KeyedQueue();
   const app = buildApp({ config, db, executor, locks, logger: false });
   return { app, db, executor, locks };
@@ -236,23 +249,19 @@ describe('error shape', () => {
     expect(res.statusCode).toBe(404);
     expect(Object.keys(res.json())).toEqual(['message']);
   });
-});
 
-describe('sandbox capacity', () => {
-  it('caps creation at maxSandboxes with an honest 429', async () => {
-    // The env variable seeds the ledger's runtime settings at first boot.
-    const { app } = testApp(undefined, { DORMICE_MAX_SANDBOXES: '1' });
-    expect((await acquire(app, { name: 'alice' })).statusCode).toBe(200);
-
-    const capped = await acquire(app, { name: 'bob' });
-    expect(capped.statusCode).toBe(429);
-    expect(capped.json().message).toMatch(/maxSandboxes=1/);
-
-    // Existing sandboxes always wake — the cap only guards creation.
-    expect((await acquire(app, { name: 'alice' })).statusCode).toBe(200);
-    // Releasing frees the slot.
-    await rpc(app, '/destroySandbox', { name: 'alice' });
-    expect((await acquire(app, { name: 'bob' })).statusCode).toBe(200);
+  it('a verb that answers at the gateway alone is a 404 naming the gateway; so is the console', async () => {
+    const { app } = testApp();
+    for (const verb of ['listApiKeys', 'getConfig', 'getFleetMetrics']) {
+      const res = await rpc(app, `/${verb}`);
+      expect(res.statusCode).toBe(404);
+      expect(res.json().message).toBe(
+        `/${verb} answers at the gateway (http://127.0.0.1:3677), not on a node`,
+      );
+    }
+    const page = await app.inject({ method: 'GET', url: '/console/' });
+    expect(page.statusCode).toBe(404);
+    expect(page.json().message).toMatch(/^\/console\/ answers at the gateway/);
   });
 });
 
@@ -511,17 +520,6 @@ describe('acquire finds the shell dead under an active row', () => {
       cause: 'runtime-died',
     });
     expect(again.sandbox.lastExit.at).toMatch(/^\d{4}-/);
-
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string; detail: string }) => [e.kind, e.detail]);
-    expect(kinds).toContainEqual([
-      'reconciled',
-      "container is stopped — state active corrected to stopped (exit 2, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see the sandbox pids cap in settings), found dead at wake",
-    ]);
-    // The restart is its own event, recorded once it has happened — the
-    // death record never claims it ahead of time.
-    expect(kinds[0]).toEqual(['woken', 'cold start from the surviving disk']);
   });
 
   it('lastExit is sticky history: a later idle stop and wake keep the last death readable', async () => {
@@ -1009,13 +1007,6 @@ describe('POST /updatePolicy', () => {
     });
     // Adjusting a knob is not activity: the idle countdown keeps running.
     expect(res.json().sandbox.lastActiveAt).toBe(created.sandbox.lastActiveAt);
-
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(events[0]).toMatchObject({
-      kind: 'policy-changed',
-      sandboxName: 'alice',
-      detail: 'freeze 600s -> 120s',
-    });
   });
 
   it('promotes a frozen sandbox to never-stop without waking it', async () => {
@@ -1080,7 +1071,7 @@ describe('POST /updatePolicy', () => {
     expect(res.json().message).toMatch(/acquire it first/);
   });
 
-  it('treats a no-change patch as the goal state and writes no history', async () => {
+  it('treats a no-change patch as the goal state', async () => {
     const { app } = testApp();
     await acquire(app, { name: 'alice' });
     const res = await rpc(app, '/updatePolicy', {
@@ -1090,10 +1081,6 @@ describe('POST /updatePolicy', () => {
       },
     });
     expect(res.statusCode).toBe(200);
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(
-      events.some((e: { kind: string }) => e.kind === 'policy-changed'),
-    ).toBe(false);
   });
 });
 
@@ -1116,16 +1103,9 @@ describe('POST /updateMetadata', () => {
     expect(res.json().sandbox.metadata).toEqual({ app: 'assistant' });
     // Relabeling is not activity: the idle countdown keeps running.
     expect(res.json().sandbox.lastActiveAt).toBe(created.sandbox.lastActiveAt);
-
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(events[0]).toMatchObject({
-      kind: 'metadata-changed',
-      sandboxName: 'alice',
-      detail: 'app=assistant',
-    });
   });
 
-  it('clears every label with {} and says so in the history', async () => {
+  it('clears every label with {}', async () => {
     const { app } = testApp();
     await acquire(app, { name: 'alice', metadata: { app: 'crawler' } });
     const res = await rpc(app, '/updateMetadata', {
@@ -1134,11 +1114,6 @@ describe('POST /updateMetadata', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().sandbox.metadata).toEqual({});
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(events[0]).toMatchObject({
-      kind: 'metadata-changed',
-      detail: 'cleared',
-    });
   });
 
   it('relabels a frozen sandbox without waking it — a pure ledger write', async () => {
@@ -1173,7 +1148,7 @@ describe('POST /updateMetadata', () => {
     expect(res.json().message).toMatch(/acquire it first/);
   });
 
-  it('treats a no-change replacement as the goal state and writes no history', async () => {
+  it('treats a no-change replacement as the goal state', async () => {
     const { app } = testApp();
     await acquire(app, { name: 'alice', metadata: { app: 'crawler' } });
     const res = await rpc(app, '/updateMetadata', {
@@ -1181,18 +1156,17 @@ describe('POST /updateMetadata', () => {
       metadata: { app: 'crawler' },
     });
     expect(res.statusCode).toBe(200);
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(
-      events.some((e: { kind: string }) => e.kind === 'metadata-changed'),
-    ).toBe(false);
   });
 });
 
 describe('POST /updateTemplate', () => {
-  it('re-homes the sandbox, does not refresh the idle clock, and records the move', async () => {
-    const { app } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py-a', image: 'img-a' });
-    await rpc(app, '/registerTemplate', { name: 'py-b', image: 'img-b' });
+  it('re-homes the sandbox and does not refresh the idle clock', async () => {
+    const { app } = testApp(new FakeExecutor(), {
+      templates: [
+        { name: 'py-a', image: 'img-a' },
+        { name: 'py-b', image: 'img-b' },
+      ],
+    });
     const created = (
       await acquire(app, { name: 'alice', template: 'py-a' })
     ).json();
@@ -1205,19 +1179,15 @@ describe('POST /updateTemplate', () => {
     expect(res.json().sandbox.template).toBe('py-b');
     // Re-homing is not activity: the idle countdown keeps running.
     expect(res.json().sandbox.lastActiveAt).toBe(created.sandbox.lastActiveAt);
-
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(events[0]).toMatchObject({
-      kind: 'template-changed',
-      sandboxName: 'alice',
-      detail: 'template py-a -> py-b; applies at the next cold wake',
-    });
   });
 
   it('a frozen sandbox stays frozen; the next wake swaps the shell onto the new template, data intact', async () => {
-    const { app, db, executor, locks } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py-a', image: 'img-a' });
-    await rpc(app, '/registerTemplate', { name: 'py-b', image: 'img-b' });
+    const { app, db, executor, locks } = testApp(new FakeExecutor(), {
+      templates: [
+        { name: 'py-a', image: 'img-a' },
+        { name: 'py-b', image: 'img-b' },
+      ],
+    });
     const created = (
       await acquire(app, { name: 'alice', template: 'py-a' })
     ).json().sandbox;
@@ -1264,8 +1234,9 @@ describe('POST /updateTemplate', () => {
   });
 
   it('null detaches back to the base image', async () => {
-    const { app } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py-a', image: 'img-a' });
+    const { app } = testApp(new FakeExecutor(), {
+      templates: [{ name: 'py-a', image: 'img-a' }],
+    });
     await acquire(app, { name: 'alice', template: 'py-a' });
 
     const res = await rpc(app, '/updateTemplate', {
@@ -1274,16 +1245,11 @@ describe('POST /updateTemplate', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().sandbox.template).toBeNull();
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(events[0]).toMatchObject({
-      kind: 'template-changed',
-      detail: 'template py-a -> base image; applies at the next cold wake',
-    });
-    // With no rows referencing it, the old template can now be removed —
-    // the migration story this verb exists for.
-    expect(
-      (await rpc(app, '/removeTemplate', { name: 'py-a' })).json(),
-    ).toEqual({ removed: true });
+    // With no rows referencing it, the gateway's removal guard — which
+    // asks this node — finds nobody: the migration story this verb exists for.
+    expect((await rpc(app, '/templateUsers', { name: 'py-a' })).json()).toEqual(
+      { sandboxNames: [] },
+    );
   });
 
   it('rejects an unknown template with 400 and an unknown key with 404', async () => {
@@ -1305,19 +1271,16 @@ describe('POST /updateTemplate', () => {
     expect(nobody.json().message).toMatch(/acquire it first/);
   });
 
-  it('treats a same-template update as the goal state and writes no history', async () => {
-    const { app } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py-a', image: 'img-a' });
+  it('treats a same-template update as the goal state', async () => {
+    const { app } = testApp(new FakeExecutor(), {
+      templates: [{ name: 'py-a', image: 'img-a' }],
+    });
     await acquire(app, { name: 'alice', template: 'py-a' });
     const res = await rpc(app, '/updateTemplate', {
       name: 'alice',
       template: 'py-a',
     });
     expect(res.statusCode).toBe(200);
-    const events = (await rpc(app, '/listActivity')).json().events;
-    expect(
-      events.some((e: { kind: string }) => e.kind === 'template-changed'),
-    ).toBe(false);
   });
 });
 
@@ -1366,10 +1329,10 @@ describe('POST /destroySandbox', () => {
 
 describe('the archiver through the app', () => {
   /**
-   * testApp plus a MemStore-backed archiver — the S3-configured daemon.
-   * The env S3 seed is what flips the ledger's live adjudication
-   * (archiveEnabled); the MemStore stands in for the S3 those settings
-   * describe, so the routes' answer and the archiver's plumbing agree.
+   * testApp plus a MemStore-backed archiver — the S3-configured node. The
+   * copy's S3 store is what flips the live adjudication (archiveEnabled);
+   * the MemStore stands in for the S3 those settings describe, so the
+   * routes' answer and the archiver's plumbing agree.
    */
   function archiverTestApp(executor: FakeExecutor = new FakeExecutor()) {
     const db = openDb(':memory:');
@@ -1378,11 +1341,8 @@ describe('the archiver through the app', () => {
       DORMICE_DB_PATH: ':memory:',
       DORMICE_NODE_ID: 'node-test',
       DORMICE_API_TOKEN: TOKEN,
-      DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
-      DORMICE_S3_BUCKET: 'exam',
-      DORMICE_S3_ACCESS_KEY_ID: 'exam-key',
-      DORMICE_S3_SECRET_ACCESS_KEY: 'exam-secret',
     });
+    configureNode(db, { s3: TEST_S3 });
     const locks = new KeyedQueue();
     const store = new MemStore();
     const archiver = new Archiver({
@@ -1590,73 +1550,11 @@ describe('the archiver through the app', () => {
   });
 });
 
-describe('templates', () => {
-  it('registers, lists and requires auth like every native verb', async () => {
-    const { app } = testApp();
-    const anon = await app.inject({
-      method: 'POST',
-      url: '/registerTemplate',
-      payload: { name: 'py', image: 'img-a' },
-    });
-    expect(anon.statusCode).toBe(401);
-
-    const res = await rpc(app, '/registerTemplate', {
-      name: 'py',
-      image: 'img-a',
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().template).toMatchObject({ name: 'py', image: 'img-a' });
-
-    const listed = await rpc(app, '/listTemplates');
-    expect(listed.json().templates).toMatchObject([
-      { name: 'py', image: 'img-a' },
-    ]);
-  });
-
-  it('re-registering re-points the name and keeps its birth date — the upgrade verb', async () => {
-    const { app } = testApp();
-    const first = (
-      await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' })
-    ).json().template;
-    // Born un-upgraded: the upgrade timestamp starts at the birth date.
-    expect(first.updatedAt).toBe(first.createdAt);
-    // Millisecond timestamps need real time to pass to tell apart.
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    // Same image again: idempotent, and updatedAt must not claim an upgrade.
-    const same = (
-      await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' })
-    ).json().template;
-    expect(same.updatedAt).toBe(first.updatedAt);
-    const second = (
-      await rpc(app, '/registerTemplate', { name: 'py', image: 'img-b' })
-    ).json().template;
-    expect(second.image).toBe('img-b');
-    expect(second.createdAt).toBe(first.createdAt);
-    // A real image change stamps the upgrade time.
-    expect(Date.parse(second.updatedAt)).toBeGreaterThan(
-      Date.parse(first.updatedAt),
-    );
-    expect((await rpc(app, '/listTemplates')).json().templates).toHaveLength(1);
-  });
-
-  it("rejects a malformed name, and 'base' as reserved", async () => {
-    const { app } = testApp();
-    const bad = await rpc(app, '/registerTemplate', {
-      name: '-bad',
-      image: 'img',
-    });
-    expect(bad.statusCode).toBe(400);
-    const base = await rpc(app, '/registerTemplate', {
-      name: 'base',
-      image: 'img',
-    });
-    expect(base.statusCode).toBe(400);
-    expect(base.json().message).toMatch(/'base' is reserved/);
-  });
-
+describe('templates on the node: the copy at work', () => {
   it('acquire with a template creates the sandbox from its image and records the name', async () => {
-    const { app, executor } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' });
+    const { app, executor } = testApp(new FakeExecutor(), {
+      templates: [{ name: 'py', image: 'img-a' }],
+    });
     const res = await acquire(app, { name: 'alice', template: 'py' });
     expect(res.statusCode).toBe(200);
     const sandbox = res.json().sandbox;
@@ -1683,8 +1581,9 @@ describe('templates', () => {
   });
 
   it('a valid template on an existing key is not applied — creation-time only', async () => {
-    const { app } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' });
+    const { app } = testApp(new FakeExecutor(), {
+      templates: [{ name: 'py', image: 'img-a' }],
+    });
     const created = (await acquire(app, { name: 'alice' })).json().sandbox;
     expect(created.template).toBeNull();
     const again = (await acquire(app, { name: 'alice', template: 'py' })).json()
@@ -1693,39 +1592,56 @@ describe('templates', () => {
     expect(again.template).toBeNull();
   });
 
-  it('refuses to remove a template while sandboxes use it, naming the keys', async () => {
-    const { app } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-a' });
+  it("templateUsers names the sandboxes still on a template — the gateway's removal guard asks this", async () => {
+    const { app } = testApp(new FakeExecutor(), {
+      templates: [{ name: 'py', image: 'img-a' }],
+    });
     await acquire(app, { name: 'alice', template: 'py' });
+    await acquire(app, { name: 'bob', template: 'py' });
+    await acquire(app, { name: 'carol' });
 
-    const refused = await rpc(app, '/removeTemplate', { name: 'py' });
-    expect(refused.statusCode).toBe(409);
-    expect(refused.json().message).toBe(
-      "template 'py' is used by 1 sandbox(es): alice — destroy them first",
-    );
-
+    const users = await rpc(app, '/templateUsers', { name: 'py' });
+    expect(users.statusCode).toBe(200);
+    expect(users.json().sandboxNames.sort()).toEqual(['alice', 'bob']);
+    // A name nobody uses, and a name that is no template at all: both an
+    // honest empty list — the question is about this ledger's rows.
     await rpc(app, '/destroySandbox', { name: 'alice' });
-    expect((await rpc(app, '/removeTemplate', { name: 'py' })).json()).toEqual({
-      removed: true,
+    await rpc(app, '/destroySandbox', { name: 'bob' });
+    expect((await rpc(app, '/templateUsers', { name: 'py' })).json()).toEqual({
+      sandboxNames: [],
     });
-    // Idempotent on an unknown name, like destroySandbox.
-    expect((await rpc(app, '/removeTemplate', { name: 'py' })).json()).toEqual({
-      removed: false,
-    });
+    expect(
+      (await rpc(app, '/templateUsers', { name: 'ghost' })).json(),
+    ).toEqual({ sandboxNames: [] });
+    // Like every native verb, behind the token; and a malformed name is a 400.
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/templateUsers',
+          payload: { name: 'py' },
+        })
+      ).statusCode,
+    ).toBe(401);
+    expect(
+      (await rpc(app, '/templateUsers', { name: '-bad' })).statusCode,
+    ).toBe(400);
   });
 
   it('re-point then rebuild moves the sandbox onto the new image — the immediate front door', async () => {
-    const { app, executor } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const { app, db, executor } = testApp(new FakeExecutor(), {
+      templates: [{ name: 'py', image: 'img-v1' }],
+    });
     const created = (
       await acquire(app, { name: 'alice', template: 'py' })
     ).json().sandbox;
     expect(await executor.imageOf(created.id)).toBe('img-v1');
 
-    // Operator builds a new image and re-points the name; a running shell
-    // is never touched behind the sandbox's back — the stock moves on an
-    // explicit rebuild (here) or on the next cold wake (tests below).
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+    // Operator builds a new image and re-points the name at the gateway;
+    // the next bundle brings it here. A running shell is never touched
+    // behind the sandbox's back — the stock moves on an explicit rebuild
+    // (here) or on the next cold wake (tests below).
+    registerTestTemplate(db, 'py', 'img-v2');
     expect(await executor.imageOf(created.id)).toBe('img-v1');
 
     await rpc(app, '/rebuildSandbox', { name: 'alice' });
@@ -1738,8 +1654,9 @@ describe('templates', () => {
 
 describe('cold wakes converge onto the current image', () => {
   it('frozen + stale: the wake swaps the shell, keeps the data, and records the swap', async () => {
-    const { app, db, executor, locks } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const { app, db, executor, locks } = testApp(new FakeExecutor(), {
+      templates: [{ name: 'py', image: 'img-v1' }],
+    });
     const created = (
       await acquire(app, { name: 'alice', template: 'py' })
     ).json().sandbox;
@@ -1764,7 +1681,7 @@ describe('cold wakes converge onto the current image', () => {
     expect(sweep.failures).toEqual([]);
     expect(executor.stateOf(created.id)).toBe('paused');
 
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+    registerTestTemplate(db, 'py', 'img-v2');
     const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
     expect(woken.id).toBe(created.id);
     expect(woken.state).toBe('active');
@@ -1777,22 +1694,14 @@ describe('cold wakes converge onto the current image', () => {
     expect(Buffer.from(read.json().contentBase64, 'base64').toString()).toBe(
       'survives',
     );
-    // The audit trail names both halves of the move.
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string }) => e.kind);
-    expect(kinds.slice(0, 2)).toEqual(['woken', 'rebuilt']);
-    const rebuilt = (await rpc(app, '/listActivity'))
-      .json()
-      .events.find((e: { kind: string }) => e.kind === 'rebuilt');
-    expect(rebuilt.detail).toBe(
-      'stale shell swapped at wake: img-v1 -> img-v2',
-    );
+    // The old shell was removed — a swap, not a plain unpause.
+    expect(executor.removedShells).toEqual([created.id]);
   });
 
   it('frozen + fresh: a plain unpause, no shell removed', async () => {
-    const { app, db, executor, locks } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const { app, db, executor, locks } = testApp(new FakeExecutor(), {
+      templates: [{ name: 'py', image: 'img-v1' }],
+    });
     const created = (
       await acquire(app, { name: 'alice', template: 'py' })
     ).json().sandbox;
@@ -1806,15 +1715,13 @@ describe('cold wakes converge onto the current image', () => {
     const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
     expect(woken.state).toBe('active');
     expect(await executor.imageOf(created.id)).toBe('img-v1');
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string }) => e.kind);
-    expect(kinds).not.toContain('rebuilt');
+    expect(executor.removedShells).toEqual([]);
   });
 
   it('stopped + stale: the same convergence — stop kept the old shell, the wake replaces it', async () => {
-    const { app, db, executor, locks } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const { app, db, executor, locks } = testApp(new FakeExecutor(), {
+      templates: [{ name: 'py', image: 'img-v1' }],
+    });
     const created = (
       await acquire(app, {
         name: 'alice',
@@ -1828,14 +1735,11 @@ describe('cold wakes converge onto the current image', () => {
     expect(executor.stateOf(created.id)).toBe('stopped');
     expect(await executor.imageOf(created.id)).toBe('img-v1');
 
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+    registerTestTemplate(db, 'py', 'img-v2');
     const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
     expect(woken.state).toBe('active');
     expect(await executor.imageOf(created.id)).toBe('img-v2');
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string }) => e.kind);
-    expect(kinds.slice(0, 2)).toEqual(['woken', 'rebuilt']);
+    expect(executor.removedShells).toEqual([created.id]);
   });
 
   it('a template-less sandbox is judged against the base image — fresh, so untouched', async () => {
@@ -1850,16 +1754,14 @@ describe('cold wakes converge onto the current image', () => {
 
     const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
     expect(woken.state).toBe('active');
-    expect(await executor.imageOf(created.id)).toBe(executor.baseImage);
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string }) => e.kind);
-    expect(kinds).not.toContain('rebuilt');
+    expect(await executor.imageOf(created.id)).toBe(executor.baseImage());
+    expect(executor.removedShells).toEqual([]);
   });
 
   it('a vanished shell is not judged stale — the start builds from the current image by itself', async () => {
-    const { app, db, executor, locks } = testApp();
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v1' });
+    const { app, db, executor, locks } = testApp(new FakeExecutor(), {
+      templates: [{ name: 'py', image: 'img-v1' }],
+    });
     const created = (
       await acquire(app, {
         name: 'alice',
@@ -1871,16 +1773,13 @@ describe('cold wakes converge onto the current image', () => {
     await scanOnce(db, executor, locks, after(created.lastActiveAt, 120));
     executor.vanishContainer(created.id);
 
-    await rpc(app, '/registerTemplate', { name: 'py', image: 'img-v2' });
+    registerTestTemplate(db, 'py', 'img-v2');
     const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
     expect(woken.state).toBe('active');
     // Converged all the same, but through start's own rebuild — no shell
     // was removed, so no 'rebuilt' entry claims one was.
     expect(await executor.imageOf(created.id)).toBe('img-v2');
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string }) => e.kind);
-    expect(kinds).not.toContain('rebuilt');
+    expect(executor.removedShells).toEqual([]);
   });
 });
 
@@ -1896,9 +1795,13 @@ describe('POST /getHostMetrics', () => {
 
   it('answers a schema-valid snapshot with honest host readings', async () => {
     // tmpdir() exists on every platform, so the data-disk reading is real.
-    const { app } = testApp(new FakeExecutor(), {
-      DORMICE_DATA_DIR: tmpdir(),
-    });
+    const { app } = testApp(
+      new FakeExecutor(),
+      {},
+      {
+        DORMICE_DATA_DIR: tmpdir(),
+      },
+    );
     const res = await rpc(app, '/getHostMetrics');
     expect(res.statusCode).toBe(200);
     const body = hostMetricsResponseSchema.parse(res.json());
@@ -1909,7 +1812,6 @@ describe('POST /getHostMetrics', () => {
     expect(body.dataDisk?.totalBytes).toBeGreaterThan(0);
     expect(body.sandboxes).toEqual({
       total: 0,
-      maxSandboxes: 100,
       byState: { active: 0, frozen: 0, stopped: 0, archived: 0, restoring: 0 },
     });
     expect(body.sandboxDisks).toEqual({
@@ -1920,9 +1822,13 @@ describe('POST /getHostMetrics', () => {
   });
 
   it('reports a missing data dir as null — absent, not invented', async () => {
-    const { app } = testApp(new FakeExecutor(), {
-      DORMICE_DATA_DIR: '/no/such/dormice-data',
-    });
+    const { app } = testApp(
+      new FakeExecutor(),
+      {},
+      {
+        DORMICE_DATA_DIR: '/no/such/dormice-data',
+      },
+    );
     const res = await rpc(app, '/getHostMetrics');
     expect(res.statusCode).toBe(200);
     expect(res.json().dataDisk).toBeNull();
@@ -1961,400 +1867,247 @@ describe('POST /getHostMetrics', () => {
   });
 });
 
-describe('API keys', () => {
-  /** Mint through the wire and hand back everything a test needs. */
-  async function mint(
-    app: ReturnType<typeof testApp>['app'],
-    name: string,
-    expiresAt?: string,
-  ) {
-    const res = await rpc(app, '/createApiKey', {
-      name,
-      ...(expiresAt ? { expiresAt } : {}),
+describe('POST /lookupSandbox', () => {
+  it('answers by name and by id with the state, without waking or touching the idle clock', async () => {
+    const { app, db } = testApp();
+    const created = (await acquire(app, { name: 'alice' })).json();
+    const row = findById(db, created.sandbox.id);
+    if (!row) throw new Error('no row');
+    // A cold sandbox stays cold: lookup is observation, not use.
+    transition(db, row.id, 'frozen');
+
+    const byName = await rpc(app, '/lookupSandbox', { name: 'alice' });
+    expect(byName.statusCode).toBe(200);
+    expect(byName.json()).toEqual({
+      found: true,
+      sandbox: { id: row.id, name: 'alice', state: 'frozen' },
     });
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    return {
-      id: body.apiKey.id as string,
-      token: body.token as string,
-      apiKey: body.apiKey,
-    };
-  }
+    const byId = await rpc(app, '/lookupSandbox', { id: row.id });
+    expect(byId.json()).toEqual(byName.json());
+    expect(findById(db, row.id)?.state).toBe('frozen');
+    expect(findById(db, row.id)?.lastActiveAt).toBe(row.lastActiveAt);
 
-  const useKey = (
-    app: ReturnType<typeof testApp>['app'],
-    token: string,
-    url = '/listSandboxes',
-  ) =>
-    app.inject({
-      method: 'POST',
-      url,
-      headers: { authorization: `Bearer ${token}` },
-      payload: {},
-    });
-
-  it('mints a 64-hex token, shown once and never stored in the view', async () => {
-    const { app } = testApp();
-    const res = await rpc(app, '/createApiKey', { name: 'ci' });
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.token).toMatch(/^[0-9a-f]{64}$/);
-    expect(body.apiKey).toMatchObject({
-      name: 'ci',
-      prefix: body.token.slice(0, 8),
-      lastUsedAt: null,
-      expiresAt: null,
-      disabledAt: null,
-      revokedAt: null,
-    });
-    // The view carries no secret — not the token, not its hash.
-    expect(JSON.stringify(body.apiKey)).not.toContain(body.token);
-    expect(Object.keys(body.apiKey)).not.toContain('keyHash');
-  });
-
-  it('a minted key opens the Bearer door; revoking closes it on the next request', async () => {
-    const { app } = testApp();
-    const { id, token } = await mint(app, 'ci');
-
-    expect((await useKey(app, token)).statusCode).toBe(200);
-
-    expect((await rpc(app, '/revokeApiKey', { id })).json()).toEqual({
-      revoked: true,
-    });
-    expect((await useKey(app, token)).statusCode).toBe(401);
-
-    // The env token is the bootstrap credential: revocation never touches it.
-    expect((await rpc(app, '/listSandboxes')).statusCode).toBe(200);
-  });
-
-  it('refuses a second active key under the same name with a 409, and frees the name after revoke', async () => {
-    const { app } = testApp();
-    const { id } = await mint(app, 'ci');
-    const dup = await rpc(app, '/createApiKey', { name: 'ci' });
-    expect(dup.statusCode).toBe(409);
-    expect(dup.json().message).toMatch(/'ci' already exists/);
-
-    await rpc(app, '/revokeApiKey', { id });
-    expect((await rpc(app, '/createApiKey', { name: 'ci' })).statusCode).toBe(
-      200,
-    );
-  });
-
-  it('revoke is idempotent: an unknown or already-revoked id answers { revoked: false }', async () => {
-    const { app } = testApp();
-    expect((await rpc(app, '/revokeApiKey', { id: 'ghost' })).json()).toEqual({
-      revoked: false,
-    });
-    const { id } = await mint(app, 'ci');
-    await rpc(app, '/revokeApiKey', { id });
-    expect((await rpc(app, '/revokeApiKey', { id })).json()).toEqual({
-      revoked: false,
-    });
-  });
-
-  it('lists every key ever minted, revoked rows included, newest first', async () => {
-    const { app } = testApp();
-    const { id } = await mint(app, 'old');
-    await rpc(app, '/revokeApiKey', { id });
-    await mint(app, 'new');
-
-    const keys = (await rpc(app, '/listApiKeys')).json().apiKeys;
-    expect(keys).toHaveLength(2);
-    expect(keys[0].name).toBe('new');
-    expect(keys[0].revokedAt).toBeNull();
-    expect(keys[1].name).toBe('old');
-    expect(keys[1].revokedAt).not.toBeNull();
-  });
-
-  it('stamps lastUsedAt on first use and throttles the write to 60s granularity', async () => {
-    const { app } = testApp();
-    const { token } = await mint(app, 'ci');
-
-    await useKey(app, token);
-    const first = (await rpc(app, '/listApiKeys')).json().apiKeys[0];
-    expect(first.lastUsedAt).not.toBeNull();
-
-    // A second use inside the 60s window must not move the stamp.
-    await useKey(app, token);
-    const second = (await rpc(app, '/listApiKeys')).json().apiKeys[0];
-    expect(second.lastUsedAt).toBe(first.lastUsedAt);
-  });
-
-  it('records mint and revoke in the activity ring, token nowhere in sight', async () => {
-    const { app } = testApp();
-    const { id, token } = await mint(app, 'ci');
-    await rpc(app, '/revokeApiKey', { id });
-
-    const events = (await rpc(app, '/listActivity')).json().events;
-    const kinds = events.map((e: { kind: string }) => e.kind);
-    expect(kinds).toContain('apikey-created');
-    expect(kinds).toContain('apikey-revoked');
-    expect(JSON.stringify(events)).not.toContain(token);
-  });
-
-  it('disable parks the key reversibly: 401 while disabled, 200 again after enable', async () => {
-    const { app } = testApp();
-    const { id, token } = await mint(app, 'ci');
-    expect((await useKey(app, token)).statusCode).toBe(200);
-
-    const disabled = (
-      await rpc(app, '/updateApiKey', { id, disabled: true })
-    ).json().apiKey;
-    expect(disabled.disabledAt).not.toBeNull();
-    expect((await useKey(app, token)).statusCode).toBe(401);
-
-    // Disabling twice is idempotent: the original stamp stays, no new event.
-    const again = (
-      await rpc(app, '/updateApiKey', { id, disabled: true })
-    ).json().apiKey;
-    expect(again.disabledAt).toBe(disabled.disabledAt);
-
-    const enabled = (
-      await rpc(app, '/updateApiKey', { id, disabled: false })
-    ).json().apiKey;
-    expect(enabled.disabledAt).toBeNull();
-    expect((await useKey(app, token)).statusCode).toBe(200);
-
-    const kinds = (await rpc(app, '/listActivity'))
-      .json()
-      .events.map((e: { kind: string }) => e.kind);
-    expect(kinds.filter((k: string) => k === 'apikey-disabled')).toHaveLength(
-      1,
-    );
-    expect(kinds.filter((k: string) => k === 'apikey-enabled')).toHaveLength(1);
-  });
-
-  it('expiry closes the door: a past expiresAt is 401, clearing it reopens', async () => {
-    const { app } = testApp();
-    const past = new Date(Date.now() - 1000).toISOString();
-    const { id, token } = await mint(app, 'ttl', past);
-    expect((await useKey(app, token)).statusCode).toBe(401);
-
-    const cleared = (
-      await rpc(app, '/updateApiKey', { id, expiresAt: null })
-    ).json().apiKey;
-    expect(cleared.expiresAt).toBeNull();
-    expect((await useKey(app, token)).statusCode).toBe(200);
-
-    const future = new Date(Date.now() + 3600_000).toISOString();
-    await rpc(app, '/updateApiKey', { id, expiresAt: future });
-    expect((await useKey(app, token)).statusCode).toBe(200);
-  });
-
-  it('normalizes expiresAt on write: wire precision variants land as toISOString()', async () => {
-    const { app } = testApp();
-    // No-millis wire form would sort AFTER a with-millis "now" while being
-    // chronologically earlier — the ledger must store the canonical shape.
-    const { apiKey } = await mint(app, 'ttl', '2030-01-01T00:00:00Z');
-    expect(apiKey.expiresAt).toBe('2030-01-01T00:00:00.000Z');
-  });
-
-  it('updateApiKey renames, refuses collisions honestly, and leaves history alone', async () => {
-    const { app } = testApp();
-    const { id } = await mint(app, 'ci');
-    const other = await mint(app, 'laptop');
-
-    const renamed = (
-      await rpc(app, '/updateApiKey', { id, name: 'ci-2026' })
-    ).json().apiKey;
-    expect(renamed.name).toBe('ci-2026');
-
-    // Onto a live name: refused like create.
-    const clash = await rpc(app, '/updateApiKey', { id, name: 'laptop' });
-    expect(clash.statusCode).toBe(409);
-
-    // Onto a revoked name: revoke freed it.
-    await rpc(app, '/revokeApiKey', { id: other.id });
     expect(
-      (await rpc(app, '/updateApiKey', { id, name: 'laptop' })).statusCode,
-    ).toBe(200);
-
-    // Unknown id is a 404; a revoked row is history, not editable.
+      (await rpc(app, '/lookupSandbox', { name: 'nobody' })).json(),
+    ).toEqual({ found: false });
     expect(
-      (await rpc(app, '/updateApiKey', { id: 'ghost', name: 'x' })).statusCode,
-    ).toBe(404);
-    const edited = await rpc(app, '/updateApiKey', {
-      id: other.id,
-      name: 'zombie',
+      (await rpc(app, '/lookupSandbox', { id: 'no-such-id' })).json(),
+    ).toEqual({ found: false });
+    // Neither a name nor an id is not a question.
+    expect((await rpc(app, '/lookupSandbox', {})).statusCode).toBe(400);
+  });
+
+  it('by signature: the bare signed file query is read back to the sandbox whose token signed it — identity only, the door judges the rest', async () => {
+    const { app } = testApp();
+    const alice = (await acquire(app, { name: 'alice' })).json();
+    const bob = (await acquire(app, { name: 'bob' })).json();
+    const tokenOf = async (sandboxId: string) =>
+      (
+        (await rpc(app, '/envdToken', { sandboxId })).json() as {
+          envdAccessToken: string;
+        }
+      ).envdAccessToken;
+    // The SDK's formula, rewritten rather than imported: v1_ + base64
+    // (padding stripped) of sha256("path:operation:username:token[:exp]").
+    const sign = (parts: string[]) =>
+      `v1_${createHash('sha256').update(parts.join(':')).digest('base64').replace(/=+$/, '')}`;
+    const aliceRead = sign([
+      'a.txt',
+      'read',
+      '',
+      await tokenOf(alice.sandbox.id),
+    ]);
+    const query = (signature: string, more = '') =>
+      `path=a.txt&signature=${encodeURIComponent(signature)}${more}`;
+
+    const byAlice = await rpc(app, '/lookupSandbox', {
+      signed: { operation: 'read', query: query(aliceRead) },
     });
-    expect(edited.statusCode).toBe(409);
-    expect(edited.json().message).toMatch(/rotation history/);
-  });
-
-  it('a no-op patch changes nothing and records nothing', async () => {
-    const { app } = testApp();
-    const { id } = await mint(app, 'ci');
-    const before = (await rpc(app, '/listActivity')).json().events.length;
-
-    const res = await rpc(app, '/updateApiKey', {
-      id,
-      name: 'ci',
-      disabled: false,
+    expect(byAlice.statusCode).toBe(200);
+    expect(byAlice.json()).toEqual({
+      found: true,
+      sandbox: { id: alice.sandbox.id, name: 'alice', state: 'active' },
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().apiKey.name).toBe('ci');
-
-    const after = (await rpc(app, '/listActivity')).json().events.length;
-    expect(after).toBe(before);
-  });
-
-  it('carries expiresAt from mint into the list', async () => {
-    const { app } = testApp();
-    const future = new Date(Date.now() + 86_400_000).toISOString();
-    await mint(app, 'ttl', future);
-    const keys = (await rpc(app, '/listApiKeys')).json().apiKeys;
-    expect(keys[0].expiresAt).toBe(future);
-  });
-
-  it('admin-only: a live key gets an honest 403 on every management verb, without a lastUsedAt fingerprint', async () => {
-    const { app } = testApp();
-    const { id, token } = await mint(app, 'ci');
-    const asKey = { authorization: `Bearer ${token}` };
-
-    const attempts = [
-      ['/createApiKey', { name: 'evil' }],
-      ['/listApiKeys', {}],
-      ['/updateApiKey', { id, disabled: true }],
-      ['/revokeApiKey', { id }],
-    ] as const;
-    for (const [url, payload] of attempts) {
-      const res = await app.inject({
-        method: 'POST',
-        url,
-        headers: asKey,
-        payload,
-      });
-      expect(res.statusCode).toBe(403);
-      expect(res.json().message).toMatch(/cannot manage API keys/);
-    }
-
-    // The refusals honored nothing: no lastUsedAt fingerprint, key untouched.
-    const row = (await rpc(app, '/listApiKeys')).json().apiKeys[0];
-    expect(row.lastUsedAt).toBeNull();
-    expect(row.disabledAt).toBeNull();
-    expect(row.revokedAt).toBeNull();
-
-    // Garbage stays garbage: 401, not 403.
+    // The same path signed by bob's token names bob, nobody else.
+    const bobRead = sign(['a.txt', 'read', '', await tokenOf(bob.sandbox.id)]);
     expect(
       (
-        await app.inject({
-          method: 'POST',
-          url: '/createApiKey',
-          headers: { authorization: 'Bearer not-a-key' },
-          payload: { name: 'x' },
+        await rpc(app, '/lookupSandbox', {
+          signed: { operation: 'read', query: query(bobRead) },
         })
-      ).statusCode,
-    ).toBe(401);
+      ).json(),
+    ).toMatchObject({ found: true, sandbox: { name: 'bob' } });
+    // A read signature is not a write signature; a forged one is nobody's;
+    // no signature is no sandbox. The expiration is not judged here — an
+    // expired signature still names its sandbox, and the door it is then
+    // forwarded to says "expired" itself.
+    for (const signed of [
+      { operation: 'write', query: query(aliceRead) },
+      { operation: 'read', query: query('v1_forged') },
+      { operation: 'read', query: 'path=a.txt' },
+    ]) {
+      expect((await rpc(app, '/lookupSandbox', { signed })).json()).toEqual({
+        found: false,
+      });
+    }
+    const past = Math.floor(Date.now() / 1000) - 60;
+    const expired = sign([
+      'a.txt',
+      'read',
+      '',
+      await tokenOf(alice.sandbox.id),
+      String(past),
+    ]);
+    expect(
+      (
+        await rpc(app, '/lookupSandbox', {
+          signed: {
+            operation: 'read',
+            query: query(expired, `&signature_expiration=${past}`),
+          },
+        })
+      ).json(),
+    ).toMatchObject({ found: true, sandbox: { name: 'alice' } });
   });
 
-  it('admin-only: a console session opens the management verbs', async () => {
-    const { app } = testApp();
-    const setup = await app.inject({
-      method: 'POST',
-      url: '/console/auth/setup',
-      payload: { token: TOKEN, username: 'operator', password: 'horse pass' },
+  it('a name whose slot is busy waits its turn: asked while an acquire is mid-create, it answers found once the row exists', async () => {
+    // A create that parks inside the executor — the daemon's own shape of
+    // "in flight": the acquire holds the name's slot, the container is
+    // being built, the row is not written yet.
+    let release: () => void = () => {};
+    let inCreate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    expect(setup.statusCode).toBe(200);
-    const cookie = setup.cookies.find((c) => c.name === SESSION_COOKIE);
-    expect(cookie).toBeDefined();
+    const reached = new Promise<void>((resolve) => {
+      inCreate = resolve;
+    });
+    class ParkedCreate extends FakeExecutor {
+      override async create(
+        ...args: Parameters<FakeExecutor['create']>
+      ): Promise<void> {
+        inCreate();
+        await gate;
+        return super.create(...args);
+      }
+    }
+    const { app } = testApp(new ParkedCreate());
+    const creating = acquire(app, { name: 'alice' });
+    await reached;
+    // No row, slot busy: the question must wait, not answer "no".
+    const asked = rpc(app, '/lookupSandbox', { name: 'alice' });
+    const early = await Promise.race([
+      asked.then(() => 'answered'),
+      new Promise((resolve) => setTimeout(() => resolve('pending'), 50)),
+    ]);
+    expect(early).toBe('pending');
+    release();
+    const created = (await creating).json();
+    expect((await asked).json()).toEqual({
+      found: true,
+      sandbox: { id: created.sandbox.id, name: 'alice', state: 'active' },
+    });
+  });
 
-    const res = await app.inject({
-      method: 'POST',
-      url: '/createApiKey',
-      headers: { [CONSOLE_HEADER]: '1' },
-      cookies: { [SESSION_COOKIE]: (cookie as { value: string }).value },
-      payload: { name: 'from-console' },
+  it('a sandbox with a row answers at once even while its slot is held — a restore in progress must not read as silence', async () => {
+    const { app, db, locks } = testApp();
+    const created = (await acquire(app, { name: 'alice' })).json();
+    transition(db, created.sandbox.id, 'frozen');
+    transition(db, created.sandbox.id, 'stopped');
+    transition(db, created.sandbox.id, 'archived');
+    transition(db, created.sandbox.id, 'restoring');
+    let release: () => void = () => {};
+    const held = locks.run(
+      'alice',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const answer = await Promise.race([
+      rpc(app, '/lookupSandbox', { name: 'alice' }).then((r) => r.json()),
+      new Promise((resolve) => setTimeout(() => resolve('pending'), 500)),
+    ]);
+    expect(answer).toEqual({
+      found: true,
+      sandbox: { id: created.sandbox.id, name: 'alice', state: 'restoring' },
     });
-    expect(res.statusCode).toBe(200);
+    release();
+    await held;
   });
 });
 
-describe('activity attribution', () => {
-  /**
-   * The newest event of this kind (listActivity is newest-first),
-   * optionally narrowed to one sandbox. Actor strings are asserted as
-   * literals on purpose: they are wire vocabulary, and a drifted constant
-   * must fail here, not ride through.
-   */
-  const eventOf = async (
-    app: ReturnType<typeof testApp>['app'],
-    kind: string,
-    sandboxName?: string,
-  ) => {
-    const events = (await rpc(app, '/listActivity')).json().events as Array<{
-      kind: string;
-      sandboxName: string | null;
-      actor: string | null;
-    }>;
-    return events.find(
-      (e) =>
-        e.kind === kind &&
-        (sandboxName === undefined || e.sandboxName === sandboxName),
-    );
-  };
-
-  it('lifecycle verbs name their credential: env token and API key are distinct actors', async () => {
-    const { app } = testApp();
-    const minted = (await rpc(app, '/createApiKey', { name: 'agent' })).json();
-    const asKey = { authorization: `Bearer ${minted.token}` };
-
-    await acquire(app, { name: 'mine' });
-    await acquire(app, { name: 'theirs' }, asKey);
-    expect((await eventOf(app, 'created', 'mine'))?.actor).toBe('env-token');
-    expect((await eventOf(app, 'created', 'theirs'))?.actor).toBe(
-      `apikey:${minted.apiKey.id}`,
-    );
-
-    // The blast-radius question a leak raises: which key destroyed this?
-    await app.inject({
-      method: 'POST',
-      url: '/destroySandbox',
-      headers: asKey,
-      payload: { name: 'mine' },
+describe('the request log', () => {
+  it("says nothing of a request that succeeded, one line naming method, path and status for one that did not, the query left out — and Fastify's own two lines per request are off", async () => {
+    const db = openDb(':memory:');
+    migrateDb(db, MIGRATIONS);
+    const config = loadConfig({
+      DORMICE_DB_PATH: ':memory:',
+      DORMICE_NODE_ID: 'node-test',
+      DORMICE_API_TOKEN: TOKEN,
     });
-    expect((await eventOf(app, 'destroyed', 'mine'))?.actor).toBe(
-      `apikey:${minted.apiKey.id}`,
-    );
-  });
-
-  it('daemon moves stay null; the wake that follows names its caller', async () => {
-    const { app, db, executor, locks } = testApp();
-    const created = (await acquire(app, { name: 'alice' })).json();
-
-    await scanOnce(
+    configureNode(db, {});
+    const lines: string[] = [];
+    const app = buildApp({
+      config,
       db,
-      executor,
-      locks,
-      after(
-        created.sandbox.lastActiveAt,
-        DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+      executor: new FakeExecutor(),
+      locks: new KeyedQueue(),
+      logger: pino(
+        { level: 'info' },
+        { write: (line: string) => lines.push(line) },
       ),
-    );
-    // The idle scanner froze it: no credential asked, so no actor.
-    expect((await eventOf(app, 'frozen', 'alice'))?.actor).toBeNull();
-
-    await acquire(app, { name: 'alice' });
-    expect((await eventOf(app, 'woken', 'alice'))?.actor).toBe('env-token');
+    });
+    expect(
+      (await app.inject({ method: 'GET', url: '/healthz' })).statusCode,
+    ).toBe(200);
+    expect((await rpc(app, '/listSandboxes')).statusCode).toBe(200);
+    const said = () =>
+      lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .filter((l) => l.msg === 'request ended in an error status');
+    expect(said()).toEqual([]);
+    expect(
+      lines.some(
+        (l) =>
+          l.includes('incoming request') || l.includes('request completed'),
+      ),
+    ).toBe(false);
+    // A signed URL's signature lives in the query: not in the log.
+    expect(
+      (await rpc(app, '/noSuchVerb?signature=secret-sig')).statusCode,
+    ).toBe(404);
+    expect(
+      (await app.inject({ method: 'POST', url: '/listSandboxes' })).statusCode,
+    ).toBe(401);
+    expect(said()).toEqual([
+      expect.objectContaining({
+        level: 30,
+        method: 'POST',
+        path: '/noSuchVerb',
+        statusCode: 404,
+      }),
+      expect.objectContaining({
+        level: 30,
+        method: 'POST',
+        path: '/listSandboxes',
+        statusCode: 401,
+      }),
+    ]);
+    expect(lines.join('\n')).not.toContain('secret-sig');
   });
+});
 
-  it('apikey management events name the administrator: env token or console, never a key', async () => {
+describe('the upgrade verbs on a node', () => {
+  it("applyUpgrade refuses nodeId: the hand on a stuck node is the gateway's verb, and a node upgrades only itself", async () => {
     const { app } = testApp();
-    await rpc(app, '/createApiKey', { name: 'by-env' });
-    expect((await eventOf(app, 'apikey-created'))?.actor).toBe('env-token');
-
-    const setup = await app.inject({
-      method: 'POST',
-      url: '/console/auth/setup',
-      payload: { token: TOKEN, username: 'operator', password: 'horse pass' },
-    });
-    const cookie = setup.cookies.find((c) => c.name === SESSION_COOKIE);
-    await app.inject({
-      method: 'POST',
-      url: '/createApiKey',
-      headers: { [CONSOLE_HEADER]: '1' },
-      cookies: { [SESSION_COOKIE]: (cookie as { value: string }).value },
-      payload: { name: 'by-console' },
-    });
-    expect((await eventOf(app, 'apikey-created'))?.actor).toBe('console');
+    const hand = await rpc(app, '/applyUpgrade', { nodeId: 'node-b' });
+    expect(hand.statusCode).toBe(400);
+    expect(hand.json().message).toMatch(/nodeId is the gateway's/);
+    // Without one, the refusal is the updater's own — the fake executor
+    // cannot one-click — so the nodeId verdict comes first, not instead.
+    const own = await rpc(app, '/applyUpgrade', {});
+    expect(own.statusCode).toBe(400);
+    expect(own.json().message).toMatch(/one-click upgrade unavailable/);
   });
 });

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
+import { parseSandboxHost } from '@dormice/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app';
 import { loadConfig } from './config';
@@ -11,8 +12,8 @@ import { getOrCreateSigningSecret } from './db/secrets';
 import { mintEnvdToken } from './e2b/protocol';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
-import { parseSandboxHost } from './sandbox-proxy';
 import { scanOnce } from './scanner';
+import { configureNode } from './testing';
 
 const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
@@ -33,13 +34,14 @@ describe('sandbox port proxy', () => {
   async function listeningApp(opts: { domain?: string | null } = {}) {
     const db = openDb(':memory:');
     migrateDb(db, MIGRATIONS);
-    // domain: null boots with no sandbox domain at all (no env seed).
-    const domainSeed = opts.domain === undefined ? DOMAIN : opts.domain;
+    // domain: null boots with no sandbox domain at all in the copy.
+    configureNode(db, {
+      sandboxDomain: opts.domain === undefined ? DOMAIN : opts.domain,
+    });
     const config = loadConfig({
       DORMICE_DB_PATH: ':memory:',
       DORMICE_NODE_ID: 'node-test',
       DORMICE_API_TOKEN: TOKEN,
-      ...(domainSeed === null ? {} : { DORMICE_SANDBOX_DOMAIN: domainSeed }),
     });
     const executor = new FakeExecutor();
     const locks = new KeyedQueue();
@@ -129,13 +131,15 @@ describe('sandbox port proxy', () => {
     return created.sandboxID;
   }
 
+  // The parser lives in @dormice/shared since the gateway's proxy face
+  // reads the same header; its unit exam stays beside the proxy it serves.
   it('parses sandbox hosts and nothing else', () => {
     const id = '01234567-89ab-cdef-0123-456789abcdef';
     expect(parseSandboxHost(`8000-${id}.${DOMAIN}`, [DOMAIN])).toEqual({
       port: 8000,
       sandboxId: id,
     });
-    // The header's own :port tail is the daemon's port, not the sandbox's.
+    // The header's own :port tail is the door's port, not the sandbox's.
     expect(parseSandboxHost(`8000-${id}.${DOMAIN}:3676`, [DOMAIN])).toEqual({
       port: 8000,
       sandboxId: id,
@@ -446,18 +450,9 @@ describe('sandbox port proxy', () => {
     const before = await rawGet(t.port, '/hello', host);
     expect(before.status).toBe(404);
 
-    // The console sets the domain — same daemon, no restart.
-    const set = await rawRequest(t.port, {
-      method: 'POST',
-      path: '/updateSettings',
-      host: '127.0.0.1',
-      headers: {
-        authorization: `Bearer ${TOKEN}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ sandboxDomain: DOMAIN }),
-    });
-    expect(set.status).toBe(200);
+    // The console sets the domain at the gateway; the bundle brings it
+    // here — same daemon, no restart.
+    configureNode(t.db, { sandboxDomain: DOMAIN });
 
     // The always-mounted proxy now matches, and create responses carry it.
     const after = await rawGet(t.port, '/hello', host);
@@ -466,17 +461,7 @@ describe('sandbox port proxy', () => {
     await createSandbox(t.port);
 
     // Cleared: back to stock-Fastify behavior for the same Host.
-    const clear = await rawRequest(t.port, {
-      method: 'POST',
-      path: '/updateSettings',
-      host: '127.0.0.1',
-      headers: {
-        authorization: `Bearer ${TOKEN}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ sandboxDomain: null }),
-    });
-    expect(clear.status).toBe(200);
+    configureNode(t.db, { sandboxDomain: null });
     expect((await rawGet(t.port, '/hello', host)).status).toBe(404);
   });
 
@@ -486,18 +471,11 @@ describe('sandbox port proxy', () => {
     const ALIAS = 'alias.dormice.test';
     const aliasHost = `8000-${sandboxId}.${ALIAS}`;
     const canonicalHost = `8000-${sandboxId}.${DOMAIN}`;
-    const setSettings = async (body: object) => {
-      const res = await rawRequest(t.port, {
-        method: 'POST',
-        path: '/updateSettings',
-        host: '127.0.0.1',
-        headers: {
-          authorization: `Bearer ${TOKEN}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      });
-      expect(res.status).toBe(200);
+    const setSettings = async (body: {
+      sandboxDomain?: string | null;
+      sandboxDomainAliases?: string[];
+    }) => {
+      configureNode(t.db, body);
     };
 
     // Not listed yet: ordinary Fastify traffic.

@@ -32,9 +32,8 @@ export interface E2bDeps {
   envdSigningSecret: string;
   /**
    * buildApp's one adjudication of "does this bare credential open the
-   * door" and who it is (the shared actor vocabulary; null = not a
-   * credential) — the same closure the native Bearer face uses, consulted
-   * here by the X-API-KEY hook, which rides the answer on request.actor.
+   * door" — the same closure the native Bearer face uses, consulted here
+   * by the X-API-KEY hook.
    */
-  identifyCredential: (bareToken: string) => string | null;
+  isCredential: (bareToken: string) => boolean;
 }

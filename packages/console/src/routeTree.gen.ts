@@ -19,10 +19,11 @@ import { Route as AppDomainsRouteImport } from './routes/_app/domains'
 import { Route as AppDoctorRouteImport } from './routes/_app/doctor'
 import { Route as AppConnectRouteImport } from './routes/_app/connect'
 import { Route as AppApiKeysRouteImport } from './routes/_app/api-keys'
-import { Route as AppActivityRouteImport } from './routes/_app/activity'
 import { Route as AppSandboxesIndexRouteImport } from './routes/_app/sandboxes/index'
+import { Route as AppNodesIndexRouteImport } from './routes/_app/nodes/index'
 import { Route as AppTempSplatRouteImport } from './routes/_app/temp.$'
 import { Route as AppSandboxesNameRouteImport } from './routes/_app/sandboxes/$name'
+import { Route as AppNodesIdRouteImport } from './routes/_app/nodes/$id'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -73,14 +74,14 @@ const AppApiKeysRoute = AppApiKeysRouteImport.update({
   path: '/api-keys',
   getParentRoute: () => AppRoute,
 } as any)
-const AppActivityRoute = AppActivityRouteImport.update({
-  id: '/activity',
-  path: '/activity',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppSandboxesIndexRoute = AppSandboxesIndexRouteImport.update({
   id: '/sandboxes/',
   path: '/sandboxes/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppNodesIndexRoute = AppNodesIndexRouteImport.update({
+  id: '/nodes/',
+  path: '/nodes/',
   getParentRoute: () => AppRoute,
 } as any)
 const AppTempSplatRoute = AppTempSplatRouteImport.update({
@@ -93,11 +94,15 @@ const AppSandboxesNameRoute = AppSandboxesNameRouteImport.update({
   path: '/sandboxes/$name',
   getParentRoute: () => AppRoute,
 } as any)
+const AppNodesIdRoute = AppNodesIdRouteImport.update({
+  id: '/nodes/$id',
+  path: '/nodes/$id',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
-  '/activity': typeof AppActivityRoute
   '/api-keys': typeof AppApiKeysRoute
   '/connect': typeof AppConnectRoute
   '/doctor': typeof AppDoctorRoute
@@ -105,13 +110,14 @@ export interface FileRoutesByFullPath {
   '/settings': typeof AppSettingsRoute
   '/templates': typeof AppTemplatesRoute
   '/version': typeof AppVersionRoute
+  '/nodes/$id': typeof AppNodesIdRoute
   '/sandboxes/$name': typeof AppSandboxesNameRoute
   '/temp/$': typeof AppTempSplatRoute
+  '/nodes/': typeof AppNodesIndexRoute
   '/sandboxes/': typeof AppSandboxesIndexRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
-  '/activity': typeof AppActivityRoute
   '/api-keys': typeof AppApiKeysRoute
   '/connect': typeof AppConnectRoute
   '/doctor': typeof AppDoctorRoute
@@ -120,15 +126,16 @@ export interface FileRoutesByTo {
   '/templates': typeof AppTemplatesRoute
   '/version': typeof AppVersionRoute
   '/': typeof AppIndexRoute
+  '/nodes/$id': typeof AppNodesIdRoute
   '/sandboxes/$name': typeof AppSandboxesNameRoute
   '/temp/$': typeof AppTempSplatRoute
+  '/nodes': typeof AppNodesIndexRoute
   '/sandboxes': typeof AppSandboxesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
-  '/_app/activity': typeof AppActivityRoute
   '/_app/api-keys': typeof AppApiKeysRoute
   '/_app/connect': typeof AppConnectRoute
   '/_app/doctor': typeof AppDoctorRoute
@@ -137,8 +144,10 @@ export interface FileRoutesById {
   '/_app/templates': typeof AppTemplatesRoute
   '/_app/version': typeof AppVersionRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/nodes/$id': typeof AppNodesIdRoute
   '/_app/sandboxes/$name': typeof AppSandboxesNameRoute
   '/_app/temp/$': typeof AppTempSplatRoute
+  '/_app/nodes/': typeof AppNodesIndexRoute
   '/_app/sandboxes/': typeof AppSandboxesIndexRoute
 }
 export interface FileRouteTypes {
@@ -146,7 +155,6 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/login'
-    | '/activity'
     | '/api-keys'
     | '/connect'
     | '/doctor'
@@ -154,13 +162,14 @@ export interface FileRouteTypes {
     | '/settings'
     | '/templates'
     | '/version'
+    | '/nodes/$id'
     | '/sandboxes/$name'
     | '/temp/$'
+    | '/nodes/'
     | '/sandboxes/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
-    | '/activity'
     | '/api-keys'
     | '/connect'
     | '/doctor'
@@ -169,14 +178,15 @@ export interface FileRouteTypes {
     | '/templates'
     | '/version'
     | '/'
+    | '/nodes/$id'
     | '/sandboxes/$name'
     | '/temp/$'
+    | '/nodes'
     | '/sandboxes'
   id:
     | '__root__'
     | '/_app'
     | '/login'
-    | '/_app/activity'
     | '/_app/api-keys'
     | '/_app/connect'
     | '/_app/doctor'
@@ -185,8 +195,10 @@ export interface FileRouteTypes {
     | '/_app/templates'
     | '/_app/version'
     | '/_app/'
+    | '/_app/nodes/$id'
     | '/_app/sandboxes/$name'
     | '/_app/temp/$'
+    | '/_app/nodes/'
     | '/_app/sandboxes/'
   fileRoutesById: FileRoutesById
 }
@@ -267,18 +279,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppApiKeysRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/activity': {
-      id: '/_app/activity'
-      path: '/activity'
-      fullPath: '/activity'
-      preLoaderRoute: typeof AppActivityRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/sandboxes/': {
       id: '/_app/sandboxes/'
       path: '/sandboxes'
       fullPath: '/sandboxes/'
       preLoaderRoute: typeof AppSandboxesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/nodes/': {
+      id: '/_app/nodes/'
+      path: '/nodes'
+      fullPath: '/nodes/'
+      preLoaderRoute: typeof AppNodesIndexRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/temp/$': {
@@ -295,11 +307,17 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSandboxesNameRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/nodes/$id': {
+      id: '/_app/nodes/$id'
+      path: '/nodes/$id'
+      fullPath: '/nodes/$id'
+      preLoaderRoute: typeof AppNodesIdRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
 interface AppRouteChildren {
-  AppActivityRoute: typeof AppActivityRoute
   AppApiKeysRoute: typeof AppApiKeysRoute
   AppConnectRoute: typeof AppConnectRoute
   AppDoctorRoute: typeof AppDoctorRoute
@@ -308,13 +326,14 @@ interface AppRouteChildren {
   AppTemplatesRoute: typeof AppTemplatesRoute
   AppVersionRoute: typeof AppVersionRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppNodesIdRoute: typeof AppNodesIdRoute
   AppSandboxesNameRoute: typeof AppSandboxesNameRoute
   AppTempSplatRoute: typeof AppTempSplatRoute
+  AppNodesIndexRoute: typeof AppNodesIndexRoute
   AppSandboxesIndexRoute: typeof AppSandboxesIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
-  AppActivityRoute: AppActivityRoute,
   AppApiKeysRoute: AppApiKeysRoute,
   AppConnectRoute: AppConnectRoute,
   AppDoctorRoute: AppDoctorRoute,
@@ -323,8 +342,10 @@ const AppRouteChildren: AppRouteChildren = {
   AppTemplatesRoute: AppTemplatesRoute,
   AppVersionRoute: AppVersionRoute,
   AppIndexRoute: AppIndexRoute,
+  AppNodesIdRoute: AppNodesIdRoute,
   AppSandboxesNameRoute: AppSandboxesNameRoute,
   AppTempSplatRoute: AppTempSplatRoute,
+  AppNodesIndexRoute: AppNodesIndexRoute,
   AppSandboxesIndexRoute: AppSandboxesIndexRoute,
 }
 

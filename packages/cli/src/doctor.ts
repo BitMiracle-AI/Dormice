@@ -604,10 +604,13 @@ const CHECKS: DoctorCheck[] = [
     id: 's3-config',
     title: 'S3 archive configuration',
     run: async (ctx) => {
-      // Since the settings moved into the ledger these variables are
-      // first-boot seeds; doctor stays an offline preflight (env, files,
-      // commands — never the daemon), so it reports on the seed and points
-      // at the console for the value in force.
+      // The S3 variables are the gateway's first-boot seeds now (the
+      // fleet's settings live in the gateway's table, edited from the
+      // console; a node takes them from its check-in). Doctor stays an
+      // offline preflight (env, files, commands — never a process), so it
+      // reports on the seed in the environment it was given — the
+      // gateway's env file on the machine that runs the gateway — and
+      // points at the console for the value in force.
       const wanted = [
         'DORMICE_S3_ENDPOINT',
         'DORMICE_S3_BUCKET',
@@ -617,19 +620,19 @@ const CHECKS: DoctorCheck[] = [
       const missing = wanted.filter((name) => !ctx.env[name]);
       if (missing.length === wanted.length) {
         return skip(
-          'DORMICE_S3_* not set — no first-boot seed; archiving can be switched on from the console settings at any time',
+          "DORMICE_S3_* not set in this environment — no first-boot seed for the gateway; archiving can be switched on from the console settings at any time (a node never reads these: they are the gateway's)",
         );
       }
       if (missing.length > 0) {
         // The daemon's config schema refuses this too; naming it here saves
         // one failed boot.
         return fail(
-          `partial S3 set: ${missing.join(', ')} missing — the daemon refuses a half-configured seed`,
-          'set all four DORMICE_S3_* variables (endpoint, bucket, key id, secret) or none',
+          `partial S3 set: ${missing.join(', ')} missing — the gateway refuses a half-configured seed`,
+          'set all four DORMICE_S3_* variables (endpoint, bucket, key id, secret) in the gateway env, or none',
         );
       }
       return pass(
-        'all four DORMICE_S3_* variables set — a first-boot seed; once the daemon has booted, the ledger (console settings) rules',
+        "all four DORMICE_S3_* variables set — the gateway's first-boot seed; once it has started, its settings table (console settings) rules",
       );
     },
   },
@@ -668,7 +671,7 @@ const CHECKS: DoctorCheck[] = [
       const file = ctx.env.DORMICE_INGRESS_FILE;
       if (!file) {
         return skip(
-          'DORMICE_INGRESS_FILE not set — the daemon manages no reverse proxy; bind domains by editing your proxy config directly',
+          "DORMICE_INGRESS_FILE not set in this environment — no managed reverse proxy; it is the gateway's variable (the gateway rewrites the file on setIngress), bind domains by editing your proxy config directly",
         );
       }
       const caddy = await ctx.run('caddy', ['version']);
@@ -681,7 +684,7 @@ const CHECKS: DoctorCheck[] = [
       const active = await ctx.run('systemctl', ['is-active', 'caddy']);
       if (!active.ok) {
         return fail(
-          'the caddy service is not active — nothing proxies the outside world to the daemon',
+          'the caddy service is not active — nothing proxies the outside world to the gateway',
           'systemctl start caddy (and `journalctl -u caddy` for why it stopped)',
         );
       }
@@ -693,7 +696,7 @@ const CHECKS: DoctorCheck[] = [
       if (!content.includes('Managed by Dormice')) {
         return warn(
           `${file} was not written by Dormice — setIngress refuses to overwrite it, so web domain binding is effectively off`,
-          'move your config elsewhere and re-run install.sh, or point DORMICE_INGRESS_FILE at a file the daemon may own',
+          'move your config elsewhere and re-run install.sh, or point DORMICE_INGRESS_FILE at a file the gateway may own',
         );
       }
       // The generated shape puts site addresses at column 0; every
@@ -716,10 +719,17 @@ const CHECKS: DoctorCheck[] = [
     title: 'base image available',
     needs: ['docker-daemon'],
     run: async (ctx) => {
+      // The base image is the fleet's setting since the fourth cut
+      // (2026-09-15): the gateway's env seeds it, the console edits it,
+      // a node takes it at check-in and pulls it from the fleet registry
+      // when the host lacks it. Doctor stays an offline preflight and
+      // reads the environment it was given: install.sh loads the
+      // gateway's env on the gateway's machine, and on a node machine
+      // tells doctor the value it learned from the gateway for this run.
       const image = baseImage(ctx);
       if (!image) {
         return skip(
-          'DORMICE_BASE_IMAGE is not set — set it to check the image and enable the container probes',
+          "DORMICE_BASE_IMAGE is not set in this environment — the base image is the fleet's setting (console › settings; the gateway's env seeds it), and a node pulls it from the fleet registry when it lacks it; export DORMICE_BASE_IMAGE=<the fleet's> to check the image here and enable the container probes",
         );
       }
       const res = await ctx.run('docker', ['image', 'inspect', image]);
@@ -727,7 +737,59 @@ const CHECKS: DoctorCheck[] = [
         ? pass(`${image} is present locally`)
         : fail(
             `${image} is not present locally`,
-            'build it from images/Dockerfile — doctor never pulls images itself',
+            ctx.env.DORMICE_REGISTRY_ADDRESS
+              ? `pull it from the fleet registry: docker pull ${ctx.env.DORMICE_REGISTRY_ADDRESS}/${image} && docker tag ${ctx.env.DORMICE_REGISTRY_ADDRESS}/${image} ${image} (the daemon does this on its own at its next configuration bundle) — doctor never pulls images itself`
+              : 'build it from images/Dockerfile — doctor never pulls images itself',
+          );
+    },
+  },
+  {
+    id: 'registry',
+    title: 'fleet image registry reachable',
+    run: async (ctx) => {
+      // The fleet's image store (install.sh runs one beside the gateway,
+      // TLS with a self-signed certificate Docker trusts through
+      // /etc/docker/certs.d). Reachable and asking for the credential is
+      // the whole check: a 401 from /v2/ proves the address, the TLS trust
+      // and that a registry answers — without a credential on any command
+      // line. The pull itself is the daemon's, per image.
+      const address = ctx.env.DORMICE_REGISTRY_ADDRESS;
+      if (!address) {
+        return skip(
+          "DORMICE_REGISTRY_ADDRESS not set in this environment — no fleet registry (the gateway's variable; without one every node must have its images staged by hand)",
+        );
+      }
+      const ca = `/etc/docker/certs.d/${address}/ca.crt`;
+      if ((await ctx.readTextFile(ca)) === undefined) {
+        return fail(
+          `${ca} is missing — docker cannot trust the registry's certificate, so every pull from ${address} fails`,
+          "re-run install.sh: on the gateway's machine it writes the certificate there; on a node it pins the gateway's on first sight",
+        );
+      }
+      const res = await ctx.run('curl', [
+        '-sS',
+        '-o',
+        '/dev/null',
+        '-w',
+        '%{http_code}',
+        '--cacert',
+        ca,
+        `https://${address}/v2/`,
+      ]);
+      const code = res.stdout.trim();
+      if (!res.ok) {
+        return fail(
+          `https://${address}/v2/ did not answer: ${res.stderr.trim() || 'no reason given'}`,
+          "on the gateway's machine: systemctl status dormice-registry; on a node: is :5000 on the gateway machine open to this one?",
+        );
+      }
+      return code === '401' || code === '200'
+        ? pass(
+            `https://${address}/v2/ answers ${code} — reachable over TLS${code === '401' ? ', asks for the fleet credential' : ''}`,
+          )
+        : fail(
+            `https://${address}/v2/ answered ${code}, not the 401 a registry gives without a credential`,
+            'journalctl -u dormice-registry on the gateway machine',
           );
     },
   },

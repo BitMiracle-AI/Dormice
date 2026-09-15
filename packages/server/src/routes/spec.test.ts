@@ -13,6 +13,7 @@ import { readRuntimeSettings } from '../db/settings';
 import { FakeExecutor } from '../executor/fake';
 import { KeyedQueue } from '../keyed-queue';
 import { scanOnce } from '../scanner';
+import { configureNode, TEST_S3, type TestConfig } from '../testing';
 
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 const TOKEN = 'test-token-test-token-test-token';
@@ -26,7 +27,7 @@ const TOKEN = 'test-token-test-token-test-token';
  */
 function testApp(
   executor: FakeExecutor = new FakeExecutor(),
-  env: Record<string, string> = {},
+  configured: TestConfig = {},
 ) {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
@@ -34,8 +35,8 @@ function testApp(
     DORMICE_DB_PATH: ':memory:',
     DORMICE_NODE_ID: 'node-test',
     DORMICE_API_TOKEN: TOKEN,
-    ...env,
   });
+  configureNode(db, configured);
   const locks = new KeyedQueue();
   const app = buildApp({ config, db, executor, locks, logger: false });
   return { app, db, executor, locks };
@@ -49,11 +50,8 @@ function archiverTestApp(executor: FakeExecutor = new FakeExecutor()) {
     DORMICE_DB_PATH: ':memory:',
     DORMICE_NODE_ID: 'node-test',
     DORMICE_API_TOKEN: TOKEN,
-    DORMICE_S3_ENDPOINT: 'http://127.0.0.1:9000',
-    DORMICE_S3_BUCKET: 'exam',
-    DORMICE_S3_ACCESS_KEY_ID: 'exam-key',
-    DORMICE_S3_SECRET_ACCESS_KEY: 'exam-secret',
   });
+  configureNode(db, { s3: TEST_S3 });
   const locks = new KeyedQueue();
   const store = new MemStore();
   const archiver = new Archiver({
@@ -89,13 +87,6 @@ function acquire(
   payload: Record<string, unknown>,
 ) {
   return rpc(app, '/acquireSandbox', payload);
-}
-
-async function activityKinds(app: ReturnType<typeof testApp>['app']) {
-  const events = (await rpc(app, '/listActivity')).json().events as Array<{
-    kind: string;
-  }>;
-  return events.map((event) => event.kind);
 }
 
 /** Time travel for the scanner, app.test.ts's helper. */
@@ -177,7 +168,6 @@ describe('POST /updateSpec', () => {
     // A pure ledger write: state untouched, idle clock NOT refreshed.
     expect(res.json().sandbox.state).toBe('active');
     expect(res.json().sandbox.lastActiveAt).toBe(before.lastActiveAt);
-    expect(await activityKinds(app)).toContain('spec-changed');
   });
 
   it('omitted knobs keep their values; null pins back to the global default', async () => {
@@ -191,11 +181,16 @@ describe('POST /updateSpec', () => {
     expect(findByName(db, 'alice')?.cpus).toBeNull();
   });
 
-  it('a no-op patch writes no history', async () => {
-    const { app } = testApp();
+  it('a no-op patch is the goal state: 200, nothing rewritten', async () => {
+    const { app, db } = testApp();
     await acquire(app, { name: 'alice', spec: { cpus: 2 } });
-    await rpc(app, '/updateSpec', { name: 'alice', spec: { cpus: 2 } });
-    expect(await activityKinds(app)).not.toContain('spec-changed');
+    const before = findByName(db, 'alice');
+    const res = await rpc(app, '/updateSpec', {
+      name: 'alice',
+      spec: { cpus: 2 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(findByName(db, 'alice')).toEqual(before);
   });
 
   it('answers 404 for an unknown key — updateSpec is not a creator', async () => {
@@ -233,17 +228,14 @@ describe('POST /updateSpec', () => {
       nanoCpus: 2e9,
       memoryBytes: 2 * 1024 ** 3,
     });
-    expect(await activityKinds(app)).toContain('rebuilt');
+    expect(executor.removedShells).toEqual([id]);
 
     // Freeze again with the spec unchanged: the wake must NOT rebuild —
     // the millisecond unpause path stays untouched.
     const again = (await rpc(app, '/listSandboxes')).json().sandboxes[0];
     await scanOnce(db, executor, locks, after(again.lastActiveAt, 1));
     await acquire(app, { name: 'alice' });
-    const rebuilds = (await activityKinds(app)).filter(
-      (kind) => kind === 'rebuilt',
-    );
-    expect(rebuilds).toHaveLength(1);
+    expect(executor.removedShells).toEqual([id]);
   });
 });
 
@@ -264,6 +256,7 @@ describe('a global default edit through the cold-wake convergence', () => {
         memoryGb: sandboxDefaults.memoryGb,
       };
     });
+    configureNode(db);
     const config = loadConfig({
       DORMICE_DB_PATH: ':memory:',
       DORMICE_NODE_ID: 'node-test',
@@ -285,11 +278,10 @@ describe('a global default edit through the cold-wake convergence', () => {
       memoryBytes: 2 * 1024 ** 3,
     });
 
-    // The fleet-wide knob moves; alice is unpinned (all columns NULL), so
-    // her next cold wake owes a rebuild onto the new limits.
-    await rpc(app, '/updateSettings', {
-      sandboxDefaults: { cpus: 2, memoryGb: 4, diskGb: 10 },
-    });
+    // The fleet-wide knob moves (at the gateway; the bundle brings it
+    // here); alice is unpinned (all columns NULL), so her next cold wake
+    // owes a rebuild onto the new limits.
+    configureNode(db, { cpus: 2, memoryGb: 4, diskGb: 10 });
     const { lastActiveAt } = (await rpc(app, '/listSandboxes')).json()
       .sandboxes[0];
     await scanOnce(db, executor, locks, after(lastActiveAt, 1));
@@ -298,7 +290,7 @@ describe('a global default edit through the cold-wake convergence', () => {
       nanoCpus: 2e9,
       memoryBytes: 4 * 1024 ** 3,
     });
-    expect(await activityKinds(app)).toContain('rebuilt');
+    expect(executor.removedShells).toEqual([id]);
 
     // The regression this test exists for: the fresh shell was born from
     // the LIVE defaults, so the second wake must not rebuild again — an
@@ -307,10 +299,7 @@ describe('a global default edit through the cold-wake convergence', () => {
     const again = (await rpc(app, '/listSandboxes')).json().sandboxes[0];
     await scanOnce(db, executor, locks, after(again.lastActiveAt, 1));
     await acquire(app, { name: 'alice' });
-    const rebuilds = (await activityKinds(app)).filter(
-      (kind) => kind === 'rebuilt',
-    );
-    expect(rebuilds).toHaveLength(1);
+    expect(executor.removedShells).toEqual([id]);
   });
 });
 
@@ -324,7 +313,6 @@ describe('POST /expandDisk', () => {
     expect((await executor.metrics(created.sandbox.id)).diskTotalBytes).toBe(
       20 * 1024 ** 3,
     );
-    expect(await activityKinds(app)).toContain('disk-expanded');
   });
 
   it('refuses to shrink with a 400', async () => {
@@ -335,17 +323,15 @@ describe('POST /expandDisk', () => {
     expect(res.json().message).toMatch(/only grows/);
   });
 
-  it('asking for the pinned size again is a no-op success, no history', async () => {
-    const { app } = testApp();
+  it('asking for the pinned size again is a no-op success', async () => {
+    const { app, db } = testApp();
     await acquire(app, { name: 'alice' });
     await rpc(app, '/expandDisk', { name: 'alice', diskGb: 20 });
+    const before = findByName(db, 'alice');
     const res = await rpc(app, '/expandDisk', { name: 'alice', diskGb: 20 });
     expect(res.statusCode).toBe(200);
     expect(res.json().sandbox.spec.diskGb).toBe(20);
-    const expansions = (await activityKinds(app)).filter(
-      (kind) => kind === 'disk-expanded',
-    );
-    expect(expansions).toHaveLength(1);
+    expect(findByName(db, 'alice')).toEqual(before);
   });
 
   it('asking for the default size on an unpinned row pins it', async () => {

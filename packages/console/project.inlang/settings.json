@@ -22,10 +22,10 @@
       "./messages/{locale}/overview.json",
       "./messages/{locale}/sandboxes.json",
       "./messages/{locale}/workbench.json",
-      "./messages/{locale}/activity.json",
       "./messages/{locale}/apikeys.json",
       "./messages/{locale}/templates.json",
       "./messages/{locale}/domains.json",
+      "./messages/{locale}/nodes.json",
       "./messages/{locale}/settings.json",
       "./messages/{locale}/connect.json"
     ]

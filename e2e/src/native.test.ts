@@ -1,10 +1,28 @@
+import { spawn } from 'node:child_process';
 import { DEFAULT_LIFECYCLE_POLICY, Dormice } from '@dormice/sdk';
 import { describe, expect, inject, it } from 'vitest';
+import { door, settled } from './helpers';
 
 // One daemon serves the whole run, so every test uses its own sandbox name to
 // stay independent of the others.
 function client(token = inject('dormiceToken')) {
   return new Dormice({ endpoint: inject('dormiceEndpoint'), token });
+}
+
+/**
+ * The fleet's door — node A's own gateway, a fleet of one. Templates,
+ * keys and settings are registered there (design record #22); the node
+ * takes them from its next check-in, so a write here is followed by
+ * settled() before the node is asked to act on it.
+ */
+function viaDoor(token = inject('dormiceToken')) {
+  return new Dormice({ endpoint: door(), token });
+}
+
+/** registerTemplate at the door, then the wait for node A to hold it. */
+async function registerTemplate(name: string, image: string) {
+  await viaDoor().registerTemplate(name, image);
+  await settled();
 }
 
 function sleep(seconds: number) {
@@ -76,7 +94,9 @@ describe('native API over a real daemon', () => {
     expect(updated.sandbox.metadata).toEqual({ app: 'assistant' });
 
     const listed = await client().listSandboxes();
-    expect(listed.find((s) => s.name === 'meta-key')?.metadata).toEqual({
+    expect(
+      listed.sandboxes.find((s) => s.name === 'meta-key')?.metadata,
+    ).toEqual({
       app: 'assistant',
     });
 
@@ -111,6 +131,42 @@ describe('native API over a real daemon', () => {
     ).resolves.toBe(400);
   });
 
+  it('a second daemon on the same ledger dies at boot naming the conflict — one ledger, one daemon', async () => {
+    // The same environment as the running daemon, another port: the port
+    // is not what must refuse it, the ledger lock is (measured 2026-09-11:
+    // with the lock handle garbage-collected, this second daemon started).
+    const child = spawn('node', [inject('dormiceDaemonMain')], {
+      env: {
+        ...inject('dormiceNodeAEnv'),
+        DORMICE_PORT: String(
+          Number(new URL(inject('dormiceEndpoint')).port) + 1000,
+        ),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    child.stdout.on('data', (chunk) => {
+      output += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      output += chunk;
+    });
+    const code = await new Promise<number | null>((resolve) => {
+      const timer = setTimeout(() => {
+        child.kill();
+        resolve(null);
+      }, 10_000);
+      child.on('exit', (exitCode) => {
+        clearTimeout(timer);
+        resolve(exitCode);
+      });
+    });
+    expect(code, output).toBe(1);
+    expect(output).toMatch(
+      /another daemon is already running against .*dormice\.db/,
+    );
+  });
+
   it('destroys a sandbox: gone, forgotten, idempotent', async () => {
     const created = await client().acquireSandbox('destroy-key');
 
@@ -118,7 +174,9 @@ describe('native API over a real daemon', () => {
       destroyed: true,
     });
     const listed = await client().listSandboxes();
-    expect(listed.some((s) => s.id === created.sandbox.id)).toBe(false);
+    expect(listed.sandboxes.some((s) => s.id === created.sandbox.id)).toBe(
+      false,
+    );
     expect(await client().destroySandbox('destroy-key')).toEqual({
       destroyed: false,
     });
@@ -298,7 +356,7 @@ describe('native API over a real daemon', () => {
     });
     const result = await client().execCommand('exec-busy-key', 'sleep 3');
     expect(result.exitCode).toBe(0);
-    const observed = (await client().listSandboxes()).find(
+    const observed = (await client().listSandboxes()).sandboxes.find(
       (s) => s.name === 'exec-busy-key',
     );
     expect(observed?.state).toBe('active');
@@ -315,7 +373,7 @@ describe('native API over a real daemon', () => {
     // Watch it actually freeze from outside, on real wall-clock time.
     const deadline = Date.now() + 15_000;
     for (;;) {
-      const cold = (await client().listSandboxes()).find(
+      const cold = (await client().listSandboxes()).sandboxes.find(
         (s) => s.name === 'exec-wake-key',
       );
       if (cold?.state === 'frozen') break;
@@ -332,7 +390,7 @@ describe('native API over a real daemon', () => {
     const result = await client().execCommand('exec-wake-key', 'echo woke');
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('woke\n');
-    const observed = (await client().listSandboxes()).find(
+    const observed = (await client().listSandboxes()).sandboxes.find(
       (s) => s.name === 'exec-wake-key',
     );
     expect(observed?.state).toBe('active');
@@ -356,7 +414,7 @@ describe('native API over a real daemon', () => {
     // own, in a separate process, on real wall-clock time.
     const deadline = Date.now() + 15_000;
     for (;;) {
-      const asleep = (await client().listSandboxes()).find(
+      const asleep = (await client().listSandboxes()).sandboxes.find(
         (s) => s.name === 'sleeper-key',
       );
       if (asleep?.state === 'stopped') break;
@@ -452,70 +510,59 @@ describe('native API over a real daemon', () => {
     // config; the fake plays any name. The daemon's own base image serves
     // both: a real boot there, an arbitrary string here.
     const image = process.env.DORMICE_BASE_IMAGE ?? 'img:native';
-    await client().registerTemplate('native-tpl', image);
+    await registerTemplate('native-tpl', image);
     const created = await client().acquireSandbox('tpl-key', {
       template: 'native-tpl',
     });
     expect(created.sandbox.template).toBe('native-tpl');
-    const listed = (await client().listSandboxes()).find(
+    const listed = (await client().listSandboxes()).sandboxes.find(
       (s) => s.name === 'tpl-key',
     );
     expect(listed?.template).toBe('native-tpl');
 
-    await expect(client().removeTemplate('native-tpl')).rejects.toMatchObject({
+    // Removal is the gateway's verb, and it asks node A first.
+    await expect(viaDoor().removeTemplate('native-tpl')).rejects.toMatchObject({
       name: 'DormiceApiError',
       status: 409,
-      message: expect.stringMatching(/tpl-key/),
+      message: expect.stringMatching(/tpl-key on node node-1/),
     });
 
     // The migration story: re-home the sandbox onto a successor template,
     // and the old name — no longer referenced — becomes removable without
     // destroying anything. An unknown target is refused, never stored.
-    await client().registerTemplate('native-tpl-v2', image);
+    await registerTemplate('native-tpl-v2', image);
     await expect(
       client().updateTemplate('tpl-key', 'ghost-tpl'),
     ).rejects.toMatchObject({ status: 400 });
     const moved = await client().updateTemplate('tpl-key', 'native-tpl-v2');
     expect(moved.sandbox.template).toBe('native-tpl-v2');
-    expect(await client().removeTemplate('native-tpl')).toEqual({
+    expect(await viaDoor().removeTemplate('native-tpl')).toEqual({
       removed: true,
     });
 
     await client().destroySandbox('tpl-key');
-    expect(await client().removeTemplate('native-tpl-v2')).toEqual({
+    expect(await viaDoor().removeTemplate('native-tpl-v2')).toEqual({
       removed: true,
     });
   });
 
-  it('API keys: the rolling-rotation story — mint, work, park, revoke, the env token survives', async () => {
-    const { apiKey, token } = await client().createApiKey('rotation');
+  it('API keys: the rolling-rotation story at the door — mint, work, park, revoke, the fleet token survives; a node knows only the fleet token', async () => {
+    const { apiKey, token } = await viaDoor().createApiKey('rotation');
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     expect(apiKey.prefix).toBe(token.slice(0, 8));
 
-    // A fresh client on the minted key does real work — rotation means the
-    // new credential is live before the old one dies.
-    const keyed = client(token);
+    // A fresh client on the minted key does real work through the door —
+    // placed on node A under the fleet token; rotation means the new
+    // credential is live before the old one dies.
+    const keyed = viaDoor(token);
     const created = await keyed.acquireSandbox('rotation-key');
     expect(created.sandbox.name).toBe('rotation-key');
+    expect(created.sandbox.nodeId).toBe('node-1');
     await keyed.destroySandbox('rotation-key');
 
-    const listed = await client().listApiKeys();
+    const listed = await viaDoor().listApiKeys();
     const mine = listed.find((k) => k.name === 'rotation');
     expect(mine?.lastUsedAt).not.toBeNull();
-
-    // Attribution answers the blast-radius question: the key's work carries
-    // its id, and the mint (done above on the env token) says who minted.
-    const story = await client().listActivity({ limit: 500 });
-    const keyWork = story.filter((e) => e.sandboxName === 'rotation-key');
-    expect(keyWork.map((e) => e.actor)).toEqual([
-      `apikey:${apiKey.id}`,
-      `apikey:${apiKey.id}`,
-    ]);
-    expect(
-      story.find(
-        (e) => e.kind === 'apikey-created' && e.detail.includes('"rotation"'),
-      )?.actor,
-    ).toBe('env-token');
 
     // Key-manages-key is refused with the honest 403 — a leaked key must
     // not be able to mint itself an unrevoked successor.
@@ -528,20 +575,32 @@ describe('native API over a real daemon', () => {
       status: 403,
     });
 
-    // Disable is the reversible hold: 401 while parked, alive again after.
-    await client().updateApiKey(apiKey.id, { disabled: true });
-    await expect(keyed.listSandboxes()).rejects.toMatchObject({ status: 401 });
-    await client().updateApiKey(apiKey.id, { disabled: false });
-    expect(await keyed.listSandboxes()).toBeDefined();
+    // The node judges one credential, the fleet token: a minted key is a
+    // stranger there, however live it is at the door.
+    await expect(client(token).listSandboxes()).rejects.toMatchObject({
+      status: 401,
+    });
 
-    expect(await client().revokeApiKey(apiKey.id)).toEqual({ revoked: true });
-    await expect(keyed.listSandboxes()).rejects.toMatchObject({
+    // Disable is the reversible hold: 401 while parked, alive again after.
+    // The probe is a destroy of a name nobody holds — a named verb the
+    // door answers itself once the key is through.
+    await viaDoor().updateApiKey(apiKey.id, { disabled: true });
+    await expect(keyed.destroySandbox('rotation-probe')).rejects.toMatchObject({
+      status: 401,
+    });
+    await viaDoor().updateApiKey(apiKey.id, { disabled: false });
+    expect(await keyed.destroySandbox('rotation-probe')).toEqual({
+      destroyed: false,
+    });
+
+    expect(await viaDoor().revokeApiKey(apiKey.id)).toEqual({ revoked: true });
+    await expect(keyed.destroySandbox('rotation-probe')).rejects.toMatchObject({
       name: 'DormiceApiError',
       status: 401,
     });
-    // The env token is the bootstrap credential: revocation never touches it.
+    // The fleet token is the bootstrap credential: revocation never touches it.
     expect(await client().listSandboxes()).toBeDefined();
-    expect(await client().revokeApiKey(apiKey.id)).toEqual({
+    expect(await viaDoor().revokeApiKey(apiKey.id)).toEqual({
       revoked: false,
     });
   });
@@ -552,12 +611,12 @@ describe('native API over a real daemon', () => {
     // at an unbuilt image on purpose: registration is config and observation
     // never boots anything, so no engine ever has to pull it.
     const image = process.env.DORMICE_BASE_IMAGE ?? 'img:lineage-v1';
-    await client().registerTemplate('lineage-tpl', image);
+    await registerTemplate('lineage-tpl', image);
     const created = await client().acquireSandbox('lineage-key', {
       template: 'lineage-tpl',
     });
     const mine = async () =>
-      (await client().listSandboxImages()).find(
+      (await client().listSandboxImages()).images.find(
         (e) => e.sandboxName === 'lineage-key',
       );
 
@@ -571,7 +630,7 @@ describe('native API over a real daemon', () => {
     });
 
     // Re-registering moves nextImage; the live shell honestly stays behind.
-    await client().registerTemplate('lineage-tpl', 'img:lineage-v2');
+    await registerTemplate('lineage-tpl', 'img:lineage-v2');
     expect(await mine()).toMatchObject({
       image,
       nextImage: 'img:lineage-v2',
@@ -580,7 +639,7 @@ describe('native API over a real daemon', () => {
 
     // Point the name back and rebuild: no shell means no image and nothing
     // to upgrade; the wake boots the template's current image, in sync.
-    await client().registerTemplate('lineage-tpl', image);
+    await registerTemplate('lineage-tpl', image);
     await client().rebuildSandbox('lineage-key');
     expect(await mine()).toMatchObject({
       image: null,
@@ -595,7 +654,7 @@ describe('native API over a real daemon', () => {
     });
 
     await client().destroySandbox('lineage-key');
-    expect(await client().removeTemplate('lineage-tpl')).toEqual({
+    expect(await viaDoor().removeTemplate('lineage-tpl')).toEqual({
       removed: true,
     });
   });
@@ -608,7 +667,7 @@ describe('native API over a real daemon', () => {
   it.skipIf(process.env.DORMICE_EXECUTOR === 'docker')(
     'a template upgrade reaches a frozen sandbox on its next touch: shell swapped, data kept, audited',
     async () => {
-      await client().registerTemplate('swap-tpl', 'img:swap-v1');
+      await registerTemplate('swap-tpl', 'img:swap-v1');
       await client().acquireSandbox('swap-key', {
         template: 'swap-tpl',
         policy: {
@@ -623,7 +682,7 @@ describe('native API over a real daemon', () => {
       // Watch it actually freeze from outside, on real wall-clock time.
       const deadline = Date.now() + 15_000;
       for (;;) {
-        const cold = (await client().listSandboxes()).find(
+        const cold = (await client().listSandboxes()).sandboxes.find(
           (s) => s.name === 'swap-key',
         );
         if (cold?.state === 'frozen') break;
@@ -636,7 +695,7 @@ describe('native API over a real daemon', () => {
       }
 
       // Operator re-points the template; the frozen shell is now stale.
-      await client().registerTemplate('swap-tpl', 'img:swap-v2');
+      await registerTemplate('swap-tpl', 'img:swap-v2');
 
       // The touch is an ordinary use verb — every wake entry (native, envd,
       // port proxy) funnels into the same wakeSandbox, and the read itself
@@ -647,23 +706,13 @@ describe('native API over a real daemon', () => {
       // The deployment check: the lineage row reports the new image and the
       // upgradable flag has cleared.
       expect(
-        (await client().listSandboxImages()).find(
+        (await client().listSandboxImages()).images.find(
           (e) => e.sandboxName === 'swap-key',
         ),
       ).toMatchObject({ image: 'img:swap-v2', upgradable: false });
 
-      // Both halves of the move made the audit trail, in order.
-      const story = (await client().listActivity({ limit: 500 })).filter(
-        (e) => e.sandboxName === 'swap-key',
-      );
-      const kinds = story.map((e) => e.kind);
-      expect(kinds.slice(0, 2)).toEqual(['woken', 'rebuilt']);
-      expect(story[1]?.detail).toBe(
-        'stale shell swapped at wake: img:swap-v1 -> img:swap-v2',
-      );
-
       await client().destroySandbox('swap-key');
-      await client().removeTemplate('swap-tpl');
+      await viaDoor().removeTemplate('swap-tpl');
     },
   );
 
@@ -672,7 +721,7 @@ describe('native API over a real daemon', () => {
   it.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
     'a template whose image is missing fails create with a named, honest error',
     async () => {
-      await client().registerTemplate('hollow-tpl', 'img:does-not-exist');
+      await registerTemplate('hollow-tpl', 'img:does-not-exist');
       await expect(
         client().acquireSandbox('hollow-key', { template: 'hollow-tpl' }),
       ).rejects.toMatchObject({
@@ -686,7 +735,7 @@ describe('native API over a real daemon', () => {
       expect(await client().destroySandbox('hollow-key')).toEqual({
         destroyed: false,
       });
-      expect(await client().removeTemplate('hollow-tpl')).toEqual({
+      expect(await viaDoor().removeTemplate('hollow-tpl')).toEqual({
         removed: true,
       });
     },
@@ -706,7 +755,7 @@ describe('native API over a real daemon', () => {
     // Watch it actually freeze from outside, on real wall-clock time.
     const deadline = Date.now() + 15_000;
     for (;;) {
-      const cold = (await client().listSandboxes()).find(
+      const cold = (await client().listSandboxes()).sandboxes.find(
         (s) => s.name === 'files-wake-key',
       );
       if (cold?.state === 'frozen') break;
@@ -720,7 +769,7 @@ describe('native API over a real daemon', () => {
 
     const read = await client().readFile('files-wake-key', 'keep.txt');
     expect(new TextDecoder().decode(read.content)).toBe('still here');
-    const observed = (await client().listSandboxes()).find(
+    const observed = (await client().listSandboxes()).sandboxes.find(
       (s) => s.name === 'files-wake-key',
     );
     expect(observed?.state).toBe('active');
@@ -734,7 +783,6 @@ describe('native API over a real daemon', () => {
     expect(metrics.host.cpuCount).toBeGreaterThan(0);
     expect(metrics.host.memTotalBytes).toBeGreaterThan(0);
     expect(metrics.sandboxes.total).toBeGreaterThanOrEqual(1);
-    expect(metrics.sandboxes.maxSandboxes).toBeGreaterThan(0);
     expect(metrics.sandboxDisks.count).toBeGreaterThanOrEqual(1);
     expect(metrics.sandboxDisks.actualBytes).toBeGreaterThan(0);
     // Disks are sparse: the fleet is promised more than it occupies —
@@ -747,56 +795,49 @@ describe('native API over a real daemon', () => {
 });
 
 describe('the observability verbs over a real daemon', () => {
-  it('getConfig reports effective knobs and never leaks the token', async () => {
-    const config = await client().getConfig();
+  it('getConfig at the door reports effective knobs and never leaks the token', async () => {
+    const config = await viaDoor().getConfig();
     const token = config.entries.find((e) => e.key === 'DORMICE_API_TOKEN');
     expect(token).toMatchObject({ value: null, redacted: true });
     // Black-box secrecy: the real token appears nowhere in the response.
     expect(JSON.stringify(config)).not.toContain(inject('dormiceToken'));
-    // The exam daemon runs with miniS3 configured, so the daemon's own
+    // The exam's gateway is seeded with miniS3, so the fleet's own
     // adjudication says archiving is live, with the one-week default.
     expect(config.archive).toEqual({
       enabled: true,
       defaultSeconds: 7 * 24 * 60 * 60,
     });
-  });
-
-  it('updateSettings moves a ledger knob with immediate effect', async () => {
-    const before = (await client().getConfig()).settings;
-    const { settings } = await client().updateSettings({
-      maxSandboxes: before.maxSandboxes + 1,
-    });
-    expect(settings.maxSandboxes).toBe(before.maxSandboxes + 1);
-    expect(settings.updatedAt).not.toBeNull();
-    expect((await client().getConfig()).settings.maxSandboxes).toBe(
-      before.maxSandboxes + 1,
+    expect(config.configVersion).toBeGreaterThanOrEqual(1);
+    // The fleet's base image and registry are settings since the fourth
+    // cut: seeded by the exam's gateway env (an image name, no registry).
+    expect(config.settings.baseImage).toBe(
+      process.env.DORMICE_BASE_IMAGE ?? 'fake-base',
     );
-    // Restore: the exam daemon is shared by every suite in this run.
-    await client().updateSettings({ maxSandboxes: before.maxSandboxes });
+    expect(config.settings.registryAddress).toBeNull();
+    // The node answers no configuration verb of its own anymore.
+    await expect(client().getConfig()).rejects.toMatchObject({ status: 404 });
   });
 
-  it('the swap knob follows getConfig: refused where unmanageable, accepted where real', async () => {
-    // The suite runs in two worlds — fake mode (CI, dev Macs), where
-    // managed swap is deterministically unavailable, and docker mode on a
-    // real Linux host, where it is real. Either way getConfig's
-    // `supported` is the adjudication and updateSettings must agree.
-    const { swap } = await client().getConfig();
-    if (!swap.supported) {
-      // Unmanageable host: setting a target is a 400, not a silently
-      // stored dead value.
-      await expect(
-        client().updateSettings({ swapGb: 8 }),
-      ).rejects.toMatchObject({
-        name: 'DormiceApiError',
-        status: 400,
-        message: expect.stringMatching(/Linux host with the docker executor/),
-      });
-      return;
-    }
-    // Capable host: the knob is accepted. Target 0 = "manage none" — a
-    // recorded no-op, so the shared exam machine gains no swapfile.
-    const { settings } = await client().updateSettings({ swapGb: 0 });
-    expect(settings.swapGb).toBe(0);
+  it('updateSettings at the door moves a fleet knob; the version counts up and node A runs it within a check-in', async () => {
+    const before = await viaDoor().getConfig();
+    const { settings } = await viaDoor().updateSettings({
+      pidsLimit: before.settings.pidsLimit + 1,
+    });
+    expect(settings.pidsLimit).toBe(before.settings.pidsLimit + 1);
+    expect(settings.updatedAt).not.toBeNull();
+    const after = await viaDoor().getConfig();
+    expect(after.settings.pidsLimit).toBe(before.settings.pidsLimit + 1);
+    // Greater, not exactly one more: the exam's gateway is shared by every
+    // suite in this run, and another suite's write (settings-hot's domain
+    // edits) can count the version up between two reads here — CI saw 22
+    // where +1 said 21 (2026-09-14). The node's proof keeps its shape:
+    // settled() returns once node A reports the gateway's current version,
+    // which is at least the one this write produced.
+    expect(after.configVersion).toBeGreaterThan(before.configVersion);
+    expect(await settled()).toBeGreaterThanOrEqual(after.configVersion);
+    // Restore: the exam's gateway is shared by every suite in this run.
+    await viaDoor().updateSettings({ pidsLimit: before.settings.pidsLimit });
+    await settled();
   });
 
   it('getSandboxMetrics samples a live sandbox and 404s after destroy', async () => {
@@ -810,17 +851,6 @@ describe('the observability verbs over a real daemon', () => {
     await expect(
       client().getSandboxMetrics('obs-metrics-key'),
     ).rejects.toMatchObject({ name: 'DormiceApiError', status: 404 });
-  });
-
-  it("listActivity tells one sandbox's story, newest first", async () => {
-    await client().acquireSandbox('obs-story-key');
-    await client().destroySandbox('obs-story-key');
-    const events = await client().listActivity({ limit: 500 });
-    const mine = events.filter((e) => e.sandboxName === 'obs-story-key');
-    expect(mine.map((e) => e.kind)).toEqual(['destroyed', 'created']);
-    expect(mine[1]?.detail).toContain('acquireSandbox');
-    // Attribution: this suite runs on the env token, and the events say so.
-    expect(mine.map((e) => e.actor)).toEqual(['env-token', 'env-token']);
   });
 
   it('getSandboxMetricsHistory fills up as the sampler ticks, and 404s after destroy', async () => {
@@ -848,17 +878,23 @@ describe('the observability verbs over a real daemon', () => {
     ).rejects.toMatchObject({ name: 'DormiceApiError', status: 404 });
   });
 
-  it('getFleetTimeline reports points and a peak once the fleet was seen', async () => {
+  it('getFleetStateHistory at the door reports points and a peak once the fleet was seen; a node answers no fleet history of its own', async () => {
     await client().acquireSandbox('obs-timeline-key');
+    // The node's own answer: none — the fleet's history is the gateway's,
+    // and the node's 404 says where it lives.
+    await expect(client().getFleetStateHistory()).rejects.toMatchObject({
+      status: 404,
+      message: expect.stringMatching(/answers at the gateway/),
+    });
     const deadline = Date.now() + 15_000;
-    let timeline = await client().getFleetTimeline();
+    let timeline = await viaDoor().getFleetStateHistory();
     // Wait for a tick that observed at least one sandbox alive.
     while (
       (timeline.points.length < 1 || (timeline.peak?.active ?? 0) < 1) &&
       Date.now() < deadline
     ) {
       await sleep(0.5);
-      timeline = await client().getFleetTimeline();
+      timeline = await viaDoor().getFleetStateHistory();
     }
     expect(timeline.points.length).toBeGreaterThanOrEqual(1);
     expect(timeline.peak?.active).toBeGreaterThanOrEqual(1);

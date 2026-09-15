@@ -5,8 +5,10 @@ description: Operate Dormice self-hosted agent sandboxes — acquire a sandbox, 
 
 # Dormice
 
-Dormice is a self-hosted sandbox platform: one daemon on one machine, and
-sandboxes that are **permanent** — idle ones cool down
+Dormice is a self-hosted sandbox platform: a gateway (the front door —
+console, API keys, fleet settings) and one or more daemons (the nodes that
+run the sandboxes; a single machine runs both), and sandboxes that are
+**permanent** — idle ones cool down
 (`active → frozen → stopped → archived`) instead of being destroyed, and any
 acquire brings them back. Two facts drive every workflow below:
 
@@ -21,17 +23,21 @@ acquire brings them back. Two facts drive every workflow below:
 
 ## Connecting
 
-The daemon serves everything on one port and binds to `127.0.0.1:3676`
-only. On the server itself use that address directly; from another machine
-the operator has either an SSH tunnel
-(`ssh -L 3676:127.0.0.1:3676 root@host`, then use `http://127.0.0.1:3676`)
-or a reverse-proxy domain (then use `https://their-domain`). Auth is one
-API token (created by the installer, hex): ask the user for the endpoint
-and token, conventionally held in `DORMICE_ENDPOINT` / `DORMICE_API_TOKEN`.
-API keys minted in the console (or with `dor apikey create <name>`) work
-everywhere the token does — same variables, revocable per client — except
-the apiKey management verbs themselves, which require the env token
-(keys cannot manage keys).
+Two doors, both bound to `127.0.0.1` only: the gateway on `3677` (the
+console, templates, API keys, settings, and every per-sandbox verb, which
+it forwards to the node) and the daemon on `3676` (the sandbox verbs plus
+the list and observation verbs the gateway does not answer yet). On the
+server itself use those addresses directly; from another machine the
+operator has either an SSH tunnel (`ssh -L 3677:127.0.0.1:3677 -L
+3676:127.0.0.1:3676 root@host`) or a reverse-proxy domain in front of the
+gateway (then use `https://their-domain`). Auth is one API token (created
+by the installer, hex): ask the user for the endpoint and token,
+conventionally held in `DORMICE_ENDPOINT` / `DORMICE_API_TOKEN`. API keys
+minted in the console (or with `dor apikey create <name>`) open the
+gateway wherever the token does — same variables, revocable per client —
+except the verbs that configure the fleet (keys, settings, templates,
+domains), which require the token (keys cannot manage keys); a daemon
+knows only the token.
 
 ## Pick an entry path
 
@@ -52,8 +58,8 @@ import { Sandbox } from 'e2b';
 
 const sbx = await Sandbox.create({
   apiKey: `e2b_${process.env.DORMICE_API_TOKEN}`,
-  apiUrl: 'http://127.0.0.1:3676/e2b/api',
-  sandboxUrl: 'http://127.0.0.1:3676/e2b/envd',
+  apiUrl: 'http://127.0.0.1:3677/e2b/api',
+  sandboxUrl: 'http://127.0.0.1:3677/e2b/envd',
 });
 await sbx.commands.run('echo hello');
 ```
@@ -64,8 +70,8 @@ from e2b import Sandbox
 
 sandbox = Sandbox.create(
     api_key=f"e2b_{os.environ['DORMICE_API_TOKEN']}",
-    api_url="http://127.0.0.1:3676/e2b/api",
-    sandbox_url="http://127.0.0.1:3676/e2b/envd",
+    api_url="http://127.0.0.1:3677/e2b/api",
+    sandbox_url="http://127.0.0.1:3677/e2b/envd",
 )
 sandbox.commands.run("echo hello")
 ```
@@ -87,7 +93,7 @@ Every operation is `POST /<sdkMethodName>` with a JSON body and
 import { Dormice } from '@dormice/sdk';
 
 const client = new Dormice({
-  endpoint: 'http://127.0.0.1:3676',
+  endpoint: 'http://127.0.0.1:3677',
   token: process.env.DORMICE_API_TOKEN!,
 });
 
@@ -106,7 +112,7 @@ await client.destroySandbox('my-agent'); // the only verb that loses data
 The same loop in curl:
 
 ```sh
-curl -X POST http://127.0.0.1:3676/acquireSandbox \
+curl -X POST http://127.0.0.1:3677/acquireSandbox \
   -H "Authorization: Bearer $DORMICE_API_TOKEN" \
   -H "content-type: application/json" \
   -d '{"name": "my-agent"}'
@@ -119,16 +125,23 @@ an existing sandbox's lifecycle policy in place — no wake, no destroy),
 `{}` clears — same no-wake manners), `listSandboxes`,
 `execCommand`, `writeFiles` / `writeFile`, `readFile` / `readFiles`,
 `rebuildSandbox` (fresh container, `/home/user` kept), `destroySandbox`,
-`registerTemplate` / `listTemplates` / `removeTemplate`,
-`createApiKey` / `listApiKeys` / `updateApiKey` / `revokeApiKey`
-(revocable peers of the API token with optional expiry and a reversible
-disable switch; the create response shows the key once, never again;
-these four verbs accept only the env token),
-`getHostMetrics`, `getSandboxMetrics` / `listSandboxMetrics` (live
-resource samples; never wake anything), `listSandboxImages` (who still
-runs an old template image), `listActivity` (recent daemon history),
-`getConfig` (effective config, secrets redacted), `getIngress` /
-`setIngress` (bind domains on the daemon's managed reverse proxy).
+`registerTemplate` / `listTemplates` / `removeTemplate` (at the gateway;
+nodes learn a template at their next check-in),
+`createApiKey` / `listApiKeys` / `updateApiKey` / `revokeApiKey` (at the
+gateway: revocable peers of the API token with optional expiry and a
+reversible disable switch; the create response shows the key once, never
+again; these four verbs accept only the token),
+`getHostMetrics` (one machine's reading; at the gateway name the node
+with `nodeId`, a fleet of one needs none), `getSandboxMetrics` /
+`listSandboxMetrics` (live resource samples; never wake anything),
+`listSandboxImages` (who still runs an old template image) — the lists
+at the gateway are every node's, with `silent` naming a node it could
+not include — `getFleetMetrics` / `getFleetStateHistory` (the fleet's
+sums and its census over time, answered by the gateway from the nodes'
+check-ins), `getConfig` / `updateSettings` (the fleet's settings at the
+gateway, secrets redacted; applied by every node at its next check-in),
+`getIngress` / `setIngress` (bind domains on the gateway's managed reverse
+proxy), `listNodes` (every node and what it last reported).
 `execCommand` takes
 `{ name, command, timeoutSeconds?, cwd?, env? }` and returns
 `{ exitCode, stdout, stderr, ... }` — **a non-zero exit code is a result,

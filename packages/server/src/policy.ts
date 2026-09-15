@@ -4,14 +4,10 @@ import {
   lifecyclePolicySchema,
 } from '@dormice/shared';
 
-/**
- * The default distance from stopped to archived, applied only when the
- * daemon actually has an archiver (S3 configured) — the shared default
- * stays null because a promise nobody can honor is a standing lie. Since
- * runtime settings landed this is only the first-boot SEED of the ledger's
- * defaultPolicy.archiveAfterSeconds; the ledger value is what acquires read.
- */
-export const ARCHIVE_DEFAULT_SECONDS = 7 * 24 * 60 * 60;
+// The first-boot seed of defaultPolicy.archiveAfterSeconds lives with the
+// shared policy schema now that the gateway seeds it too; re-exported so
+// the daemon's callers keep one import path.
+export { ARCHIVE_DEFAULT_SECONDS } from '@dormice/shared';
 
 /** An archive-asking policy on a daemon that has no archive store. */
 export class ArchiveDisabledError extends Error {

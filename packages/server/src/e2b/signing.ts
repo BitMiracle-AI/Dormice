@@ -56,7 +56,7 @@ function matchesToken(
  * `<origin>/files?...` and browsers add nothing) — but every sandbox's
  * access token is different, so the signature itself binds the sandbox:
  * compute the expected signature per live ledger row and take the match.
- * At most DORMICE_MAX_SANDBOXES hashes per request — microseconds.
+ * One hash per live ledger row — microseconds even at thousands.
  *
  * This is the single-domain answer to what real E2B solves with one
  * subdomain per sandbox; the deliberate divergence is documented in the
@@ -83,6 +83,73 @@ export interface SignedFileQuery {
   username?: string;
   signature?: string;
   signature_expiration?: string;
+}
+
+const SIGNED_FILE_QUERY_KEYS = [
+  'path',
+  'username',
+  'signature',
+  'signature_expiration',
+] as const;
+
+/**
+ * The query half read off a bare query string — the gateway's
+ * lookupSandbox hands the string over as it arrived on the wire, and it
+ * is read here, beside the door that reads the real request, so the two
+ * readings agree. URLSearchParams and Fastify's parser decode the four
+ * keys alike (`+` a space, percent-escapes resolved).
+ */
+export function parseSignedFileQuery(raw: string): SignedFileQuery {
+  const params = new URLSearchParams(raw);
+  const query: SignedFileQuery = {};
+  for (const key of SIGNED_FILE_QUERY_KEYS) {
+    const value = params.get(key);
+    if (value !== null) query[key] = value;
+  }
+  return query;
+}
+
+/** The signed material a query spells, in the SDK's order; the expiration rides along for the door's own check. */
+function materialOf(
+  query: SignedFileQuery,
+  operation: SigningOperation,
+): SignatureMaterial {
+  const expirationUnix =
+    query.signature_expiration === undefined
+      ? undefined
+      : Number(query.signature_expiration);
+  return {
+    path: query.path ?? '',
+    operation,
+    username: query.username ?? '',
+    ...(expirationUnix === undefined ? {} : { expirationUnix }),
+  };
+}
+
+/**
+ * Which live sandbox does a bare signed query speak for — identity alone,
+ * for the gateway's lookupSandbox. A root `/files` request carries no
+ * sandbox id (the SDK builds the URL off the API origin), the signature
+ * is the only key in it, and only this node's secret reads it: so the
+ * gateway asks every node this and forwards to the one that says yes.
+ * Nothing else is judged here — not the expiration, not the username: the
+ * door the request is then forwarded to judges the whole query again, in
+ * validateSigning order (authenticateSignedQuery). No signature, no
+ * sandbox.
+ */
+export function sandboxOfSignedQuery(
+  db: Db,
+  signingSecret: string,
+  query: SignedFileQuery,
+  operation: SigningOperation,
+): SandboxRow | undefined {
+  if (!query.signature) return undefined;
+  return findRowBySignature(
+    db,
+    signingSecret,
+    materialOf(query, operation),
+    query.signature,
+  );
 }
 
 /**
@@ -117,16 +184,8 @@ export function authenticateSignedQuery(opts: {
       'missing signature query parameter',
     );
   }
-  const expirationUnix =
-    query.signature_expiration === undefined
-      ? undefined
-      : Number(query.signature_expiration);
-  const material: SignatureMaterial = {
-    path: query.path ?? '',
-    operation,
-    username: query.username ?? '',
-    ...(expirationUnix === undefined ? {} : { expirationUnix }),
-  };
+  const material = materialOf(query, operation);
+  const { expirationUnix } = material;
   const sandboxId =
     pinnedSandboxId !== undefined
       ? matchesToken(

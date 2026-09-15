@@ -6,7 +6,8 @@ import type {
   CheckUpgradeResponse,
   CreateApiKeyResponse,
   GetConfigResponse,
-  GetFleetTimelineResponse,
+  GetFleetMetricsResponse,
+  GetFleetStateHistoryResponse,
   GetHostMetricsHistoryResponse,
   GetIngressResponse,
   GetSandboxMetricsHistoryResponse,
@@ -14,13 +15,16 @@ import type {
   GetUpgradeStatusResponse,
   HostMetricsResponse,
   LifecyclePolicyOverride,
-  ListActivityResponse,
+  ListNodesResponse,
+  ListSandboxesResponse,
   ListSandboxImagesResponse,
   ListSandboxMetricsResponse,
   RegisterTemplateResponse,
+  RemoveNodeResponse,
   Sandbox,
   SetIngressResponse,
   Template,
+  UpdateNodeSettingsResponse,
   UpdateSettingsRequest,
   UpdateSettingsResponse,
 } from '@dormice/shared';
@@ -140,12 +144,20 @@ export const login = (input: { username: string; password: string }) =>
 export const logout = () =>
   rpc<{ loggedIn: false }>('/console/auth/logout', {}, { intercept401: false });
 
-export const listSandboxes = () =>
-  rpc<{ sandboxes: Sandbox[] }>('/listSandboxes');
+export const listSandboxes = () => rpc<ListSandboxesResponse>('/listSandboxes');
 
-// The host-level observation window: machine health plus fleet aggregates.
-// Pure observation — the daemon wakes nothing to answer it.
-export const getHostMetrics = () => rpc<HostMetricsResponse>('/getHostMetrics');
+// One machine's observation window: its health, its ledger's census, its
+// disks' bill. Named by node since the third cut (2026-09-15): the gateway
+// forwards it to that node. Pure observation — nothing wakes to answer it.
+export const getHostMetrics = (nodeId: string) =>
+  rpc<HostMetricsResponse>('/getHostMetrics', { nodeId });
+
+// The fleet's figures that add up — how many nodes, the census by state,
+// the disks' bill — from the nodes' last check-ins, answered by the gateway
+// without asking a node. `nodes.reported` says how many nodes the sums
+// cover; until every node has reported they are a lower bound.
+export const getFleetMetrics = () =>
+  rpc<GetFleetMetricsResponse>('/getFleetMetrics');
 
 // One sandbox's point-in-time reading. Same principle: a frozen sandbox is
 // measured as it sleeps, a stopped one answers sample: null — never woken.
@@ -171,17 +183,57 @@ export const getSandboxMetricsHistory = (
     end,
   });
 
-// Fleet state counts over time — the concurrency curve's data. Bucketed
-// points are whole raw snapshots (byState always sums to total); peak is
-// computed from raw rows and immune to bucketing.
-export const getFleetTimeline = (start: string, end: string) =>
-  rpc<GetFleetTimelineResponse>('/getFleetTimeline', { start, end });
+// Fleet state counts over time — the concurrency curve's data, kept by the
+// gateway's own sampler (30s by default). Bucketed points are whole raw
+// samples (byState always sums to total); peak is computed from raw rows
+// and immune to bucketing.
+export const getFleetStateHistory = (start: string, end: string) =>
+  rpc<GetFleetStateHistoryResponse>('/getFleetStateHistory', { start, end });
 
-// The machine's sampled past — the host health card's trend food. Buckets
+// One machine's sampled past — the node health card's trend food. Buckets
 // keep each field's worst case (max usage, min available) so spikes
 // survive; peak carries the window's raw CPU high point.
-export const getHostMetricsHistory = (start: string, end: string) =>
-  rpc<GetHostMetricsHistoryResponse>('/getHostMetricsHistory', { start, end });
+export const getHostMetricsHistory = (
+  nodeId: string,
+  start: string,
+  end: string,
+) =>
+  rpc<GetHostMetricsHistoryResponse>('/getHostMetricsHistory', {
+    nodeId,
+    start,
+    end,
+  });
+
+// The nodes as the gateway knows them: every node that ever checked in,
+// with its last reading, build and configuration version (the drift
+// marker is this against getConfig's configVersion). Costs no node
+// anything — the gateway answers from memory.
+export const listNodes = () => rpc<ListNodesResponse>('/listNodes');
+
+// The one per-node knob: how much swap that node's daemon manages on its
+// own data disk. Applied by the node at its next check-in.
+export const updateNodeSettings = (id: string, swapGb: number) =>
+  rpc<UpdateNodeSettingsResponse>('/updateNodeSettings', { id, swapGb });
+
+// The operator's word that a node is gone for good; the gateway refuses it
+// (409) for a node still checking in — the message is relayed as it came.
+export const removeNode = (id: string) =>
+  rpc<RemoveNodeResponse>('/removeNode', { id });
+
+// The gateway's liveness answer, open by design: its build identity, so
+// the nodes page can say which node runs a build other than the gateway's.
+export async function gatewayHealth(): Promise<{
+  status: 'ok';
+  build: { commit: string; title: string; committedAt: string } | null;
+}> {
+  const res = await fetch('/healthz');
+  if (!res.ok)
+    throw new ApiError(`/healthz failed with ${res.status}`, res.status);
+  return (await res.json()) as {
+    status: 'ok';
+    build: { commit: string; title: string; committedAt: string } | null;
+  };
+}
 
 // Every sandbox's image lineage: the born image of the current shell (null
 // when no shell exists), the image the next shell would boot, and whether a
@@ -189,11 +241,6 @@ export const getHostMetricsHistory = (start: string, end: string) =>
 // old image?" after a template upgrade.
 export const listSandboxImages = () =>
   rpc<ListSandboxImagesResponse>('/listSandboxImages');
-
-// The ledger's recent history, newest first — a bounded ring, not an audit
-// log. The daemon records at the moves themselves; this only reads.
-export const listActivity = (limit?: number) =>
-  rpc<ListActivityResponse>('/listActivity', limit ? { limit } : {});
 
 // Effective configuration. Secrets come back as "set", never as their
 // value; archive.enabled is the daemon's own adjudication. The env entries
@@ -214,8 +261,14 @@ export const checkUpgrade = (force = false) =>
 // The one-click upgrade: the daemon hands install.sh to a systemd unit
 // that outlives its own restart, then answers { started: true }. Progress
 // lives in getUpgradeStatus; expect the daemon to restart near the end.
-export const applyUpgrade = () =>
-  rpc<ApplyUpgradeResponse>('/applyUpgrade', {});
+// Without a node: the gateway's machine upgrades and the fleet rolls
+// behind it. With one: the operator tells that node again (a node the
+// status lists as stuck).
+export const applyUpgrade = (nodeId?: string) =>
+  rpc<ApplyUpgradeResponse>(
+    '/applyUpgrade',
+    nodeId === undefined ? {} : { nodeId },
+  );
 
 // The upgrade execution window: availability, unit liveness (from systemd,
 // not the status file's claim), the last run's report and the log tail.
@@ -289,4 +342,4 @@ export const updatePolicy = (name: string, policy: LifecyclePolicyOverride) =>
 // The terminal's key: trades the session cookie for one sandbox's envd
 // access token, so the browser can speak to the envd surface directly.
 export const mintEnvdToken = (sandboxId: string) =>
-  rpc<{ envdAccessToken: string }>('/console/envdToken', { sandboxId });
+  rpc<{ envdAccessToken: string }>('/envdToken', { sandboxId });

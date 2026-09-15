@@ -4,14 +4,21 @@ description: Every dor command — sandboxes, templates, and the host doctor —
 ---
 
 The CLI installs as two names for the same binary: `dormice` and `dor`
-(the one you actually type). It talks to a daemon over the
-[HTTP API](/docs/http-api) and connects with exactly two environment
-variables — missing one produces an error naming it:
+(the one you actually type). It speaks the [HTTP API](/docs/http-api)
+to the gateway — the fleet's one door — and connects with exactly two
+environment variables — missing one produces an error naming it:
 
 ```sh
-export DORMICE_ENDPOINT=http://127.0.0.1:3676
-export DORMICE_API_TOKEN=<token>   # on the daemon host: grep ^DORMICE_API_TOKEN /etc/dormice/env
+export DORMICE_ENDPOINT=http://127.0.0.1:3677
+export DORMICE_API_TOKEN=<token>   # on the host: grep ^DORMICE_API_TOKEN /etc/dormice/env
 ```
+
+Everything on this page goes to the gateway. `dor sandbox ls` lists
+every node's sandboxes; when a node did not answer, a `warning:` line
+on stderr names it and says its sandboxes are not listed, and the
+command exits 1 — the table on stdout stays a table, so a pipe never
+reads the warning as a row, and a script never takes the partial list
+for the whole fleet.
 
 Errors print as one line on stderr (no stack traces at a shell prompt)
 and exit 1.
@@ -103,11 +110,11 @@ dor apikey revoke <name>                      # final; frees the name
 
 API keys are revocable peers of `DORMICE_API_TOKEN` — same power, but
 killable without touching the server ([details](/docs/http-api#api-keys)).
-`create` prints the 64-hex token exactly once; the daemon keeps only its
+`create` prints the 64-hex token exactly once; the gateway keeps only its
 hash. The minted key goes wherever the token goes, including this CLI's
 own `DORMICE_API_TOKEN` variable — with one exception: the `apikey`
 commands themselves require the env token (keys cannot manage keys; a
-key gets the daemon's honest 403). `disable` is the reversible half of
+key gets the gateway's honest 403). `disable` is the reversible half of
 `revoke`: the key stops working until re-enabled but keeps its name and
 history. `revoke` takes effect on the key's next request; revoking a
 name that has no active key says so honestly — check the spelling before

@@ -1,7 +1,7 @@
-import http from 'node:http';
 import { Dormice } from '@dormice/sdk';
 import { CommandExitError, Sandbox } from 'e2b';
 import { describe, expect, inject, it } from 'vitest';
+import { door, until as poll, settled, spoofHost } from './helpers';
 
 // The compatibility promise, verified with the promise's own artifact: the
 // OFFICIAL e2b package, pointed at the daemon by exactly two URLs (plus its
@@ -28,36 +28,12 @@ async function until(check: () => boolean, timeoutMs = 8_000) {
   }
 }
 
-/**
- * A GET at the daemon with a spoofed Host header — exactly what traffic
- * from a wildcard-DNS reverse proxy looks like, no DNS needed (fetch
- * refuses to set Host, so this speaks node:http directly).
- */
-function throughProxy(
+/** A GET with a spoofed Host header, at node A by default or at the door (helpers.ts spoofHost). */
+const throughProxy = (
   host: string,
   path = '/',
-): Promise<{ status: number; body: string }> {
-  const endpoint = new URL(inject('dormiceEndpoint'));
-  return new Promise((resolve, reject) => {
-    const req = http.request(
-      {
-        host: endpoint.hostname,
-        port: endpoint.port,
-        path,
-        headers: { host },
-      },
-      (res) => {
-        let body = '';
-        res.on('data', (chunk) => {
-          body += chunk;
-        });
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
-      },
-    );
-    req.on('error', reject);
-    req.end();
-  });
-}
+  via = inject('dormiceEndpoint'),
+) => spoofHost(via, host, path);
 
 describe('official e2b SDK against the daemon', () => {
   it('creates a sandbox and runs a command', async () => {
@@ -72,18 +48,26 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
-  it('a ledger API key drives the official SDK exactly like the env token', async () => {
-    // Minted over the native face; the E2B face accepts it as e2b_<key> —
-    // pure hex by construction, so even the Python SDK's client-side
-    // e2b_[0-9a-f]+ validation would let it through.
+  it('a minted API key drives the official SDK through the door exactly like the fleet token', async () => {
+    // Minted at the gateway over the native face; the gateway's E2B face
+    // accepts it as e2b_<key> — pure hex by construction, so even the
+    // Python SDK's client-side e2b_[0-9a-f]+ validation would let it
+    // through. A node knows only the fleet token, so the keyed SDK is
+    // pointed at the door: the E2B control plane there places on node A
+    // and forwards by id.
     const dormice = new Dormice({
-      endpoint: inject('dormiceEndpoint'),
+      endpoint: door(),
       token: inject('dormiceToken'),
     });
     const { apiKey, token } = await dormice.createApiKey('e2b-face');
+    const atDoor = {
+      apiUrl: `${door()}/e2b/api`,
+      sandboxUrl: `${door()}/e2b/envd`,
+    };
     try {
       const sbx = await Sandbox.create({
         ...connection(),
+        ...atDoor,
         apiKey: `e2b_${token}`,
       });
       try {
@@ -97,7 +81,7 @@ describe('official e2b SDK against the daemon', () => {
     }
     // Revoked: the same key is refused at the control-plane door.
     await expect(
-      Sandbox.create({ ...connection(), apiKey: `e2b_${token}` }),
+      Sandbox.create({ ...connection(), ...atDoor, apiKey: `e2b_${token}` }),
     ).rejects.toThrow(/invalid API key/);
   });
 
@@ -246,6 +230,29 @@ describe('official e2b SDK against the daemon', () => {
       expect(await sbx.files.read('signed/up.txt')).toBe(
         'uploaded via signed url\n',
       );
+    } finally {
+      await sbx.kill();
+    }
+  });
+
+  it('signed URLs minted through the door work through the door: the form carries no sandbox id, and the door asks the node', async () => {
+    const sbx = await Sandbox.create({
+      ...connection(),
+      apiUrl: `${door()}/e2b/api`,
+      sandboxUrl: `${door()}/e2b/envd`,
+    });
+    try {
+      await sbx.files.write('signed/door.txt', 'through the door\n');
+      const url = await sbx.downloadUrl('signed/door.txt');
+      // The URL the SDK really builds off a door origin: the door's root
+      // /files, no sandbox id anywhere — what a browser opens.
+      expect(url.startsWith(`${door()}/files?`)).toBe(true);
+      const res = await fetch(url);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('through the door\n');
+      const forged = new URL(url);
+      forged.searchParams.set('signature', 'v1_forged');
+      expect((await fetch(forged)).status).toBe(401);
     } finally {
       await sbx.kill();
     }
@@ -514,14 +521,22 @@ describe('official e2b SDK against the daemon', () => {
   });
 
   it('getHost builds the wildcard host from the served domain', async () => {
-    const sbx = await Sandbox.create(connection());
-    try {
-      // Pure client-side string assembly — but from OUR domain field, which
-      // is the whole point: the daemon told the SDK where sandboxes live.
-      expect(sbx.getHost(8000)).toBe(`8000-${sbx.sandboxId}.sbx.dormice.test`);
-    } finally {
-      await sbx.kill();
-    }
+    // Pure client-side string assembly — but from OUR domain field, which
+    // is the whole point: the daemon told the SDK where sandboxes live.
+    // Polled: settings-hot swaps the shared node's domain for a second or
+    // two at a time (the edit travels by check-in since 2026-09-14), and a
+    // sandbox created inside that window is told the other domain. The
+    // seed is the steady state and always comes back.
+    await poll(async () => {
+      const sbx = await Sandbox.create(connection());
+      try {
+        return sbx.getHost(8000) === `8000-${sbx.sandboxId}.sbx.dormice.test`
+          ? true
+          : undefined;
+      } finally {
+        await sbx.kill();
+      }
+    });
   });
 
   it('watchDir streams filesystem events for changes made through the SDK', async () => {
@@ -582,7 +597,7 @@ describe('official e2b SDK against the daemon', () => {
       );
       // The real wall-clock scanner freezes the sandbox under the open watch.
       const frozen = async () => {
-        const sandboxes = await dormice.listSandboxes();
+        const { sandboxes } = await dormice.listSandboxes();
         return sandboxes.find((s) => s.name === name)?.state;
       };
       const deadline = Date.now() + 15_000;
@@ -718,13 +733,15 @@ describe('official e2b SDK against the daemon', () => {
     // consumes the name as its templateID — aliases are the same wire.
     // The image must exist in docker mode; the base image serves both.
     const dormice = new Dormice({
-      endpoint: inject('dormiceEndpoint'),
+      endpoint: door(),
       token: inject('dormiceToken'),
     });
     await dormice.registerTemplate(
       'e2e-tpl',
       process.env.DORMICE_BASE_IMAGE ?? 'img:e2e-tpl',
     );
+    // Registered at the door; node A holds it after its next check-in.
+    await settled();
     const sbx = await Sandbox.create('e2e-tpl', connection());
     try {
       const info = await sbx.getInfo();
@@ -751,13 +768,35 @@ describe.runIf(process.env.DORMICE_EXECUTOR !== 'docker')(
     it('a Host-routed request lands inside the sandbox and echoes back', async () => {
       const sbx = await Sandbox.create(connection());
       try {
-        const host = sbx.getHost(8000);
-        const res = await throughProxy(host, '/hello?from=e2e');
-        expect(res.status).toBe(200);
+        // The seed domain, spelled out rather than read off getHost():
+        // settings-hot.test.ts moves the shared domain for a few seconds
+        // at a time, a create inside that window is told the other domain,
+        // and the seed is the steady state that comes back (the getHost
+        // exam above covers the assembly). Each door is asked until its
+        // proxy answers: a 404 mid-switch is the router speaking while the
+        // edit travels — the gateway keys on its own copy at once, the
+        // node on its next check-in (seen in a local run, 2026-09-14).
+        const host = `8000-${sbx.sandboxId}.sbx.dormice.test`;
+        const proxied = (via: string, path: string) =>
+          poll(async () => {
+            const res = await throughProxy(host, path, via);
+            return res.status === 200 ? res : undefined;
+          });
+        const res = await proxied(inject('dormiceEndpoint'), '/hello?from=e2e');
         const echo = JSON.parse(res.body);
         expect(echo.sandboxId).toBe(sbx.sandboxId);
         expect(echo.path).toBe('/hello?from=e2e');
         expect(echo.host).toBe(host);
+        // The same URL at the door: the gateway reads the id off the Host,
+        // finds the node holding it and forwards, Host kept — getHost()
+        // works through the fleet's one door, which is where the wildcard
+        // DNS points in production.
+        const viaDoor = await proxied(door(), '/hello?from=door');
+        expect(JSON.parse(viaDoor.body)).toMatchObject({
+          sandboxId: sbx.sandboxId,
+          path: '/hello?from=door',
+          host,
+        });
       } finally {
         await sbx.kill();
       }
@@ -939,10 +978,11 @@ describe.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
       const image = process.env.DORMICE_BASE_IMAGE;
       if (!image) throw new Error('docker e2e requires DORMICE_BASE_IMAGE');
       const dormice = new Dormice({
-        endpoint: inject('dormiceEndpoint'),
+        endpoint: door(),
         token: inject('dormiceToken'),
       });
       await dormice.registerTemplate('e2e-real-tpl', image);
+      await settled();
       const sbx = await Sandbox.create('e2e-real-tpl', connection());
       try {
         expect((await sbx.getInfo()).templateId).toBe('e2e-real-tpl');

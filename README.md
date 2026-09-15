@@ -3,7 +3,7 @@
 [![CI](https://github.com/BitMiracle-AI/Dormice/actions/workflows/ci.yml/badge.svg)](https://github.com/BitMiracle-AI/Dormice/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**The SQLite of agent sandboxes** — a self-hosted sandbox platform for AI agents. One machine, sandboxes that live forever, idle costs nothing.
+**The SQLite of agent sandboxes** — a self-hosted sandbox platform for AI agents. One machine or a fleet of them, sandboxes that live forever, idle costs nothing.
 
 > **Status: early development.** The daemon, its lifecycle engine, the SDK, the CLI, the web console, the real Docker + gVisor executor, the S3 archiver, and the E2B-compatible API work end to end — the full create → freeze → stop → archive → restore cycle, command execution, file I/O, and the official `e2b` SDK against real infrastructure. Nothing here is ready for production yet.
 
@@ -31,6 +31,13 @@ a battery of read-only checks — three of them boot a real gVisor
 container — that decides whether the install actually succeeded;
 `dor doctor` can be re-run on its own at any time.
 
+A second machine joins the same fleet with one more command
+(`--role node --gateway http://<first machine>:80`, the token in the
+environment) and needs no settings of its own; upgrades then run from
+the gateway, one node at a time. See the
+[installation](website/content/docs/installation.mdx) and
+[upgrading](website/content/docs/upgrading.mdx) docs.
+
 ## Quick start
 
 `@dormice/sdk` is the native TypeScript client. (Not on npm yet — the
@@ -40,7 +47,7 @@ first release is queued; inside this repo, `pnpm build` produces it.)
 import { Dormice } from '@dormice/sdk';
 
 const client = new Dormice({
-  endpoint: 'http://127.0.0.1:3676',
+  endpoint: 'http://127.0.0.1:3677',
   token: process.env.DORMICE_API_TOKEN!,
 });
 
@@ -93,8 +100,8 @@ import { Sandbox } from 'e2b';
 
 const sbx = await Sandbox.create({
   apiKey: `e2b_${process.env.DORMICE_API_TOKEN}`,
-  apiUrl: 'http://127.0.0.1:3676/e2b/api',
-  sandboxUrl: 'http://127.0.0.1:3676/e2b/envd',
+  apiUrl: 'http://127.0.0.1:3677/e2b/api',
+  sandboxUrl: 'http://127.0.0.1:3677/e2b/envd',
 });
 ```
 
@@ -135,28 +142,30 @@ Deliberate deltas from the hosted product:
 
 ## Web console
 
-The daemon serves a small web console at `http://127.0.0.1:3676/console` —
-sign in with the API token once and it becomes an httpOnly session cookie;
-the token itself is never stored anywhere the page can read. The console
+The gateway — the fleet's front door, installed beside the daemon — serves
+a small web console at `http://127.0.0.1:3677/console`: sign in with the
+API token once and it becomes an httpOnly session cookie; the token itself
+is never stored anywhere the page can read. The console
 shows every sandbox with its live lifecycle state (the same
 `/listSandboxes` the SDK sees), opens a per-sandbox detail view, creates
 sandboxes (the same idempotent `acquire`, with the lifecycle knobs),
 releases them, and has a Connect page with copy-paste snippets for every
 client (E2B SDK, native SDK, CLI) pointed at your own endpoint.
 
-The daemon listens on 127.0.0.1 only, so reaching it from another machine
-is a choice you make explicitly, one of two ways:
+Both processes listen on 127.0.0.1 only (the gateway on 3677, the daemon
+on 3676), so reaching them from another machine is a choice you make
+explicitly, one of two ways:
 
 - **SSH tunnel** (private, zero setup):
-  `ssh -L 3676:127.0.0.1:3676 root@host`, then open
-  `http://127.0.0.1:3676/console`.
+  `ssh -L 3677:127.0.0.1:3677 root@host`, then open
+  `http://127.0.0.1:3677/console`.
 - **Reverse proxy** for the console, the API, and the E2B surface at once —
-  e.g. Caddy, which also handles TLS certificates automatically once you
-  give it a domain:
+  e.g. Caddy pointed at the gateway, which also handles TLS certificates
+  automatically once you give it a domain:
 
   ```
   your-domain.example {
-  	reverse_proxy 127.0.0.1:3676 {
+  	reverse_proxy 127.0.0.1:3677 {
   		flush_interval -1
   	}
   }
@@ -169,8 +178,9 @@ is a choice you make explicitly, one of two ways:
 
 ## Cold archive (S3, optional)
 
-Set the four `DORMICE_S3_*` variables and idle sandboxes take the last
-step down: a week after stopping (tunable per sandbox via
+Configure a store in the console's settings page — or seed the four
+`DORMICE_S3_*` variables in the gateway's env (`/etc/dormice/gateway.env`)
+— and idle sandboxes take the last step down: a week after stopping (tunable per sandbox via
 `archiveAfterSeconds`), the disk is packed with `tar` + `zstd`, shipped to
 any S3-compatible bucket (AWS, Cloudflare R2, MinIO, Alibaba OSS in
 S3-compat mode), and freed locally. The next `acquireSandbox` answers
@@ -212,7 +222,7 @@ verifies it, but these are the facts underneath:
   disable inter-container traffic (`"icc": false` in `daemon.json`). The
   daemon binds to 127.0.0.1 only, by design without a knob; exposing it is
   a reverse proxy's job.
-- **One machine, one daemon.** The daemon enforces this with a lock next to
+- **One daemon per machine.** The daemon enforces this with a lock next to
   its ledger and refuses to start when its ledger and the machine's reality
   cannot belong together.
 
@@ -220,9 +230,11 @@ verifies it, but these are the facts underneath:
 
 Pick something else if:
 
-- **You need a fleet.** One machine, one daemon, by design — that is where
-  the simplicity comes from. Multi-machine sharding is a future direction
-  (the schema already carries the fields), not a current feature.
+- **You need sandboxes that move between machines, or a fleet across
+  regions.** A fleet is one gateway and the machines on its private
+  network — sharded, not distributed, by design: a sandbox lives on the
+  machine it was created on, and a node that is down takes its sandboxes
+  with it until it is back.
 - **You want a managed service.** No hosted anything, no SLA. That is
   E2B's product, and it is good at it.
 - **Your threat model demands hardware virtualization.** Sandboxes are
@@ -242,7 +254,8 @@ pnpm monorepo:
 | `packages/server` | The daemon: Fastify + SQLite ledger + lifecycle engine |
 | `packages/sdk` | `@dormice/sdk` — TypeScript client for the native API |
 | `packages/cli` | `dormice` command-line tool (`dor` for short) |
-| `packages/console` | Web console: React SPA, served by the daemon at `/console` |
+| `packages/console` | Web console: React SPA, served by the gateway at `/console` |
+| `packages/gateway` | The fleet's one door in front of one or more daemons: holds the fleet's settings, templates, API keys and the console; places new sandboxes, finds existing ones by asking the nodes, forwards everything else |
 | `e2e` | Black-box suite: boots the built daemon, drives it over the wire |
 | `examples` | Runnable demos: the native SDK, the official `e2b` package, a resident agent |
 

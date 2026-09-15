@@ -8,7 +8,6 @@ import {
   RamMemoryIcon,
 } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon, type HugeiconsProps } from '@hugeicons/react';
-import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { Meter } from '@/components/Meter';
@@ -28,18 +27,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { actorLabel } from '@/features/activity/actors';
-import { useActivity } from '@/features/activity/hooks/useActivity';
-import {
-  ACTIVITY_KIND_STYLES,
-  activityKindLabel,
-} from '@/features/activity/kinds';
-import { useApiKeys } from '@/features/api-keys/hooks/useApiKeys';
 import { Sparkline } from '@/features/overview/components/Sparkline';
 import { copyText } from '@/lib/copy';
 import { formatDateTime } from '@/lib/datetime';
 import { formatBytes, pctOf } from '@/lib/format';
-import { cn } from '@/lib/utils';
 import { m } from '@/paraglide/messages';
 import { ago, policyLine } from '../../format';
 import { useEnvdAuth, useKillProcess, useProcesses } from '../../hooks/useEnvd';
@@ -313,71 +304,6 @@ function ProcessesCard({ sandbox }: { sandbox: Sandbox }) {
   );
 }
 
-/** 右栏活动卡列几条最近的;全量(带筛选与详情列)在活动页。 */
-const ACTIVITY_ROWS = 8;
-
-function ActivityCard({ sandbox }: { sandbox: Sandbox }) {
-  const { data } = useActivity(1000);
-  const apiKeys = useApiKeys().data?.apiKeys;
-  const events = (data?.events ?? []).filter(
-    (event) => event.sandboxName === sandbox.name,
-  );
-
-  return (
-    <RailCard
-      title={m.workbench_recent_activity()}
-      action={
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 px-2 text-xs text-muted-foreground"
-          nativeButton={false}
-          render={<Link to="/activity" search={{ sandbox: sandbox.name }} />}
-        >
-          {m.workbench_view_all()}
-        </Button>
-      }
-    >
-      {events.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          {m.workbench_activity_empty()}
-        </p>
-      ) : (
-        <div className="flex flex-col">
-          {events.slice(0, ACTIVITY_ROWS).map((event) => (
-            <div
-              key={event.id}
-              className="flex items-center gap-2 border-b py-1.5 text-xs last:border-b-0"
-              title={`${formatDateTime(event.at)}${event.detail ? ` · ${event.detail}` : ''}`}
-            >
-              <Badge
-                variant="outline"
-                className={cn(
-                  'shrink-0 font-medium',
-                  ACTIVITY_KIND_STYLES[event.kind],
-                )}
-              >
-                {activityKindLabel(event.kind)}
-              </Badge>
-              <span
-                className={cn(
-                  'min-w-0 flex-1 truncate',
-                  event.actor === null && 'text-muted-foreground',
-                )}
-              >
-                {actorLabel(event.actor, apiKeys)}
-              </span>
-              <span className="shrink-0 tabular-nums text-muted-foreground">
-                {ago(event.at)}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </RailCard>
-  );
-}
-
 function InfoRow({
   label,
   children,
@@ -481,7 +407,6 @@ export function MonitorRail({ sandbox }: { sandbox: Sandbox }) {
       <LifecycleCard sandbox={sandbox} />
       <VitalsSection sandbox={sandbox} />
       <ProcessesCard sandbox={sandbox} />
-      <ActivityCard sandbox={sandbox} />
       <InfoCard sandbox={sandbox} />
     </div>
   );

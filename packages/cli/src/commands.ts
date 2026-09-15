@@ -26,8 +26,8 @@ export function clientFromEnv(
       .join(' and ');
     throw new Error(
       `${missing} must be set, e.g.\n` +
-        '  export DORMICE_ENDPOINT=http://127.0.0.1:3676\n' +
-        "  export DORMICE_API_TOKEN=<the daemon's token>",
+        '  export DORMICE_ENDPOINT=http://127.0.0.1:3677\n' +
+        '  export DORMICE_API_TOKEN=<the fleet token, from /etc/dormice/env>',
     );
   }
   return new Dormice({ endpoint, token });
@@ -71,16 +71,32 @@ function renderTable(headers: string[], rows: string[][]): string {
   return [line(headers), ...rows.map(line)].join('\n');
 }
 
-/** `dor sandbox ls`: every sandbox with its lifecycle state, as plain columns. */
-export async function sandboxLs(client: Dormice): Promise<string> {
-  const sandboxes = await client.listSandboxes();
-  if (sandboxes.length === 0) {
-    return 'No sandboxes.';
-  }
-  return renderTable(
-    COLUMNS.map((column) => column.header),
-    sandboxes.map((s) => COLUMNS.map((column) => printable(column.value(s)))),
+/**
+ * `dor sandbox ls`: every sandbox with its lifecycle state, as plain
+ * columns (`table`, for stdout). Asked of the gateway, the list may lack
+ * a node that did not answer — said in `warnings`, one line per node,
+ * never dropped: an operator reading "No sandboxes." while a node is down
+ * must be told. Kept apart from the table so main.ts can send them to
+ * stderr: `dor sandbox ls | grep …` must not read a warning as a row.
+ */
+export async function sandboxLs(
+  client: Dormice,
+): Promise<{ table: string; warnings: string[] }> {
+  const { sandboxes, silent = [] } = await client.listSandboxes();
+  const table =
+    sandboxes.length === 0
+      ? 'No sandboxes.'
+      : renderTable(
+          COLUMNS.map((column) => column.header),
+          sandboxes.map((s) =>
+            COLUMNS.map((column) => printable(column.value(s))),
+          ),
+        );
+  const warnings = silent.map(
+    (node) =>
+      `warning: node ${printable(node.nodeId)} did not answer (${printable(node.why)}) — its sandboxes are not listed`,
   );
+  return { table, warnings };
 }
 
 /**
@@ -113,7 +129,9 @@ export async function sandboxMeta(
 ): Promise<string> {
   if (labels === null) {
     // Read path: the native list is the one read the daemon offers.
-    const sandbox = (await client.listSandboxes()).find((s) => s.name === name);
+    const sandbox = (await client.listSandboxes()).sandboxes.find(
+      (s) => s.name === name,
+    );
     if (!sandbox) {
       throw new Error(`no sandbox named "${name}" — acquire it first`);
     }

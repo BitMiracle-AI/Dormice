@@ -112,5 +112,6 @@
   "sandboxes_cpu_value": "{v}% (단일 vCPU 기준)",
   "sandboxes_footer_live": "현재 값은 5초마다 새로 고쳐지며, 이번 판독값은 {ago} 시점의 것입니다.",
   "sandboxes_footer_history": "히스토리는 daemon이 백그라운드에서 샘플링해 저장합니다. 잠든 샌드박스도 그대로 측정되며(관찰은 절대 깨우지 않음), 중지 후에는 곡선이 정직하게 끊깁니다.",
-  "sandboxes_footer_bucketed": "기간이 길어 {n}분 버킷으로 집계했으며, 각 점은 버킷 내 최고치입니다."
+  "sandboxes_footer_bucketed": "기간이 길어 {n}분 버킷으로 집계했으며, 각 점은 버킷 내 최고치입니다.",
+  "sandboxes_silent_nodes": "노드 {nodes}가 응답하지 않았습니다. 그 위의 샌드박스는 목록에 없습니다"
 }

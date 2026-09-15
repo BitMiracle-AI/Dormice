@@ -222,13 +222,7 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
     await joinRestore(sandboxId);
     return locks.run(before.name, async () => {
       const fresh = requireRunningRow(sandboxId);
-      const awake = await wakeSandbox(
-        db,
-        executor,
-        fresh,
-        undefined,
-        deps.watchers,
-      );
+      const awake = await wakeSandbox(db, executor, fresh, deps.watchers);
       return touch(db, awake.id);
     });
   }
@@ -241,13 +235,7 @@ export function createEnvdContext(deps: E2bDeps): EnvdContext {
     await joinRestore(sandboxId);
     return locks.run(before.name, async () => {
       const fresh = requireRunningRow(sandboxId);
-      const awake = await wakeSandbox(
-        db,
-        executor,
-        fresh,
-        undefined,
-        deps.watchers,
-      );
+      const awake = await wakeSandbox(db, executor, fresh, deps.watchers);
       const row = touch(db, awake.id);
       try {
         return await work(row);

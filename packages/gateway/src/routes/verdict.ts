@@ -1,0 +1,78 @@
+import type { FastifyReply } from 'fastify';
+import type { Found } from '../find';
+import type { NodeState } from '../fleet';
+import { RETRY_AFTER_SECONDS } from '../raw';
+
+/**
+ * A finding turned into a routing decision for an authenticated face: the
+ * node to forward to (with what the cache or the lookup knows of the
+ * sandbox), nothing (every node answered and none holds it — a create
+ * places, a destroy gives its idempotent answer, everything else a 404),
+ * or a refusal with its status and sentence, which the face sends in its
+ * own dialect. A value, so every verb reads the decision the same way.
+ */
+export type Verdict =
+  | { kind: 'node'; node: NodeState; id: string; name: string | null }
+  | { kind: 'none' }
+  | {
+      kind: 'refuse';
+      status: number;
+      message: string;
+      retryAfterSeconds?: number;
+    };
+
+export function verdict(found: Found, what: string): Verdict {
+  switch (found.kind) {
+    case 'one':
+      return { kind: 'node', node: found.node, id: found.id, name: found.name };
+    case 'none':
+      return { kind: 'none' };
+    case 'conflict': {
+      // The gateway refuses every verb for this name with this very 409,
+      // destroy included — it will not guess which copy the caller means.
+      const ids = found.nodes.map((n) => n.id).join(' and ');
+      const endpoints = new Set(found.nodes.map((n) => n.endpoint));
+      if (endpoints.size === 1) {
+        // Two ids, one endpoint: not two copies but one daemon answering
+        // twice — a node whose DORMICE_NODE_ID changed (its old id keeps
+        // its row until removed), or two nodes whose DORMICE_NODE_ENDPOINT
+        // name the same machine. Nothing to destroy; the fleet's list of
+        // nodes is wrong, and the check-in log said so when it happened
+        // (routes/nodes.ts).
+        return {
+          kind: 'refuse',
+          status: 409,
+          message: `${what} was answered for by nodes ${ids}, which are one endpoint (${[...endpoints][0]}) — one daemon under two node ids: a node whose DORMICE_NODE_ID changed and whose old id still has its row (removeNode the id that no longer checks in; listNodes shows which), or two nodes whose DORMICE_NODE_ENDPOINT name the same machine (correct the wrong one)`,
+        };
+      }
+      return {
+        kind: 'refuse',
+        status: 409,
+        message: `${what} exists on nodes ${ids} — destroy one copy directly on its node before routing can resume`,
+      };
+    }
+    case 'unsure':
+      return {
+        kind: 'refuse',
+        status: 503,
+        message: `${what}: ${found.silent
+          .map((s) => `node ${s.nodeId} did not answer (${s.why})`)
+          .join(
+            ', ',
+          )} — it cannot be treated as new while a node that may hold it is silent: that node may be down, or busy building this very name (its lookup waits for that); retry after Retry-After, and remove the node only if it is gone for good`,
+        retryAfterSeconds: RETRY_AFTER_SECONDS,
+      };
+  }
+}
+
+/** Sends a refusal in the native dialect, with Retry-After where the verdict carries one. */
+export function refuse(
+  reply: FastifyReply,
+  refusal: Extract<Verdict, { kind: 'refuse' }>,
+  body: (message: string) => unknown = (message) => ({ message }),
+) {
+  if (refusal.retryAfterSeconds !== undefined) {
+    reply.header('retry-after', String(refusal.retryAfterSeconds));
+  }
+  return reply.code(refusal.status).send(body(refusal.message));
+}

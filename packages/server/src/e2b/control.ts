@@ -3,7 +3,6 @@ import type { FastifyError } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import {
-  countSandboxes,
   createSandbox,
   findById,
   findByName,
@@ -12,15 +11,11 @@ import {
   setPausedByUser,
   touch,
 } from '../db/ledger';
-import {
-  bucketSamples,
-  querySandboxSamples,
-  resolveBucketSeconds,
-  resolveWindow,
-} from '../db/metrics';
+import { bucketSamples, querySandboxSamples } from '../db/metrics';
 import type { SandboxRow } from '../db/schema';
 import { archiveEnabled, readRuntimeSettings } from '../db/settings';
 import { findTemplate, resolveImage } from '../db/templates';
+import { resolveBucketSeconds, resolveWindow } from '../history';
 import {
   destroySandbox,
   freezeSandbox,
@@ -34,7 +29,7 @@ import {
   apiError,
   E2bError,
   ENVD_VERSION,
-  identifyApiKey,
+  isApiKey,
   mintEnvdToken,
 } from './protocol';
 import { e2bView } from './view';
@@ -102,7 +97,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     watchers,
     archiver,
     envdSigningSecret,
-    identifyCredential,
+    isCredential,
   },
 ) => {
   /**
@@ -134,12 +129,9 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
   app.addHook('onRequest', async (request, reply) => {
     const presented = request.headers['x-api-key'];
     const key = Array.isArray(presented) ? presented[0] : presented;
-    const actor = identifyApiKey(identifyCredential, key);
-    if (actor === null) {
+    if (!isApiKey(isCredential, key)) {
       await reply.code(401).send({ code: 401, message: 'invalid API key' });
-      return;
     }
-    request.actor = actor;
   });
 
   // The E2B error dialect: every non-2xx body is { code, message } — the
@@ -175,11 +167,12 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
 
   // What the views report as the sandbox's template. E2B's alias is the
   // template's human name — present only when a registered template was
-  // used; a base sandbox echoes the base image name (or 'base') as its
-  // templateID, the honest pre-templates behavior kept for round-trips.
+  // used; a base sandbox echoes the base image's name as its templateID,
+  // the honest pre-templates behavior kept for round-trips (the fleet's
+  // base image, resolved live — the executor's view over the copy).
   function templateFields(row: SandboxRow) {
     return {
-      templateID: row.template ?? config.DORMICE_BASE_IMAGE ?? 'base',
+      templateID: row.template ?? executor.baseImage(),
       ...(row.template ? { alias: row.template } : {}),
     };
   }
@@ -299,7 +292,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           template = body.templateID;
         } else if (
           body.templateID !== 'base' &&
-          body.templateID !== config.DORMICE_BASE_IMAGE
+          body.templateID !== executor.baseImage()
         ) {
           throw apiError(404, `template '${body.templateID}' not found`);
         }
@@ -312,13 +305,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           // E2B clothes. Stored metadata/envs stay (same principle as the
           // native policy's "override applies at creation only"); the
           // deadline is extended like a connect.
-          const awake = await wakeSandbox(
-            db,
-            executor,
-            existing,
-            request.actor,
-            watchers,
-          );
+          const awake = await wakeSandbox(db, executor, existing, watchers);
           extendDeadline(awake, timeoutSeconds);
           return touch(db, awake.id);
         }
@@ -330,22 +317,14 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
             executor,
             existing.id,
             archiver?.currentStore() ?? null,
-            {
-              kind: 'destroyed',
-              cause: 'protocol-dead row reaped by E2B create',
-              actor: request.actor,
-            },
             watchers,
+          );
+          request.log.info(
+            { sandbox: name, id: existing.id },
+            'protocol-dead sandbox reaped by E2B create',
           );
         }
 
-        const maxSandboxes = readRuntimeSettings(db).maxSandboxes;
-        if (countSandboxes(db) >= maxSandboxes) {
-          throw apiError(
-            429,
-            `sandbox limit reached (maxSandboxes=${maxSandboxes}) — destroy a sandbox or raise the limit in settings`,
-          );
-        }
         const id = randomUUID();
         await executor.create(id, {
           image: resolveImage(db, template),
@@ -360,7 +339,6 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
             archiveEnabled(db),
           ),
           template,
-          actor: request.actor,
           metadata:
             body.metadata && Object.keys(body.metadata).length > 0
               ? JSON.stringify(body.metadata)
@@ -398,13 +376,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         if (!fresh || e2bView(fresh, new Date()) === 'dead') {
           throw notFound(id);
         }
-        const awake = await wakeSandbox(
-          db,
-          executor,
-          fresh,
-          request.actor,
-          watchers,
-        );
+        const awake = await wakeSandbox(db, executor, fresh, watchers);
         extendDeadline(awake, request.body.timeout ?? DEFAULT_TIMEOUT_SECONDS);
         return touch(db, awake.id);
       });
@@ -544,12 +516,11 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         executor,
         fresh.id,
         archiver?.currentStore() ?? null,
-        {
-          kind: 'destroyed',
-          cause: 'via E2B kill',
-          actor: request.actor,
-        },
         watchers,
+      );
+      request.log.info(
+        { sandbox: fresh.name, id: fresh.id },
+        'sandbox destroyed via E2B kill',
       );
     });
     return reply.code(204).send();
@@ -590,25 +561,12 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
         if (!fresh) throw notFound(id);
         let current = fresh;
         if (current.state === 'active') {
-          current = await freezeSandbox(
-            db,
-            executor,
-            current.id,
-            'paused via E2B',
-            request.actor,
-          );
+          current = await freezeSandbox(db, executor, current.id);
         }
         // keepMemory:false maps to stopped: filesystem only, cold boot on
         // resume — physically exactly what E2B promises for it.
         if (request.body?.memory === false && current.state === 'frozen') {
-          await stopSandbox(
-            db,
-            executor,
-            current.id,
-            'paused via E2B (memory discarded)',
-            request.actor,
-            watchers,
-          );
+          await stopSandbox(db, executor, current.id, watchers);
         }
         setPausedByUser(db, fresh.id, true);
       });

@@ -1,6 +1,5 @@
 import type { ShellExitCause } from '@dormice/shared';
 import { type ArchiveStore, objectKey } from './archive/store';
-import { recordActivity } from './db/activity';
 import type { Db } from './db/db';
 import {
   deleteSandbox,
@@ -29,51 +28,31 @@ import { resolveSpec, shellSpecOf } from './spec';
  */
 
 /**
- * The lifecycle verbs also feed the activity ring here, after the ledger
- * write — history is recorded where reality and ledger already move
- * together, so no caller can forget it. `cause` is the caller's one line of
- * context ("why"); `actor` is who asked (request.actor's vocabulary) — the
- * daemon's own callers (scanner, reconciler) pass neither, and the honest
- * defaults name the bare move and no credential.
+ * The verbs return the row they left behind and say nothing themselves:
+ * the caller with a logger (a route's request log, the heartbeat's
+ * summary in main.ts) is the one that speaks. The activity ring that once
+ * recorded every move here went with design record #16 (2026-09-13): a
+ * bounded SQLite history nobody queried, replaced by the daemon's own
+ * structured log in journald.
  */
 export async function freezeSandbox(
   db: Db,
   executor: Executor,
   sandboxId: string,
-  cause?: string,
-  actor?: string | null,
 ): Promise<SandboxRow> {
   await executor.freeze(sandboxId);
-  const row = transition(db, sandboxId, 'frozen');
-  recordActivity(db, {
-    kind: 'frozen',
-    sandboxName: row.name,
-    sandboxId,
-    actor,
-    detail: cause ?? 'memory squeezed into swap',
-  });
-  return row;
+  return transition(db, sandboxId, 'frozen');
 }
 
 export async function stopSandbox(
   db: Db,
   executor: Executor,
   sandboxId: string,
-  cause?: string,
-  actor?: string | null,
   watchers?: WatcherTable,
 ): Promise<SandboxRow> {
   await executor.stop(sandboxId);
   watchers?.disposeSandbox(sandboxId);
-  const row = transition(db, sandboxId, 'stopped');
-  recordActivity(db, {
-    kind: 'stopped',
-    sandboxName: row.name,
-    sandboxId,
-    actor,
-    detail: cause ?? 'container torn down, disk kept',
-  });
-  return row;
+  return transition(db, sandboxId, 'stopped');
 }
 
 /**
@@ -94,14 +73,6 @@ export async function destroySandbox(
   executor: Executor,
   sandboxId: string,
   store: ArchiveStore | null,
-  activity: {
-    kind: 'destroyed' | 'expired-killed';
-    cause: string;
-    actor?: string | null;
-  } = {
-    kind: 'destroyed',
-    cause: 'via destroySandbox',
-  },
   watchers?: WatcherTable,
 ): Promise<void> {
   const row = findById(db, sandboxId);
@@ -117,28 +88,12 @@ export async function destroySandbox(
     // With the disk gone its metrics history has no owner; fleet snapshots
     // belong to no sandbox and stay.
     deleteSandboxMetricsSamples(db, sandboxId);
-    recordActivity(db, {
-      kind: activity.kind,
-      sandboxName: row.name,
-      sandboxId,
-      actor: activity.actor,
-      detail: `${activity.cause}; archive object deleted`,
-    });
     return;
   }
   await executor.destroy(sandboxId);
   watchers?.disposeSandbox(sandboxId);
   deleteSandbox(db, sandboxId);
   deleteSandboxMetricsSamples(db, sandboxId);
-  if (row) {
-    recordActivity(db, {
-      kind: activity.kind,
-      sandboxName: row.name,
-      sandboxId,
-      actor: activity.actor,
-      detail: activity.cause,
-    });
-  }
 }
 
 /**
@@ -154,39 +109,24 @@ export function causeOfExit(exit: ShellExit): ShellExitCause {
   return 'exited';
 }
 
-/** The same three verdicts in the words the activity feed uses. */
-export function describeExit(exit: ShellExit): string {
-  const cause = causeOfExit(exit);
-  if (cause === 'oom-killed') {
-    return ` (exit ${exit.exitCode}, OOM-killed by the kernel's memory cgroup)`;
-  }
-  if (cause === 'runtime-died') {
-    return ` (exit ${exit.exitCode}, not an OOM kill — gVisor's sentry itself died, the signature a pids-cap hit leaves; see the sandbox pids cap in settings)`;
-  }
-  return ` (exit ${exit.exitCode}, not an OOM kill)`;
-}
-
 /**
  * A shell that stopped under a row that never ordered a stop — a death. The
  * one place it is recorded, whoever noticed: the reconciler's heartbeat
  * (an idle sandbox nobody touches) or a wake that found the shell dead (a
- * busy one, whose caller is about to use it). Both write the same three
- * facts — state stopped, lastExit, a `reconciled` event carrying the
- * exit — so the console, the wire and the activity feed tell one story.
- * Watchers are disposed here too: a dead container has ended every
- * inotifywait it hosted. `noticed` names the observer in the detail, the
- * only thing that differs between the two — and only the observation is
- * recorded here: the cold start a wake goes on to attempt is its own
- * `woken` event once it has actually happened, never a claim made ahead
- * of it. lastExit.at is the runtime's record of the exit (the death
- * itself), which is why the row can say when a sandbox died even when the
- * reconciler only found it a heartbeat later.
+ * busy one, whose caller is about to use it). Both write the same two
+ * facts — state stopped and lastExit — so the console and the wire tell
+ * one story. Watchers are disposed here too: a dead container has ended
+ * every inotifywait it hosted. Only the observation is recorded: the cold
+ * start a wake goes on to attempt is its own move once it has actually
+ * happened, never a claim made ahead of it. lastExit.at is the runtime's
+ * record of the exit (the death itself), which is why the row can say
+ * when a sandbox died even when the reconciler only found it a heartbeat
+ * later.
  */
 export function recordShellDeath(
   db: Db,
   row: SandboxRow,
   exit: ShellExit,
-  noticed: 'by the reconciler' | 'at wake',
   watchers?: WatcherTable,
 ): void {
   watchers?.disposeSandbox(row.id);
@@ -194,12 +134,6 @@ export function recordShellDeath(
     at: exit.finishedAt,
     exitCode: exit.exitCode,
     cause: causeOfExit(exit),
-  });
-  recordActivity(db, {
-    kind: 'reconciled',
-    sandboxName: row.name,
-    sandboxId: row.id,
-    detail: `container is stopped — state ${row.state} corrected to stopped${describeExit(exit)}${noticed === 'at wake' ? ', found dead at wake' : ''}`,
   });
 }
 
@@ -218,21 +152,10 @@ export async function rebuildSandbox(
   db: Db,
   executor: Executor,
   row: SandboxRow,
-  actor?: string | null,
-  detail?: string,
   watchers?: WatcherTable,
 ): Promise<SandboxRow> {
   await executor.removeContainer(row.id);
   watchers?.disposeSandbox(row.id);
-  recordActivity(db, {
-    kind: 'rebuilt',
-    sandboxName: row.name,
-    sandboxId: row.id,
-    actor,
-    detail:
-      detail ??
-      'shell removed, disk kept — next wake builds from the current image',
-  });
   if (row.state === 'stopped') {
     return row;
   }
@@ -270,7 +193,6 @@ export async function wakeSandbox(
   db: Db,
   executor: Executor,
   row: SandboxRow,
-  actor?: string | null,
   watchers?: WatcherTable,
 ): Promise<SandboxRow> {
   switch (row.state) {
@@ -299,16 +221,16 @@ export async function wakeSandbox(
         await watchers?.reapDeferred(row.id);
         return row;
       }
-      recordShellDeath(db, row, exit, 'at wake', watchers);
+      recordShellDeath(db, row, exit, watchers);
       const dead = findById(db, row.id);
       if (dead === undefined) {
         throw new Error(`sandbox ${row.id} vanished while recording its death`);
       }
-      return wakeSandbox(db, executor, dead, actor, watchers);
+      return wakeSandbox(db, executor, dead, watchers);
     }
     case 'frozen':
     case 'stopped': {
-      const next = resolveImage(db, row.template) ?? executor.baseImage;
+      const next = resolveImage(db, row.template) ?? executor.baseImage();
       const born = await executor.imageOf(row.id);
       // The spec in force, in the runtime's integer units — what a shell
       // built right now would be born with.
@@ -319,27 +241,18 @@ export async function wakeSandbox(
       // image is swapped regardless of what limits it was born with.
       const limits =
         born !== null && born === next ? await executor.limitsOf(row.id) : null;
-      const staleCause =
-        born !== null && born !== next
-          ? `stale shell swapped at wake: ${born} -> ${next}`
-          : limits !== null &&
-              (limits.nanoCpus !== wantNanoCpus ||
-                limits.memoryBytes !== wantMemoryBytes)
-            ? `stale shell swapped at wake: limits ${limits.nanoCpus / 1e9} cpus / ${limits.memoryBytes / 1024 ** 3} GiB -> ${spec.cpus} cpus / ${spec.memoryGb} GiB`
-            : null;
-      const fresh =
-        staleCause !== null
-          ? await rebuildSandbox(db, executor, row, actor, staleCause, watchers)
-          : row;
+      const stale =
+        (born !== null && born !== next) ||
+        (limits !== null &&
+          (limits.nanoCpus !== wantNanoCpus ||
+            limits.memoryBytes !== wantMemoryBytes));
+      const fresh = stale
+        ? await rebuildSandbox(db, executor, row, watchers)
+        : row;
       if (fresh.state === 'frozen') {
         await executor.unfreeze(fresh.id);
         await watchers?.reapDeferred(fresh.id);
-        return awaken(
-          db,
-          fresh,
-          'from frozen (memory back out of swap)',
-          actor,
-        );
+        return awaken(db, fresh);
       }
       // If no container object exists (pruned away, or the stale shell was
       // just removed), start rebuilds it from the current image and the
@@ -349,7 +262,7 @@ export async function wakeSandbox(
         ...shellSpecOf(fresh),
       });
       await watchers?.reapDeferred(fresh.id);
-      return awaken(db, fresh, 'cold start from the surviving disk', actor);
+      return awaken(db, fresh);
     }
     case 'archived':
     case 'restoring':
@@ -367,22 +280,10 @@ export async function wakeSandbox(
  * so any explicit E2B pause mark is cleared along with the transition —
  * ledger honesty, not an E2B-surface concern leaking in.
  */
-function awaken(
-  db: Db,
-  row: SandboxRow,
-  how: string,
-  actor?: string | null,
-): SandboxRow {
+function awaken(db: Db, row: SandboxRow): SandboxRow {
   if (row.pausedByUser) {
     setPausedByUser(db, row.id, false);
   }
   const awake = transition(db, row.id, 'active');
-  recordActivity(db, {
-    kind: 'woken',
-    sandboxName: row.name,
-    sandboxId: row.id,
-    actor,
-    detail: how,
-  });
   return { ...awake, pausedByUser: false };
 }

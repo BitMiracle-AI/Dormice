@@ -55,21 +55,26 @@ array with one sample. Either way:
 a dashboard over N sandboxes costs one call, not N:
 
 ```ts
-const samples = await client.listSandboxMetrics();
-// [{ sandboxName, sandboxId, sample }, …]
+const { samples, silent } = await client.listSandboxMetrics();
+// samples: [{ sandboxName, sandboxId, sample }, …]
 ```
 
 Only sandboxes with a running or frozen container appear; colder
 sandboxes are simply absent — the same honesty as `null`, expressed as
-absence.
+absence. Asked of the gateway, the answer is every node's put together,
+and `silent` names any node it could not include (down, not listening
+yet, or too slow), so a shorter list is never mistaken for the whole
+fleet; `listSandboxes` and `listSandboxImages` carry the same field.
 
 ## Get metrics for the host
 
 The native `getHostMetrics()` answers the operator's question — is this
-machine okay, and what do the sandboxes collectively cost it?
+machine okay, and what do the sandboxes collectively cost it? A machine's
+reading is one machine's: at the gateway, name the node (`listNodes`
+lists them); a fleet of one needs no name.
 
 ```ts
-const m = await client.getHostMetrics();
+const m = await client.getHostMetrics({ nodeId: 'node-1' });
 ```
 
 The snapshot has four sections:
@@ -78,7 +83,7 @@ The snapshot has four sections:
 | --- | --- |
 | `host` | CPU usage, available memory, and **swap** — the freeze mechanism's fuel. Frozen sandboxes live in swap; a full swap means "idle is free" is ending. |
 | `dataDisk` | The filesystem holding sandbox disks (`DORMICE_DATA_DIR`). This is the real capacity ceiling: past full, even the daemon's database cannot write. |
-| `sandboxes` | Totals from the daemon's records: sandbox count, the capacity cap (seeded from `DORMICE_MAX_SANDBOXES`, edited live in the console's settings page), and a count per lifecycle state. |
+| `sandboxes` | Totals from the daemon's records: sandbox count and a count per lifecycle state. There is no count-based cap — a record is not a resource; the data disk and the host's CPU and memory are the ceilings, and they are the readings above. |
 | `sandboxDisks` | What the sparse disk images *promise* (nominal) versus what they *occupy* (actual). The gap is your disk overcommit — watch it, because nothing else caps it. Measured on the test host: a sandbox promising 10 GiB actually occupied 68 MiB. |
 
 **Readings are honest about their limits:**
@@ -91,7 +96,33 @@ The snapshot has four sections:
 - `swap.totalBytes: 0` is a real reading of a machine with no swap;
   `null` means the platform offers no reading at all.
 
-The web console's Overview page renders exactly this snapshot — CPU,
-memory, swap, the data disk, sandbox states, and the overcommit meter —
-refreshed every few seconds. Readings a platform cannot produce show as
-an amber hint pointing at `dor doctor`, never a fake number.
+The web console's node page renders exactly this snapshot for one node
+— CPU, memory, swap and the data disk, each with its trend — refreshed
+every few seconds. Readings a platform cannot produce show as an amber
+hint pointing at `dor doctor`, never a fake number.
+
+## Get the fleet's figures
+
+Some figures add up across machines and some do not. A machine's CPU
+percentage is one machine's; the sandbox census and the disks' bill are
+sums. `getFleetMetrics()` answers the sums from the nodes' last
+check-ins — the gateway asks no node to answer it, so a dashboard may
+poll it freely:
+
+```ts
+const fleet = await client.getFleetMetrics();
+// { nodes: { total, reachable, reported },
+//   sandboxes: { total, byState }, sandboxDisks }
+```
+
+`nodes.reported` says how many nodes the sums cover. A node that has never
+checked in has no reading yet; until it does, the sums are a lower bound,
+and the console's overview says so. A gateway restart keeps every node's
+last reading.
+
+`getFleetStateHistory({ start?, end? })` is the same census over time —
+one sample every 30 seconds (the gateway's own sampler,
+`DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS`), kept 30 days, bucketed past
+360 points by whole rows so the states always sum to the total, with the
+window's concurrency `peak` computed from the raw rows. It feeds the overview's
+concurrency curve.

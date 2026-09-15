@@ -2,19 +2,16 @@ import { fileURLToPath } from 'node:url';
 import { count } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app';
-import { CONFIG_KEYS, type ConfigSources, loadConfig } from './config';
+import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
-import { FLEET_SNAPSHOT_KEEP_DAYS, insertMetricsTick } from './db/metrics';
-import {
-  fleetSnapshots,
-  hostMetricsSamples,
-  sandboxMetricsSamples,
-} from './db/schema';
+import { HOST_SAMPLE_KEEP_DAYS, insertMetricsTick } from './db/metrics';
+import { hostMetricsSamples, sandboxMetricsSamples } from './db/schema';
 import { FakeExecutor } from './executor/fake';
 import { CpuSampler, type HostSample } from './host-metrics';
 import { KeyedQueue } from './keyed-queue';
 import { freezeSandbox, stopSandbox } from './lifecycle';
 import { sampleOnce } from './metrics-sampler';
+import { configureNode } from './testing';
 
 // The sampler, unit-level: one tick's writes, the measurable-states gate,
 // the vanished-container skip, retention pruning and the destroy cascade.
@@ -47,13 +44,6 @@ const HOST: HostSample = {
   diskAvailableBytes: null,
 };
 
-function fixedSources(): ConfigSources {
-  const all = Object.fromEntries(
-    Object.keys(CONFIG_KEYS).map((key) => [key, 'default']),
-  ) as ConfigSources;
-  return { ...all, DORMICE_API_TOKEN: 'env' };
-}
-
 function harness() {
   const db = openDb(':memory:');
   migrateDb(db, MIGRATIONS);
@@ -61,16 +51,10 @@ function harness() {
     DORMICE_DB_PATH: ':memory:',
     DORMICE_API_TOKEN: TOKEN,
   });
+  configureNode(db);
   const executor = new FakeExecutor();
   const locks = new KeyedQueue();
-  const app = buildApp({
-    config,
-    db,
-    executor,
-    locks,
-    logger: false,
-    sources: fixedSources(),
-  });
+  const app = buildApp({ config, db, executor, locks, logger: false });
   return { app, db, executor, locks };
 }
 
@@ -91,16 +75,12 @@ function sampleRows(db: ReturnType<typeof harness>['db']) {
   return db.select().from(sandboxMetricsSamples).all();
 }
 
-function fleetRows(db: ReturnType<typeof harness>['db']) {
-  return db.select().from(fleetSnapshots).all();
-}
-
 function hostRows(db: ReturnType<typeof harness>['db']) {
   return db.select().from(hostMetricsSamples).all();
 }
 
 describe('sampleOnce', () => {
-  it('writes one fleet row and one sample per measurable sandbox', async () => {
+  it('writes one host row and one sample per measurable sandbox', async () => {
     const { app, db, executor } = harness();
     await acquire(app, 'hot');
     const napping = await acquire(app, 'napping');
@@ -114,18 +94,6 @@ describe('sampleOnce', () => {
 
     // Active and frozen are measured; stopped has no container and is not.
     expect(result).toEqual({ sampled: 2, skipped: 0 });
-    const fleet = fleetRows(db);
-    expect(fleet).toEqual([
-      {
-        at: now.toISOString(),
-        active: 1,
-        frozen: 1,
-        stopped: 1,
-        archived: 0,
-        restoring: 0,
-        total: 3,
-      },
-    ]);
     const samples = sampleRows(db);
     expect(samples).toHaveLength(2);
     for (const row of samples) {
@@ -158,12 +126,12 @@ describe('sampleOnce', () => {
     const result = await sampleOnce(db, executor, now, tickOpts());
     expect(result).toEqual({ sampled: 1, skipped: 1 });
     expect(sampleRows(db)).toHaveLength(1);
-    // The fleet row still lands: state counts come from the ledger, not
-    // from what happened to be measurable.
-    expect(fleetRows(db)).toHaveLength(1);
+    // The host row still lands: the machine's reading does not depend on
+    // what happened to be measurable.
+    expect(hostRows(db)).toHaveLength(1);
   });
 
-  it('prunes samples past retention and fleet rows past 30 days', async () => {
+  it('prunes samples past retention and host rows past 30 days', async () => {
     const { app, db, executor } = harness();
     await acquire(app, 'steady');
 
@@ -171,25 +139,20 @@ describe('sampleOnce', () => {
     await sampleOnce(db, executor, early, tickOpts());
 
     // One retention window plus a minute later: the early sample must fall,
-    // the early fleet row (well within 30 days) must survive.
+    // the early host row (well within 30 days) must survive.
     const later = new Date(early.getTime() + 168 * 3600_000 + 60_000);
     await sampleOnce(db, executor, later, tickOpts());
     expect(sampleRows(db).map((r) => r.at)).toEqual([later.toISOString()]);
-    expect(fleetRows(db).map((r) => r.at)).toEqual([
+    expect(hostRows(db).map((r) => r.at)).toEqual([
       early.toISOString(),
       later.toISOString(),
     ]);
 
-    // Past the fleet's own 30-day window the early fleet row falls too,
-    // and the host samples share that window exactly.
+    // Past the host table's own 30-day window the early row falls too.
     const ancientCutoff = new Date(
-      early.getTime() + (FLEET_SNAPSHOT_KEEP_DAYS * 24 + 1) * 3600_000,
+      early.getTime() + (HOST_SAMPLE_KEEP_DAYS * 24 + 1) * 3600_000,
     );
     await sampleOnce(db, executor, ancientCutoff, tickOpts());
-    expect(fleetRows(db).map((r) => r.at)).toEqual([
-      later.toISOString(),
-      ancientCutoff.toISOString(),
-    ]);
     expect(hostRows(db).map((r) => r.at)).toEqual([
       later.toISOString(),
       ancientCutoff.toISOString(),
@@ -219,8 +182,8 @@ describe('sampleOnce', () => {
     const remaining = sampleRows(db);
     expect(remaining).toHaveLength(1);
     expect(remaining[0]?.sandboxId).not.toBe(victim.id);
-    // Fleet snapshots belong to no sandbox: untouched.
-    expect(fleetRows(db)).toHaveLength(1);
+    // Host samples belong to no sandbox: untouched.
+    expect(hostRows(db)).toHaveLength(1);
   });
 
   it('drops a sample whose sandbox was destroyed mid-read (no orphan rows)', () => {
@@ -230,14 +193,6 @@ describe('sampleOnce', () => {
     insertMetricsTick(db, {
       at: '2026-07-15T10:00:00.000Z',
       host: HOST,
-      fleetCounts: {
-        active: 0,
-        frozen: 0,
-        stopped: 0,
-        archived: 0,
-        restoring: 0,
-        total: 0,
-      },
       samples: [
         {
           sandboxId: 'ghost',
@@ -261,6 +216,6 @@ describe('sampleOnce', () => {
       .from(sandboxMetricsSamples)
       .get() as { n: number };
     expect(total.n).toBe(0);
-    expect(fleetRows(db)).toHaveLength(1);
+    expect(hostRows(db)).toHaveLength(1);
   });
 });

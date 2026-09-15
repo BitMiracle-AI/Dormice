@@ -69,7 +69,7 @@ import { SandboxStateBadge } from '../components/SandboxStateBadge';
 import { UpgradableBadge } from '../components/UpgradableBadge';
 import { ago, stateLabel } from '../format';
 import {
-  useFleetMetrics,
+  useListSandboxMetrics,
   useSandboxes,
   useSandboxImages,
 } from '../hooks/useSandboxes';
@@ -313,7 +313,7 @@ export function SandboxesPage() {
   const query = useSandboxes();
   const sandboxes = query.data?.sandboxes ?? [];
   // 资源快照批量拉(一个请求管全表);读不到就整列出 —,不挡列表本身。
-  const fleet = useFleetMetrics();
+  const fleet = useListSandboxMetrics();
   const metricsOf = useMemo(
     () =>
       new Map(
@@ -321,6 +321,8 @@ export function SandboxesPage() {
       ),
     [fleet.data],
   );
+  // 网关的列表可能缺一台节点(它没应答):说出来,不许当成整个舰队。
+  const silent = query.data?.silent ?? [];
   // 镜像血统批量拉,同一口径:拉不到就不出标记,不挡列表。
   const images = useSandboxImages();
   const lineageOf = useMemo(
@@ -394,6 +396,20 @@ export function SandboxesPage() {
         <h1 className="text-xl font-medium">{m.sandboxes_page_title()}</h1>
         <CreateSandboxDialog />
       </header>
+
+      {silent.length > 0 && (
+        <Alert variant="destructive" className="shrink-0">
+          <AlertDescription
+            title={silent.map((s) => `${s.nodeId}: ${s.why}`).join('\n')}
+          >
+            {m.sandboxes_silent_nodes({
+              nodes: silent
+                .map((s) => s.nodeId)
+                .join(m.common_name_separator()),
+            })}
+          </AlertDescription>
+        </Alert>
+      )}
 
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         <InputGroup className="w-64">

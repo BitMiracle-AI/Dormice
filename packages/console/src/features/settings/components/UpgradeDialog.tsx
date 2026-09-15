@@ -15,12 +15,14 @@ import { ApiError, applyUpgrade, getUpgradeStatus } from '@/lib/api';
 import { m } from '@/paraglide/messages';
 
 /**
- * 一键升级的两幕:确认(把会发生什么说全 — 包括 daemon 重启会打断
- * 进行中的终端/exec/watch,以及构建失败自动回退)→ 观察(2 秒轮询
+ * 一键升级的两幕:确认(把会发生什么说全 — 包括网关机重启会打断
+ * 进行中的终端/exec/watch,构建失败自动回退,以及 2026-09-15 刀 4 起
+ * 其余节点在报到里被逐台带起、20 分钟不回来标卡住)→ 观察(2 秒轮询
  * getUpgradeStatus,实时滚日志)。轮询不用查询库而是自己的 setTimeout
- * 链:daemon 重启造成的失联是升级的预期环节,要显示「重启中」继续等,
+ * 链:网关重启造成的失联是升级的预期环节,要显示「重启中」继续等,
  * 而不是当错误处理。终局以 install.sh 写下的报告为准 — succeeded 意味
- * 着 daemon 已带着新版本回来并通过 doctor,不是"脚本跑完了"。
+ * 着网关已带着新版本回来并通过 doctor,不是"脚本跑完了";节点的滚动
+ * 在版本卡的节点表里继续画,不归这个弹窗。
  *
  * 防「上一次的旧报告」误判靠报告身份:发起前记下现存报告的 startedAt
  * 作基线,只接受非基线的终局 — applyUpgrade 刚返回时读到的还是上一轮
@@ -159,6 +161,7 @@ export function UpgradeDialog({
               </li>
               <li>{m.settings_upgrade_step3()}</li>
               <li>{m.settings_upgrade_step4()}</li>
+              <li>{m.settings_upgrade_step5()}</li>
             </ol>
             {launchError !== null && (
               <p className="text-sm text-destructive">

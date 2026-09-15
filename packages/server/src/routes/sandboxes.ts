@@ -49,10 +49,8 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { ZodError, z } from 'zod';
 import type { Archiver, RestoreProgress } from '../archive/archiver';
 import type { Config } from '../config';
-import { recordActivity } from '../db/activity';
 import type { Db } from '../db/db';
 import {
-  countSandboxes,
   createSandbox,
   findByName,
   listSandboxes,
@@ -63,12 +61,7 @@ import {
   updateSpec,
   updateTemplate,
 } from '../db/ledger';
-import {
-  bucketSamples,
-  querySandboxSamples,
-  resolveBucketSeconds,
-  resolveWindow,
-} from '../db/metrics';
+import { bucketSamples, querySandboxSamples } from '../db/metrics';
 import type { SandboxRow } from '../db/schema';
 import { archiveEnabled, readRuntimeSettings } from '../db/settings';
 import { findTemplate, resolveImage } from '../db/templates';
@@ -80,6 +73,7 @@ import {
   FileTooLargeError,
   NotAFileError,
 } from '../executor/executor';
+import { resolveBucketSeconds, resolveWindow } from '../history';
 import { httpError } from '../http-error';
 import type { KeyedQueue } from '../keyed-queue';
 import { destroySandbox, rebuildSandbox, wakeSandbox } from '../lifecycle';
@@ -181,7 +175,6 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     template: string | null,
     metadata: string | null,
     spec: SandboxSpecOverride | undefined,
-    actor: string | null,
   ): Promise<AcquireOutcome> {
     const existing = findByName(db, name);
     if (existing?.state === 'archived' || existing?.state === 'restoring') {
@@ -219,22 +212,15 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       // Requested template and metadata are not applied: like policy, they
       // take effect only when this acquire creates the sandbox (metadata
       // has its own update verb, updateMetadata).
-      const awake = await wakeSandbox(db, executor, existing, actor, watchers);
+      const awake = await wakeSandbox(db, executor, existing, watchers);
       return { status: 'ready', created: false, row: touch(db, awake.id) };
     }
 
-    // The capacity check lives at the only verb that creates — wakes of
-    // existing sandboxes are never blocked. Disk is the real ceiling: every
-    // sandbox holds a disk image, and unbounded creation fills the host
-    // until the ledger itself can no longer write. Read live from the
-    // ledger: a console edit applies to the very next create.
-    const maxSandboxes = readRuntimeSettings(db).maxSandboxes;
-    if (countSandboxes(db) >= maxSandboxes) {
-      throw httpError(
-        429,
-        `sandbox limit reached (maxSandboxes=${maxSandboxes}) — destroy a sandbox or raise the limit in settings`,
-      );
-    }
+    // No count-based cap: a ledger row is not a resource (design record
+    // #23 — stopped rows cost only disk, archived ones nothing local), and
+    // the physical ceilings each have their own reading: the data disk's
+    // free space and the host's CPU and memory, which the gateway places
+    // by and the operator watches through getHostMetrics.
 
     // Reality first, ledger second: bring the container up, then record
     // it. If create fails, no row was written — the next acquire retries
@@ -259,7 +245,6 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         template,
         metadata,
         spec,
-        actor,
       }),
     };
   }
@@ -269,10 +254,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
   // is more likely a typo than an intent to build a sandbox as a side
   // effect — then wake whatever cold state the sandbox is in and refresh
   // its idle clock. Must be called while holding the key's queue slot.
-  async function wakeForUse(
-    name: string,
-    actor: string | null,
-  ): Promise<SandboxRow> {
+  async function wakeForUse(name: string): Promise<SandboxRow> {
     const existing = findByName(db, name);
     if (!existing) {
       throw httpError(404, `no sandbox named "${name}" — acquire it first`);
@@ -285,7 +267,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         `sandbox "${name}" is ${existing.state} — call acquireSandbox and poll until it is ready`,
       );
     }
-    const awake = await wakeSandbox(db, executor, existing, actor, watchers);
+    const awake = await wakeSandbox(db, executor, existing, watchers);
     return touch(db, awake.id);
   }
 
@@ -353,7 +335,6 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           template ?? null,
           serializeMetadata(metadata),
           spec,
-          request.actor,
         ),
       );
       if (outcome.status === 'restoring') {
@@ -519,10 +500,10 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       const images = await Promise.all(
         listSandboxes(db).map(async (row) => {
           // resolveImage is the one arbiter of template -> image; undefined
-          // means "the executor's own base image", and the executor is the
-          // one authority on what that is (config only knows in docker mode).
+          // means the fleet's base image, which the executor resolves live
+          // (its baseImage view over the copy, main.ts).
           const nextImage =
-            resolveImage(db, row.template) ?? executor.baseImage;
+            resolveImage(db, row.template) ?? executor.baseImage();
           let image: string | null = null;
           if (row.state !== 'archived' && row.state !== 'restoring') {
             try {
@@ -566,7 +547,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       // whole duration. The heartbeat keeps the scanner away; a concurrent
       // destroy mid-exec removes the container and this exec fails with
       // the executor's honest error — accepted, not defended against.
-      const row = await locks.run(name, () => wakeForUse(name, request.actor));
+      const row = await locks.run(name, () => wakeForUse(name));
 
       const stopHeartbeat = startExecHeartbeat(
         db,
@@ -620,7 +601,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     async (request) => {
       const { name, files } = request.body;
       return locks.run(name, async () => {
-        const row = await wakeForUse(name, request.actor);
+        const row = await wakeForUse(name);
         try {
           await executor.writeFiles(
             row.id,
@@ -655,7 +636,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     async (request) => {
       const { name, path, contentBase64 } = request.body;
       return locks.run(name, async () => {
-        const row = await wakeForUse(name, request.actor);
+        const row = await wakeForUse(name);
         try {
           await executor.writeFiles(row.id, [
             { path, content: Buffer.from(contentBase64, 'base64') },
@@ -680,7 +661,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     async (request) => {
       const { name, path } = request.body;
       return locks.run(name, async () => {
-        const row = await wakeForUse(name, request.actor);
+        const row = await wakeForUse(name);
         let content: Buffer;
         try {
           content = await executor.readFile(row.id, path);
@@ -710,7 +691,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
     async (request) => {
       const { name, paths } = request.body;
       return locks.run(name, async () => {
-        const row = await wakeForUse(name, request.actor);
+        const row = await wakeForUse(name);
         const files: { path: string; contentBase64: string }[] = [];
         let totalBytes = 0;
         for (const path of paths) {
@@ -766,14 +747,8 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
             `sandbox "${name}" is ${existing.state} — it has no container to rebuild`,
           );
         }
-        const row = await rebuildSandbox(
-          db,
-          executor,
-          existing,
-          request.actor,
-          undefined,
-          watchers,
-        );
+        const row = await rebuildSandbox(db, executor, existing, watchers);
+        request.log.info({ sandbox: name, id: row.id }, 'sandbox rebuilt');
         return { sandbox: view(row) };
       });
     },
@@ -852,18 +827,15 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           const row = updatePolicy(db, existing.id, merged.data);
           const fmt = (seconds: number | null) =>
             seconds === null ? 'never' : `${seconds}s`;
-          recordActivity(db, {
-            kind: 'policy-changed',
-            sandboxName: name,
-            sandboxId: row.id,
-            actor: request.actor,
-            detail: changed
+          request.log.info(
+            { sandbox: name, id: row.id, policy: merged.data },
+            `sandbox policy changed: ${changed
               .map(
                 (knob) =>
                   `${knob.replace('AfterSeconds', '')} ${fmt(before[knob])} -> ${fmt(merged.data[knob])}`,
               )
-              .join(', '),
-          });
+              .join(', ')}`,
+          );
           return { row };
         },
       );
@@ -922,13 +894,10 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
             ? [`memoryGb ${fmt(existing.memoryGb)} -> ${fmt(merged.memoryGb)}`]
             : []),
         ];
-        recordActivity(db, {
-          kind: 'spec-changed',
-          sandboxName: name,
-          sandboxId: updated.id,
-          actor: request.actor,
-          detail: `${changed.join(', ')}; applies at the next cold wake`,
-        });
+        request.log.info(
+          { sandbox: name, id: updated.id, spec: merged },
+          `sandbox spec changed: ${changed.join(', ')}; applies at the next cold wake`,
+        );
         return updated;
       });
       return { sandbox: view(row) };
@@ -976,13 +945,10 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
         }
         const updated = updateTemplate(db, existing.id, template);
         const fmt = (t: string | null) => (t === null ? 'base image' : t);
-        recordActivity(db, {
-          kind: 'template-changed',
-          sandboxName: name,
-          sandboxId: updated.id,
-          actor: request.actor,
-          detail: `template ${fmt(existing.template)} -> ${fmt(template)}; applies at the next cold wake`,
-        });
+        request.log.info(
+          { sandbox: name, id: updated.id, template },
+          `sandbox template changed: ${fmt(existing.template)} -> ${fmt(template)}; applies at the next cold wake`,
+        );
         return updated;
       });
       return { sandbox: view(row) };
@@ -1046,15 +1012,12 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
             await executor.growDisk(existing.id, diskGb);
           }
           const row = setDiskGb(db, existing.id, diskGb);
-          recordActivity(db, {
-            kind: 'disk-expanded',
-            sandboxName: name,
-            sandboxId: row.id,
-            actor: request.actor,
-            // The equal-size pin deserves its own words: "10 GiB -> 10 GiB"
-            // reads like nothing happened, but something did — the sandbox
-            // left the fleet-wide knob for a size of its own.
-            detail: `${
+          // The equal-size pin deserves its own words: "10 GiB -> 10 GiB"
+          // reads like nothing happened, but something did — the sandbox
+          // left the fleet-wide knob for a size of its own.
+          request.log.info(
+            { sandbox: name, id: row.id, diskGb },
+            `sandbox ${
               diskGb === current
                 ? `disk pinned at ${diskGb} GiB (was following the global default)`
                 : `disk ${current} GiB -> ${diskGb} GiB`
@@ -1063,7 +1026,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
                 ? ' (ledger only — the restore opens the disk at the recorded size)'
                 : ''
             }`,
-          });
+          );
           return { row };
         },
       );
@@ -1098,16 +1061,10 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           return existing;
         }
         const updated = updateMetadata(db, existing.id, serialized);
-        recordActivity(db, {
-          kind: 'metadata-changed',
-          sandboxName: name,
-          sandboxId: updated.id,
-          actor: request.actor,
-          detail:
-            Object.entries(metadata)
-              .map(([key, value]) => `${key}=${value}`)
-              .join(', ') || 'cleared',
-        });
+        request.log.info(
+          { sandbox: name, id: updated.id, metadata },
+          'sandbox metadata replaced',
+        );
         return updated;
       });
       return { sandbox: view(row) };
@@ -1146,12 +1103,11 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
           executor,
           existing.id,
           archiver?.currentStore() ?? null,
-          {
-            kind: 'destroyed',
-            cause: 'via destroySandbox',
-            actor: request.actor,
-          },
           watchers,
+        );
+        request.log.info(
+          { sandbox: name, id: existing.id },
+          'sandbox destroyed',
         );
         return { destroyed: true };
       });

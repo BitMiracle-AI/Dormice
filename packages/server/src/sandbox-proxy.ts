@@ -2,7 +2,11 @@ import type http from 'node:http';
 import { request as httpRequest } from 'node:http';
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
-import type { RuntimeSettings } from '@dormice/shared';
+import {
+  isEnvdFilesForm,
+  parseSandboxHost,
+  sandboxDomainsInForce,
+} from '@dormice/shared';
 import type { Db } from './db/db';
 import { findById, touch } from './db/ledger';
 import type { SandboxRow } from './db/schema';
@@ -24,7 +28,9 @@ import { wakeSandbox } from './lifecycle';
  * The daemon still binds 127.0.0.1 only: public TLS and wildcard DNS are
  * the operator's reverse proxy's job (Caddy with `flush_interval -1`,
  * measured on the predecessor system — without it streaming responses
- * buffer into one lump).
+ * buffer into one lump), and since 2026-09-14 that proxy points at the
+ * gateway, whose proxy face forwards a sandbox host to the node holding
+ * the sandbox — this code, one hop later.
  *
  * Sandbox traffic is deliberately unauthenticated, like E2B's: a preview
  * URL exists to be opened by whoever it is shared with. What the proxy
@@ -32,69 +38,13 @@ import { wakeSandbox } from './lifecycle';
  */
 
 /**
- * envd's fixed port in E2B's URL grammar: `49983-<sandboxId>.<domain>`
- * reaches the sandbox's envd, never a user process — it is how the SDK's
- * uploadUrl/downloadUrl become browser-postable URLs. Dormice runs no envd
- * inside the container (the daemon plays that role), so /files on this
- * port is carved out of the proxy and lands on the daemon's signed-URL
- * file door, with the Host label pinning which sandbox the signature must
- * speak for. Every other path keeps the honest proxy answer: nothing
- * listens on 49983 inside the sandbox.
+ * The Host grammar — parseSandboxHost, the domain group in force, and
+ * the browser-direct file form isEnvdFilesForm — lives in @dormice/shared
+ * (sandbox-host.ts): the gateway's proxy face reads the same header to
+ * find the node holding the sandbox and forwards the request here whole,
+ * Host kept, so a host names the same sandbox at both doors and the same
+ * form is browser-direct at both.
  */
-export const ENVD_PORT = 49983;
-
-/** Path-only match for the carve-out: exactly /files, query ignored. */
-function isEnvdFilesRequest(req: http.IncomingMessage): boolean {
-  const url = req.url ?? '';
-  const q = url.indexOf('?');
-  return (q === -1 ? url : url.slice(0, q)) === '/files';
-}
-
-/**
- * The domain group inbound matching runs against: the canonical domain
- * first, then the inbound-only aliases; empty when the feature is off
- * (sandboxDomain null). The one adjudication of "off = never a match" —
- * the proxy's per-request getter and the signed-URL host pin both call
- * this instead of deciding it themselves.
- */
-export function sandboxDomainsInForce(settings: RuntimeSettings): string[] {
-  return settings.sandboxDomain
-    ? [settings.sandboxDomain, ...settings.sandboxDomainAliases]
-    : [];
-}
-
-/**
- * Host header -> { port, sandboxId }, or null when it is not sandbox
- * traffic (then the request belongs to Fastify). The port suffix of the
- * header itself (`:3676`) is not the sandbox port — the label carries that.
- *
- * Every domain gets a full parse, never first-suffix-wins: an alias may be
- * a subdomain of another listed domain, and a host under it would suffix-
- * match the shorter domain first with a dotted label the regex refuses.
- */
-export function parseSandboxHost(
-  hostHeader: string | undefined,
-  domains: readonly string[],
-): { port: number; sandboxId: string } | null {
-  if (!hostHeader) return null;
-  const host = hostHeader.replace(/:\d+$/, '').toLowerCase();
-  for (const domain of domains) {
-    // Empty means "no domain in force" — never a match. Explicit, not left
-    // to the suffix check: `.` + '' would make every dotted host a candidate.
-    if (!domain) continue;
-    const suffix = `.${domain.toLowerCase()}`;
-    if (!host.endsWith(suffix)) continue;
-    const label = host.slice(0, -suffix.length);
-    const match = label.match(
-      /^(\d{1,5})-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/,
-    );
-    if (!match) continue;
-    const port = Number(match[1]);
-    if (port < 1 || port > 65535) continue;
-    return { port, sandboxId: match[2] as string };
-  }
-  return null;
-}
 
 export interface SandboxProxyDeps {
   db: Db;
@@ -147,7 +97,7 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
     const before = liveRow(parsed.sandboxId);
     const row = await locks.run(before.name, async () => {
       const fresh = liveRow(parsed.sandboxId);
-      const awake = await wakeSandbox(db, executor, fresh, undefined, watchers);
+      const awake = await wakeSandbox(db, executor, fresh, watchers);
       return touch(db, awake.id);
     });
     const target = await executor.resolvePortTarget(row.id, parsed.port);
@@ -171,10 +121,9 @@ export function createSandboxProxy(deps: SandboxProxyDeps): SandboxProxy {
     matches(req) {
       const parsed = parseSandboxHost(req.headers.host, domains());
       if (!parsed) return false;
-      // The envd file face on its fixed port belongs to Fastify's signed
-      // door, not to a dial into the container (see ENVD_PORT).
-      if (parsed.port === ENVD_PORT && isEnvdFilesRequest(req)) return false;
-      return true;
+      // The browser-direct file form on envd's fixed port belongs to
+      // Fastify's signed door, not to a dial into the container.
+      return !isEnvdFilesForm(parsed.port, req.url);
     },
 
     handleRequest(req, res) {

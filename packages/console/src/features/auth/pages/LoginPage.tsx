@@ -140,7 +140,7 @@ export function LoginPage() {
 }
 
 // The wire speaks English by design; the Chinese is UI copy, translated at
-// the edge — the same rule the activity page follows.
+// the edge — the same rule every page follows.
 function errorText(error: unknown, invalidCredential: string): string {
   if (error instanceof ApiError) {
     if (error.status === 401) return invalidCredential;

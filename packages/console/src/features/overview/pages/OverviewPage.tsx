@@ -2,17 +2,19 @@ import { useState } from 'react';
 import { m } from '@/paraglide/messages';
 import { FleetChart } from '../components/FleetChart';
 import { FleetStatCards } from '../components/FleetStatCards';
-import { HostHealthCard } from '../components/HostHealthCard';
+import { NodesCard } from '../components/NodesCard';
 import { QuickConnectCard } from '../components/QuickConnectCard';
 import { RangeSwitcher } from '../components/RangeSwitcher';
 import type { TimelineRangeKey } from '../hooks/useFleetTimeline';
 
 /**
- * 回答三个问题:沙箱群现在多忙、一段时间以来多忙(daemon 采样器落库
- * 的舰队时间线,含窗口峰值)、这台机器还好吗。版式仿 openasi 仪表盘
+ * 回答三个问题:沙箱群现在多忙、一段时间以来多忙(网关按报到落库的
+ * 舰队走势,含窗口峰值)、机器们还好吗。版式仿 openasi 仪表盘
  * (2026-07-16 用户拍板对齐页头与容器):max-w-6xl 限宽居中,页头一行
  * 标题 + 全局档位,顶排四张统计卡(沙箱磁盘也在其中),主图区 3:1
- * (走势图配宿主健康竖卡),底部快速接入(「换两个 URL 直连」放上第一屏)。
+ * (走势图配节点竖卡 — 2026-09-15 刀 3 由宿主健康卡改来:舰队里没有
+ * 「这台机器」,每台一行、点进节点页看走势),底部快速接入(「换两个
+ * URL 直连」放上第一屏)。
  */
 export function OverviewPage() {
   const [range, setRange] = useState<TimelineRangeKey>('24h');
@@ -26,7 +28,7 @@ export function OverviewPage() {
       <FleetStatCards range={range} />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
         <FleetChart range={range} className="min-h-[420px] lg:col-span-3" />
-        <HostHealthCard range={range} className="min-h-[420px] lg:col-span-1" />
+        <NodesCard className="min-h-[420px] lg:col-span-1" />
       </div>
       <QuickConnectCard />
     </div>
