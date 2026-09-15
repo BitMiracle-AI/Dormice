@@ -8,6 +8,7 @@ import {
   FILE_SIZE_LIMIT_BYTES,
   hostMetricsResponseSchema,
 } from '@dormice/shared';
+import { pino } from 'pino';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app';
 import { Archiver } from './archive/archiver';
@@ -2033,5 +2034,66 @@ describe('POST /lookupSandbox', () => {
     });
     release();
     await held;
+  });
+});
+
+describe('the request log', () => {
+  it("says nothing of a request that succeeded, one line naming method, path and status for one that did not, the query left out — and Fastify's own two lines per request are off", async () => {
+    const db = openDb(':memory:');
+    migrateDb(db, MIGRATIONS);
+    const config = loadConfig({
+      DORMICE_DB_PATH: ':memory:',
+      DORMICE_NODE_ID: 'node-test',
+      DORMICE_API_TOKEN: TOKEN,
+    });
+    configureNode(db, {});
+    const lines: string[] = [];
+    const app = buildApp({
+      config,
+      db,
+      executor: new FakeExecutor(),
+      locks: new KeyedQueue(),
+      logger: pino(
+        { level: 'info' },
+        { write: (line: string) => lines.push(line) },
+      ),
+    });
+    expect(
+      (await app.inject({ method: 'GET', url: '/healthz' })).statusCode,
+    ).toBe(200);
+    expect((await rpc(app, '/listSandboxes')).statusCode).toBe(200);
+    const said = () =>
+      lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .filter((l) => l.msg === 'request ended in an error status');
+    expect(said()).toEqual([]);
+    expect(
+      lines.some(
+        (l) =>
+          l.includes('incoming request') || l.includes('request completed'),
+      ),
+    ).toBe(false);
+    // A signed URL's signature lives in the query: not in the log.
+    expect(
+      (await rpc(app, '/noSuchVerb?signature=secret-sig')).statusCode,
+    ).toBe(404);
+    expect(
+      (await app.inject({ method: 'POST', url: '/listSandboxes' })).statusCode,
+    ).toBe(401);
+    expect(said()).toEqual([
+      expect.objectContaining({
+        level: 30,
+        method: 'POST',
+        path: '/noSuchVerb',
+        statusCode: 404,
+      }),
+      expect.objectContaining({
+        level: 30,
+        method: 'POST',
+        path: '/listSandboxes',
+        statusCode: 401,
+      }),
+    ]);
+    expect(lines.join('\n')).not.toContain('secret-sig');
   });
 });

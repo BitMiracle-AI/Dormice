@@ -1,7 +1,11 @@
 import http from 'node:http';
 import nodePath from 'node:path';
 import { GATEWAY_ONLY_VERBS } from '@dormice/shared';
-import fastify, { type FastifyError, type FastifyServerFactory } from 'fastify';
+import fastify, {
+  type FastifyError,
+  type FastifyServerFactory,
+  LogController,
+} from 'fastify';
 import {
   serializerCompiler,
   validatorCompiler,
@@ -133,6 +137,10 @@ export function buildApp({
   const app = fastify({
     loggerInstance,
     serverFactory,
+    // Fastify's two lines per request ("incoming request", "request
+    // completed") are off; the onResponse hook below says what a request
+    // is worth saying.
+    logController: new LogController({ disableRequestLogging: true }),
   }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -162,6 +170,33 @@ export function buildApp({
       request.log.error(error, 'request failed');
     }
     reply.code(status).send({ message: error.message });
+  });
+
+  // One line per request that ended in an error status, none for the
+  // rest: a healthy daemon's log is what happened to it, not every poll
+  // it answered (with Fastify's own two lines per request the Beijing
+  // node wrote 74 a second and journald kept 22 hours, measured
+  // 2026-09-15; they are off above). A 4xx names the caller's mistake
+  // (info); a 5xx is ours (warn) — its error and stack are the error
+  // handler's line, this one carries what that line lacks with the
+  // request logging off: which request. The path without its query: a
+  // signed URL's signature and an envd access token travel there
+  // (security rule 5). Nothing about slow requests, on purpose: an
+  // execCommand or an attached process stream is legitimately long, and
+  // a Docker that hangs surfaces as a 5xx through the deadlines
+  // (executor/deadline.ts).
+  app.addHook('onResponse', async (request, reply) => {
+    const status = reply.statusCode;
+    if (status < 400) return;
+    request.log[status >= 500 ? 'warn' : 'info'](
+      {
+        method: request.method,
+        path: request.url.split('?')[0],
+        statusCode: status,
+        elapsedMs: Math.round(reply.elapsedTime),
+      },
+      'request ended in an error status',
+    );
   });
   // A verb that answers at the gateway alone, asked of a node: the 404
   // names the door. The emergency path is ssh to a node and curl its

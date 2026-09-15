@@ -2,7 +2,11 @@ import http from 'node:http';
 import type { KeyedQueue } from '@dormice/server/keyed-queue';
 import { sandboxDomainsInForce } from '@dormice/shared';
 import fastifyCookie from '@fastify/cookie';
-import fastify, { type FastifyError, type FastifyServerFactory } from 'fastify';
+import fastify, {
+  type FastifyError,
+  type FastifyServerFactory,
+  LogController,
+} from 'fastify';
 import {
   serializerCompiler,
   validatorCompiler,
@@ -163,6 +167,9 @@ export function buildGatewayApp({
   const app = fastify({
     loggerInstance,
     serverFactory,
+    // Fastify's two lines per request are off, as on the daemon
+    // (server/app.ts); the onResponse hook below says what is worth saying.
+    logController: new LogController({ disableRequestLogging: true }),
   }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -181,6 +188,27 @@ export function buildGatewayApp({
     reply
       .code(404)
       .send({ message: `route ${request.method} ${request.url} not found` });
+  });
+
+  // One line per request that ended in an error status, none for the
+  // rest — the daemon's rule (server/app.ts has the measurement), at the
+  // door: a 4xx names the caller's mistake (info), a 5xx is ours or a
+  // node's (warn; the error handler's line has the error when it was
+  // ours). A forwarded answer counts by the status the node gave it —
+  // the hook runs when the raw response ends, hijacked or not. The path
+  // without its query: signatures and access tokens travel there.
+  app.addHook('onResponse', async (request, reply) => {
+    const status = reply.statusCode;
+    if (status < 400) return;
+    request.log[status >= 500 ? 'warn' : 'info'](
+      {
+        method: request.method,
+        path: request.url.split('?')[0],
+        statusCode: status,
+        elapsedMs: Math.round(reply.elapsedTime),
+      },
+      'request ended in an error status',
+    );
   });
 
   // Liveness, open by design; the build identity so an operator can tell

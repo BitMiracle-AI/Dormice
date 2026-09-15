@@ -5,7 +5,9 @@ description: Symptoms, causes, and fixes — every entry here was hit on real ha
 
 Three places answer most questions before this page does: the daemon's
 log (`journalctl -u dormice -f` — error messages are written to be
-read), `dor doctor` (the environment,
+read; a request that succeeded leaves no line, one that ended in a 4xx
+or 5xx leaves exactly one, naming the method, the path and the status),
+`dor doctor` (the environment,
 [check by check](/docs/doctor)), and the console's Overview or
 `getHostMetrics` (the machine's [capacity](/docs/metrics)).
 

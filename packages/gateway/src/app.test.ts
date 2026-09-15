@@ -1974,3 +1974,47 @@ describe('the E2B list across nodes', () => {
     });
   });
 });
+
+describe('the request log', () => {
+  it("says nothing of a 2xx; one line for a 4xx (info) or a 5xx (warn) naming method, path and status, the query left out; Fastify's own two lines per request are off", async () => {
+    const logs: string[] = [];
+    const h = await gateway(['b'], {}, { logs });
+    // The harness's check-ins and a probe are 2xx: nothing said of them.
+    expect((await fetch(`${h.endpoint}/healthz`)).status).toBe(200);
+    const said = () =>
+      logs
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .filter((l) => l.msg === 'request ended in an error status');
+    expect(said()).toEqual([]);
+    expect(
+      logs.some(
+        (l) =>
+          l.includes('incoming request') || l.includes('request completed'),
+      ),
+    ).toBe(false);
+    expect((await rpc(h, '/noSuchVerb?signature=secret-sig')).status).toBe(404);
+    // Every node down: a new name is the placement's own 503, sent
+    // directly, not through the error handler — logged all the same.
+    const b = h.fleet.get('b');
+    if (!b) throw new Error('node lost');
+    b.lastCheckInAt = new Date(Date.now() - 31_000);
+    expect((await rpc(h, '/acquireSandbox', { name: 'nowhere' })).status).toBe(
+      503,
+    );
+    expect(said()).toEqual([
+      expect.objectContaining({
+        level: 30,
+        method: 'POST',
+        path: '/noSuchVerb',
+        statusCode: 404,
+      }),
+      expect.objectContaining({
+        level: 40,
+        method: 'POST',
+        path: '/acquireSandbox',
+        statusCode: 503,
+      }),
+    ]);
+    expect(logs.join('\n')).not.toContain('secret-sig');
+  });
+});
