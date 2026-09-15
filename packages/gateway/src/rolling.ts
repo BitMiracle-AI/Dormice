@@ -81,10 +81,14 @@ export function upgradeStateOf(
   // comment has why), judged before the tell: a told node that comes back
   // on a newer build has upgraded, and reads ahead — not upgrading. The
   // commit's time is the order: main is trunk-based and linear, so a later
-  // committer time is a later commit. Two commits in one second (a rebase
-  // re-commits several in a burst) tie, and a tie reads behind — a node
-  // ahead by a same-second commit is the one case misjudged, and a tell
-  // it survives as before.
+  // committer time is a later commit. Commits in one second tie, and a tie
+  // reads behind. Ties are common in the history (a rebased series is
+  // re-committed in a burst: 24 of main's last 300 commits share a second
+  // with their neighbour, measured 2026-09-15) but not between the two
+  // builds compared here: each was built by install.sh at its branch's
+  // head at the time, and two heads a second apart would be two pushes a
+  // second apart. A hand-built checkout of a mid-series commit is the one
+  // way to reach the misjudgement, and it costs that node one rebuild.
   if (
     Date.parse(node.build.committedAt) > Date.parse(gatewayBuild.committedAt)
   ) {
@@ -175,11 +179,15 @@ export class Rolling {
    */
   onCheckIn(node: NodeState, now: Date): boolean {
     const { state } = upgradeStateOf(node, this.gatewayBuild, now);
-    if (
-      (state === 'current' || state === 'ahead') &&
-      node.upgradeToldAt !== null
-    ) {
-      this.fleet.setUpgradeToldAt(node.id, null);
+    if (state === 'current' || state === 'ahead') {
+      // Off the old build: the tell, if any, is fulfilled, and so is the
+      // operator's pending re-tell — that hand was for the node that was
+      // behind, and a re-tell left standing would fire the moment this
+      // node read behind again, whatever the order said (found by
+      // review, 2026-09-15).
+      if (node.upgradeToldAt !== null) {
+        this.fleet.setUpgradeToldAt(node.id, null);
+      }
       this.retell.delete(node.id);
       return false;
     }

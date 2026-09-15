@@ -316,6 +316,17 @@ describe('Rolling', () => {
     // Not upgrading, so it holds no pointer: b's turn comes.
     const b = reporting(fleet, 'b', { build: OLD, selfUpgrade: CAN }, later);
     expect(rolling.onCheckIn(b, later)).toBe(true);
+    // A pending re-tell is spent by an ahead check-in too: c, behind and
+    // re-told by the operator while b upgrades, is upgraded by hand to a
+    // newer build, then put back on the old one — the hand was for the
+    // node that was, and c waits its turn like any other.
+    const c = reporting(fleet, 'c', { build: OLD, selfUpgrade: CAN }, later);
+    expect(rolling.onCheckIn(c, later)).toBe(false);
+    expect(rolling.requestRetell(c, later)).toBeNull();
+    reporting(fleet, 'c', { build: NEWER, selfUpgrade: CAN }, later);
+    expect(rolling.onCheckIn(c, later)).toBe(false);
+    reporting(fleet, 'c', { build: OLD, selfUpgrade: CAN }, later);
+    expect(rolling.onCheckIn(c, later)).toBe(false);
   });
 
   it('states lists every node in id order with its standing, build and tell', () => {

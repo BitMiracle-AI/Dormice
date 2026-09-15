@@ -181,6 +181,10 @@ else
   ROLE=gateway
   GATEWAY_URL="http://127.0.0.1:$GATEWAY_PORT"
 fi
+# The registry is the gateway machine's; a node pulls from the address the
+# fleet's settings name, and a flag here would be taken for a setting and
+# silently do nothing (found by review, 2026-09-15).
+[ "$ROLE" = node ] && [ -n "$REGISTRY_ADDR_FLAG" ] && die "--registry-addr is the gateway machine's flag — a node pulls from the registry its gateway names; re-run without it"
 
 # ---- outcome reporting and the build rollback --------------------------------
 # status.json is the one file the daemon's one-click upgrade reads back;
@@ -1338,7 +1342,7 @@ db.close();
       # account gone with no word said (found by review, 2026-09-15). The
       # file did not exist before this step: removing it puts the machine
       # back exactly where it was, and the re-run imports again.
-      rm -f "$GATEWAY_DATA_DIR/gateway.db" "$GATEWAY_DATA_DIR/gateway.db-wal" "$GATEWAY_DATA_DIR/gateway.db-shm" "$GATEWAY_DATA_DIR/gateway.db.lock"
+      rm -f "$GATEWAY_DATA_DIR/gateway.db" "$GATEWAY_DATA_DIR/gateway.db-wal" "$GATEWAY_DATA_DIR/gateway.db-shm" "$GATEWAY_DATA_DIR/gateway.db.lock" "$GATEWAY_DATA_DIR/gateway.db.lock-journal"
       die "the import of $DATA_DIR/dormice.db into the gateway failed — nothing was restarted, and the half-made gateway database was removed so that the re-run imports again; fix the cause and re-run"
     }
     note "imported into the gateway: $imported"
