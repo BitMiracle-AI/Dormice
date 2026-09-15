@@ -312,7 +312,7 @@ export function buildGatewayApp({
   app.register(async (admin) => {
     admin.addHook('onRequest', adminAuth);
     await admin.register(apiKeyRoutes, { db });
-    await admin.register(nodeRoutes, { fleet, cache: finder.cache });
+    await admin.register(nodeRoutes, { fleet, cache: finder.cache, rolling });
     await admin.register(settingsRoutes, {
       config,
       db,

@@ -130,6 +130,22 @@ describe('the fleet upgrade over the check-in', () => {
     expect((await status(app)).nodes?.find((n) => n.id === 'a')?.state).toBe(
       'upgrading',
     );
+    // The hand does not outlive the node: c, behind and re-told, goes
+    // silent and is removed; a machine under the same id joins behind
+    // while a upgrades, and waits its turn.
+    expect(
+      (await checkIn(app, 'c', { build: OLD, selfUpgrade: CAN })).upgrade,
+    ).toBeUndefined();
+    expect((await rpc(app, '/applyUpgrade', { nodeId: 'c' })).statusCode).toBe(
+      200,
+    );
+    const c = fleet.get('c');
+    if (!c) throw new Error('node lost');
+    c.lastCheckInAt = new Date(Date.now() - 40_000);
+    expect((await rpc(app, '/removeNode', { id: 'c' })).statusCode).toBe(200);
+    expect(
+      (await checkIn(app, 'c', { build: OLD, selfUpgrade: CAN })).upgrade,
+    ).toBeUndefined();
   });
 
   it('nodes that cannot upgrade themselves, did not say, or carry no build are listed with the reason and never told', async () => {

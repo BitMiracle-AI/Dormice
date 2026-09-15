@@ -327,6 +327,19 @@ describe('Rolling', () => {
     expect(rolling.onCheckIn(c, later)).toBe(false);
     reporting(fleet, 'c', { build: OLD, selfUpgrade: CAN }, later);
     expect(rolling.onCheckIn(c, later)).toBe(false);
+    // And by the node's removal: d, re-told, is removed and a machine
+    // under the same id joins behind — a new node, waiting its turn.
+    const d = reporting(fleet, 'd', { build: OLD, selfUpgrade: CAN }, later);
+    expect(rolling.requestRetell(d, later)).toBeNull();
+    fleet.remove('d');
+    rolling.forget('d');
+    const again = reporting(
+      fleet,
+      'd',
+      { build: OLD, selfUpgrade: CAN },
+      later,
+    );
+    expect(rolling.onCheckIn(again, later)).toBe(false);
   });
 
   it('states lists every node in id order with its standing, build and tell', () => {

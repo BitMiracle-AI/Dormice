@@ -161,7 +161,7 @@ export function rollingDecision(
  * object the check-in route and the upgrade routes share.
  */
 export class Rolling {
-  /** Nodes the operator told to upgrade again (applyUpgrade {nodeId}), told at their next check-in whatever the order says. Memory: see the module comment. */
+  /** Nodes the operator told to upgrade again (applyUpgrade {nodeId}), told at their next check-in whatever the order says. Memory: see the module comment. Spent by the tell, by a check-in off the old build (onCheckIn), or by the node's removal (forget). */
   private readonly retell = new Set<string>();
 
   constructor(
@@ -236,6 +236,16 @@ export class Rolling {
         this.retell.add(node.id);
         return null;
     }
+  }
+
+  /**
+   * The node is gone (removeNode): its pending re-tell goes with it. The
+   * hand was for that node; a machine re-imaged under the same id joins
+   * as a new node, and must wait its turn like one — not be told at its
+   * first check-in past the order (found by review, 2026-09-15).
+   */
+  forget(id: string): void {
+    this.retell.delete(id);
   }
 
   /** Every node's standing right now (getUpgradeStatus.nodes), in node-id order. */

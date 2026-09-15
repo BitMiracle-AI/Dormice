@@ -28,6 +28,8 @@ export interface CheckInRoutesOptions {
 export interface NodeRoutesOptions {
   fleet: Fleet;
   cache: NameCache;
+  /** Forgets a removed node's pending re-tell (rolling.ts forget). */
+  rolling: Rolling;
 }
 
 /** A refusal in the native dialect, rendered by the app's error handler as `{ message }` under its status. */
@@ -178,7 +180,7 @@ export const checkInRoutes: FastifyPluginAsyncZod<
  */
 export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
   app,
-  { fleet, cache },
+  { fleet, cache, rolling },
 ) => {
   app.post(
     '/listNodes',
@@ -278,6 +280,7 @@ export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
       }
       const removed = fleet.remove(request.body.id);
       const evicted = cache.evictNode(request.body.id);
+      rolling.forget(request.body.id);
       if (removed) {
         request.log.warn(
           { nodeId: request.body.id, evicted },
