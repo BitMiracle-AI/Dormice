@@ -59,7 +59,11 @@ function clampPercent(fraction: number): number {
  * evented, because the writer (tar) offers no progress hooks and a growing
  * output file IS its progress. Only actual growth pulses: a wedged writer
  * goes silent, and the heartbeat watchdog hears exactly that. A file not
- * born yet is no growth either.
+ * born yet is no growth either. stop() ends the sampling for good: a stat
+ * already in flight when it is called delivers nothing — clearing the
+ * interval alone let that last sample pulse after stop() whenever the
+ * file had grown meanwhile (seen as a flaky test under a full parallel
+ * run, 2026-09-16).
  */
 export function pulseFileGrowth(
   filePath: string,
@@ -67,10 +71,11 @@ export function pulseFileGrowth(
   everyMs = 15_000,
 ): { stop(): void } {
   let lastSize = -1;
+  let stopped = false;
   const timer = setInterval(() => {
     void stat(filePath).then(
       ({ size }) => {
-        if (size > lastSize) {
+        if (!stopped && size > lastSize) {
           lastSize = size;
           onPulse();
         }
@@ -80,7 +85,12 @@ export function pulseFileGrowth(
   }, everyMs);
   // Sampling must never be what keeps the process alive.
   timer.unref();
-  return { stop: () => clearInterval(timer) };
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
 }
 
 /**
