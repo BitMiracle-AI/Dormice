@@ -152,7 +152,7 @@
   "settings_nodes_state_unreachable": "到達不能",
   "settings_nodes_state_unknown": "不明",
   "settings_nodes_retry": "再試行",
-  "settings_nodes_retry_done": "ノード {id} に通知しました。次のチェックイン時に再びアップグレードします",
+  "settings_nodes_retry_done": "ノード {id} は列に戻りました。他のノードがアップグレード中でなければ、次のチェックイン時に通知されます",
   "settings_nodes_retry_failed": "ノード {id} に通知できません:{error}",
   "settings_archive_card_title": "アーカイブストレージ(S3)",
   "settings_archive_card_desc": "アイドルなサンドボックスのディスクを圧縮して S3 互換ストレージにアップロードし、ローカル使用量はゼロになります。次回の acquire で自動的に復元されます。台帳に保存され、変更は再起動なしで即時に反映されます。",

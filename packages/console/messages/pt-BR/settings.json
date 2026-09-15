@@ -152,7 +152,7 @@
   "settings_nodes_state_unreachable": "Inacessível",
   "settings_nodes_state_unknown": "Desconhecido",
   "settings_nodes_retry": "Tentar de novo",
-  "settings_nodes_retry_done": "Nó {id} avisado; ele atualiza de novo no próximo check-in",
+  "settings_nodes_retry_done": "O nó {id} voltou para a fila; ele é avisado no próximo check-in quando nenhum outro nó estiver atualizando",
   "settings_nodes_retry_failed": "Não foi possível avisar o nó {id}: {error}",
   "settings_archive_card_title": "Armazenamento de arquivamento (S3)",
   "settings_archive_card_desc": "O disco dos sandboxes ociosos é comprimido e enviado para qualquer armazenamento compatível com S3, sem ocupar nada local, e volta sozinho no próximo acquire. Mora no ledger; mudanças entram em vigor imediatamente, sem reiniciar.",

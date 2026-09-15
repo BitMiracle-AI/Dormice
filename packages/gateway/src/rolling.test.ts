@@ -241,22 +241,41 @@ describe('Rolling', () => {
     expect(rolling.onCheckIn(b, later)).toBe(true);
   });
 
-  it("requestRetell honors the operator's hand at the next check-in even while another node upgrades, and refuses in words where it would do nothing", () => {
-    const { fleet } = fleetOver();
+  it("retell forgets a stuck node's tell: it reads behind, waits for the node upgrading and is told at its turn; every other state is refused in words", () => {
+    const { db, fleet } = fleetOver();
     const rolling = new Rolling(fleet, GATEWAY);
     const a = reporting(fleet, 'a', { build: OLD, selfUpgrade: CAN });
     const b = reporting(fleet, 'b', { build: OLD, selfUpgrade: CAN });
     expect(rolling.onCheckIn(a, NOW)).toBe(true);
-    // b is behind and a is upgrading: b would wait — unless the operator says so.
     expect(rolling.onCheckIn(b, NOW)).toBe(false);
-    expect(rolling.requestRetell(b, NOW)).toBeNull();
-    expect(rolling.onCheckIn(b, NOW)).toBe(true);
-    // A stuck node is the case the hand exists for.
+    // b is behind and in line already; a is upgrading and its tell is the
+    // one-at-a-time rule's count — neither is the hand's to touch.
+    expect(rolling.retell(b, NOW)).toMatchObject({
+      status: 400,
+      message: expect.stringMatching(/behind and in line/),
+    });
+    expect(rolling.retell(a, NOW)).toMatchObject({
+      status: 409,
+      message: expect.stringMatching(
+        /is upgrading \(told 0s ago, still on old0001\)/,
+      ),
+    });
+    expect(a.upgradeToldAt).toEqual(NOW);
+    // Twenty minutes on, a is stuck and b's turn came.
     const late = new Date(NOW.getTime() + UPGRADE_TOLD_TIMEOUT_MS);
     reporting(fleet, 'a', { build: OLD, selfUpgrade: CAN }, late);
-    expect(upgradeStateOf(a, GATEWAY, late).state).toBe('stuck');
+    reporting(fleet, 'b', { build: OLD, selfUpgrade: CAN }, late);
     expect(rolling.onCheckIn(a, late)).toBe(false);
-    expect(rolling.requestRetell(a, late)).toBeNull();
+    expect(rolling.onCheckIn(b, late)).toBe(true);
+    // The hand: a's tell is forgotten on the row, and a reads behind.
+    expect(rolling.retell(a, late)).toBeNull();
+    expect(a.upgradeToldAt).toBeNull();
+    expect(new Fleet(db).get('a')?.upgradeToldAt).toBeNull();
+    expect(upgradeStateOf(a, GATEWAY, late).state).toBe('behind');
+    // Not past b: a waits while b upgrades, and is told once b is back.
+    expect(rolling.onCheckIn(a, late)).toBe(false);
+    reporting(fleet, 'b', { build: GATEWAY, selfUpgrade: CAN }, late);
+    expect(rolling.onCheckIn(b, late)).toBe(false);
     expect(rolling.onCheckIn(a, late)).toBe(true);
     expect(a.upgradeToldAt).toEqual(late);
 
@@ -266,7 +285,7 @@ describe('Rolling', () => {
       { build: GATEWAY, selfUpgrade: CAN },
       late,
     );
-    expect(rolling.requestRetell(current, late)).toMatchObject({
+    expect(rolling.retell(current, late)).toMatchObject({
       status: 400,
       message: expect.stringMatching(/already runs the gateway's build/),
     });
@@ -276,23 +295,23 @@ describe('Rolling', () => {
       { build: OLD, selfUpgrade: CANNOT },
       late,
     );
-    expect(rolling.requestRetell(cannot, late)).toMatchObject({
+    expect(rolling.retell(cannot, late)).toMatchObject({
       status: 400,
       message: expect.stringMatching(/cannot be told to upgrade: systemd-run/),
     });
     const gone = reporting(fleet, 'e', { build: OLD, selfUpgrade: CAN }, late);
     gone.lastCheckInAt = new Date(late.getTime() - 40_000);
-    expect(rolling.requestRetell(gone, late)).toMatchObject({
-      status: 409,
+    expect(rolling.retell(gone, late)).toMatchObject({
+      status: 400,
       message: expect.stringMatching(/not checking in/),
     });
-    expect(new Rolling(fleet, null).requestRetell(a, late)).toMatchObject({
+    expect(new Rolling(fleet, null).retell(a, late)).toMatchObject({
       status: 400,
       message: expect.stringMatching(/gateway carries no build identity/),
     });
   });
 
-  it('a told node that comes back newer than the gateway is ahead: its tell is fulfilled and cleared, it is not told again, the operator cannot re-tell it, and it holds nobody', () => {
+  it('a told node that comes back newer than the gateway is ahead: its tell is fulfilled and cleared, it is not told again, the hand refuses it, and it holds nobody', () => {
     const { db, fleet } = fleetOver();
     const rolling = new Rolling(fleet, GATEWAY);
     const a = reporting(fleet, 'a', { build: OLD, selfUpgrade: CAN });
@@ -307,7 +326,7 @@ describe('Rolling', () => {
     expect(rolling.states(later)).toMatchObject([
       { id: 'a', state: 'ahead', toldAt: null },
     ]);
-    expect(rolling.requestRetell(a, later)).toMatchObject({
+    expect(rolling.retell(a, later)).toMatchObject({
       status: 400,
       message: expect.stringMatching(
         /cannot be told to upgrade: runs new0002 .* newer than the gateway's new0001/,
@@ -316,30 +335,6 @@ describe('Rolling', () => {
     // Not upgrading, so it holds no pointer: b's turn comes.
     const b = reporting(fleet, 'b', { build: OLD, selfUpgrade: CAN }, later);
     expect(rolling.onCheckIn(b, later)).toBe(true);
-    // A pending re-tell is spent by an ahead check-in too: c, behind and
-    // re-told by the operator while b upgrades, is upgraded by hand to a
-    // newer build, then put back on the old one — the hand was for the
-    // node that was, and c waits its turn like any other.
-    const c = reporting(fleet, 'c', { build: OLD, selfUpgrade: CAN }, later);
-    expect(rolling.onCheckIn(c, later)).toBe(false);
-    expect(rolling.requestRetell(c, later)).toBeNull();
-    reporting(fleet, 'c', { build: NEWER, selfUpgrade: CAN }, later);
-    expect(rolling.onCheckIn(c, later)).toBe(false);
-    reporting(fleet, 'c', { build: OLD, selfUpgrade: CAN }, later);
-    expect(rolling.onCheckIn(c, later)).toBe(false);
-    // And by the node's removal: d, re-told, is removed and a machine
-    // under the same id joins behind — a new node, waiting its turn.
-    const d = reporting(fleet, 'd', { build: OLD, selfUpgrade: CAN }, later);
-    expect(rolling.requestRetell(d, later)).toBeNull();
-    fleet.remove('d');
-    rolling.forget('d');
-    const again = reporting(
-      fleet,
-      'd',
-      { build: OLD, selfUpgrade: CAN },
-      later,
-    );
-    expect(rolling.onCheckIn(again, later)).toBe(false);
   });
 
   it('states lists every node in id order with its standing, build and tell', () => {

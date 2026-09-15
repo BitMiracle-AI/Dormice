@@ -43,6 +43,10 @@
 #                       nodes pull from (gateway's machine, first install;
 #                       default: this machine's private address, port 5000
 #                       — a re-run keeps the address gateway.env holds)
+#   The four fleet flags (--gateway, --node-id, --node-endpoint,
+#   --registry-addr) are judged against the role before anything is
+#   installed: one on the other role's machine, or one contradicting the
+#   env file on a re-run, is refused — never silently ignored.
 #
 # Four promises, mirroring `dor doctor`:
 #   - Idempotent. Every step checks before it acts; a step whose outcome is
@@ -162,21 +166,6 @@ ENV_GATEWAY=''
 if [ -n "$ENV_GATEWAY" ] && ! is_loopback_url "$ENV_GATEWAY"; then
   ROLE=node
   GATEWAY_URL=${ENV_GATEWAY%/}
-  if [ -n "$GATEWAY_FLAG" ] && [ "${GATEWAY_FLAG%/}" != "$GATEWAY_URL" ]; then
-    die "$ENV_FILE says this node's gateway is $GATEWAY_URL, --gateway says ${GATEWAY_FLAG%/} — edit DORMICE_GATEWAY_ENDPOINT in the env file if the gateway really moved, then re-run without the flag"
-  fi
-  # The env file is the node's identity on a re-run, as it is the gateway's
-  # address: a flag that repeats it is harmless, one that contradicts it
-  # would be taken for a change and silently do nothing (found by review,
-  # 2026-09-15).
-  env_node_id=$(sed -n 's/^DORMICE_NODE_ID=//p' "$ENV_FILE" | head -1)
-  if [ -n "$NODE_ID_FLAG" ] && [ "$NODE_ID_FLAG" != "$env_node_id" ]; then
-    die "$ENV_FILE says this node is $env_node_id, --node-id says $NODE_ID_FLAG — the id is the node's name in the gateway's rows and its sandboxes'; to re-join under another, edit DORMICE_NODE_ID in the env file and removeNode the old id at the gateway, then re-run without the flag"
-  fi
-  env_node_endpoint=$(sed -n 's/^DORMICE_NODE_ENDPOINT=//p' "$ENV_FILE" | head -1)
-  if [ -n "$NODE_ENDPOINT_FLAG" ] && [ "${NODE_ENDPOINT_FLAG%/}" != "${env_node_endpoint%/}" ]; then
-    die "$ENV_FILE says the gateway reaches this node at $env_node_endpoint, --node-endpoint says ${NODE_ENDPOINT_FLAG%/} — edit DORMICE_NODE_ENDPOINT in the env file if the address really changed (the daemon reports it at its next check-in), then re-run without the flag"
-  fi
 elif [ "$ROLE_FLAG" = node ]; then
   if [ -f "$ENV_FILE" ]; then
     die "$ENV_FILE exists and names a gateway on this machine (or none) — this is the gateway's machine; --role node is for a machine that has never been installed. To turn it into a node, stop and disable dormice-gateway, move the env file aside, and re-run"
@@ -195,15 +184,41 @@ else
   ROLE=gateway
   GATEWAY_URL="http://127.0.0.1:$GATEWAY_PORT"
 fi
-# The registry is the gateway machine's; a node pulls from the address the
-# fleet's settings name, and a flag here would be taken for a setting and
-# silently do nothing (found by review, 2026-09-15).
-[ "$ROLE" = node ] && [ -n "$REGISTRY_ADDR_FLAG" ] && die "--registry-addr is the gateway machine's flag — a node pulls from the registry its gateway names; re-run without it"
-# And the node's identity flags are a node machine's: the gateway machine's
-# node is the daemon beside the gateway, named by its own env (config.ts
-# DORMICE_NODE_ID), and a flag here would be read by nobody (same review).
-if [ "$ROLE" = gateway ] && { [ -n "$NODE_ID_FLAG" ] || [ -n "$NODE_ENDPOINT_FLAG" ]; }; then
-  die "--node-id and --node-endpoint are a node machine's flags (--role node, first install) — this is the gateway's machine, whose node is the daemon beside the gateway (DORMICE_NODE_ID in $ENV_FILE names it); re-run without them"
+
+# ---- the fleet flags against the role -----------------------------------------
+# Every flag but --mirror, --swap-gb and --status-dir names this machine's
+# place in the fleet, and each belongs to one role: a node machine's say
+# which gateway it joins and how it is known there, the gateway machine's
+# where its registry listens. Judged here, once, with the role known and
+# nothing installed yet. On the other role's machine a flag is read by
+# nobody; on a re-run the env files hold the value, and a flag would be
+# taken for a change and silently do nothing — three reviews in one day
+# found one such flag each (2026-09-15), because each flag was judged
+# where it was consumed, hundreds of lines and a role branch away from the
+# others. A flag that repeats the env file's line is harmless; one that
+# contradicts it is refused, with the edit that does change the value.
+flag_against_env() { # <flag> <value> <env file> <key> <how the value is really changed>
+  [ -n "$2" ] && [ -f "$3" ] || return 0
+  have=$(sed -n "s/^$4=//p" "$3" | head -1)
+  [ -n "$have" ] || return 0
+  [ "${2%/}" = "${have%/}" ] && return 0
+  die "$3 says $4=$have, $1 says $2 — $5"
+}
+if [ "$ROLE" = gateway ]; then
+  for f in "--gateway=$GATEWAY_FLAG" "--node-id=$NODE_ID_FLAG" "--node-endpoint=$NODE_ENDPOINT_FLAG"; do
+    [ -n "${f#*=}" ] || continue
+    die "${f%%=*} is a node machine's flag (--role node, first install) — this is the gateway's machine, whose node is the daemon beside the gateway (DORMICE_NODE_ID in $ENV_FILE names it); re-run without it"
+  done
+  flag_against_env --registry-addr "$REGISTRY_ADDR_FLAG" "$GATEWAY_ENV_FILE" DORMICE_REGISTRY_ADDRESS \
+    "the address is the fleet's setting: the gateway's row carries it to every node, and each pins the registry's certificate under it; it does not move with a flag — re-run without it"
+else
+  [ -z "$REGISTRY_ADDR_FLAG" ] || die "--registry-addr is the gateway machine's flag — a node pulls from the registry its gateway names; re-run without it"
+  flag_against_env --gateway "$GATEWAY_FLAG" "$ENV_FILE" DORMICE_GATEWAY_ENDPOINT \
+    "edit DORMICE_GATEWAY_ENDPOINT in the env file if the gateway really moved, then re-run without the flag"
+  flag_against_env --node-id "$NODE_ID_FLAG" "$ENV_FILE" DORMICE_NODE_ID \
+    "the id is the node's name in the gateway's rows and its sandboxes'; to re-join under another, edit DORMICE_NODE_ID in the env file and removeNode the old id at the gateway, then re-run without the flag"
+  flag_against_env --node-endpoint "$NODE_ENDPOINT_FLAG" "$ENV_FILE" DORMICE_NODE_ENDPOINT \
+    "edit DORMICE_NODE_ENDPOINT in the env file if the address really changed (the daemon reports it at its next check-in), then re-run without the flag"
 fi
 
 # ---- outcome reporting and the build rollback --------------------------------
@@ -1080,19 +1095,10 @@ fi
 # the private address the other machines reach it by; docker0's 172.17.0.1
 # never is). A machine whose main address is public listens on it; the
 # lock is what makes that acceptable.
+# (A flag contradicting the env line died at the top, with the other fleet
+# flags.)
 env_registry_addr=$(sed -n 's/^DORMICE_REGISTRY_ADDRESS=//p' "$GATEWAY_ENV_FILE" | head -1)
-REGISTRY_ADDR=$REGISTRY_ADDR_FLAG
-if [ -n "$REGISTRY_ADDR" ] && [ -n "$env_registry_addr" ] && [ "$REGISTRY_ADDR" != "$env_registry_addr" ]; then
-  # Once seeded, the address is the fleet's setting: the gateway's row
-  # carries it to every node, and each node pins the certificate under it
-  # and pulls from it. A flag on a re-run would move the listener and
-  # nothing else — the env line and the row stand — and every node would
-  # pull from where the registry no longer is. Refused, as --gateway is
-  # against a node's env (found by review, 2026-09-15); moving the
-  # registry is not a re-run's job in this version.
-  die "$GATEWAY_ENV_FILE says the fleet registry is at $env_registry_addr, --registry-addr says $REGISTRY_ADDR — the address is the fleet's setting and does not move with a flag; re-run without it"
-fi
-[ -n "$REGISTRY_ADDR" ] || REGISTRY_ADDR=$env_registry_addr
+REGISTRY_ADDR=${REGISTRY_ADDR_FLAG:-$env_registry_addr}
 if [ -z "$REGISTRY_ADDR" ]; then
   registry_host=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')
   [ -n "$registry_host" ] || registry_host=$(hostname -I 2>/dev/null | awk '{print $1}')

@@ -152,7 +152,7 @@
   "settings_nodes_state_unreachable": "Inalcanzable",
   "settings_nodes_state_unknown": "Desconocido",
   "settings_nodes_retry": "Reintentar",
-  "settings_nodes_retry_done": "Nodo {id} avisado; se actualiza de nuevo en su siguiente registro",
+  "settings_nodes_retry_done": "El nodo {id} vuelve a la cola; se le avisa en su siguiente registro cuando ningún otro nodo esté actualizándose",
   "settings_nodes_retry_failed": "No se pudo avisar al nodo {id}: {error}",
   "settings_archive_card_title": "Almacenamiento de archivado (S3)",
   "settings_archive_card_desc": "El disco de los sandboxes inactivos se comprime y se sube a un almacenamiento compatible con S3, sin ocupar nada en local, y se restaura solo en el siguiente acquire. Vive en el libro de registro; los cambios se aplican de inmediato, sin reiniciar.",

@@ -49,10 +49,11 @@ alone — a node whose build keeps failing must not rebuild every twenty
 minutes on the CPU its sandboxes run on. Read `journalctl -u
 dormice-upgrade` and `/var/lib/dormice/upgrade/upgrade.log` on that
 node, fix the cause, and press **Try again** on the version page (or
-`POST /applyUpgrade {"nodeId": "..."}`), which tells that node again at
-its next check-in. A node that cannot upgrade itself — no git checkout,
-no systemd — is listed with its reason; run the installer on it by
-hand.
+`POST /applyUpgrade {"nodeId": "..."}`), which puts that node back in
+line: the gateway forgets it was told and tells it again at its next
+check-in once no other node is upgrading — one node at a time holds for
+the retry too. A node that cannot upgrade itself — no git checkout, no
+systemd — is listed with its reason; run the installer on it by hand.
 
 ## What survives an upgrade
 

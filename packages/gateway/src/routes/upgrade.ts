@@ -25,8 +25,8 @@ export interface UpgradeRoutesOptions {
  * applyUpgrade without a node upgrades the gateway's machine — install.sh
  * in a systemd unit, the daemon's own mechanism, which restarts the
  * gateway and its node together, and from then on the check-ins roll the
- * upgrade over the other nodes (rolling.ts); applyUpgrade with a node is
- * the operator's re-tell of one node; getUpgradeStatus is the gateway
+ * upgrade over the other nodes (rolling.ts); applyUpgrade with a node puts
+ * one stuck node back in line; getUpgradeStatus is the gateway
  * machine's run plus every node's standing. Behind the admin gate: an
  * upgrade is the fleet's configuration in the largest sense, and a leaked
  * automation key must not be able to restart every machine.
@@ -70,11 +70,11 @@ export const upgradeRoutes: FastifyPluginAsyncZod<
           `no node with id '${nodeId}' — listNodes shows which exist`,
         );
       }
-      const refused = rolling.requestRetell(node, new Date());
+      const refused = rolling.retell(node, new Date());
       if (refused !== null) throw httpError(refused.status, refused.message);
       request.log.info(
         { nodeId, build: node.build?.commit ?? null },
-        'node told to upgrade again by the operator; it hears at its next check-in',
+        'a stuck node was put back in line by the operator: its tell is forgotten, and it is told again at its turn',
       );
       return { started: true as const };
     },

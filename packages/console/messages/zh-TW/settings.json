@@ -152,7 +152,7 @@
   "settings_nodes_state_unreachable": "不可達",
   "settings_nodes_state_unknown": "未知",
   "settings_nodes_retry": "再試一次",
-  "settings_nodes_retry_done": "已通知節點 {id},它在下一次報到時重新升級",
+  "settings_nodes_retry_done": "節點 {id} 已回到隊列;沒有別的節點在升級時,它在下一次報到被帶起",
   "settings_nodes_retry_failed": "無法通知節點 {id}:{error}",
   "settings_archive_card_title": "封存儲存(S3)",
   "settings_archive_card_desc": "閒置沙箱的磁碟壓縮上傳到 S3 相容儲存、本機零佔用,下次 acquire 自動還原。住在帳本裡,改了立即生效,不用重新啟動。",

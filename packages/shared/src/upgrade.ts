@@ -102,18 +102,20 @@ export type CheckUpgradeResponse = z.infer<typeof checkUpgradeResponseSchema>;
  * At the gateway, without `nodeId`, this is the fleet upgrade: the
  * gateway's machine upgrades (its gateway and its node together), and the
  * nodes behind follow — each is told at its check-in, one at a time, once.
- * With `nodeId` it is the operator telling one node again: a node told
+ * With `nodeId` it is the operator's hand on one stuck node: a node told
  * once that is still on the old build twenty minutes later is `stuck`
  * (getUpgradeStatus), never re-told on its own — a node whose build keeps
  * failing must not rebuild every twenty minutes on the sandboxes' CPU —
- * and this is the hand that re-tells it. On a node `nodeId` is meaningless
- * and refused.
+ * and this puts it back in line: its tell is forgotten, it reads behind,
+ * and the roll tells it at its turn, after the node upgrading now if
+ * there is one, never beside it. On a node `nodeId` is meaningless and
+ * refused.
  *
  * Refused (400) when one-click is unavailable — fake executor, no git
  * checkout, no systemd. Watch progress with getUpgradeStatus.
  */
 export const applyUpgradeRequestSchema = z.object({
-  /** At the gateway: tell this one node to upgrade at its next check-in, whatever the rolling order says. Absent: upgrade the gateway's machine, then roll the fleet. */
+  /** At the gateway: put this stuck node back in line — its tell is forgotten, and the roll tells it again at its turn (400 on any other state, 409 while it is upgrading). Absent: upgrade the gateway's machine, then roll the fleet. */
   nodeId: z.string().min(1).optional(),
 });
 
@@ -169,7 +171,8 @@ export type GetUpgradeStatusRequest = z.infer<
  *                turn comes when no other node is upgrading
  *   upgrading    told within the last twenty minutes, not back yet
  *   stuck        told, still on the old build twenty minutes on — never
- *                re-told on its own; applyUpgrade {nodeId} is the hand
+ *                re-told on its own; applyUpgrade {nodeId} puts it back
+ *                in line
  *   unavailable  another build, but the node cannot upgrade itself (its
  *                own reason: no checkout, no systemd, an older build that
  *                does not say) — run install.sh on it by hand

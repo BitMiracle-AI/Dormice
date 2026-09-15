@@ -152,7 +152,7 @@
   "settings_nodes_state_unreachable": "접근 불가",
   "settings_nodes_state_unknown": "알 수 없음",
   "settings_nodes_retry": "다시 시도",
-  "settings_nodes_retry_done": "노드 {id}에 통지했습니다. 다음 체크인 때 다시 업그레이드합니다",
+  "settings_nodes_retry_done": "노드 {id}가 대기열로 돌아왔습니다. 다른 노드가 업그레이드 중이 아니면 다음 체크인 때 통지됩니다",
   "settings_nodes_retry_failed": "노드 {id}에 통지할 수 없습니다: {error}",
   "settings_archive_card_title": "아카이브 스토리지(S3)",
   "settings_archive_card_desc": "유휴 샌드박스의 디스크를 압축해 S3 호환 스토리지로 업로드하며 로컬 점유는 0이고, 다음 acquire 때 자동으로 복원됩니다. 장부에 저장되어 변경 즉시 적용되며 재시작이 필요 없습니다.",

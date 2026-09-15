@@ -23,13 +23,22 @@ import { downReason, type Fleet, type NodeState } from './fleet';
  * its tell is stuck: named as such with where to look, and never re-told
  * on its own — a node whose build fails every time would otherwise
  * rebuild every twenty minutes, on the CPU its sandboxes run on. The
- * pointer moves past it (a stuck node is not "upgrading"), and the
- * operator's applyUpgrade {nodeId} is the hand that tells it again,
- * whatever the rolling order says at that moment. The tell is on the
- * node's row (nodes.upgrade_told_at), so a gateway restart mid-roll
- * neither forgets a node it told nor tells it twice; the operator's
- * re-tell is memory — a gateway restarted before the node's next check-in
- * forgets it, and the operator clicks again.
+ * pointer moves past it (a stuck node is not "upgrading"). The operator's
+ * applyUpgrade {nodeId} puts it back in line: its tell is forgotten, it
+ * reads behind again, and the roll tells it at its turn — after the node
+ * upgrading now, if there is one, never beside it. Not a tell past the
+ * order: the first version's hand was one ("told at its next check-in,
+ * whatever the order says"), kept in the gateway's memory, and three
+ * reviews in one day found three ways for that memory to outlive the
+ * node it was for and tell two nodes into one minute (2026-09-15). One
+ * node down at a time is the one thing the roll promises; a hand that
+ * could break it was the wrong hand, and with it gone nothing is
+ * remembered but the row.
+ *
+ * The row: the tell is nodes.upgrade_told_at, so a gateway restart
+ * mid-roll neither forgets a node it told nor tells it twice, and every
+ * verdict here is a function of the rows, the gateway's build and the
+ * clock.
  *
  * Behind means older. A node whose build is newer than the gateway's — a
  * commit that landed on main after the gateway's machine upgraded and
@@ -115,7 +124,7 @@ export function upgradeStateOf(
     }
     return {
       state: 'stuck',
-      reason: `told to upgrade at ${node.upgradeToldAt.toISOString()} and still on ${node.build.commit} ${Math.round(sinceMs / 60_000)} minutes later${silence} — read journalctl -u dormice-upgrade and the upgrade log on the node, then tell it again (applyUpgrade with its nodeId)`,
+      reason: `told to upgrade at ${node.upgradeToldAt.toISOString()} and still on ${node.build.commit} ${Math.round(sinceMs / 60_000)} minutes later${silence} — read journalctl -u dormice-upgrade and the upgrade log on the node, then put it back in line (applyUpgrade with its nodeId): it is told again at its turn`,
     };
   }
   if (down !== null) {
@@ -156,96 +165,85 @@ export function rollingDecision(
 }
 
 /**
- * The fleet upgrade's live half: the gateway's build to judge against,
- * the operator's pending re-tells, and the check-in's verdicts — one
- * object the check-in route and the upgrade routes share.
+ * The fleet upgrade's live half: the gateway's build to judge against and
+ * the fleet's rows — one object the check-in route and the upgrade routes
+ * share. Nothing of its own: every verdict is a function of the rows, the
+ * gateway's build and the clock (the module comment has why).
  */
 export class Rolling {
-  /** Nodes the operator told to upgrade again (applyUpgrade {nodeId}), told at their next check-in whatever the order says. Memory: see the module comment. Spent by the tell, by a check-in off the old build (onCheckIn), or by the node's removal (forget). */
-  private readonly retell = new Set<string>();
-
   constructor(
     private readonly fleet: Fleet,
     private readonly gatewayBuild: BuildInfo | null,
   ) {}
 
   /**
-   * The check-in's verdict for a node that just reported, in order: a
-   * fulfilled tell is cleared (the node is off the old build — on the
-   * gateway's, or ahead of it);
-   * a pending re-tell is honored; otherwise the rolling rule decides. Any
-   * tell is written to the row before the answer carries it. Answers
-   * whether the node is told now.
+   * The check-in's verdict for a node that just reported: a fulfilled tell
+   * is cleared (the node is off the old build — on the gateway's, or ahead
+   * of it); otherwise the rolling rule decides, and a tell is written to
+   * the row before the answer carries it. Answers whether the node is told
+   * now.
    */
   onCheckIn(node: NodeState, now: Date): boolean {
     const { state } = upgradeStateOf(node, this.gatewayBuild, now);
     if (state === 'current' || state === 'ahead') {
-      // Off the old build: the tell, if any, is fulfilled, and so is the
-      // operator's pending re-tell — that hand was for the node that was
-      // behind, and a re-tell left standing would fire the moment this
-      // node read behind again, whatever the order said (found by
-      // review, 2026-09-15).
       if (node.upgradeToldAt !== null) {
         this.fleet.setUpgradeToldAt(node.id, null);
       }
-      this.retell.delete(node.id);
       return false;
     }
-    const tell =
-      (this.retell.has(node.id) &&
-        (state === 'behind' || state === 'stuck' || state === 'upgrading')) ||
-      rollingDecision(this.fleet.all(), this.gatewayBuild, node, now);
-    if (!tell) return false;
+    if (!rollingDecision(this.fleet.all(), this.gatewayBuild, node, now)) {
+      return false;
+    }
     this.fleet.setUpgradeToldAt(node.id, now);
-    this.retell.delete(node.id);
     return true;
   }
 
   /**
-   * The operator's re-tell (applyUpgrade {nodeId}): honored at the node's
-   * next check-in. Refused in words when it would do nothing — a node on
-   * the gateway's build or ahead of it, one that cannot upgrade itself,
-   * one whose build is unknown — and told to wait for an unreachable one; a node merely
-   * behind or upgrading is taken too (the operator's hand outranks the
-   * order). Answers the refusal, or null when the re-tell is pending.
+   * The operator's hand on a stuck node (applyUpgrade {nodeId}): its tell
+   * is forgotten, it reads behind, and the roll tells it at its turn.
+   * Refused in words everywhere else. Nothing to forget on a node that is
+   * current, ahead, behind (in line already), unavailable, unreachable or
+   * unknown. And not on one upgrading: its tell is what the one-at-a-time
+   * rule counts, and forgotten, the rule would see nobody upgrading and
+   * tell the next node into the same minute — the twenty minutes to stuck
+   * are the roll's promise, not a delay to be skipped. Answers the
+   * refusal, or null when the tell was forgotten.
    */
-  requestRetell(
+  retell(
     node: NodeState,
     now: Date,
   ): { status: 400 | 409; message: string } | null {
     const { state, reason } = upgradeStateOf(node, this.gatewayBuild, now);
     switch (state) {
+      case 'stuck':
+        this.fleet.setUpgradeToldAt(node.id, null);
+        return null;
+      case 'upgrading':
+        return {
+          status: 409,
+          message: `node ${node.id} is upgrading (${reason}) — it reads stuck twenty minutes after its tell if it is still on the old build, and can be put back in line from there; wait`,
+        };
       case 'current':
         return {
           status: 400,
           message: `node ${node.id} already runs the gateway's build (${node.build?.commit ?? 'unknown'}) — nothing to upgrade`,
         };
-      case 'ahead':
-      case 'unavailable':
-      case 'unknown':
+      case 'behind':
+        return {
+          status: 400,
+          message: `node ${node.id} is behind and in line — it is told at its next check-in once no other node is upgrading; nothing to do`,
+        };
+      case 'unreachable':
+        return {
+          status: 400,
+          message: `node ${node.id} is not checking in (${reason}) — back and behind, it is told at its turn; gone for good, remove it`,
+        };
+      default:
         return {
           status: 400,
           message: `node ${node.id} cannot be told to upgrade: ${reason ?? state}`,
         };
-      case 'unreachable':
-        return {
-          status: 409,
-          message: `node ${node.id} is not checking in (${reason}) — it is told at its next check-in; retry once it is back, or remove it if it is gone for good`,
-        };
-      default:
-        this.retell.add(node.id);
-        return null;
     }
-  }
-
-  /**
-   * The node is gone (removeNode): its pending re-tell goes with it. The
-   * hand was for that node; a machine re-imaged under the same id joins
-   * as a new node, and must wait its turn like one — not be told at its
-   * first check-in past the order (found by review, 2026-09-15).
-   */
-  forget(id: string): void {
-    this.retell.delete(id);
   }
 
   /** Every node's standing right now (getUpgradeStatus.nodes), in node-id order. */

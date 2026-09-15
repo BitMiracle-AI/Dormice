@@ -152,7 +152,7 @@
   "settings_nodes_state_unreachable": "Unreachable",
   "settings_nodes_state_unknown": "Unknown",
   "settings_nodes_retry": "Try again",
-  "settings_nodes_retry_done": "Node {id} told; it upgrades again at its next check-in",
+  "settings_nodes_retry_done": "Node {id} is back in line; it is told at its next check-in once no other node is upgrading",
   "settings_nodes_retry_failed": "Could not tell node {id}: {error}",
   "settings_archive_card_title": "Archive store (S3)",
   "settings_archive_card_desc": "Idle sandboxes' disks compress into any S3-compatible store at zero local cost, and restore on the next acquire. Lives in the ledger; changes apply immediately, no restart.",

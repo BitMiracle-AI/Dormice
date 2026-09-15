@@ -99,7 +99,7 @@ describe('the fleet upgrade over the check-in', () => {
     void fleet;
   });
 
-  it('a node still old twenty minutes after its tell is stuck and is not re-told; the operator re-tells it, and it hears at its next check-in', async () => {
+  it('a node still old twenty minutes after its tell is stuck and is not re-told; the operator puts it back in line, and it is told at its turn — not beside the node upgrading', async () => {
     const { app, fleet } = testGateway({}, { build: GATEWAY });
     expect(
       (await checkIn(app, 'a', { build: OLD, selfUpgrade: CAN })).upgrade,
@@ -119,33 +119,35 @@ describe('the fleet upgrade over the check-in', () => {
     expect(
       (await checkIn(app, 'b', { build: OLD, selfUpgrade: CAN })).upgrade,
     ).toBe(true);
-    // The operator's hand: a is told again at its next check-in, even
-    // while b upgrades.
+    // The operator's hand: a is back in line — behind, not told while b
+    // upgrades, told once b is back.
     const retold = await rpc(app, '/applyUpgrade', { nodeId: 'a' });
     expect(retold.statusCode).toBe(200);
     expect(retold.json()).toEqual({ started: true });
+    expect((await status(app)).nodes).toMatchObject([
+      { id: 'a', state: 'behind', toldAt: null },
+      { id: 'b', state: 'upgrading' },
+    ]);
+    expect(
+      (await checkIn(app, 'a', { build: OLD, selfUpgrade: CAN })).upgrade,
+    ).toBeUndefined();
+    // The hand on b, upgrading, is refused — its tell is the rule's count;
+    // on a, behind and in line, there is nothing to do.
+    const onUpgrading = await rpc(app, '/applyUpgrade', { nodeId: 'b' });
+    expect(onUpgrading.statusCode).toBe(409);
+    expect(onUpgrading.json().message).toMatch(/is upgrading/);
+    expect((await rpc(app, '/applyUpgrade', { nodeId: 'a' })).statusCode).toBe(
+      400,
+    );
+    expect(
+      (await checkIn(app, 'b', { build: GATEWAY, selfUpgrade: CAN })).upgrade,
+    ).toBeUndefined();
     expect(
       (await checkIn(app, 'a', { build: OLD, selfUpgrade: CAN })).upgrade,
     ).toBe(true);
     expect((await status(app)).nodes?.find((n) => n.id === 'a')?.state).toBe(
       'upgrading',
     );
-    // The hand does not outlive the node: c, behind and re-told, goes
-    // silent and is removed; a machine under the same id joins behind
-    // while a upgrades, and waits its turn.
-    expect(
-      (await checkIn(app, 'c', { build: OLD, selfUpgrade: CAN })).upgrade,
-    ).toBeUndefined();
-    expect((await rpc(app, '/applyUpgrade', { nodeId: 'c' })).statusCode).toBe(
-      200,
-    );
-    const c = fleet.get('c');
-    if (!c) throw new Error('node lost');
-    c.lastCheckInAt = new Date(Date.now() - 40_000);
-    expect((await rpc(app, '/removeNode', { id: 'c' })).statusCode).toBe(200);
-    expect(
-      (await checkIn(app, 'c', { build: OLD, selfUpgrade: CAN })).upgrade,
-    ).toBeUndefined();
   });
 
   it('nodes that cannot upgrade themselves, did not say, or carry no build are listed with the reason and never told', async () => {

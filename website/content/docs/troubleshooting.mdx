@@ -155,7 +155,8 @@ own (a build that fails every time must not rebuild every twenty
 minutes on the sandboxes' CPU). On that node read `journalctl -u
 dormice-upgrade` and `/var/lib/dormice/upgrade/upgrade.log`, fix the
 cause — a mirror that hung, a full disk — and press **Try again** on the
-version page, which tells the node once more at its next check-in.
+version page, which puts the node back in line: it is told once more at
+its next check-in, once no other node is upgrading.
 See [Upgrade a fleet](/docs/upgrading#upgrade-a-fleet).
 
 ## A paused container won't `docker rm` by hand

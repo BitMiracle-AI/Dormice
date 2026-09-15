@@ -203,7 +203,7 @@ export class CheckIn {
         // failure: the check-in itself succeeded, and the gateway tells a
         // node once — a launch that fails here is the operator's to read
         // (the gateway shows the node as stuck twenty minutes on, and
-        // applyUpgrade {nodeId} at the gateway tells it again).
+        // applyUpgrade {nodeId} at the gateway puts it back in line).
         opts.log.info(
           `the gateway says this node's turn to upgrade has come — launching install.sh (systemd unit dormice-upgrade)`,
         );
@@ -212,7 +212,7 @@ export class CheckIn {
         } catch (error) {
           opts.log.warn(
             { error: describe(error) },
-            'the upgrade the gateway asked for could not be launched; the gateway lists this node as stuck once twenty minutes have passed, and applyUpgrade {nodeId} there tells it again',
+            'the upgrade the gateway asked for could not be launched; the gateway lists this node as stuck once twenty minutes have passed, and applyUpgrade {nodeId} there puts it back in line',
           );
         }
       }

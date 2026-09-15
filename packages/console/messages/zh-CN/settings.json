@@ -152,7 +152,7 @@
   "settings_nodes_state_unreachable": "不可达",
   "settings_nodes_state_unknown": "未知",
   "settings_nodes_retry": "再试一次",
-  "settings_nodes_retry_done": "已通知节点 {id},它在下一次报到时重新升级",
+  "settings_nodes_retry_done": "节点 {id} 已回到队列;没有别的节点在升级时,它在下一次报到被带起",
   "settings_nodes_retry_failed": "无法通知节点 {id}:{error}",
   "settings_archive_card_title": "归档存储(S3)",
   "settings_archive_card_desc": "闲置沙箱的磁盘压缩上传到 S3 兼容存储、本地零占用,下次 acquire 自动恢复。住在账本里,改了立即生效,不用重启。",

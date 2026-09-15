@@ -152,7 +152,7 @@
   "settings_nodes_state_unreachable": "Nicht erreichbar",
   "settings_nodes_state_unknown": "Unbekannt",
   "settings_nodes_retry": "Erneut versuchen",
-  "settings_nodes_retry_done": "Knoten {id} benachrichtigt; er aktualisiert beim nächsten Check-in erneut",
+  "settings_nodes_retry_done": "Knoten {id} ist wieder in der Reihe; er wird beim nächsten Check-in benachrichtigt, sobald kein anderer Knoten aktualisiert",
   "settings_nodes_retry_failed": "Knoten {id} konnte nicht benachrichtigt werden: {error}",
   "settings_archive_card_title": "Archivspeicher (S3)",
   "settings_archive_card_desc": "Datenträger untätiger Sandboxes wandern komprimiert in einen S3-kompatiblen Speicher, null lokaler Platz, und werden beim nächsten acquire automatisch wiederhergestellt. Wohnt im Ledger; Änderungen wirken sofort, ohne Neustart.",

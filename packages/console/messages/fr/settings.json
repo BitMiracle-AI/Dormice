@@ -152,7 +152,7 @@
   "settings_nodes_state_unreachable": "Injoignable",
   "settings_nodes_state_unknown": "Inconnu",
   "settings_nodes_retry": "Réessayer",
-  "settings_nodes_retry_done": "Nœud {id} prévenu ; il se met à niveau à nouveau à son prochain check-in",
+  "settings_nodes_retry_done": "Le nœud {id} est de retour dans la file ; il est prévenu à son prochain check-in dès qu'aucun autre nœud ne se met à niveau",
   "settings_nodes_retry_failed": "Impossible de prévenir le nœud {id} : {error}",
   "settings_archive_card_title": "Stockage d'archivage (S3)",
   "settings_archive_card_desc": "Le disque des sandbox inactives est compressé vers un stockage compatible S3, sans empreinte locale, et restauré automatiquement au prochain acquire. Stocké dans le registre ; les changements prennent effet immédiatement, sans redémarrage.",
