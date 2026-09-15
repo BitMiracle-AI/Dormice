@@ -70,7 +70,7 @@ export const upgradeRoutes: FastifyPluginAsyncZod<
           `no node with id '${nodeId}' — listNodes shows which exist`,
         );
       }
-      const refused = rolling.retell(node, new Date());
+      const refused = rolling.unstick(node, new Date());
       if (refused !== null) throw httpError(refused.status, refused.message);
       request.log.info(
         { nodeId, build: node.build?.commit ?? null },

@@ -209,7 +209,7 @@ export class Rolling {
    * are the roll's promise, not a delay to be skipped. Answers the
    * refusal, or null when the tell was forgotten.
    */
-  retell(
+  unstick(
     node: NodeState,
     now: Date,
   ): { status: 400 | 409; message: string } | null {

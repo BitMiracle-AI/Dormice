@@ -2097,3 +2097,17 @@ describe('the request log', () => {
     expect(lines.join('\n')).not.toContain('secret-sig');
   });
 });
+
+describe('the upgrade verbs on a node', () => {
+  it("applyUpgrade refuses nodeId: the hand on a stuck node is the gateway's verb, and a node upgrades only itself", async () => {
+    const { app } = testApp();
+    const hand = await rpc(app, '/applyUpgrade', { nodeId: 'node-b' });
+    expect(hand.statusCode).toBe(400);
+    expect(hand.json().message).toMatch(/nodeId is the gateway's/);
+    // Without one, the refusal is the updater's own — the fake executor
+    // cannot one-click — so the nodeId verdict comes first, not instead.
+    const own = await rpc(app, '/applyUpgrade', {});
+    expect(own.statusCode).toBe(400);
+    expect(own.json().message).toMatch(/one-click upgrade unavailable/);
+  });
+});

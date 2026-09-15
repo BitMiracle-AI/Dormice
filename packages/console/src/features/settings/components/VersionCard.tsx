@@ -321,7 +321,7 @@ function stateClass(state: NodeUpgradeView['state']): string {
  */
 function NodesTable({ nodes }: { nodes: NodeUpgradeView[] }) {
   const queryClient = useQueryClient();
-  const retell = useMutation({
+  const unstick = useMutation({
     mutationFn: (id: string) => applyUpgrade(id),
     onSuccess: (_data, id) => {
       toast.success(m.settings_nodes_retry_done({ id }));
@@ -387,8 +387,8 @@ function NodesTable({ nodes }: { nodes: NodeUpgradeView[] }) {
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={retell.isPending}
-                      onClick={() => retell.mutate(node.id)}
+                      disabled={unstick.isPending}
+                      onClick={() => unstick.mutate(node.id)}
                     >
                       {m.settings_nodes_retry()}
                     </Button>

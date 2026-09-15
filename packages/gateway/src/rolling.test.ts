@@ -241,7 +241,7 @@ describe('Rolling', () => {
     expect(rolling.onCheckIn(b, later)).toBe(true);
   });
 
-  it("retell forgets a stuck node's tell: it reads behind, waits for the node upgrading and is told at its turn; every other state is refused in words", () => {
+  it("unstick forgets a stuck node's tell: it reads behind, waits for the node upgrading and is told at its turn; every other state is refused in words", () => {
     const { db, fleet } = fleetOver();
     const rolling = new Rolling(fleet, GATEWAY);
     const a = reporting(fleet, 'a', { build: OLD, selfUpgrade: CAN });
@@ -250,11 +250,11 @@ describe('Rolling', () => {
     expect(rolling.onCheckIn(b, NOW)).toBe(false);
     // b is behind and in line already; a is upgrading and its tell is the
     // one-at-a-time rule's count — neither is the hand's to touch.
-    expect(rolling.retell(b, NOW)).toMatchObject({
+    expect(rolling.unstick(b, NOW)).toMatchObject({
       status: 400,
       message: expect.stringMatching(/behind and in line/),
     });
-    expect(rolling.retell(a, NOW)).toMatchObject({
+    expect(rolling.unstick(a, NOW)).toMatchObject({
       status: 409,
       message: expect.stringMatching(
         /is upgrading \(told 0s ago, still on old0001\)/,
@@ -268,7 +268,7 @@ describe('Rolling', () => {
     expect(rolling.onCheckIn(a, late)).toBe(false);
     expect(rolling.onCheckIn(b, late)).toBe(true);
     // The hand: a's tell is forgotten on the row, and a reads behind.
-    expect(rolling.retell(a, late)).toBeNull();
+    expect(rolling.unstick(a, late)).toBeNull();
     expect(a.upgradeToldAt).toBeNull();
     expect(new Fleet(db).get('a')?.upgradeToldAt).toBeNull();
     expect(upgradeStateOf(a, GATEWAY, late).state).toBe('behind');
@@ -285,7 +285,7 @@ describe('Rolling', () => {
       { build: GATEWAY, selfUpgrade: CAN },
       late,
     );
-    expect(rolling.retell(current, late)).toMatchObject({
+    expect(rolling.unstick(current, late)).toMatchObject({
       status: 400,
       message: expect.stringMatching(/already runs the gateway's build/),
     });
@@ -295,17 +295,17 @@ describe('Rolling', () => {
       { build: OLD, selfUpgrade: CANNOT },
       late,
     );
-    expect(rolling.retell(cannot, late)).toMatchObject({
+    expect(rolling.unstick(cannot, late)).toMatchObject({
       status: 400,
       message: expect.stringMatching(/cannot be told to upgrade: systemd-run/),
     });
     const gone = reporting(fleet, 'e', { build: OLD, selfUpgrade: CAN }, late);
     gone.lastCheckInAt = new Date(late.getTime() - 40_000);
-    expect(rolling.retell(gone, late)).toMatchObject({
+    expect(rolling.unstick(gone, late)).toMatchObject({
       status: 400,
       message: expect.stringMatching(/not checking in/),
     });
-    expect(new Rolling(fleet, null).retell(a, late)).toMatchObject({
+    expect(new Rolling(fleet, null).unstick(a, late)).toMatchObject({
       status: 400,
       message: expect.stringMatching(/gateway carries no build identity/),
     });
@@ -326,7 +326,7 @@ describe('Rolling', () => {
     expect(rolling.states(later)).toMatchObject([
       { id: 'a', state: 'ahead', toldAt: null },
     ]);
-    expect(rolling.retell(a, later)).toMatchObject({
+    expect(rolling.unstick(a, later)).toMatchObject({
       status: 400,
       message: expect.stringMatching(
         /cannot be told to upgrade: runs new0002 .* newer than the gateway's new0001/,

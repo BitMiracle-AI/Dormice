@@ -396,7 +396,7 @@ export class Dormice {
    * and watchers break, sandboxes and their disks are untouched.
    */
   async applyUpgrade(options?: {
-    /** At the gateway: put a stuck node back in line — its tell is forgotten and the roll tells it again at its turn (400 on any other state, 409 while it is upgrading). Absent: upgrade the gateway's machine and roll the fleet. */
+    /** At the gateway: put a stuck node back in line — its tell is forgotten and the roll tells it again at its turn (400 on any other state, 409 while it is upgrading). Absent: upgrade the gateway's machine and roll the fleet. On a node the field is refused (400): a node upgrades only itself. */
     nodeId?: string;
   }): Promise<ApplyUpgradeResponse> {
     const data = await this.rpc('applyUpgrade', {

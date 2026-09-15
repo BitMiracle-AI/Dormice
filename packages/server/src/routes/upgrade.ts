@@ -7,6 +7,7 @@ import {
   getUpgradeStatusResponseSchema,
 } from '@dormice/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
+import { httpError } from '../http-error';
 import type { Updater } from '../updater';
 
 export interface UpgradeRoutesOptions {
@@ -45,6 +46,17 @@ export const upgradeRoutes: FastifyPluginAsyncZod<
       },
     },
     async (request) => {
+      // The verb's `nodeId` half is the gateway's (the hand that puts a
+      // stuck node back in line, gateway routes/upgrade.ts); on a node it
+      // names nothing. Refused, not dropped: taken silently, a hand meant
+      // for one node would upgrade whichever node it was sent to (found
+      // by review, 2026-09-16).
+      if (request.body.nodeId !== undefined) {
+        throw httpError(
+          400,
+          "nodeId is the gateway's: applyUpgrade {nodeId} at the gateway puts a stuck node back in line; here, applyUpgrade {} upgrades this node itself",
+        );
+      }
       await updater.apply();
       request.log.info(
         { from: updater.current?.commit ?? null },

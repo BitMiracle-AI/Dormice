@@ -11,13 +11,6 @@ an explicit click.**
 
 (The console UI is currently Chinese-language.)
 
-**Work in progress:** the console moved to the gateway with the fleet's
-configuration. The pages that read the fleet-wide list and observation
-verbs — the overview and the sandbox list — stay dark until the gateway
-answers those verbs itself, the next step of the move; the settings,
-domains, templates, API keys and version pages, and the per-sandbox
-workbench, work.
-
 ## Signing in
 
 The console has one account with a username and password. On first
@@ -41,8 +34,8 @@ concurrency peak, the total by lifecycle state and the disk-overcommit
 figure (promised vs actually occupied — the same numbers as
 [`getFleetMetrics`](/docs/metrics)), the stacked concurrency curve over
 the chosen window, and a nodes card with each machine's CPU, memory and
-data-disk levels. When a node has not reported since the gateway
-started, the card says so — the figures above are then a lower bound.
+data-disk levels. A node that is not checking in is marked as such —
+the figures above are then a lower bound.
 
 ## Nodes
 
@@ -94,8 +87,8 @@ middle, and a monitor rail on the right, with draggable dividers:
   without waking: the lifecycle card, CPU/memory/disk vitals with
   one-hour sparklines (full 1h/24h/7d trend charts from the daemon's
   [metrics history](/docs/metrics) open in a dialog), the E2B process
-  table (a stopped sandbox honestly shows none), this sandbox's recent
-  lifecycle events, and its identity details.
+  table (a stopped sandbox honestly shows none), and its identity
+  details.
 
 ## Templates
 
@@ -109,7 +102,7 @@ with the daemon's own message naming the sandboxes.
 Mint revocable credentials without leaving the browser
 ([what they are](/docs/http-api#api-keys)). The create dialog takes a
 name and an optional expiry date, then shows the key **exactly once** —
-the daemon stores only a hash — with a copy button, a "copy connection
+the gateway stores only a hash — with a copy button, a "copy connection
 config" button (endpoint + credential, ready for CI secrets), and no
 second chance. The table keeps every key ever minted, revoked ones
 included, as your rotation history: name, masked prefix, creation time,
@@ -118,16 +111,16 @@ revoking), and status. Rows can be edited in place (rename, change or
 clear the expiry), selected in bulk for revocation, and revoking takes
 effect on the key's next request. `DORMICE_API_TOKEN` itself appears as
 a pinned, read-only "default" row so all credentials are visible in one
-table — but it lives in the server's environment, so retiring it means
-editing `/etc/dormice/env`, and it (or a console session) is also the
-only credential the key-management actions themselves accept: keys
-cannot manage keys.
+table — but it lives in the env files (`/etc/dormice/gateway.env` and
+every node's `/etc/dormice/env`), so retiring it means editing those,
+and it (or a console session) is also the only credential the
+key-management actions themselves accept: keys cannot manage keys.
 
 ## Domains, settings, and version
 
 Three more pages round out the operator view:
 
-- **Domains** — two sections. Console domains bind to the daemon's
+- **Domains** — two sections. Console domains bind to the gateway's
   front door (the managed reverse proxy), with a copyable DNS record
   guide and a live per-domain probe that shows DNS and certificate
   progress until each one turns green — see
@@ -171,8 +164,8 @@ A command palette (⌘K) jumps to any page or sandbox.
 Copy-paste snippets for the SDK, the official E2B packages, and curl,
 pre-filled with the endpoint the browser itself is using. The API token
 is never displayed — the console does not hold it and cannot read it
-back; fetch it from the daemon host
-(`grep ^DORMICE_API_TOKEN /etc/dormice/env`).
+back; fetch it from the gateway machine
+(`grep ^DORMICE_API_TOKEN /etc/dormice/gateway.env`).
 
 ## What you will not find
 
