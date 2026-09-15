@@ -37,6 +37,10 @@
     "./history": {
       "types": "./dist/history.d.ts",
       "default": "./dist/history.js"
+    },
+    "./updater": {
+      "types": "./dist/updater.d.ts",
+      "default": "./dist/updater.js"
     }
   },
   "files": [

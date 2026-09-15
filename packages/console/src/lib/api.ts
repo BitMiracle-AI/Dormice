@@ -261,8 +261,14 @@ export const checkUpgrade = (force = false) =>
 // The one-click upgrade: the daemon hands install.sh to a systemd unit
 // that outlives its own restart, then answers { started: true }. Progress
 // lives in getUpgradeStatus; expect the daemon to restart near the end.
-export const applyUpgrade = () =>
-  rpc<ApplyUpgradeResponse>('/applyUpgrade', {});
+// Without a node: the gateway's machine upgrades and the fleet rolls
+// behind it. With one: the operator tells that node again (a node the
+// status lists as stuck).
+export const applyUpgrade = (nodeId?: string) =>
+  rpc<ApplyUpgradeResponse>(
+    '/applyUpgrade',
+    nodeId === undefined ? {} : { nodeId },
+  );
 
 // The upgrade execution window: availability, unit liveness (from systemd,
 // not the status file's claim), the last run's report and the log tail.

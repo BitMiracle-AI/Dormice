@@ -7,6 +7,7 @@ import {
 } from '@dormice/shared';
 import { execaSync } from 'execa';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { fakeExecutorUnavailable } from './app';
 import { type RunCommand, Updater, type UpdaterOptions } from './updater';
 import type { BuildInfo } from './version';
 
@@ -62,7 +63,6 @@ function updaterFor(overrides: Partial<UpdaterOptions> = {}): Updater {
     repoDir: clone,
     build: installedBuild,
     statusDir: mkdtempSync(path.join(tmpdir(), 'dormice-status-')),
-    executor: 'docker',
     run: okRun,
     ...overrides,
   });
@@ -173,15 +173,20 @@ describe('Updater.check', () => {
 });
 
 describe('Updater.apply and status', () => {
-  it('refuses one-click on the fake executor and without a checkout', async () => {
-    const fake = updaterFor({ executor: 'fake' });
+  it("refuses one-click for the caller's own reason (the daemon's fake executor) and without a checkout; availability() is the same word the check-in reports", async () => {
+    const fake = updaterFor({
+      unavailable: fakeExecutorUnavailable('fake'),
+    });
     await expect(fake.apply()).rejects.toMatchObject({ statusCode: 400 });
     const status = await fake.status();
     expect(status.available).toBe(false);
     expect(status.unavailableReason).toMatch(/fake executor/);
+    expect(await fake.availability()).toBe(status.unavailableReason);
+    expect(fakeExecutorUnavailable('docker')).toBeUndefined();
 
     const noRepo = updaterFor({ repoDir: null });
     expect((await noRepo.status()).unavailableReason).toMatch(/git checkout/);
+    expect(await updaterFor().availability()).toBeNull();
   });
 
   it('launches install.sh in a transient unit built from daemon-side paths only', async () => {

@@ -8,7 +8,7 @@ import {
   type SandboxStateCounts,
 } from '@dormice/shared';
 import { eq } from 'drizzle-orm';
-import type { z } from 'zod';
+import { z } from 'zod';
 import type { Db } from './db/db';
 import { type NodeRow, nodes } from './db/schema';
 import { bumpConfigVersion } from './db/settings';
@@ -42,9 +42,20 @@ export interface NodeState {
   intervalSeconds: number | null;
   build: BuildInfo | null;
   reading: NodeReading | null;
+  /** Whether the node can upgrade itself, its own word (shared checkInRequestSchema.selfUpgrade); null = it did not say. */
+  selfUpgrade: SelfUpgrade | null;
+  /** When the fleet upgrade last told this node to upgrade (rolling.ts); null = never, or fulfilled. */
+  upgradeToldAt: Date | null;
   placedSinceCheckIn: number;
   placedIds: Set<string>;
 }
+
+export type SelfUpgrade = NonNullable<CheckInRequest['selfUpgrade']>;
+
+const selfUpgradeSchema = z.object({
+  available: z.boolean(),
+  reason: z.string().nullable(),
+});
 
 /**
  * What the fleet says for itself — a row it could not read back, a row it
@@ -179,6 +190,7 @@ type RowShare = Pick<
   | 'configVersion'
   | 'build'
   | 'reading'
+  | 'selfUpgrade'
 >;
 
 /**
@@ -232,9 +244,22 @@ export class Fleet {
         row.reading,
         nodeReadingSchema,
       ),
+      selfUpgrade: this.parseJson(
+        row.id,
+        'selfUpgrade',
+        row.selfUpgrade,
+        selfUpgradeSchema,
+      ),
+      upgradeToldAt: this.parseDate(row.upgradeToldAt),
       placedSinceCheckIn: 0,
       placedIds: new Set(),
     };
+  }
+
+  private parseDate(iso: string | null): Date | null {
+    if (iso === null) return null;
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? null : date;
   }
 
   private parseJson<T>(
@@ -301,6 +326,10 @@ export class Fleet {
       configVersion: report.configVersion,
       build: report.build === null ? null : JSON.stringify(report.build),
       reading: JSON.stringify(report.reading),
+      selfUpgrade:
+        report.selfUpgrade === undefined
+          ? null
+          : JSON.stringify(report.selfUpgrade),
     };
     if (node === undefined) {
       const addedAt = now.toISOString();
@@ -318,6 +347,8 @@ export class Fleet {
         intervalSeconds: null,
         build: null,
         reading: null,
+        selfUpgrade: null,
+        upgradeToldAt: null,
         placedSinceCheckIn: 0,
         placedIds: new Set(),
       };
@@ -348,9 +379,29 @@ export class Fleet {
     node.build = report.build;
     node.reading = report.reading;
     node.configVersion = report.configVersion;
+    node.selfUpgrade = report.selfUpgrade ?? null;
     node.placedSinceCheckIn = 0;
     node.placedIds.clear();
     return { node, joined, movedFrom };
+  }
+
+  /**
+   * The fleet upgrade's one mark on a node: when it was told to upgrade,
+   * or null once the tell is fulfilled (rolling.ts). Written through,
+   * not best-effort — the tell rides on the check-in's answer, and a
+   * gateway that forgot it told a node would tell it again after a
+   * restart, the one thing the rolling upgrade promises not to do; a
+   * write that fails fails the check-in, and the node is told at the next.
+   */
+  setUpgradeToldAt(id: string, at: Date | null): void {
+    const node = this.members.get(id);
+    if (node === undefined) return;
+    this.db
+      .update(nodes)
+      .set({ upgradeToldAt: at === null ? null : at.toISOString() })
+      .where(eq(nodes.id, id))
+      .run();
+    node.upgradeToldAt = at;
   }
 
   /**

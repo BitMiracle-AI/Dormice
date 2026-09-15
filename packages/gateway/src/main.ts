@@ -1,8 +1,11 @@
 import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '@dormice/server/keyed-queue';
 import { acquireSingleWriterLock } from '@dormice/server/lock';
 import { closeWithGrace, trackConnections } from '@dormice/server/shutdown';
+import { Updater } from '@dormice/server/updater';
 import { pino } from 'pino';
 import { z } from 'zod';
 import { buildGatewayApp } from './app';
@@ -84,6 +87,29 @@ log.info(
     : 'dormice-gateway build: no version identity (built outside a git checkout)',
 );
 
+// The gateway machine's upgrade window — the daemon's Updater over the
+// same checkout (dist/main.js sits at packages/gateway/dist, three hops
+// under the repo root, as the daemon's does). applyUpgrade at the door
+// runs install.sh here, which restarts this gateway and the node beside
+// it; the other nodes follow at their check-ins (rolling.ts). The run
+// reports beside the gateway's database; an in-memory database is not an
+// install, and one-click is honestly off there.
+const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
+const inMemory = config.DORMICE_GATEWAY_DB_PATH === ':memory:';
+const updater = new Updater({
+  repoDir: existsSync(path.join(repoRoot, '.git')) ? repoRoot : null,
+  build,
+  statusDir: inMemory
+    ? path.join(tmpdir(), 'dormice-gateway-upgrade')
+    : path.join(path.dirname(config.DORMICE_GATEWAY_DB_PATH), 'upgrade'),
+  ...(inMemory
+    ? {
+        unavailable:
+          'the gateway runs on an in-memory database — not an install that install.sh can upgrade',
+      }
+    : {}),
+});
+
 // The managed front door, present exactly when the knob names a file
 // (the archiver precedent). The upstream is this gateway: the fleet's one
 // public Caddy sits in front of the one door.
@@ -123,6 +149,7 @@ const app = buildGatewayApp({
   build,
   consoleDistDir: existsSync(consoleDistDir) ? consoleDistDir : undefined,
   ingress,
+  updater,
 });
 
 // Same red line as the daemon: loopback only, host not configurable — the

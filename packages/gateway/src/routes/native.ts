@@ -58,20 +58,6 @@ export const BY_NODE_VERBS = [
   'getHostMetricsHistory',
 ] as const;
 
-/**
- * The verbs that address the daemon and that the gateway does not route
- * yet: the upgrade, whose fleet-wide form (the gateway upgrades itself,
- * then rolls the nodes one at a time) is the fourth cut's. Until then
- * each answers an honest 501 naming the alternative. (The lists merged
- * and the host readings went by node in the third cut; keys, settings,
- * templates and ingress left with the configuration authority.)
- */
-export const UNNAMED_VERBS = [
-  'checkUpgrade',
-  'applyUpgrade',
-  'getUpgradeStatus',
-] as const;
-
 export interface NativeRoutesOptions {
   fleet: Fleet;
   finder: Finder;
@@ -92,14 +78,6 @@ export const nativeRoutes: FastifyPluginAsyncZod<NativeRoutesOptions> = async (
     { parseAs: 'buffer' },
     (_request, body, done) => done(null, body),
   );
-
-  for (const verb of UNNAMED_VERBS) {
-    app.post(`/${verb}`, async (_request, reply) =>
-      reply.code(501).send({
-        message: `${verb} is not routed by the gateway until the upgrade cut — call the node directly`,
-      }),
-    );
-  }
 
   for (const verb of BY_NODE_VERBS) {
     app.post(`/${verb}`, async (request, reply) => {

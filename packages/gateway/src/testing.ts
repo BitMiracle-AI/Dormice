@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '@dormice/server/keyed-queue';
-import type { CheckInRequest, NodeReading } from '@dormice/shared';
+import type { BuildInfo, CheckInRequest, NodeReading } from '@dormice/shared';
 import { buildGatewayApp } from './app';
 import { type AskNode, type AskVerb, httpAskNode } from './ask';
 import { NameCache } from './cache';
@@ -73,6 +73,10 @@ export function checkInOf(
   over: Parameters<typeof reading>[0] & {
     intervalSeconds?: number;
     configVersion?: number | null;
+    /** The build the node reports; the scaffolding's default, or null for a node built outside a checkout. */
+    build?: BuildInfo | null;
+    /** Whether the node can upgrade itself; absent = the node does not say (a build before the fourth cut). */
+    selfUpgrade?: CheckInRequest['selfUpgrade'];
   } = {},
 ): CheckInRequest {
   return {
@@ -82,12 +86,18 @@ export function checkInOf(
     // A configured node by default: placement refuses one without a copy,
     // and most suites are about nodes that run one.
     configVersion: over.configVersion === undefined ? 1 : over.configVersion,
-    build: {
-      commit: 'abc1234',
-      title: 'a commit',
-      committedAt: '2026-09-14T00:00:00.000Z',
-    },
+    build:
+      over.build === undefined
+        ? {
+            commit: 'abc1234',
+            title: 'a commit',
+            committedAt: '2026-09-14T00:00:00.000Z',
+          }
+        : over.build,
     reading: reading(over),
+    ...(over.selfUpgrade === undefined
+      ? {}
+      : { selfUpgrade: over.selfUpgrade }),
   };
 }
 
@@ -107,6 +117,8 @@ export function testGateway(
     ingress?: Ingress;
     /** Forged by default: the suites here are about the settings machinery, not S3's availability. */
     probeS3?: NonNullable<Parameters<typeof buildGatewayApp>[0]['probeS3']>;
+    /** The gateway's build identity (null by default, as a source run has none) — the fleet upgrade judges the nodes against it. */
+    build?: BuildInfo | null;
   } = {},
 ) {
   const db = openDb(':memory:');
@@ -135,7 +147,7 @@ export function testGateway(
     finder,
     locks: new KeyedQueue(),
     logger: false,
-    build: null,
+    build: opts.build ?? null,
     consoleDistDir: opts.consoleDistDir,
     ingress: opts.ingress,
     ask: opts.askVerb,

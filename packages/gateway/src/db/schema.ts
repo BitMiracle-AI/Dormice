@@ -64,6 +64,15 @@ export const nodes = sqliteTable('nodes', {
   build: text('build'),
   /** JSON, shared nodeReadingSchema; null until the first check-in. */
   reading: text('reading'),
+  /** JSON `{available, reason}` — whether the node can upgrade itself, its own word at its last check-in; null = it did not say (a build before the fourth cut) or never checked in. */
+  selfUpgrade: text('self_upgrade'),
+  /**
+   * ISO 8601 UTC — when the fleet upgrade last told this node to upgrade
+   * itself (rolling.ts); null = never, or the tell was fulfilled (the node
+   * came back on the gateway's build). On the row so a gateway restart
+   * mid-roll neither forgets a node it told nor tells it twice.
+   */
+  upgradeToldAt: text('upgrade_told_at'),
 });
 
 export type NodeRow = typeof nodes.$inferSelect;

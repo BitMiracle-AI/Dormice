@@ -28,11 +28,13 @@ export function useForceCheckUpgrade() {
 
 /**
  * 升级执行窗:一键升级可不可用、systemd unit 是否活着、上一次运行的
- * 报告。全是本机读数(systemctl + 状态文件),不打网络 — 版本卡拿它
- * 决定「升级」按钮还是手动指引。升级弹窗里的 2 秒轮询是弹窗自己的
- * setTimeout 链(daemon 重启的失联是预期环节,查询库的重试语义不合身);
- * 这里只在有升级在跑时自轮询 — 横幅与「上次运行」的结局要能自愈,
- * 不能指望弹窗一直开着。
+ * 报告,以及(2026-09-15 刀 4 起)各节点对着网关构建的站位。网关机
+ * 本机读数(systemctl + 状态文件)加报到里的内存,不打网络 — 版本卡
+ * 拿它决定「升级」按钮还是手动指引,并画节点表。升级弹窗里的 2 秒
+ * 轮询是弹窗自己的 setTimeout 链(网关重启的失联是预期环节,查询库
+ * 的重试语义不合身);这里在有升级在跑、或有节点待升/升级中时自轮询
+ * — 横幅、「上次运行」的结局与节点表的滚动都要能自愈,不能指望弹窗
+ * 一直开着。
  */
 export function useUpgradeStatus() {
   return useQuery({
@@ -40,7 +42,14 @@ export function useUpgradeStatus() {
     queryFn: getUpgradeStatus,
     staleTime: 15_000,
     retry: false,
-    refetchInterval: (query) => (query.state.data?.running ? 5000 : false),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (data === undefined) return false;
+      const rolling = data.nodes?.some(
+        (n) => n.state === 'behind' || n.state === 'upgrading',
+      );
+      return data.running || rolling ? 5000 : false;
+    },
   });
 }
 

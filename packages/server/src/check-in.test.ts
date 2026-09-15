@@ -384,6 +384,62 @@ describe('CheckIn', () => {
     ]);
   });
 
+  it("reports whether this node can upgrade itself, and runs its upgrade when the answer says so — a launch that fails is a warning, not the tick's failure", async () => {
+    let sent = 0;
+    const gw = await gateway(() => {
+      sent += 1;
+      return {
+        status: 200,
+        body: JSON.stringify({
+          configVersion: 1,
+          ...(sent === 2 || sent === 3 ? { upgrade: true } : {}),
+        }),
+      };
+    });
+    const { log, warns, infos, details } = logSpy();
+    let launches = 0;
+    const opts = options(gw.endpoint, log, {
+      selfUpgrade: async () => ({
+        available: false,
+        reason: 'systemd-run is not available',
+      }),
+      applyUpgrade: async () => {
+        launches += 1;
+        if (launches === 2) throw new Error('an upgrade is already running');
+      },
+    });
+    applyNodeConfig(opts.db, testBundle({}, 1));
+    const checkIn = new CheckIn(opts);
+    await checkIn.once();
+    expect(checkInRequestSchema.parse(gw.seen[0]?.body).selfUpgrade).toEqual({
+      available: false,
+      reason: 'systemd-run is not available',
+    });
+    expect(launches).toBe(0);
+    // Told: the upgrade is launched, said as its own line.
+    await checkIn.once();
+    expect(launches).toBe(1);
+    expect(infos).toEqual([
+      expect.stringMatching(/this node's turn to upgrade has come/),
+    ]);
+    expect(warns).toEqual([]);
+    // Told again while one runs: the launch's 409 is a warning; the
+    // check-in itself succeeded.
+    await checkIn.once();
+    expect(launches).toBe(2);
+    expect(warns).toEqual([expect.stringMatching(/could not be launched/)]);
+    expect((details[0] as { error: string }).error).toMatch(/already running/);
+    // Not told: nothing launched, and a check-in without an updater
+    // wired reports no selfUpgrade at all.
+    await checkIn.once();
+    expect(launches).toBe(2);
+    const bare = new CheckIn(options(gw.endpoint, logSpy().log));
+    await bare.once();
+    expect(
+      checkInRequestSchema.parse(gw.seen.at(-1)?.body).selfUpgrade,
+    ).toBeUndefined();
+  });
+
   it('ticks on its interval from start() and stops on stop()', async () => {
     const gw = await gateway(() => answering(1));
     const { log } = logSpy();

@@ -1,8 +1,9 @@
-import type { CheckUpgradeResponse } from '@dormice/shared';
+import type { CheckUpgradeResponse, NodeUpgradeView } from '@dormice/shared';
 import { RefreshIcon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -14,6 +15,15 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { applyUpgrade } from '@/lib/api';
 import { formatDateTime } from '@/lib/datetime';
 import { m } from '@/paraglide/messages';
 import {
@@ -24,11 +34,16 @@ import {
 import { UpgradeDialog } from './UpgradeDialog';
 
 /**
- * daemon 自己的版本与升级窗口。「版本」= 构建进 dist 的 git commit
- * (还没有发版 tag,main 上每个提交都过验收链);比较由 daemon 服务端
- * 裁决(upgradable 字段),这里只负责显示 — 与沙箱「可升级」徽章同一
- * 纪律。检查失败如实显示 checkError,绝不把失败装成「已是最新」。
- * 「升级」按钮只在 daemon 自报一键可用时出现,否则给手动路径与原因。
+ * 网关的版本与舰队的升级窗口(2026-09-15 刀 4 起主语是网关:三动词在
+ * 门口答,当前=网关构建,「升级」=先升网关机、再在报到里逐台带起节点)。
+ * 「版本」= 构建进 dist 的 git commit(还没有发版 tag,main 上每个提交
+ * 都过验收链);比较由服务端裁决(upgradable 字段),这里只负责显示 —
+ * 与沙箱「可升级」徽章同一纪律。检查失败如实显示 checkError,绝不把
+ * 失败装成「已是最新」。「升级」按钮只在网关自报一键可用时出现,否则
+ * 给手动路径与原因。卡片下方一张节点表:每台对着网关构建的站位,由
+ * 网关裁决(state 字段);「卡住」的行给「再试一次」= applyUpgrade
+ * {nodeId},人工重告 — 网关自己绝不重告(构建总失败的节点不能每 20
+ * 分钟白烤一遍)。
  */
 export function VersionCard() {
   const { data, isPending, isError, error } = useCheckUpgrade();
@@ -127,6 +142,9 @@ export function VersionCard() {
                   : { reason: status.data.unavailableReason }
             }
           />
+        )}
+        {status.data?.nodes !== undefined && status.data.nodes.length > 0 && (
+          <NodesTable nodes={status.data.nodes} />
         )}
       </CardContent>
       <UpgradeDialog
@@ -266,6 +284,118 @@ function UpgradePreview({
           {m.settings_oneclick_manual()}
         </p>
       )}
+    </div>
+  );
+}
+
+const STATE_LABEL: Record<NodeUpgradeView['state'], () => string> = {
+  current: m.settings_nodes_state_current,
+  behind: m.settings_nodes_state_behind,
+  upgrading: m.settings_nodes_state_upgrading,
+  stuck: m.settings_nodes_state_stuck,
+  unavailable: m.settings_nodes_state_unavailable,
+  unreachable: m.settings_nodes_state_unreachable,
+  unknown: m.settings_nodes_state_unknown,
+};
+
+/** 徽章色阶:跟上=静;待升/升级中=琥珀(在动);卡住=红(要人);其余=灰(说明在 title)。 */
+function stateClass(state: NodeUpgradeView['state']): string {
+  switch (state) {
+    case 'behind':
+    case 'upgrading':
+      return 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400';
+    case 'stuck':
+      return 'border-destructive/40 bg-destructive/10 text-destructive';
+    default:
+      return '';
+  }
+}
+
+/**
+ * 节点表:网关裁决的站位,原话进 title。只有「卡住」给动作 — 待升的
+ * 会自己轮到,升级中的在跑,不能自升/不可达/未知的原因都在 reason 里,
+ * 按钮改不了物理事实。
+ */
+function NodesTable({ nodes }: { nodes: NodeUpgradeView[] }) {
+  const queryClient = useQueryClient();
+  const retell = useMutation({
+    mutationFn: (id: string) => applyUpgrade(id),
+    onSuccess: (_data, id) => {
+      toast.success(m.settings_nodes_retry_done({ id }));
+      void queryClient.invalidateQueries({ queryKey: ['upgradeStatus'] });
+    },
+    onError: (error, id) => {
+      toast.error(
+        m.settings_nodes_retry_failed({
+          id,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    },
+  });
+  return (
+    <div className="flex flex-col gap-2">
+      <div>
+        <div className="text-sm font-medium">{m.settings_nodes_title()}</div>
+        <p className="text-xs text-muted-foreground">
+          {m.settings_nodes_desc()}
+        </p>
+      </div>
+      <div className="overflow-hidden rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{m.settings_nodes_col_node()}</TableHead>
+              <TableHead>{m.settings_nodes_col_build()}</TableHead>
+              <TableHead>{m.settings_nodes_col_state()}</TableHead>
+              <TableHead className="w-28" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {nodes.map((node) => (
+              <TableRow key={node.id}>
+                <TableCell className="font-medium">{node.id}</TableCell>
+                <TableCell>
+                  {node.build === null ? (
+                    <span className="text-muted-foreground">
+                      {m.common_unknown()}
+                    </span>
+                  ) : (
+                    <span
+                      className="font-mono"
+                      title={`${node.build.title} · ${formatDateTime(node.build.committedAt)}`}
+                    >
+                      {node.build.commit}
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Badge
+                    variant="outline"
+                    className={`font-medium ${stateClass(node.state)}`}
+                    title={node.reason ?? undefined}
+                  >
+                    {node.state === 'upgrading' && <Spinner />}
+                    {STATE_LABEL[node.state]()}
+                  </Badge>
+                </TableCell>
+                <TableCell className="text-right">
+                  {node.state === 'stuck' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={retell.isPending}
+                      onClick={() => retell.mutate(node.id)}
+                    >
+                      {m.settings_nodes_retry()}
+                    </Button>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 }

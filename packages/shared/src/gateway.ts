@@ -135,6 +135,17 @@ export const checkInRequestSchema = z.object({
    * the gateway has to remember about who was told what.
    */
   configVersion: z.number().int().nullable(),
+  /**
+   * Whether this node can upgrade itself when told (its updater's
+   * availability: a git checkout, install.sh, systemd-run; upgrade.ts),
+   * and why not when it cannot. The gateway rolls an upgrade only over
+   * nodes that can; the rest it lists as `unavailable` with the reason.
+   * Optional on the wire: a node on a build before the fourth cut does
+   * not say, and its check-in is taken.
+   */
+  selfUpgrade: z
+    .object({ available: z.boolean(), reason: z.string().nullable() })
+    .optional(),
 });
 
 export type CheckInRequest = z.infer<typeof checkInRequestSchema>;
@@ -188,6 +199,13 @@ export const checkInResponseSchema = z.object({
   configVersion: z.number().int().positive(),
   /** Present exactly when the node's reported version differs from the gateway's: the whole bundle to apply. */
   config: nodeConfigBundleSchema.optional(),
+  /**
+   * Present exactly when the gateway tells this node to upgrade itself
+   * now (upgrade.ts: the fleet upgrade rolls over the nodes one at a
+   * time, each told once at a check-in) — the node runs its own
+   * applyUpgrade and comes back on the gateway's build.
+   */
+  upgrade: z.literal(true).optional(),
 });
 
 export type CheckInResponse = z.infer<typeof checkInResponseSchema>;

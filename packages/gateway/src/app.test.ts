@@ -1203,11 +1203,11 @@ describe('using, destroying, and the cache', () => {
     expect(a.lookups()).toBe(before + 1);
   });
 
-  it('the upgrade verbs are an honest 501, a misspelled verb a 404, a body without a name a 400', async () => {
+  it("the upgrade verbs answer at the door (the gateway's own, routes/upgrade.test.ts), a misspelled verb is a 404, a body without a name a 400", async () => {
     const h = await gateway(['a']);
     const upgrade = await rpc(h, '/checkUpgrade');
-    expect(upgrade.status).toBe(501);
-    expect(message(upgrade)).toContain('call the node directly');
+    expect(upgrade.status).toBe(200);
+    expect(upgrade.body).toMatchObject({ current: null, check: null });
     expect((await rpc(h, '/acquireSandbx', { name: 'x' })).status).toBe(404);
     expect((await rpc(h, '/execCommand', { command: 'x' })).status).toBe(400);
     expect(h.nodes[0]?.hits).toEqual([]);
@@ -1880,13 +1880,16 @@ describe('the fleet-wide lists and the by-node readings', () => {
     expect(message(refused)).toContain('no node has checked in yet');
   });
 
-  it('the upgrade verbs alone are still an honest 501', async () => {
+  it("the upgrade verbs are the gateway's own now, not a node's: no node is asked", async () => {
     const h = await gateway(['b']);
-    for (const verb of ['checkUpgrade', 'applyUpgrade', 'getUpgradeStatus']) {
-      const r = await rpc(h, `/${verb}`, {});
-      expect(r.status).toBe(501);
-      expect(message(r)).toContain('until the upgrade cut');
-    }
+    const before = h.nodes[0]?.hits.length ?? 0;
+    const s = await rpc(h, '/getUpgradeStatus', {});
+    expect(s.status).toBe(200);
+    expect(s.body).toMatchObject({
+      available: false,
+      nodes: [{ id: 'b', state: 'unknown' }],
+    });
+    expect(h.nodes[0]?.hits.length ?? 0).toBe(before);
   });
 });
 

@@ -395,8 +395,13 @@ export class Dormice {
    * Expect the daemon to restart near the end: in-flight execs, terminals
    * and watchers break, sandboxes and their disks are untouched.
    */
-  async applyUpgrade(): Promise<ApplyUpgradeResponse> {
-    const data = await this.rpc('applyUpgrade', {});
+  async applyUpgrade(options?: {
+    /** At the gateway: tell this one node to upgrade again at its next check-in (a node the fleet upgrade lists as stuck). Absent: upgrade the gateway's machine and roll the fleet. */
+    nodeId?: string;
+  }): Promise<ApplyUpgradeResponse> {
+    const data = await this.rpc('applyUpgrade', {
+      ...(options?.nodeId === undefined ? {} : { nodeId: options.nodeId }),
+    });
     return applyUpgradeResponseSchema.parse(data);
   }
 

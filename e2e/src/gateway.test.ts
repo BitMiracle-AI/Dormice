@@ -493,11 +493,26 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
     expect(history.points.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('the upgrade verbs are an honest 501 until their cut; a misspelled verb is a 404', async () => {
-    await expect(viaGateway().checkUpgrade()).rejects.toMatchObject({
-      status: 501,
-      message: expect.stringMatching(/until the upgrade cut/),
-    });
+  it("the upgrade verbs answer at the door: the gateway's own build and standing, every node's standing beside it; a misspelled verb is a 404", async () => {
+    // Deliberately not applyUpgrade: it would re-run install.sh on the
+    // machine running the exam. checkUpgrade reaches for origin/main —
+    // its outcome is data either way (a check, or a checkError).
+    const check = await viaGateway().checkUpgrade();
+    expect(check.check !== null || check.checkError !== null).toBe(true);
+    const s = await viaGateway().getUpgradeStatus();
+    expect(typeof s.available).toBe('boolean');
+    if (!s.available) expect(s.unavailableReason).not.toBeNull();
+    // The exam's gateway and nodes are one build (or, built outside a
+    // checkout, none): every node is current, or unknown with the reason.
+    const standing = new Map(s.nodes?.map((n) => [n.id, n]));
+    for (const id of ['node-b', 'node-c']) {
+      const node = standing.get(id);
+      expect(node).toBeDefined();
+      expect(['current', 'unknown']).toContain(node?.state);
+      if (node?.state === 'unknown') expect(node.reason).not.toBeNull();
+    }
+    // A node's own answer has no nodes to speak of.
+    expect((await direct('node-b').getUpgradeStatus()).nodes).toBeUndefined();
     expect((await rpc('/acquireSandbx', { name: 'x' })).status).toBe(404);
   });
 

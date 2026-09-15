@@ -57,6 +57,16 @@ export interface CheckInOptions {
   configVersion: () => number | null;
   /** Makes a bundle the gateway answered with real on this node (node-config.ts applyConfig). */
   applyConfig: (bundle: NodeConfigBundle) => Promise<void>;
+  /**
+   * Whether this node can upgrade itself when told, and why not (the
+   * updater's availability, updater.ts) — reported at every check-in so
+   * the gateway rolls the fleet upgrade over the nodes that can and names
+   * the rest. Optional for the suites that embed a check-in without an
+   * updater; the daemon always wires it.
+   */
+  selfUpgrade?: () => Promise<{ available: boolean; reason: string | null }>;
+  /** Runs this node's own upgrade (updater.apply) when the gateway's answer says `upgrade: true`. */
+  applyUpgrade?: () => Promise<void>;
   log: CheckInLog;
   /** Test seam; production uses the platform's fetch. */
   fetchImpl?: typeof fetch;
@@ -101,6 +111,11 @@ function describe(error: unknown): string {
   return why === undefined ? message : `${message} (${why})`;
 }
 
+/** The daemon always wires applyUpgrade; a suite that does not, told to upgrade, hears why nothing happened. */
+async function unavailableUpgrade(): Promise<void> {
+  throw new Error('this check-in has no updater to run an upgrade with');
+}
+
 export class CheckIn {
   private timer: NodeJS.Timeout | undefined;
   private closing = false;
@@ -129,6 +144,9 @@ export class CheckIn {
         build: opts.build,
         reading: await opts.readReading(),
         configVersion: opts.configVersion(),
+        ...(opts.selfUpgrade === undefined
+          ? {}
+          : { selfUpgrade: await opts.selfUpgrade() }),
       };
       const res = await (opts.fetchImpl ?? fetch)(`${opts.gateway}/checkIn`, {
         method: 'POST',
@@ -175,6 +193,26 @@ export class CheckIn {
         } catch (error) {
           throw new Error(
             `configuration v${answer.config.version} from the gateway could not be applied: ${describe(error)}`,
+          );
+        }
+      }
+      if (answer.upgrade === true) {
+        // The gateway's turn for this node in the fleet upgrade: run the
+        // same one-click upgrade an operator would (install.sh in a
+        // systemd unit, updater.ts). Said as its own line, not this tick's
+        // failure: the check-in itself succeeded, and the gateway tells a
+        // node once — a launch that fails here is the operator's to read
+        // (the gateway shows the node as stuck twenty minutes on, and
+        // applyUpgrade {nodeId} at the gateway tells it again).
+        opts.log.info(
+          `the gateway says this node's turn to upgrade has come — launching install.sh (systemd unit dormice-upgrade)`,
+        );
+        try {
+          await (opts.applyUpgrade ?? unavailableUpgrade)();
+        } catch (error) {
+          opts.log.warn(
+            { error: describe(error) },
+            'the upgrade the gateway asked for could not be launched; the gateway lists this node as stuck once twenty minutes have passed, and applyUpgrade {nodeId} there tells it again',
           );
         }
       }

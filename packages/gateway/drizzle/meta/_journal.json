@@ -36,6 +36,13 @@
       "when": 1789459862989,
       "tag": "0004_fleet-base-image",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1789461434618,
+      "tag": "0005_fleet-upgrade",
+      "breakpoints": true
     }
   ]
 }

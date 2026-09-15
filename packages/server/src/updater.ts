@@ -12,12 +12,15 @@ import { httpError } from './http-error';
 import type { BuildInfo } from './version';
 
 /**
- * The daemon's own upgrade window. Versions are git commits (trunk-based,
- * no release tags yet), and the question "is a newer Dormice available?"
- * is answered by comparing the commit baked into this build against the
- * origin's main — fetched through the checkout's own `origin` remote, so
- * an install done with `--mirror cn` (whose clone URL carries the mirror
- * prefix) checks through the same mirror for free.
+ * A process's own upgrade window — the daemon's, and since the fourth cut
+ * the gateway's (imported through the `@dormice/server/updater` subpath;
+ * the gateway's machine is upgraded by the same install.sh, and its
+ * process launches it the same way). Versions are git commits
+ * (trunk-based, no release tags yet), and the question "is a newer
+ * Dormice available?" is answered by comparing the commit baked into this
+ * build against the origin's main — fetched through the checkout's own
+ * `origin` remote, so an install done with `--mirror cn` (whose clone URL
+ * carries the mirror prefix) checks through the same mirror for free.
  *
  * `git fetch` updates .git only and never touches the working tree or the
  * running process — checking is always safe. The result is cached so a
@@ -72,8 +75,13 @@ export interface UpdaterOptions {
   build: BuildInfo | null;
   /** Where the upgrade unit writes status.json and its log: <DATA_DIR>/upgrade. */
   statusDir: string;
-  /** One-click upgrade is a real install's move; the fake executor refuses. */
-  executor: 'fake' | 'docker';
+  /**
+   * The caller's own reason one-click is off, when it has one: the daemon
+   * says so on the fake executor (a real install's move, not a test
+   * double's), the gateway on an in-memory database. Checked first; the
+   * checkout, install.sh and systemd-run probes follow.
+   */
+  unavailable?: string;
   run?: RunCommand;
 }
 
@@ -83,7 +91,7 @@ export class Updater {
   private readonly repoDir: string | null;
   private readonly build: BuildInfo | null;
   private readonly statusDir: string;
-  private readonly executor: 'fake' | 'docker';
+  private readonly unavailable: string | undefined;
   private readonly run: RunCommand;
   private cache: { at: number; check: Check } | null = null;
   /** Probed once — every input (executor, checkout, systemd) is boot-stable. */
@@ -93,7 +101,7 @@ export class Updater {
     this.repoDir = options.repoDir;
     this.build = options.build;
     this.statusDir = options.statusDir;
-    this.executor = options.executor;
+    this.unavailable = options.unavailable;
     this.run = options.run ?? defaultRun;
   }
 
@@ -108,7 +116,7 @@ export class Updater {
         current: this.build,
         check: null,
         checkError:
-          'the daemon does not run from a git checkout — nothing to compare against',
+          'the process does not run from a git checkout — nothing to compare against',
       };
     }
     if (this.build === null) {
@@ -202,7 +210,7 @@ export class Updater {
       // name must be reusable for the next upgrade.
       '--collect',
       '--description',
-      'Dormice self-upgrade (install.sh)',
+      'Dormice upgrade (install.sh)',
       '/bin/bash',
       '-c',
       command,
@@ -254,7 +262,13 @@ export class Updater {
     };
   }
 
-  private async availability(): Promise<string | null> {
+  /**
+   * Why one-click is off, or null when it is on — probed once (every
+   * input is boot-stable). Public for the node's check-in, which reports
+   * it to the gateway: the fleet upgrade rolls over the nodes that can
+   * upgrade themselves and names the rest with this reason.
+   */
+  async availability(): Promise<string | null> {
     if (this.availabilityReason === undefined) {
       this.availabilityReason = await this.probeAvailability();
     }
@@ -262,11 +276,11 @@ export class Updater {
   }
 
   private async probeAvailability(): Promise<string | null> {
-    if (this.executor !== 'docker') {
-      return 'one-click upgrade is for a real install (docker executor) — this daemon runs the fake executor';
+    if (this.unavailable !== undefined) {
+      return this.unavailable;
     }
     if (this.repoDir === null) {
-      return 'the daemon does not run from a git checkout';
+      return 'the process does not run from a git checkout';
     }
     if (!existsSync(path.join(this.repoDir, 'deploy', 'install.sh'))) {
       return 'deploy/install.sh is missing from the checkout';

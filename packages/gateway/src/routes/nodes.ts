@@ -16,10 +16,13 @@ import { readNodeConfig } from '../db/node-config';
 import { readConfigVersion } from '../db/settings';
 import { downReason, type Fleet, type NodeState } from '../fleet';
 import { RETRY_AFTER_SECONDS } from '../raw';
+import type { Rolling } from '../rolling';
 
 export interface CheckInRoutesOptions {
   fleet: Fleet;
   db: Db;
+  /** The fleet upgrade's verdict for each check-in (rolling.ts). */
+  rolling: Rolling;
 }
 
 export interface NodeRoutesOptions {
@@ -37,12 +40,15 @@ function refusal(statusCode: number, message: string): Error {
  * own gate in app.ts: the fleet token and nothing else. The answer is the
  * configuration version, and the whole bundle when the node's differs
  * (design record #22, shared nodeConfigBundleSchema): the check-in is the
- * pull. No record is kept of who was told what — the node states what it
- * runs at every check-in, and the comparison is the whole protocol.
+ * pull. Of the configuration no record is kept of who was told what —
+ * the node states what it runs at every check-in, and the comparison is
+ * the whole protocol. The fleet upgrade rides the same answer (`upgrade:
+ * true`, rolling.ts) and is the one thing remembered: a node is told
+ * once, on its row.
  */
 export const checkInRoutes: FastifyPluginAsyncZod<
   CheckInRoutesOptions
-> = async (app, { fleet, db }) => {
+> = async (app, { fleet, db, rolling }) => {
   /**
    * Per node, the ids it was last reported to share an endpoint with
    * (sorted, joined) — so the warning below is said when the situation
@@ -124,6 +130,17 @@ export const checkInRoutes: FastifyPluginAsyncZod<
           'the node no longer shares its endpoint with another',
         );
       }
+      // The fleet upgrade's turn for this node, if it is its turn: said
+      // here, once — the tell is the event, and the node's own log has the
+      // run.
+      const told = rolling.onCheckIn(node, new Date());
+      if (told) {
+        request.log.info(
+          { nodeId: node.id, build: node.build?.commit ?? null },
+          'the node is told to upgrade itself: it runs another build than the gateway and no other node is upgrading',
+        );
+      }
+      const upgrade = told ? { upgrade: true as const } : {};
       const version = readConfigVersion(db);
       const runs = request.body.configVersion;
       if (runs === version) {
@@ -133,7 +150,7 @@ export const checkInRoutes: FastifyPluginAsyncZod<
             'the node now runs the current configuration version',
           );
         }
-        return { configVersion: version };
+        return { configVersion: version, ...upgrade };
       }
       const gap = `${String(runs)}→${version}`;
       if (bundleSaid.get(node.id) !== gap) {
@@ -145,7 +162,11 @@ export const checkInRoutes: FastifyPluginAsyncZod<
             : 'a node runs another configuration version; the bundle rides on this answer',
         );
       }
-      return { configVersion: version, config: readNodeConfig(db, node) };
+      return {
+        configVersion: version,
+        config: readNodeConfig(db, node),
+        ...upgrade,
+      };
     },
   );
 };

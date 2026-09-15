@@ -25,8 +25,10 @@ to the node the request names. The **daemon** (`127.0.0.1:3676`) is a
 node: it answers the per-sandbox, list and host verbs for itself; asked
 for a verb that lives at the gateway, it answers `404` naming the
 gateway. Point clients at the gateway; the rows below say which door
-answers what. The three upgrade verbs are the one thing the gateway does
-not route yet (an honest `501`).
+answers what. The three upgrade verbs answer at both doors: at the
+gateway they are the [fleet upgrade](/docs/upgrading#upgrade-a-fleet)
+(the gateway's machine first, then every node behind it, one at a
+time); on a node they are that node's own, the emergency path.
 
 Two rules cover the whole surface:
 

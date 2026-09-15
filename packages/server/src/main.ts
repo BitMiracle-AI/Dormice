@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pino } from 'pino';
-import { buildApp } from './app';
+import { buildApp, fakeExecutorUnavailable } from './app';
 import { Archiver } from './archive/archiver';
 import { LedgerArchiveStore } from './archive/ledger-store';
 import { CheckIn, readNodeReading } from './check-in';
@@ -206,6 +206,21 @@ const build = readBuildInfo();
 // unknown; a sample a few milliseconds before it would make that first
 // reading a percentage over the sliver in between, near 0 or near 100 by
 // luck (found by review, 2026-09-14).
+// The daemon's own upgrade window compares the commit baked into this
+// build against the checkout it runs from — main.js sits at
+// packages/server/dist (src/main.ts at packages/server/src: same depth),
+// so three hops up is the repo root either way. No checkout (a dist
+// copied elsewhere) means checking is honestly unavailable, not guessed.
+// Built before the check-in: the check-in reports whether this node can
+// upgrade itself, and runs the upgrade when the gateway says so.
+const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
+const updater = new Updater({
+  repoDir: existsSync(path.join(repoRoot, '.git')) ? repoRoot : null,
+  build,
+  statusDir: path.join(config.DORMICE_DATA_DIR, 'upgrade'),
+  unavailable: fakeExecutorUnavailable(config.DORMICE_EXECUTOR),
+});
+
 const nodeEndpoint =
   config.DORMICE_NODE_ENDPOINT ?? `http://127.0.0.1:${config.DORMICE_PORT}`;
 const checkInCpu = new CpuSampler();
@@ -229,20 +244,12 @@ const checkIn = new CheckIn({
       beat,
       baseImageFallback: config.DORMICE_BASE_IMAGE,
     }),
+  selfUpgrade: async () => {
+    const reason = await updater.availability();
+    return { available: reason === null, reason };
+  },
+  applyUpgrade: () => updater.apply(),
   log,
-});
-
-// The daemon's own upgrade window compares the commit baked into this
-// build against the checkout it runs from — main.js sits at
-// packages/server/dist (src/main.ts at packages/server/src: same depth),
-// so three hops up is the repo root either way. No checkout (a dist
-// copied elsewhere) means checking is honestly unavailable, not guessed.
-const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
-const updater = new Updater({
-  repoDir: existsSync(path.join(repoRoot, '.git')) ? repoRoot : null,
-  build,
-  statusDir: path.join(config.DORMICE_DATA_DIR, 'upgrade'),
-  executor: config.DORMICE_EXECUTOR,
 });
 log.info(
   build

@@ -88,6 +88,20 @@ export interface AppDeps {
  * Building the app is separate from listening so tests can inject requests
  * without opening a port.
  */
+/**
+ * The daemon's own reason one-click is off: an upgrade is a real
+ * install's move (install.sh, systemd, a Docker host), never a test
+ * double's — an e2e daemon on the fake executor must not be able to
+ * re-run install.sh on a developer's machine.
+ */
+export function fakeExecutorUnavailable(
+  executor: 'fake' | 'docker',
+): string | undefined {
+  return executor === 'docker'
+    ? undefined
+    : 'one-click upgrade is for a real install (docker executor) — this daemon runs the fake executor';
+}
+
 export function buildApp({
   config,
   db,
@@ -100,7 +114,7 @@ export function buildApp({
     repoDir: null,
     build: readBuildInfo(),
     statusDir: nodePath.join(config.DORMICE_DATA_DIR, 'upgrade'),
-    executor: config.DORMICE_EXECUTOR,
+    unavailable: fakeExecutorUnavailable(config.DORMICE_EXECUTOR),
   }),
 }: AppDeps) {
   // Always a pino instance (booleans are normalized into one): two fastify()

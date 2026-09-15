@@ -27,6 +27,30 @@ script file mid-run while bash keeps executing the *old* bytes —
 measured on a real upgrade. Run a local copy twice, or just pipe from
 the repo.
 
+## Upgrade a fleet
+
+A fleet upgrades from its gateway, and one action upgrades every
+machine. On the gateway's machine, re-running the installer — or the
+console's **Upgrade** button, or `POST /applyUpgrade` at the gateway —
+pulls, rebuilds and restarts the gateway and the node on that machine.
+Once the gateway is back on the new build, every other node hears at
+its next check-in (within fifteen seconds) that its turn has come, and
+runs the same installer itself: one node at a time, so the fleet is
+never missing more than one node's sandboxes for the few tens of
+seconds a restart takes. The version page shows each node's standing:
+current, behind, upgrading, or stuck.
+
+A node is told exactly once. If it has not come back on the new build
+twenty minutes later, the gateway marks it **stuck** and leaves it
+alone — a node whose build keeps failing must not rebuild every twenty
+minutes on the CPU its sandboxes run on. Read `journalctl -u
+dormice-upgrade` and `/var/lib/dormice/upgrade/upgrade.log` on that
+node, fix the cause, and press **Try again** on the version page (or
+`POST /applyUpgrade {"nodeId": "..."}`), which tells that node again at
+its next check-in. A node that cannot upgrade itself — no git checkout,
+no systemd — is listed with its reason; run the installer on it by
+hand.
+
 ## What survives an upgrade
 
 - **Your configuration.** `/etc/dormice/env` is never touched once it

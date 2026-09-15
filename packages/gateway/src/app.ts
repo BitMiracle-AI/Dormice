@@ -1,5 +1,8 @@
 import http from 'node:http';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { KeyedQueue } from '@dormice/server/keyed-queue';
+import { Updater } from '@dormice/server/updater';
 import { sandboxDomainsInForce } from '@dormice/shared';
 import fastifyCookie from '@fastify/cookie';
 import fastify, {
@@ -28,6 +31,7 @@ import type { Fleet } from './fleet';
 import type { Ingress } from './ingress';
 import type { PlacementKnobs } from './placement';
 import { createRawFaces } from './raw';
+import { Rolling } from './rolling';
 import { apiKeyRoutes } from './routes/api-keys';
 import { consoleRoutes } from './routes/console';
 import { e2bControlRoutes } from './routes/e2b';
@@ -39,6 +43,7 @@ import { checkInRoutes, nodeRoutes } from './routes/nodes';
 import { observeRoutes } from './routes/observe';
 import { settingsRoutes } from './routes/settings';
 import { templateRoutes } from './routes/templates';
+import { upgradeRoutes } from './routes/upgrade';
 import { type BuildInfo, readBuildInfo } from './version';
 
 export interface GatewayAppDeps {
@@ -79,6 +84,14 @@ export interface GatewayAppDeps {
    * Defaults to reading process.env; tests inject a fixed map.
    */
   sources?: ConfigSources;
+  /**
+   * The gateway machine's upgrade window (the daemon's Updater over this
+   * checkout; routes/upgrade.ts). main.ts injects one that knows the
+   * checkout; the default knows none, so checkUpgrade answers an honest
+   * checkError and applyUpgrade refuses — tests never reach the network
+   * or systemd by accident.
+   */
+  updater?: Updater;
 }
 
 type SettingsProbe = NonNullable<
@@ -124,10 +137,18 @@ export function buildGatewayApp({
   probeS3,
   ask,
   sources = configSources(),
+  updater = new Updater({
+    repoDir: null,
+    build,
+    statusDir: path.join(tmpdir(), 'dormice-gateway-upgrade'),
+  }),
 }: GatewayAppDeps) {
   const loggerInstance =
     typeof logger === 'boolean' ? pino({ enabled: logger }) : logger;
   const token = config.DORMICE_API_TOKEN;
+  // The fleet upgrade's live half, judged against this gateway's build:
+  // the check-ins ask it, the upgrade routes read and steer it.
+  const rolling = new Rolling(fleet, build);
 
   // The faces keyed on a header sit in front of Fastify, exactly as the
   // daemon's port proxy does (server/app.ts): refuse what is not an
@@ -271,7 +292,7 @@ export function buildGatewayApp({
         await reply.code(401).send({ message: 'missing or invalid API token' });
       }
     });
-    await nodesFace.register(checkInRoutes, { fleet, db });
+    await nodesFace.register(checkInRoutes, { fleet, db, rolling });
   });
 
   // The sandbox gate: everything that addresses a sandbox — and the
@@ -301,6 +322,7 @@ export function buildGatewayApp({
     });
     await admin.register(templateRoutes, { db, fleet, ask: askVerb });
     await admin.register(ingressRoutes, { ingress });
+    await admin.register(upgradeRoutes, { updater, fleet, rolling });
   });
 
   // The web console: account + session endpoints (open — setup and login
