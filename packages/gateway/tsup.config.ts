@@ -26,8 +26,9 @@ export default defineConfig({
   // index is the library surface the SDK's and the CLI's suites embed a
   // gateway through (the verbs they test for keys, settings and templates
   // answer at the gateway), so it ships with declarations like the
-  // daemon's.
-  entry: ['src/main.ts', 'src/index.ts'],
+  // daemon's. import.ts is the one-time ledger import install.sh runs
+  // before the gateway's first start (import-ledger.ts).
+  entry: ['src/main.ts', 'src/index.ts', 'src/import.ts'],
   format: ['esm'],
   dts: true,
   clean: true,
