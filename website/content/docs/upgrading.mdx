@@ -38,7 +38,10 @@ its next check-in (within fifteen seconds) that its turn has come, and
 runs the same installer itself: one node at a time, so the fleet is
 never missing more than one node's sandboxes for the few tens of
 seconds a restart takes. The version page shows each node's standing:
-current, behind, upgrading, or stuck.
+current, behind, upgrading, stuck — or ahead: a node on a build newer
+than the gateway's (a commit landed on `main` while the fleet was
+rolling, or the installer was run on that node by hand) is left alone,
+and reads current once the gateway itself is upgraded.
 
 A node is told exactly once. If it has not come back on the new build
 twenty minutes later, the gateway marks it **stuck** and leaves it

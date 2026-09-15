@@ -144,6 +144,7 @@
   "settings_nodes_col_build": "建置",
   "settings_nodes_col_state": "狀態",
   "settings_nodes_state_current": "已跟上",
+  "settings_nodes_state_ahead": "比網關新",
   "settings_nodes_state_behind": "待升級",
   "settings_nodes_state_upgrading": "升級中",
   "settings_nodes_state_stuck": "卡住",

@@ -144,6 +144,7 @@
   "settings_nodes_col_build": "Сборка",
   "settings_nodes_col_state": "Состояние",
   "settings_nodes_state_current": "Актуален",
+  "settings_nodes_state_ahead": "Новее шлюза",
   "settings_nodes_state_behind": "Ожидает",
   "settings_nodes_state_upgrading": "Обновляется",
   "settings_nodes_state_stuck": "Застрял",

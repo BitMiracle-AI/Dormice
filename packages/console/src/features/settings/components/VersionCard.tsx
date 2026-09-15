@@ -43,7 +43,8 @@ import { UpgradeDialog } from './UpgradeDialog';
  * 给手动路径与原因。卡片下方一张节点表:每台对着网关构建的站位,由
  * 网关裁决(state 字段);「卡住」的行给「再试一次」= applyUpgrade
  * {nodeId},人工重告 — 网关自己绝不重告(构建总失败的节点不能每 20
- * 分钟白烤一遍)。
+ * 分钟白烤一遍)。「比网关新」的节点不给按钮:该升的是网关,理由在
+ * title 里说。
  */
 export function VersionCard() {
   const { data, isPending, isError, error } = useCheckUpgrade();
@@ -290,6 +291,7 @@ function UpgradePreview({
 
 const STATE_LABEL: Record<NodeUpgradeView['state'], () => string> = {
   current: m.settings_nodes_state_current,
+  ahead: m.settings_nodes_state_ahead,
   behind: m.settings_nodes_state_behind,
   upgrading: m.settings_nodes_state_upgrading,
   stuck: m.settings_nodes_state_stuck,
@@ -298,9 +300,10 @@ const STATE_LABEL: Record<NodeUpgradeView['state'], () => string> = {
   unknown: m.settings_nodes_state_unknown,
 };
 
-/** 徽章色阶:跟上=静;待升/升级中=琥珀(在动);卡住=红(要人);其余=灰(说明在 title)。 */
+/** 徽章色阶:跟上=静;待升/升级中/比网关新=琥珀(在动,或要人先升网关);卡住=红(要人);其余=灰(说明在 title)。 */
 function stateClass(state: NodeUpgradeView['state']): string {
   switch (state) {
+    case 'ahead':
     case 'behind':
     case 'upgrading':
       return 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400';

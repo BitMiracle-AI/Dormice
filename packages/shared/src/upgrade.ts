@@ -161,7 +161,11 @@ export type GetUpgradeStatusRequest = z.infer<
  * Where one node stands against the gateway's build, as the gateway
  * judges it from the node's last check-in (gateway rolling.ts):
  *   current      the node runs the gateway's build
- *   behind       another build, able to upgrade itself, not told yet — its
+ *   ahead        a build newer than the gateway's — a commit that landed on
+ *                main while the fleet was rolling, or install.sh run on the
+ *                node by hand — never told; the gateway's own upgrade
+ *                brings it to current
+ *   behind       an older build, able to upgrade itself, not told yet — its
  *                turn comes when no other node is upgrading
  *   upgrading    told within the last twenty minutes, not back yet
  *   stuck        told, still on the old build twenty minutes on — never
@@ -174,6 +178,7 @@ export type GetUpgradeStatusRequest = z.infer<
  */
 export const NODE_UPGRADE_STATES = [
   'current',
+  'ahead',
   'behind',
   'upgrading',
   'stuck',
@@ -190,7 +195,7 @@ export const nodeUpgradeViewSchema = z.object({
   state: z.enum(NODE_UPGRADE_STATES),
   /** ISO 8601 UTC — when the node was last told to upgrade; null = never, or its last tell was fulfilled. */
   toldAt: z.iso.datetime().nullable(),
-  /** In the gateway's words, for every state but current and behind: why it is stuck, unavailable, unreachable or unknown; how long it has been upgrading. */
+  /** In the gateway's words, for every state but current and behind: why it is ahead, stuck, unavailable, unreachable or unknown; how long it has been upgrading. */
   reason: z.string().nullable(),
 });
 

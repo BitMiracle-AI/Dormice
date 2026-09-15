@@ -144,6 +144,7 @@
   "settings_nodes_col_build": "Build",
   "settings_nodes_col_state": "State",
   "settings_nodes_state_current": "Current",
+  "settings_nodes_state_ahead": "Ahead of gateway",
   "settings_nodes_state_behind": "Behind",
   "settings_nodes_state_upgrading": "Upgrading",
   "settings_nodes_state_stuck": "Stuck",

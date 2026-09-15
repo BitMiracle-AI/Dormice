@@ -144,6 +144,7 @@
   "settings_nodes_col_build": "Compilación",
   "settings_nodes_col_state": "Estado",
   "settings_nodes_state_current": "Al día",
+  "settings_nodes_state_ahead": "Más nuevo que el gateway",
   "settings_nodes_state_behind": "Pendiente",
   "settings_nodes_state_upgrading": "Actualizando",
   "settings_nodes_state_stuck": "Atascado",

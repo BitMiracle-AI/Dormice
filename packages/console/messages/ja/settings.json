@@ -144,6 +144,7 @@
   "settings_nodes_col_build": "ビルド",
   "settings_nodes_col_state": "状態",
   "settings_nodes_state_current": "最新",
+  "settings_nodes_state_ahead": "ゲートウェイより新しい",
   "settings_nodes_state_behind": "待機中",
   "settings_nodes_state_upgrading": "アップグレード中",
   "settings_nodes_state_stuck": "スタック",

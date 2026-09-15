@@ -28,6 +28,12 @@ const OLD: BuildInfo = {
   title: 'the old build',
   committedAt: '2026-09-14T00:00:00.000Z',
 };
+/** A commit that landed on main after the gateway upgraded — where a node told mid-roll ends up. */
+const NEWER: BuildInfo = {
+  commit: 'new0002',
+  title: 'landed on main mid-roll',
+  committedAt: '2026-09-15T00:05:00.000Z',
+};
 const CAN = { available: true, reason: null };
 const CANNOT = {
   available: false,
@@ -121,6 +127,27 @@ describe('upgradeStateOf', () => {
         /runs old0001 and does not say whether it can upgrade itself/,
       ),
     });
+  });
+
+  it("ahead, never told, when the node's build is newer than the gateway's; silent, it is unreachable like any other; a same-second tie reads behind", () => {
+    const { fleet } = fleetOver();
+    const node = reporting(fleet, 'a', { build: NEWER, selfUpgrade: CAN });
+    expect(upgradeStateOf(node, GATEWAY, NOW)).toEqual({
+      state: 'ahead',
+      reason:
+        "runs new0002 (committed 2026-09-15T00:05:00.000Z), newer than the gateway's new0001 — a fleet upgrades from its gateway: upgrade the gateway (applyUpgrade there), and this node reads current",
+    });
+    expect(rollingDecision(fleet.all(), GATEWAY, node, NOW)).toBe(false);
+    expect(
+      upgradeStateOf(node, GATEWAY, new Date(NOW.getTime() + 31_000)),
+    ).toEqual({ state: 'unreachable', reason: 'has not checked in for 31s' });
+    // The commit's time is the order; two commits in one second cannot be
+    // told apart, and the tie reads behind.
+    const tied = reporting(fleet, 'b', {
+      build: { ...GATEWAY, commit: 'tie0001' },
+      selfUpgrade: CAN,
+    });
+    expect(upgradeStateOf(tied, GATEWAY, NOW).state).toBe('behind');
   });
 
   it('told: upgrading within the timeout, stuck past it — with when it was told, what it still runs, and where to look', () => {
@@ -263,6 +290,32 @@ describe('Rolling', () => {
       status: 400,
       message: expect.stringMatching(/gateway carries no build identity/),
     });
+  });
+
+  it('a told node that comes back newer than the gateway is ahead: its tell is fulfilled and cleared, it is not told again, the operator cannot re-tell it, and it holds nobody', () => {
+    const { db, fleet } = fleetOver();
+    const rolling = new Rolling(fleet, GATEWAY);
+    const a = reporting(fleet, 'a', { build: OLD, selfUpgrade: CAN });
+    expect(rolling.onCheckIn(a, NOW)).toBe(true);
+    // Its install.sh pulled main's head, which moved on since the gateway
+    // upgraded: back on a newer build than the gateway's.
+    const later = new Date(NOW.getTime() + 120_000);
+    reporting(fleet, 'a', { build: NEWER, selfUpgrade: CAN }, later);
+    expect(rolling.onCheckIn(a, later)).toBe(false);
+    expect(a.upgradeToldAt).toBeNull();
+    expect(new Fleet(db).get('a')?.upgradeToldAt).toBeNull();
+    expect(rolling.states(later)).toMatchObject([
+      { id: 'a', state: 'ahead', toldAt: null },
+    ]);
+    expect(rolling.requestRetell(a, later)).toMatchObject({
+      status: 400,
+      message: expect.stringMatching(
+        /cannot be told to upgrade: runs new0002 .* newer than the gateway's new0001/,
+      ),
+    });
+    // Not upgrading, so it holds no pointer: b's turn comes.
+    const b = reporting(fleet, 'b', { build: OLD, selfUpgrade: CAN }, later);
+    expect(rolling.onCheckIn(b, later)).toBe(true);
   });
 
   it('states lists every node in id order with its standing, build and tell', () => {

@@ -144,6 +144,7 @@
   "settings_nodes_col_build": "Build",
   "settings_nodes_col_state": "Zustand",
   "settings_nodes_state_current": "Aktuell",
+  "settings_nodes_state_ahead": "Neuer als das Gateway",
   "settings_nodes_state_behind": "Wartet",
   "settings_nodes_state_upgrading": "Aktualisiert",
   "settings_nodes_state_stuck": "Festgefahren",

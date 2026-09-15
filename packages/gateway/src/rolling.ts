@@ -11,7 +11,7 @@ import { downReason, type Fleet, type NodeState } from './fleet';
  * itself when it sees it, and the next node's turn comes when it is back
  * on the new build). The gateway's machine upgrades first — install.sh
  * there restarts its gateway and its node together — and from then on
- * every node that reports another build than the gateway's is behind.
+ * every node that reports an older build than the gateway's is behind.
  *
  * Told at a check-in, one node at a time: the answer carries `upgrade:
  * true` (shared checkInResponseSchema), the node runs its own updater
@@ -30,6 +30,15 @@ import { downReason, type Fleet, type NodeState } from './fleet';
  * neither forgets a node it told nor tells it twice; the operator's
  * re-tell is memory — a gateway restarted before the node's next check-in
  * forgets it, and the operator clicks again.
+ *
+ * Behind means older. A node whose build is newer than the gateway's — a
+ * commit that landed on main after the gateway's machine upgraded and
+ * before this node's turn came, or install.sh run on the node by hand —
+ * is `ahead`, never told: install.sh pulls main's head, which is where
+ * the node already is, so a tell would rebuild it for nothing and, twenty
+ * minutes on, read it stuck with a remedy that repeats the mistake (found
+ * by review, 2026-09-15). The gateway's own upgrade is what brings an
+ * ahead node to current, and its reason says so.
  */
 
 /** How long a told node has to come back on the new build before it is stuck: a pull, a build and a restart take a few minutes; twenty is a build that failed. */
@@ -66,6 +75,24 @@ export function upgradeStateOf(
   if (node.build.commit === gatewayBuild.commit) {
     return down === null
       ? { state: 'current', reason: null }
+      : { state: 'unreachable', reason: down };
+  }
+  // Newer than the gateway's build is ahead, not behind (the module
+  // comment has why), judged before the tell: a told node that comes back
+  // on a newer build has upgraded, and reads ahead — not upgrading. The
+  // commit's time is the order: main is trunk-based and linear, so a later
+  // committer time is a later commit. Two commits in one second (a rebase
+  // re-commits several in a burst) tie, and a tie reads behind — a node
+  // ahead by a same-second commit is the one case misjudged, and a tell
+  // it survives as before.
+  if (
+    Date.parse(node.build.committedAt) > Date.parse(gatewayBuild.committedAt)
+  ) {
+    return down === null
+      ? {
+          state: 'ahead',
+          reason: `runs ${node.build.commit} (committed ${node.build.committedAt}), newer than the gateway's ${gatewayBuild.commit} — a fleet upgrades from its gateway: upgrade the gateway (applyUpgrade there), and this node reads current`,
+        }
       : { state: 'unreachable', reason: down };
   }
   // A told node is upgrading or stuck whether or not it is checking in:
@@ -140,14 +167,18 @@ export class Rolling {
 
   /**
    * The check-in's verdict for a node that just reported, in order: a
-   * fulfilled tell is cleared (the node is back on the gateway's build);
+   * fulfilled tell is cleared (the node is off the old build — on the
+   * gateway's, or ahead of it);
    * a pending re-tell is honored; otherwise the rolling rule decides. Any
    * tell is written to the row before the answer carries it. Answers
    * whether the node is told now.
    */
   onCheckIn(node: NodeState, now: Date): boolean {
     const { state } = upgradeStateOf(node, this.gatewayBuild, now);
-    if (state === 'current' && node.upgradeToldAt !== null) {
+    if (
+      (state === 'current' || state === 'ahead') &&
+      node.upgradeToldAt !== null
+    ) {
       this.fleet.setUpgradeToldAt(node.id, null);
       this.retell.delete(node.id);
       return false;
@@ -165,8 +196,8 @@ export class Rolling {
   /**
    * The operator's re-tell (applyUpgrade {nodeId}): honored at the node's
    * next check-in. Refused in words when it would do nothing — a node on
-   * the gateway's build, one that cannot upgrade itself, one whose build
-   * is unknown — and told to wait for an unreachable one; a node merely
+   * the gateway's build or ahead of it, one that cannot upgrade itself,
+   * one whose build is unknown — and told to wait for an unreachable one; a node merely
    * behind or upgrading is taken too (the operator's hand outranks the
    * order). Answers the refusal, or null when the re-tell is pending.
    */
@@ -181,6 +212,7 @@ export class Rolling {
           status: 400,
           message: `node ${node.id} already runs the gateway's build (${node.build?.commit ?? 'unknown'}) — nothing to upgrade`,
         };
+      case 'ahead':
       case 'unavailable':
       case 'unknown':
         return {

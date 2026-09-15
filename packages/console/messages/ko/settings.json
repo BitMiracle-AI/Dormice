@@ -144,6 +144,7 @@
   "settings_nodes_col_build": "빌드",
   "settings_nodes_col_state": "상태",
   "settings_nodes_state_current": "최신",
+  "settings_nodes_state_ahead": "게이트웨이보다 최신",
   "settings_nodes_state_behind": "대기 중",
   "settings_nodes_state_upgrading": "업그레이드 중",
   "settings_nodes_state_stuck": "막힘",

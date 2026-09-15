@@ -144,6 +144,7 @@
   "settings_nodes_col_build": "Build",
   "settings_nodes_col_state": "État",
   "settings_nodes_state_current": "À jour",
+  "settings_nodes_state_ahead": "Plus récent que la passerelle",
   "settings_nodes_state_behind": "En attente",
   "settings_nodes_state_upgrading": "Mise à niveau",
   "settings_nodes_state_stuck": "Bloqué",
