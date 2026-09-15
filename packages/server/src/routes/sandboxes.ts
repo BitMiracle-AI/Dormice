@@ -500,10 +500,10 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       const images = await Promise.all(
         listSandboxes(db).map(async (row) => {
           // resolveImage is the one arbiter of template -> image; undefined
-          // means "the executor's own base image", and the executor is the
-          // one authority on what that is (config only knows in docker mode).
+          // means the fleet's base image, which the executor resolves live
+          // (its baseImage view over the copy, main.ts).
           const nextImage =
-            resolveImage(db, row.template) ?? executor.baseImage;
+            resolveImage(db, row.template) ?? executor.baseImage();
           let image: string | null = null;
           if (row.state !== 'archived' && row.state !== 'restoring') {
             try {

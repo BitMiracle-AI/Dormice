@@ -86,6 +86,8 @@ export function applyNodeConfig(
     sandboxDomain: settings.sandboxDomain,
     sandboxDomainAliases: JSON.stringify(settings.sandboxDomainAliases),
     pidsLimit: settings.pidsLimit,
+    baseImage: settings.baseImage,
+    registryAddress: settings.registryAddress,
   };
   const { id: _id, ...set } = row;
   db.transaction((tx) => {
@@ -117,6 +119,8 @@ export function readNodeConfig(db: Db): NodeConfigBundle {
       sandboxDomain: view.sandboxDomain,
       sandboxDomainAliases: view.sandboxDomainAliases,
       pidsLimit: view.pidsLimit,
+      baseImage: view.baseImage,
+      registryAddress: view.registryAddress,
     },
     node: { swapGb: row.swapGb },
     templates: db.select().from(templates).orderBy(templates.name).all(),
@@ -161,6 +165,8 @@ function toView(row: RuntimeSettingsRow): NodeSettings {
     sandboxDomainAliases: JSON.parse(row.sandboxDomainAliases!) as string[],
     pidsLimit: row.pidsLimit!,
     // biome-ignore-end lint/style/noNonNullAssertion: a copy writes every column (applyNodeConfig), and readRow refuses anything that is not a copy
+    baseImage: row.baseImage,
+    registryAddress: row.registryAddress,
   };
 }
 

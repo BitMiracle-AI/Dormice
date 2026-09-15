@@ -80,7 +80,8 @@ function stubDocker(
 function executor(docker: Docker, cgroupRoot?: string): DockerExecutor {
   return new DockerExecutor(
     {
-      baseImage: 'unused',
+      baseImage: () => 'unused',
+      registry: { address: () => null, username: 'dormice', password: 'x' },
       dataDir: '/nonexistent',
       resources: () => ({ diskSizeGb: 1, cpus: 1, memoryGb: 1 }),
       pidsLimit: () => 4096,

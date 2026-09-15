@@ -98,6 +98,11 @@ async function bootGateway(spec: GatewaySpec) {
     DORMICE_S3_ACCESS_KEY_ID: 'e2e-key',
     DORMICE_S3_SECRET_ACCESS_KEY: 'e2e-secret',
     DORMICE_S3_FORCE_PATH_STYLE: 'true',
+    // The fleet's base image — a fleet setting since the fourth cut, so
+    // the nodes take it from their check-in. In docker mode the exported
+    // real image (the documented real-machine run); in fake mode any name,
+    // the fake's own default keeps the suites' assertions honest.
+    DORMICE_BASE_IMAGE: process.env.DORMICE_BASE_IMAGE ?? 'fake-base',
     ...spec.extraEnv,
   };
   const child = spawn('node', [GATEWAY_MAIN], {

@@ -33,7 +33,10 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
     async () => {
       const dataDir = await mkdtemp(path.join(tmpdir(), 'dormice-contract-'));
       const executor = new DockerExecutor({
-        baseImage: image,
+        baseImage: () => image,
+        // No fleet registry on the exam host: every image the contract
+        // names is present (the base, and its alias tag below).
+        registry: { address: () => null, username: 'dormice', password: 'x' },
         dataDir,
         // Small and fast: the contract exercises lifecycle, not capacity.
         // A static closure, not a ledger read: the contract exam runs the
@@ -82,7 +85,8 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
       const dataDir = await mkdtemp(path.join(tmpdir(), 'dormice-contract-'));
       const withCap = (pidsLimit: number) =>
         new DockerExecutor({
-          baseImage: image,
+          baseImage: () => image,
+          registry: { address: () => null, username: 'dormice', password: 'x' },
           dataDir,
           resources: () => ({ diskSizeGb: 1, cpus: 1, memoryGb: 1 }),
           pidsLimit: () => pidsLimit,
@@ -175,7 +179,8 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
     const dyingShell = async (memoryGb: number) => {
       const dataDir = await mkdtemp(path.join(tmpdir(), 'dormice-contract-'));
       const executor = new DockerExecutor({
-        baseImage: image,
+        baseImage: () => image,
+        registry: { address: () => null, username: 'dormice', password: 'x' },
         dataDir,
         resources: () => ({ diskSizeGb: 1, cpus: 1, memoryGb }),
         pidsLimit: () => 256,

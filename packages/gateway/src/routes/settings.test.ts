@@ -164,6 +164,46 @@ describe('updateSettings on the gateway', () => {
     expect((await rpc(app, '/updateSettings', {})).statusCode).toBe(400);
   });
 
+  it('re-points the base image, seeded from the env and carried to the nodes in the bundle; the registry is read-only over the wire', async () => {
+    const { app, db } = testGateway({
+      DORMICE_BASE_IMAGE: 'dormice-base:20260831',
+      DORMICE_REGISTRY_ADDRESS: '10.0.0.5:5000',
+    });
+    expect(await settingsOf(app)).toMatchObject({
+      baseImage: 'dormice-base:20260831',
+      registryAddress: '10.0.0.5:5000',
+    });
+    const res = await rpc(app, '/updateSettings', {
+      baseImage: 'dormice-base:20260901',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(
+      updateSettingsResponseSchema.parse(res.json()).settings.baseImage,
+    ).toBe('dormice-base:20260901');
+    expect(readConfigVersion(db)).toBe(2);
+    const bundle = await rpc(
+      app,
+      '/checkIn',
+      checkInOf('b', 'http://10.0.0.7:80', { configVersion: 1 }),
+    );
+    expect(bundle.json().config.settings).toMatchObject({
+      baseImage: 'dormice-base:20260901',
+      registryAddress: '10.0.0.5:5000',
+    });
+    // Not a reference: refused at the door, the table stands.
+    expect(
+      (await rpc(app, '/updateSettings', { baseImage: 'two words' }))
+        .statusCode,
+    ).toBe(400);
+    // The registry is not a wire knob in this cut: an unknown key is
+    // stripped, and a patch of it alone is the empty patch.
+    expect(
+      (await rpc(app, '/updateSettings', { registryAddress: '1.2.3.4:5000' }))
+        .statusCode,
+    ).toBe(400);
+    expect((await settingsOf(app)).registryAddress).toBe('10.0.0.5:5000');
+  });
+
   it('a new default policy is stored for the nodes to hand to their next acquire', async () => {
     const { app } = testGateway();
     const res = await rpc(app, '/updateSettings', {

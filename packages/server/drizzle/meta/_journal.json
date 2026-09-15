@@ -183,6 +183,13 @@
       "when": 1789375849689,
       "tag": "0025_config-copy",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1789460306678,
+      "tag": "0026_fleet-base-image",
+      "breakpoints": true
     }
   ]
 }

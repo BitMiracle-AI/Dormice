@@ -17,6 +17,7 @@ import {
   readRuntimeSettings,
   readSwapTarget,
 } from './db/settings';
+import { resolveBaseImage } from './db/templates';
 import { WatcherTable } from './e2b/watcher-table';
 import { DockerExecutor } from './executor/docker';
 import type { Executor } from './executor/executor';
@@ -97,16 +98,24 @@ function buildExecutor(cfg: Config, log: (msg: string) => void): Executor {
   // Live too: a console edit reaches the next birth and the next wake's
   // in-place convergence without a restart.
   const pidsLimit = () => readRuntimeSettings(db).pidsLimit;
+  // Live, the same way: the fleet's base image from the copy, this node's
+  // DORMICE_BASE_IMAGE while the fleet names none (db/templates.ts
+  // resolveBaseImage has the rule; the boot log below says which is in
+  // force).
+  const baseImage = () => resolveBaseImage(db, cfg.DORMICE_BASE_IMAGE);
   if (cfg.DORMICE_EXECUTOR === 'fake') {
-    return new FakeExecutor(resources, pidsLimit);
-  }
-  if (!cfg.DORMICE_BASE_IMAGE) {
-    // loadConfig already rejected this combination; the check only narrows
-    // the type here.
-    throw new Error('DORMICE_BASE_IMAGE is required for the docker executor');
+    return new FakeExecutor(resources, pidsLimit, baseImage);
   }
   return new DockerExecutor({
-    baseImage: cfg.DORMICE_BASE_IMAGE,
+    baseImage,
+    // Where an image this host lacks comes from: the fleet registry named
+    // in the copy, under the fleet token — the one credential of the fleet
+    // (design record #34), doubling as the registry's password.
+    registry: {
+      address: () => readRuntimeSettings(db).registryAddress,
+      username: 'dormice',
+      password: cfg.DORMICE_API_TOKEN,
+    },
     dataDir: cfg.DORMICE_DATA_DIR,
     resources,
     pidsLimit,
@@ -211,7 +220,15 @@ const checkIn = new CheckIn({
     readNodeReading(db, checkInCpu, config.DORMICE_DATA_DIR, executor, swap),
   configVersion: () => readConfigVersion(db),
   applyConfig: (bundle) =>
-    applyConfig(bundle, { db, executor, locks, swap, log, beat }),
+    applyConfig(bundle, {
+      db,
+      executor,
+      locks,
+      swap,
+      log,
+      beat,
+      baseImageFallback: config.DORMICE_BASE_IMAGE,
+    }),
   log,
 });
 
@@ -297,6 +314,25 @@ if (readConfigVersion(db) === null) {
       ? `running configuration v${copy.version}; archiver disabled: no S3 store in the fleet settings (configure one in the console)`
       : `running configuration v${copy.version}; archiver enabled: bucket ${copy.settings.s3.bucket} at ${copy.settings.s3.endpoint}`,
   );
+  // Which base image is in force, and where it came from: the fleet's
+  // (the knob's home since the fourth cut), or this node's own env while
+  // the fleet names none — said at boot, once, so a node running on the
+  // fallback is never a surprise (db/templates.ts resolveBaseImage).
+  if (copy.settings.baseImage !== null) {
+    if (config.DORMICE_BASE_IMAGE !== undefined) {
+      log.info(
+        `base image ${copy.settings.baseImage} (the fleet's setting); DORMICE_BASE_IMAGE in this node's env is a fallback only and can be removed`,
+      );
+    }
+  } else if (config.DORMICE_BASE_IMAGE !== undefined) {
+    log.warn(
+      `the fleet settings name no base image — template-less sandboxes on this node boot DORMICE_BASE_IMAGE=${config.DORMICE_BASE_IMAGE} from its env; set baseImage at the gateway (console › settings) so every node shares one`,
+    );
+  } else {
+    log.warn(
+      'the fleet settings name no base image and DORMICE_BASE_IMAGE is not set — a template-less sandbox cannot be built here until baseImage is set at the gateway (console › settings)',
+    );
+  }
 }
 if (archiver.enabled()) {
   await archiver.init();

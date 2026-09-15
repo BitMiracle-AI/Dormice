@@ -142,6 +142,29 @@ export const runtimeSettingsSchema = z.object({
    * unlimited: the cap is what keeps a fork bomb inside its own sandbox.
    */
   pidsLimit: z.number().int().min(PIDS_LIMIT_MIN),
+  /**
+   * The image a sandbox without a template boots from — the fleet's base
+   * image (images/Dockerfile), a bare reference like
+   * `dormice-base:20260831`. A fleet setting since the fourth cut
+   * (2026-09-15): one base for every node, pulled from the fleet's
+   * registry by a node that lacks it (gateway.ts nodeConfigBundleSchema
+   * carries it in the bundle). Changing it is the base's re-point, the
+   * template's `registerTemplate` for template-less sandboxes: each one
+   * converges onto it at its next cold wake. Null = none set — a node then
+   * falls back to its own DORMICE_BASE_IMAGE, the knob's old home, and
+   * says so, or refuses to build a template-less sandbox.
+   */
+  baseImage: z.string().nullable(),
+  /**
+   * The fleet's image registry, host and port (`10.0.0.5:5000`), where a
+   * node that lacks an image pulls it from — `<registryAddress>/<image>`,
+   * tagged back under the bare name so nothing else changes. Null = no
+   * registry (a laptop, the exam): a missing image is then an honest error
+   * naming the host. Seeded from the gateway's DORMICE_REGISTRY_ADDRESS
+   * and read-only over the wire in this cut — moving a fleet to another
+   * registry is an operator's action, not a console knob yet.
+   */
+  registryAddress: z.string().nullable(),
   /** ISO 8601 of the last updateSettings; null = still exactly the first-boot seed. */
   updatedAt: z.string().nullable(),
 });
@@ -186,6 +209,14 @@ export const updateSettingsRequestSchema = z
         error: `pidsLimit must be at least ${PIDS_LIMIT_MIN} — below that a sandbox cannot boot its own runtime`,
       })
       .optional(),
+    /** The fleet's base image, a bare image reference; never null — a fleet cannot un-know its base, only re-point it. */
+    baseImage: z
+      .string()
+      .regex(/^\S+$/, {
+        error:
+          'baseImage must be an image reference like dormice-base:20260831 — no spaces',
+      })
+      .optional(),
   })
   .refine(
     (patch) =>
@@ -194,10 +225,11 @@ export const updateSettingsRequestSchema = z
       patch.defaultPolicy !== undefined ||
       patch.s3 !== undefined ||
       patch.sandboxDomain !== undefined ||
-      patch.sandboxDomainAliases !== undefined,
+      patch.sandboxDomainAliases !== undefined ||
+      patch.baseImage !== undefined,
     {
       message:
-        'updateSettings needs at least one of sandboxDefaults, defaultPolicy, s3, sandboxDomain, sandboxDomainAliases, pidsLimit',
+        'updateSettings needs at least one of sandboxDefaults, defaultPolicy, s3, sandboxDomain, sandboxDomainAliases, pidsLimit, baseImage',
     },
   );
 

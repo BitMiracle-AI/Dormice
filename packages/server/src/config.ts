@@ -90,8 +90,18 @@ const envSchema = z.object({
    * default so a bare `pnpm dev` works on any machine.
    */
   DORMICE_EXECUTOR: z.enum(['fake', 'docker']).default('fake'),
-  /** Image sandboxes boot from, e.g. dormice-base:20260708. Required by the docker executor. */
-  DORMICE_BASE_IMAGE: z.string().optional(),
+  /**
+   * The image template-less sandboxes boot from — a fleet setting since
+   * the fourth cut (shared settings.ts baseImage: every node shares one
+   * base, pulled from the fleet registry), and this variable is the
+   * node's fallback while the fleet's settings name none (a node upgraded
+   * before its gateway learned the knob; db/templates.ts
+   * resolveBaseImage). main.ts says at boot which of the two is in force.
+   * Until 2026-09-15 this was the knob's only home and required in docker
+   * mode; a node without it now refuses only at the moment a sandbox
+   * would need a base image and the fleet has none.
+   */
+  DORMICE_BASE_IMAGE: z.string().regex(/^\S+$/).optional(),
   /** Sandbox disk images and their mount points live here (docker executor only). */
   DORMICE_DATA_DIR: z.string().default('/var/lib/dormice'),
   /**
@@ -191,14 +201,6 @@ function isLoopbackUrl(url: string): boolean | null {
 }
 
 const checkedSchema = envSchema
-  .refine(
-    (cfg) => cfg.DORMICE_EXECUTOR !== 'docker' || !!cfg.DORMICE_BASE_IMAGE,
-    {
-      message:
-        'DORMICE_BASE_IMAGE is required when DORMICE_EXECUTOR=docker — build one from images/Dockerfile',
-      path: ['DORMICE_BASE_IMAGE'],
-    },
-  )
   // Production discipline for real sandboxes: a relative ledger path
   // silently depends on the start directory, and a wrong start directory
   // means an empty ledger facing real sandboxes — the exact catastrophe

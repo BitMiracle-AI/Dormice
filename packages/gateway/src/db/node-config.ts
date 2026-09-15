@@ -25,6 +25,8 @@ export function readNodeConfig(
       sandboxDomain: settings.sandboxDomain,
       sandboxDomainAliases: settings.sandboxDomainAliases,
       pidsLimit: settings.pidsLimit,
+      baseImage: settings.baseImage,
+      registryAddress: settings.registryAddress,
     },
     node: { swapGb: node.swapGb },
     templates: listTemplates(db),

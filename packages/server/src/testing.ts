@@ -30,6 +30,9 @@ export interface TestConfig {
   sandboxDomain?: string | null;
   sandboxDomainAliases?: string[];
   pidsLimit?: number;
+  /** The fleet's base image; null (the default) = the fleet names none and the executor's own default stands in. */
+  baseImage?: string | null;
+  registryAddress?: string | null;
   swapGb?: number;
   /** Replaces the whole template list; timestamps are stamped now. */
   templates?: Array<{ name: string; image: string }>;
@@ -68,6 +71,8 @@ export function testBundle(
       sandboxDomain: over.sandboxDomain ?? null,
       sandboxDomainAliases: over.sandboxDomainAliases ?? [],
       pidsLimit: over.pidsLimit ?? 4096,
+      baseImage: over.baseImage ?? null,
+      registryAddress: over.registryAddress ?? null,
     },
     node: { swapGb: over.swapGb ?? 0 },
     templates: (over.templates ?? []).map((t) => ({
@@ -112,6 +117,14 @@ export function configureNode(db: Db, over: TestConfig = {}): NodeConfigBundle {
               over.sandboxDomainAliases ??
               current.settings.sandboxDomainAliases,
             pidsLimit: over.pidsLimit ?? current.settings.pidsLimit,
+            baseImage:
+              over.baseImage !== undefined
+                ? over.baseImage
+                : current.settings.baseImage,
+            registryAddress:
+              over.registryAddress !== undefined
+                ? over.registryAddress
+                : current.settings.registryAddress,
           },
           node: { swapGb: over.swapGb ?? current.node.swapGb },
           templates:

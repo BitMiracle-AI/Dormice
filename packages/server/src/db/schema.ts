@@ -321,6 +321,17 @@ export const runtimeSettings = sqliteTable('runtime_settings', {
    * for rows from before the move.
    */
   pidsLimit: integer('pids_limit'),
+  /**
+   * The fleet's base image (shared settings.ts baseImage), in the copy
+   * since the fourth cut (2026-09-15): what a template-less sandbox boots
+   * from, pulled from the fleet registry when this host lacks it. NULL =
+   * the fleet names none — this node then falls back to its own
+   * DORMICE_BASE_IMAGE, the knob's old home (db/templates.ts
+   * resolveBaseImage).
+   */
+  baseImage: text('base_image'),
+  /** The fleet's image registry, host:port (shared settings.ts registryAddress); NULL = no registry, a missing image is a plain error. */
+  registryAddress: text('registry_address'),
   /** The old single-machine row's last edit — the gateway's timestamp now; kept for the cut-4 import, never written by the node. */
   updatedAt: text('updated_at'),
 });

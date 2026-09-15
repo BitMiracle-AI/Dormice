@@ -108,6 +108,15 @@ export const settings = sqliteTable('settings', {
   sandboxDomainAliases: text('sandbox_domain_aliases').notNull(),
   /** The pids cgroup cap on every sandbox container, fleet-wide. */
   pidsLimit: integer('pids_limit').notNull(),
+  /**
+   * The fleet's base image, a bare reference (shared settings.ts
+   * baseImage); NULL = none set. Born after the row (the fourth cut), so
+   * a table seeded before it holds NULL here until the env seed fills it
+   * once or the console writes it (db/settings.ts ensureSettings).
+   */
+  baseImage: text('base_image'),
+  /** The fleet's image registry, host:port (shared settings.ts registryAddress); NULL = no registry. Born with baseImage, filled the same way. */
+  registryAddress: text('registry_address'),
   /** Null until the first updateSettings: "still exactly the seed" is information. */
   updatedAt: text('updated_at'),
 });

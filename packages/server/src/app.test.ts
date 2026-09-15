@@ -1754,7 +1754,7 @@ describe('cold wakes converge onto the current image', () => {
 
     const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
     expect(woken.state).toBe('active');
-    expect(await executor.imageOf(created.id)).toBe(executor.baseImage);
+    expect(await executor.imageOf(created.id)).toBe(executor.baseImage());
     expect(executor.removedShells).toEqual([]);
   });
 

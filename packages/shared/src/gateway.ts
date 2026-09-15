@@ -164,6 +164,15 @@ export const nodeConfigBundleSchema = z.object({
     sandboxDomain: z.string().regex(bareHostnameRegex).nullable(),
     sandboxDomainAliases: z.array(z.string().regex(bareHostnameRegex)),
     pidsLimit: z.number().int().min(PIDS_LIMIT_MIN),
+    /**
+     * The fleet's base image and its registry (settings.ts has both).
+     * Default null, not required: a rolling upgrade takes the gateway
+     * first, and a node on this build must take a bundle from a gateway
+     * on the previous one — it then falls back to its own env for the
+     * base image, said as a warning (server/node-config.ts).
+     */
+    baseImage: z.string().nullable().default(null),
+    registryAddress: z.string().nullable().default(null),
   }),
   node: z.object({
     /** This node's managed-swap target, GiB (updateNodeSettings). */

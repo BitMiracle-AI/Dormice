@@ -248,6 +248,9 @@ export const settingsRoutes: FastifyPluginAsyncZod<
           ...(patch.pidsLimit !== undefined
             ? [`pidsLimit=${patch.pidsLimit}`]
             : []),
+          ...(patch.baseImage !== undefined
+            ? [`baseImage=${patch.baseImage}`]
+            : []),
         ].join(', ')}; the nodes apply it at their next check-in`,
       );
       return { settings };

@@ -260,7 +260,13 @@ export interface SandboxResources {
  * either goes through removeContainer + start, the rebuild path).
  */
 export interface ShellOptions {
-  /** Image reference on this host; absent means the executor's configured base image. */
+  /**
+   * Image reference, a bare one (`dormice-base:20260831`) or one naming
+   * its registry; absent means the fleet's base image, the executor's
+   * live view of it (baseImage()). An image the host lacks is pulled
+   * first (ensureImage) — the docker executor from the fleet registry,
+   * the fake from thin air.
+   */
   image?: string;
   /** CPU allowance of this shell; absent means the executor's live default (resources()). */
   cpus?: number;
@@ -360,12 +366,29 @@ export interface ImportDiskOptions {
  */
 export interface Executor {
   /**
-   * The image shells boot from when create/start name none. The executor is
-   * the one authority on its own default — config knows it only in docker
-   * mode, and callers comparing born images against "what would boot next"
-   * must not guess.
+   * The image shells boot from when create/start name none: the fleet's
+   * base image, resolved live at each call (main.ts wires the ledger copy
+   * with the env fallback, db/templates.ts resolveBaseImage) — the same
+   * live-view shape as the resource knobs, so a console edit reaches the
+   * next birth and the next wake's verdict without a restart. Callers
+   * comparing a born image against "what would boot next" ask this; it
+   * throws where the fleet names no base image and the node has no
+   * fallback, the honest answer at the moment a sandbox would need one.
    */
-  readonly baseImage: string;
+  baseImage(): string;
+  /**
+   * Makes an image available on this host, pulling it when absent: from
+   * the fleet's registry for a bare reference (then tagged under the bare
+   * name, so a shell born from it records the same name a shell built from
+   * a local build would — listSandboxImages compares names), as written
+   * for a reference naming its own registry. Answers which it was. Called
+   * ahead of a birth (node-config.ts prefetches a bundle's images) and at
+   * a birth whose image is still missing — a template of tens of GiB must
+   * not make the first sandbox that needs it wait if it can be helped.
+   * Throws, naming the image, the registry and the push command, when
+   * neither the host nor the registry has it.
+   */
+  ensureImage(image: string): Promise<'present' | 'pulled'>;
   /**
    * Brings a brand-new sandbox up to running. `image` picks what the shell
    * boots from (a template's current image); absent means the executor's

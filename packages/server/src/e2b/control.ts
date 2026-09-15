@@ -167,11 +167,12 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
 
   // What the views report as the sandbox's template. E2B's alias is the
   // template's human name — present only when a registered template was
-  // used; a base sandbox echoes the base image name (or 'base') as its
-  // templateID, the honest pre-templates behavior kept for round-trips.
+  // used; a base sandbox echoes the base image's name as its templateID,
+  // the honest pre-templates behavior kept for round-trips (the fleet's
+  // base image, resolved live — the executor's view over the copy).
   function templateFields(row: SandboxRow) {
     return {
-      templateID: row.template ?? config.DORMICE_BASE_IMAGE ?? 'base',
+      templateID: row.template ?? executor.baseImage(),
       ...(row.template ? { alias: row.template } : {}),
     };
   }
@@ -291,7 +292,7 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
           template = body.templateID;
         } else if (
           body.templateID !== 'base' &&
-          body.templateID !== config.DORMICE_BASE_IMAGE
+          body.templateID !== executor.baseImage()
         ) {
           throw apiError(404, `template '${body.templateID}' not found`);
         }

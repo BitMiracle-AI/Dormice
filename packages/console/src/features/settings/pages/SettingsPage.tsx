@@ -43,6 +43,8 @@ const KEY_HINTS: Record<string, () => string> = {
   DORMICE_SANDBOX_MEMORY_GB: m.settings_hint_sandbox_memory,
   DORMICE_SANDBOX_PIDS_LIMIT: m.settings_hint_sandbox_pids_limit,
   DORMICE_SANDBOX_DOMAIN: m.settings_hint_sandbox_domain,
+  DORMICE_BASE_IMAGE: m.settings_hint_base_image,
+  DORMICE_REGISTRY_ADDRESS: m.settings_hint_registry_address,
   DORMICE_INGRESS_FILE: m.settings_hint_ingress_file,
   DORMICE_INGRESS_RELOAD_CMD: m.settings_hint_ingress_reload_cmd,
   DORMICE_S3_ENDPOINT: m.settings_hint_s3_endpoint,

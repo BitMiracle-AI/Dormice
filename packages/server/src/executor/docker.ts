@@ -97,9 +97,33 @@ import { WatchProcessLifecycle } from './watch-lifecycle';
  */
 export const SANDBOX_LABEL = 'dormice.sandbox';
 
+/**
+ * Where a node pulls an image its host lacks (ensureImage): the fleet's
+ * registry, live from the copy — null while the fleet runs none — and
+ * the credential it takes, the fleet token as the password (one secret
+ * for the whole fleet, design record #34; install.sh writes the same
+ * pair into the registry's htpasswd). Presented per pull, never written
+ * to any file on the node.
+ */
+export interface ImageRegistry {
+  address: () => string | null;
+  username: string;
+  password: string;
+}
+
+/** How long one pull may take: an hour — a template of tens of GiB over an intranet is minutes, a registry that hangs must still be given up on. */
+export const PULL_DEADLINE_SECONDS = 3600;
+
 export interface DockerExecutorOptions {
-  /** Image every sandbox boots from, e.g. dormice-base:20260708. */
-  baseImage: string;
+  /**
+   * Live view of the fleet's base image (db/templates.ts resolveBaseImage,
+   * wired in main.ts), read at each birth that names no image and by the
+   * wake's staleness verdict — a fleet setting since the fourth cut, so a
+   * console re-point reaches the next birth without a restart. Same shape
+   * and reason as resources below.
+   */
+  baseImage: () => string;
+  registry: ImageRegistry;
   /** Sparse disk images and their mount points live under this directory. */
   dataDir: string;
   /**
@@ -123,6 +147,38 @@ export interface DockerExecutorOptions {
 
 export function containerName(sandboxId: string): string {
   return `sbx-${sandboxId}`;
+}
+
+/**
+ * Whether an image reference names its registry — Docker's own rule: the
+ * first path component is a host when it contains a dot or a colon, or is
+ * `localhost`. `docker.io/library/python:3.12` and `ghcr.io/x/y` do; the
+ * fleet's own `dormice-base:20260831` and `clawsgo_20260808_base:20260907`
+ * do not (a bare reference; its colon is the tag's).
+ */
+export function namesRegistry(image: string): boolean {
+  const slash = image.indexOf('/');
+  if (slash === -1) return false;
+  const first = image.slice(0, slash);
+  return first.includes('.') || first.includes(':') || first === 'localhost';
+}
+
+/**
+ * A bare reference split for `docker tag`: repository and tag, `latest`
+ * when none is written. A digest reference cannot be re-tagged under a
+ * name and is refused — templates are named by tag here.
+ */
+export function splitRepoTag(image: string): { repo: string; tag: string } {
+  if (image.includes('@')) {
+    throw new Error(
+      `image ${image} is pinned by digest — the fleet's images are named by tag (repository:tag), which the registry pull tags back under`,
+    );
+  }
+  const lastSlash = image.lastIndexOf('/');
+  const colon = image.lastIndexOf(':');
+  return colon > lastSlash
+    ? { repo: image.slice(0, colon), tag: image.slice(colon + 1) }
+    : { repo: image, tag: 'latest' };
 }
 
 /** One `docker inspect`, reduced to what the executor's verbs decide on. */
@@ -263,8 +319,107 @@ export class DockerExecutor implements Executor {
     }
   }
 
-  get baseImage(): string {
-    return this.opts.baseImage;
+  baseImage(): string {
+    return this.opts.baseImage();
+  }
+
+  /** Pulls in flight, by image: a birth and the prefetch asking for the same image share one pull. */
+  private readonly pulls = new Map<string, Promise<void>>();
+
+  async ensureImage(image: string): Promise<'present' | 'pulled'> {
+    if (await this.imagePresent(image)) return 'present';
+    let pull = this.pulls.get(image);
+    if (pull === undefined) {
+      pull = this.pullImage(image).finally(() => this.pulls.delete(image));
+      this.pulls.set(image, pull);
+    }
+    await pull;
+    return 'pulled';
+  }
+
+  private async imagePresent(image: string): Promise<boolean> {
+    try {
+      await deadline(
+        this.docker.getImage(image).inspect(),
+        QUERY_DEADLINE_SECONDS,
+        `inspect of image ${image}`,
+      );
+      return true;
+    } catch (err) {
+      if (isDockerApiError(err) && err.statusCode === 404) return false;
+      throw err;
+    }
+  }
+
+  /**
+   * The pull behind ensureImage. A bare reference comes from the fleet's
+   * registry as `<address>/<image>` under the fleet credential and is
+   * tagged back under the bare name: the shell is born from the bare name
+   * (Config.Image), the same name a locally built image carries, so the
+   * wake's staleness verdict and listSandboxImages keep comparing names
+   * and the fleet's move onto a registry re-marks no existing shell as
+   * upgradable. The registry-prefixed tag stays beside it — it says where
+   * the image came from, and costs nothing. A reference naming its own
+   * registry is pulled as written, no credential: a public image is a
+   * template like any other. No registry and a bare image the host lacks
+   * is a refusal that says both ways out.
+   */
+  private async pullImage(image: string): Promise<void> {
+    const registry = this.opts.registry.address();
+    const fromFleet = !namesRegistry(image);
+    if (fromFleet && registry === null) {
+      throw new Error(
+        `image ${image} is not on this host and the fleet has no registry — build or docker pull it under that name on this host, or run the fleet registry (install.sh runs one beside the gateway) and push it there`,
+      );
+    }
+    const source = fromFleet ? `${registry}/${image}` : image;
+    this.log(`pulling image ${source}`);
+    const started = Date.now();
+    try {
+      const stream = await deadline(
+        this.docker.pull(
+          source,
+          fromFleet
+            ? {
+                authconfig: {
+                  username: this.opts.registry.username,
+                  password: this.opts.registry.password,
+                  serveraddress: registry,
+                },
+              }
+            : {},
+        ),
+        QUERY_DEADLINE_SECONDS,
+        `pull of ${source}`,
+      );
+      await deadline(
+        new Promise<void>((resolve, reject) => {
+          this.docker.modem.followProgress(stream, (err: Error | null) =>
+            err ? reject(err) : resolve(),
+          );
+        }),
+        PULL_DEADLINE_SECONDS,
+        `pull of ${source}`,
+      );
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        fromFleet
+          ? `image ${image} is not on this host, and pulling ${source} from the fleet registry failed: ${why} — push it from a machine that has it: docker tag ${image} ${source} && docker push ${source}`
+          : `image ${image} is not on this host, and pulling it failed: ${why}`,
+      );
+    }
+    if (fromFleet) {
+      const { repo, tag } = splitRepoTag(image);
+      await deadline(
+        this.docker.getImage(source).tag({ repo, tag }),
+        QUERY_DEADLINE_SECONDS,
+        `tag of ${source}`,
+      );
+    }
+    this.log(
+      `pulled image ${source} in ${Math.round((Date.now() - started) / 1000)}s${fromFleet ? `, tagged ${image}` : ''}`,
+    );
   }
 
   async create(sandboxId: string, opts?: CreateOptions): Promise<void> {
@@ -1747,13 +1902,19 @@ export class DockerExecutor implements Executor {
     sandboxId: string,
     opts?: ShellOptions,
   ): Promise<void> {
-    const image = opts?.image;
+    const image = opts?.image ?? this.opts.baseImage();
+    // The image first, so a host that lacks it pulls it here rather than
+    // failing the birth: one image inspect per birth (a millisecond on the
+    // local socket) buys a node that needs no image staged by hand. Slow
+    // when it pulls — a first sandbox of a large template waits — and the
+    // prefetch (node-config.ts) is what makes that rare.
+    await this.ensureImage(image);
     let container: Docker.Container;
     try {
       container = await deadline(
         this.docker.createContainer({
           name: containerName(sandboxId),
-          Image: image ?? this.opts.baseImage,
+          Image: image,
           Cmd: ['sleep', 'infinity'],
           Labels: { [SANDBOX_LABEL]: sandboxId },
           HostConfig: {
@@ -1798,13 +1959,13 @@ export class DockerExecutor implements Executor {
       if (isDockerApiError(err) && err.statusCode === 409) {
         throw new Error(`container ${sandboxId} already exists`);
       }
-      // Registration never checks image existence (the image may arrive
-      // later), so this is where a missing one honestly surfaces. Named
-      // here — dockerode's own 404 would otherwise leak out as this API's
-      // "sandbox not found" status.
+      // ensureImage just saw the image; a 404 here is an image removed in
+      // the milliseconds between (an operator's prune). Named — dockerode's
+      // own 404 would otherwise leak out as this API's "sandbox not found"
+      // status — and the retry pulls it again.
       if (isDockerApiError(err) && err.statusCode === 404) {
         throw new Error(
-          `image ${image ?? this.opts.baseImage} is not on this host — docker pull or build it, then retry`,
+          `image ${image} vanished from this host between the check and the container's creation — retry`,
         );
       }
       throw err;

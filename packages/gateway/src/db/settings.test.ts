@@ -53,10 +53,42 @@ describe('the settings row', () => {
       sandboxDomain: null,
       sandboxDomainAliases: [],
       pidsLimit: 4096,
+      baseImage: null,
+      registryAddress: null,
       updatedAt: null,
     });
     expect(readConfigVersion(db)).toBe(1);
     expect(readS3Settings(db)).toBeNull();
+  });
+
+  it('a column born after the row is filled once from the env while empty, counted as a change; a value already there stands', () => {
+    // A table seeded before the base image and the registry were knobs.
+    const { db, config } = seeded();
+    expect(readSettings(db).baseImage).toBeNull();
+    ensureSettings(db, {
+      ...config,
+      DORMICE_BASE_IMAGE: 'dormice-base:20260831',
+      DORMICE_REGISTRY_ADDRESS: '10.0.0.5:5000',
+    });
+    expect(readSettings(db)).toMatchObject({
+      baseImage: 'dormice-base:20260831',
+      registryAddress: '10.0.0.5:5000',
+    });
+    // The nodes must hear of it: one version up, for both columns at once.
+    expect(readConfigVersion(db)).toBe(2);
+    // From here the table wins, as for every other seed.
+    ensureSettings(db, {
+      ...config,
+      DORMICE_BASE_IMAGE: 'dormice-base:20260901',
+      DORMICE_REGISTRY_ADDRESS: '10.0.0.6:5000',
+    });
+    expect(readSettings(db).baseImage).toBe('dormice-base:20260831');
+    expect(readSettings(db).registryAddress).toBe('10.0.0.5:5000');
+    expect(readConfigVersion(db)).toBe(2);
+    // An env with no seed fills nothing and counts nothing.
+    const bare = seeded();
+    ensureSettings(bare.db, bare.config);
+    expect(readConfigVersion(bare.db)).toBe(1);
   });
 
   it('an S3 seed turns the archive default on and keeps the keys for the bundle, never for the view', () => {
@@ -109,6 +141,10 @@ describe('the settings row', () => {
     expect(after.s3?.bucket).toBe('seed-bucket');
     expect(after.updatedAt).toBe(NOW.toISOString());
     expect(readConfigVersion(db)).toBe(2);
+    expect(
+      writeSettings(db, { baseImage: 'dormice-base:20260901' }, NOW).baseImage,
+    ).toBe('dormice-base:20260901');
+    expect(readConfigVersion(db)).toBe(3);
     // Clearing the store is all six columns at once; the keys go with it.
     writeSettings(
       db,
@@ -117,7 +153,7 @@ describe('the settings row', () => {
     );
     expect(readSettings(db).s3).toBeNull();
     expect(readS3Settings(db)).toBeNull();
-    expect(readConfigVersion(db)).toBe(3);
+    expect(readConfigVersion(db)).toBe(4);
   });
 
   it('bumpConfigVersion counts up by one and answers the new version', () => {

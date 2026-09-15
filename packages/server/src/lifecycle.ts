@@ -230,7 +230,7 @@ export async function wakeSandbox(
     }
     case 'frozen':
     case 'stopped': {
-      const next = resolveImage(db, row.template) ?? executor.baseImage;
+      const next = resolveImage(db, row.template) ?? executor.baseImage();
       const born = await executor.imageOf(row.id);
       // The spec in force, in the runtime's integer units — what a shell
       // built right now would be born with.

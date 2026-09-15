@@ -79,6 +79,8 @@ describe('the check-in as the configuration pull', () => {
       sandboxDomain: 'sbx.example.com',
       sandboxDomainAliases: [],
       pidsLimit: 512,
+      baseImage: null,
+      registryAddress: null,
     });
     expect(config.node).toEqual({ swapGb: 0 });
     expect(config.templates).toMatchObject([{ name: 'py', image: 'img-a' }]);

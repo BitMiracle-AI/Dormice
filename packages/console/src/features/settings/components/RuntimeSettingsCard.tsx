@@ -34,9 +34,11 @@ import { useUpdateSettings } from '../hooks/useUpdateSettings';
  * 一个弹窗,给哪组就整组替换(updatePolicy 的规矩:界面上看到什么就写
  * 下什么)。改的是"之后"不是"已经":容量上限管下一次创建,默认配额管
  * 下一次出生的磁盘/容器,默认策略管下一次 acquire 创建的沙箱 — 存量
- * 沙箱一根汗毛都不动,这句话在每个弹窗里都说清。一个例外:pids 上限会
+ * 沙箱一根汗毛都不动,这句话在每个弹窗里都说清。两个例外:pids 上限会
  * 触达存量沙箱 — 保存时就地扫一遍运行中的壳(docker update,箱内无感),
- * 冻结/停止的在下一次唤醒跟上,都不重建。归档存储与沙箱域名不在这张卡:
+ * 冻结/停止的在下一次唤醒跟上,都不重建;基础镜像(2026-09-15 刀 4 从
+ * 节点 env 升为舰队设置)改了=给基底换代,存量无模板沙箱在下一次冷唤醒
+ * 换壳跟上,与模板重指同一语义,弹窗照实说。归档存储与沙箱域名不在这张卡:
  * 前者是独立的归档卡(六字段撑不进一行的形制),后者语义归域名页。追加
  * swap 是每台机器自己的旋钮,2026-09-14 随集群刀 2 搬去节点页(刀 3)。
  */
@@ -417,6 +419,89 @@ function DefaultPolicyDialog({
   );
 }
 
+/**
+ * 基础镜像:单字段弹窗。校验只有"像一个镜像引用"(非空、无空格)— 网关
+ * 不查镜像存在性(注册模板也不查:镜像可以晚于配置出现,节点缺它时从舰
+ * 队仓库拉),前端更不该替它猜。
+ */
+function BaseImageDialog({ settings }: { settings: RuntimeSettings }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState('');
+  const { pending, error, setError, submit } = useUpdateSettings(() =>
+    setOpen(false),
+  );
+
+  const trimmed = value.trim();
+  const valid = trimmed !== '' && !/\s/.test(trimmed);
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) {
+          setValue(settings.baseImage ?? '');
+          setError(null);
+        }
+      }}
+    >
+      <EditTrigger />
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{m.settings_base_image_dialog_title()}</DialogTitle>
+          <DialogDescription>
+            {m.settings_base_image_dialog_desc()}
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit(
+              { baseImage: trimmed },
+              m.settings_base_image_saved({ image: trimmed }),
+            );
+          }}
+        >
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="settings-base-image">
+                {m.settings_base_image_label()}
+              </FieldLabel>
+              <Input
+                id="settings-base-image"
+                value={value}
+                spellCheck={false}
+                onChange={(event) => setValue(event.target.value)}
+              />
+              <FieldDescription>
+                {m.settings_base_image_field_desc()}
+              </FieldDescription>
+            </Field>
+            {error && <FieldError>{error}</FieldError>}
+          </FieldGroup>
+          <DialogFooter className="mt-6">
+            <Button type="submit" disabled={!valid || pending}>
+              {pending && <Spinner />}
+              {m.common_save()}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** 基础镜像那一行的值:设了就说节点缺它时去哪拉;没设就说各节点在靠自己的 env。 */
+function baseImageLine(settings: RuntimeSettings): string {
+  if (settings.baseImage === null) return m.settings_base_image_unset();
+  return settings.registryAddress === null
+    ? m.settings_row_base_image_local({ image: settings.baseImage })
+    : m.settings_row_base_image_registry({
+        image: settings.baseImage,
+        registry: settings.registryAddress,
+      });
+}
+
 export function RuntimeSettingsCard({ data }: { data: GetConfigResponse }) {
   const { settings } = data;
   return (
@@ -456,6 +541,11 @@ export function RuntimeSettingsCard({ data }: { data: GetConfigResponse }) {
           label={m.settings_row_pids()}
           value={m.settings_row_pids_value({ n: settings.pidsLimit })}
           dialog={<PidsLimitDialog settings={settings} />}
+        />
+        <EditRow
+          label={m.settings_row_base_image()}
+          value={baseImageLine(settings)}
+          dialog={<BaseImageDialog settings={settings} />}
         />
       </div>
     </section>

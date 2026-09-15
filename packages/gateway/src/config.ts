@@ -159,6 +159,30 @@ const envSchema = z.object({
   /** Path-style addressing: MinIO needs true; the clouds route by subdomain. */
   DORMICE_S3_FORCE_PATH_STYLE: z.stringbool().default(false),
   /**
+   * The fleet's base image — the seed of settings.baseImage (shared
+   * settings.ts has the knob): a bare reference the nodes boot
+   * template-less sandboxes from, and pull from the fleet's registry when
+   * a host lacks it. The knob's old home was every node's own env
+   * (2026-09-15, fourth cut): a fleet shares one base, and a second
+   * machine must need no setting of its own to know it. install.sh writes
+   * the tag it built here; a gateway.env from before the knob gets the
+   * line appended.
+   */
+  DORMICE_BASE_IMAGE: z.string().regex(/^\S+$/).optional(),
+  /**
+   * The fleet's image registry, host and port — the seed of
+   * settings.registryAddress: where a node pulls an image it lacks.
+   * install.sh runs one beside the gateway on the machine's intranet
+   * address, port 5000, and writes that here; unset = no registry.
+   */
+  DORMICE_REGISTRY_ADDRESS: z
+    .string()
+    .regex(/^[A-Za-z0-9.-]+(:\d{1,5})?$/, {
+      error:
+        'DORMICE_REGISTRY_ADDRESS is a registry host and port, e.g. 10.0.0.5:5000 — no scheme, no path',
+    })
+    .optional(),
+  /**
    * The Caddy config file the gateway owns — the switch for web-based
    * domain binding (setIngress rewrites the file, reloads Caddy, Caddy
    * handles the certificate). Unset, the gateway never touches any proxy
@@ -232,6 +256,8 @@ export const CONFIG_KEYS: Record<keyof Config, { sensitive: boolean }> = {
   DORMICE_S3_SECRET_ACCESS_KEY: { sensitive: true },
   DORMICE_S3_REGION: { sensitive: false },
   DORMICE_S3_FORCE_PATH_STYLE: { sensitive: false },
+  DORMICE_BASE_IMAGE: { sensitive: false },
+  DORMICE_REGISTRY_ADDRESS: { sensitive: false },
   DORMICE_INGRESS_FILE: { sensitive: false },
   DORMICE_INGRESS_RELOAD_CMD: { sensitive: false },
 };

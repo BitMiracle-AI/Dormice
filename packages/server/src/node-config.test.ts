@@ -14,10 +14,10 @@ import {
   readS3Settings,
   readSwapTarget,
 } from './db/settings';
-import { findTemplate } from './db/templates';
-import { FakeExecutor } from './executor/fake';
+import { findTemplate, resolveBaseImage } from './db/templates';
+import { FAKE_BASE_IMAGE, FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
-import { applyConfig } from './node-config';
+import { applyConfig, prefetchImages } from './node-config';
 import type { SwapControl, SwapStatus } from './swap';
 import { TEST_S3, testBundle } from './testing';
 
@@ -284,5 +284,124 @@ describe('applyConfig: the bundle made real on the host', () => {
       log,
     });
     expect(readSwapTarget(db)).toBe(16);
+  });
+});
+
+describe('the base image: a fleet setting, the env a fallback', () => {
+  it("resolveBaseImage answers the copy's, the env's while the copy names none, and refuses with where to set it when neither does", () => {
+    const db = ledger();
+    applyNodeConfig(db, testBundle({ baseImage: 'dormice-base:20260831' }, 1));
+    expect(resolveBaseImage(db, 'dormice-base:20260718')).toBe(
+      'dormice-base:20260831',
+    );
+    expect(resolveBaseImage(db, undefined)).toBe('dormice-base:20260831');
+    applyNodeConfig(db, testBundle({ baseImage: null }, 2));
+    expect(resolveBaseImage(db, 'dormice-base:20260718')).toBe(
+      'dormice-base:20260718',
+    );
+    expect(() => resolveBaseImage(db, undefined)).toThrow(
+      /no base image: the fleet settings name none and DORMICE_BASE_IMAGE is not set on this node — set baseImage at the gateway/,
+    );
+    // The copy carries the registry beside it, for the pull.
+    applyNodeConfig(
+      db,
+      testBundle({ baseImage: 'b:1', registryAddress: '10.0.0.5:5000' }, 3),
+    );
+    expect(readRuntimeSettings(db)).toMatchObject({
+      baseImage: 'b:1',
+      registryAddress: '10.0.0.5:5000',
+    });
+  });
+
+  it('a bundle naming no base image is a warning when the node has a fallback, nothing when it has none or the fleet names one', async () => {
+    const db = ledger();
+    const executor = new FakeExecutor();
+    const apply = async (
+      bundle: ReturnType<typeof testBundle>,
+      fallback?: string,
+    ) => {
+      const { log, lines } = logSpy();
+      await applyConfig(bundle, {
+        db,
+        executor,
+        locks: new KeyedQueue(),
+        log,
+        baseImageFallback: fallback,
+      });
+      return lines.filter((l) => l.level === 'warn').map((l) => l.msg);
+    };
+    expect(await apply(testBundle({}, 1), 'dormice-base:20260718')).toEqual([
+      expect.stringMatching(/the fleet settings name no base image/),
+    ]);
+    expect(await apply(testBundle({}, 2))).toEqual([]);
+    expect(
+      await apply(testBundle({ baseImage: 'b:1' }, 3), 'dormice-base:20260718'),
+    ).toEqual([]);
+  });
+
+  it("prefetchImages pulls what the bundle names and the host lacks — the base and every template's image, once each — and a pull that fails is one warning, the rest still fetched", async () => {
+    const executor = new FakeExecutor();
+    const { log, lines } = logSpy();
+    const bundle = testBundle(
+      {
+        baseImage: FAKE_BASE_IMAGE,
+        templates: [
+          { name: 'py', image: 'img-py:1' },
+          { name: 'node', image: 'img-node:1' },
+          { name: 'py-too', image: 'img-py:1' },
+        ],
+      },
+      1,
+    );
+    await prefetchImages(bundle, executor, log);
+    // The base is on the host (install.sh builds it); the two template
+    // images were not, and the one named twice was pulled once.
+    expect(executor.pulled).toEqual(['img-py:1', 'img-node:1']);
+    expect(
+      lines.map((l) => [l.level, (l.obj as { image: string }).image]),
+    ).toEqual([
+      ['info', 'img-py:1'],
+      ['info', 'img-node:1'],
+    ]);
+    // Nothing new: nothing pulled, nothing said.
+    lines.length = 0;
+    await prefetchImages(bundle, executor, log);
+    expect(executor.pulled).toEqual(['img-py:1', 'img-node:1']);
+    expect(lines).toEqual([]);
+
+    const failing = new FakeExecutor();
+    vi.spyOn(failing, 'ensureImage').mockImplementation(async (image) => {
+      if (image === 'img-gone:1') throw new Error('manifest unknown');
+      return 'pulled';
+    });
+    const { log: log2, lines: lines2 } = logSpy();
+    await prefetchImages(
+      testBundle(
+        {
+          templates: [
+            { name: 'gone', image: 'img-gone:1' },
+            { name: 'ok', image: 'img-ok:1' },
+          ],
+        },
+        1,
+      ),
+      failing,
+      log2,
+    );
+    expect(lines2.map((l) => l.level)).toEqual(['warn', 'info']);
+    expect(lines2[0]?.msg).toMatch(/could not be fetched ahead/);
+    expect((lines2[0]?.obj as { image: string }).image).toBe('img-gone:1');
+  });
+
+  it("applyConfig starts the prefetch and does not wait for it: the bundle's images arrive after the copy is applied", async () => {
+    const db = ledger();
+    const executor = new FakeExecutor();
+    const { log } = logSpy();
+    await applyConfig(
+      testBundle({ templates: [{ name: 'py', image: 'img-py:1' }] }, 1),
+      { db, executor, locks: new KeyedQueue(), log },
+    );
+    expect(readConfigVersion(db)).toBe(1);
+    await vi.waitFor(() => expect(executor.pulled).toEqual(['img-py:1']));
   });
 });

@@ -2590,24 +2590,20 @@ describe('E2B templates', () => {
     });
   });
 
-  it("'base', the configured base image name, and absence all mean the base image", async () => {
-    const t = testApp(
-      new FakeExecutor(),
-      {},
-      {
-        DORMICE_BASE_IMAGE: 'dormice-base:test',
-      },
-    );
+  it("'base', the fleet's base image name, and absence all mean the base image", async () => {
+    // The fake's own base stands in for the fleet's (the executor's live
+    // view is what the face asks; main.ts wires the copy behind it).
+    const t = testApp();
     for (const payload of [
       {},
       { templateID: 'base' },
-      { templateID: 'dormice-base:test' },
+      { templateID: FAKE_BASE_IMAGE },
     ]) {
       const res = await control(t, 'POST', '/sandboxes', payload);
       expect(res.statusCode).toBe(201);
       const body = res.json();
       // Echo keeps the pre-templates shape: the base image name, no alias.
-      expect(body.templateID).toBe('dormice-base:test');
+      expect(body.templateID).toBe(FAKE_BASE_IMAGE);
       expect(body.alias).toBeUndefined();
       expect(await t.executor.imageOf(body.sandboxID)).toBe(FAKE_BASE_IMAGE);
     }

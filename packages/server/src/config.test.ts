@@ -8,10 +8,16 @@ describe('loadConfig executor knobs', () => {
     expect(loadConfig(TOKEN).DORMICE_EXECUTOR).toBe('fake');
   });
 
-  it('rejects the docker executor without a base image', () => {
-    expect(() => loadConfig({ ...TOKEN, DORMICE_EXECUTOR: 'docker' })).toThrow(
-      /DORMICE_BASE_IMAGE is required/,
-    );
+  it('accepts the docker executor without a base image: the fleet settings name it, the env is the fallback', () => {
+    const config = loadConfig({
+      ...TOKEN,
+      DORMICE_EXECUTOR: 'docker',
+      DORMICE_DB_PATH: '/var/lib/dormice/dormice.db',
+    });
+    expect(config.DORMICE_BASE_IMAGE).toBeUndefined();
+    expect(() =>
+      loadConfig({ ...TOKEN, DORMICE_BASE_IMAGE: 'has a space:1' }),
+    ).toThrow();
   });
 
   it('accepts the docker executor with a base image and absolute paths', () => {

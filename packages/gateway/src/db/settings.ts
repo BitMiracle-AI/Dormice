@@ -14,35 +14,76 @@ import { type SettingsRow, settings } from './schema';
 const SETTINGS_ROW_ID = 1;
 
 /**
+ * The settings row as the env seeds it, whole (the import reuses it as the
+ * row a node's old settings overwrite, import.ts). The archive default is
+ * adjudicated here: an S3 seed present means new sandboxes archive after a
+ * week, absent means never. Version 1 is the seed; every change counts up
+ * from there, and the nodes compare against it at each check-in.
+ */
+export function seedRow(config: Config): typeof settings.$inferInsert {
+  const s3 = s3Seed(config);
+  return {
+    id: SETTINGS_ROW_ID,
+    version: 1,
+    sandboxCpus: config.DORMICE_SANDBOX_CPUS,
+    sandboxMemoryGb: config.DORMICE_SANDBOX_MEMORY_GB,
+    sandboxDiskGb: config.DORMICE_SANDBOX_DISK_GB,
+    defaultFreezeAfterSeconds: DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
+    defaultStopAfterSeconds: DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds,
+    defaultArchiveAfterSeconds: s3 ? ARCHIVE_DEFAULT_SECONDS : null,
+    ...s3Columns(s3),
+    sandboxDomain: config.DORMICE_SANDBOX_DOMAIN ?? null,
+    sandboxDomainAliases: '[]',
+    pidsLimit: config.DORMICE_SANDBOX_PIDS_LIMIT,
+    baseImage: config.DORMICE_BASE_IMAGE ?? null,
+    registryAddress: config.DORMICE_REGISTRY_ADDRESS ?? null,
+    updatedAt: null,
+  };
+}
+
+/**
  * Seeds the settings row from the env at the gateway's first start —
  * insert-or-nothing, so every later start finds the row and leaves it
  * alone: the table is the one truth from then on, and a later env edit of
  * a seed is deliberately ignored (the daemon's discipline since 2026-07-19,
- * shared/settings.ts has the line). The archive default is adjudicated
- * here: an S3 seed present means new sandboxes archive after a week,
- * absent means never. Version 1 is the seed; every change counts up from
- * there, and the nodes compare against it at each check-in.
+ * shared/settings.ts has the line).
+ *
+ * One exception, for columns born after the row: the base image and the
+ * registry (fourth cut, 2026-09-15). A table seeded before them holds
+ * NULL there, and NULL is "never set", not "set to nothing" — so a seed
+ * present in the env fills an empty column once, and a value the console
+ * wrote (or an earlier seed) stands. Counted as a configuration change
+ * when it fills anything: the nodes take the bundle at their next
+ * check-in and stop leaning on their own env for the base image.
  */
 export function ensureSettings(db: Db, config: Config): void {
-  const s3 = s3Seed(config);
-  db.insert(settings)
-    .values({
-      id: SETTINGS_ROW_ID,
-      version: 1,
-      sandboxCpus: config.DORMICE_SANDBOX_CPUS,
-      sandboxMemoryGb: config.DORMICE_SANDBOX_MEMORY_GB,
-      sandboxDiskGb: config.DORMICE_SANDBOX_DISK_GB,
-      defaultFreezeAfterSeconds: DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds,
-      defaultStopAfterSeconds: DEFAULT_LIFECYCLE_POLICY.stopAfterSeconds,
-      defaultArchiveAfterSeconds: s3 ? ARCHIVE_DEFAULT_SECONDS : null,
-      ...s3Columns(s3),
-      sandboxDomain: config.DORMICE_SANDBOX_DOMAIN ?? null,
-      sandboxDomainAliases: '[]',
-      pidsLimit: config.DORMICE_SANDBOX_PIDS_LIMIT,
-      updatedAt: null,
-    })
-    .onConflictDoNothing()
-    .run();
+  const seed = seedRow(config);
+  db.transaction((tx) => {
+    tx.insert(settings).values(seed).onConflictDoNothing().run();
+    const row = tx
+      .select({
+        baseImage: settings.baseImage,
+        registryAddress: settings.registryAddress,
+      })
+      .from(settings)
+      .where(eq(settings.id, SETTINGS_ROW_ID))
+      .get();
+    const late = {
+      ...(row?.baseImage === null && seed.baseImage !== null
+        ? { baseImage: seed.baseImage }
+        : {}),
+      ...(row?.registryAddress === null && seed.registryAddress !== null
+        ? { registryAddress: seed.registryAddress }
+        : {}),
+    };
+    if (Object.keys(late).length > 0) {
+      tx.update(settings)
+        .set(late)
+        .where(eq(settings.id, SETTINGS_ROW_ID))
+        .run();
+      bumpConfigVersion(tx);
+    }
+  });
 }
 
 /** The six S3 columns as one unit: a store, or all NULL = off. */
@@ -97,6 +138,8 @@ function toView(row: SettingsRow): RuntimeSettings {
     // throw right here, not read as "no aliases".
     sandboxDomainAliases: JSON.parse(row.sandboxDomainAliases) as string[],
     pidsLimit: row.pidsLimit,
+    baseImage: row.baseImage,
+    registryAddress: row.registryAddress,
     updatedAt: row.updatedAt,
   };
 }
@@ -208,6 +251,7 @@ export function writeSettings(
         ? { sandboxDomainAliases: JSON.stringify(patch.sandboxDomainAliases) }
         : {}),
       ...(patch.pidsLimit !== undefined ? { pidsLimit: patch.pidsLimit } : {}),
+      ...(patch.baseImage !== undefined ? { baseImage: patch.baseImage } : {}),
       version: sql`${settings.version} + 1`,
       updatedAt: now.toISOString(),
     })
