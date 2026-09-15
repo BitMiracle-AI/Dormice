@@ -1,4 +1,10 @@
-import { mkdtempSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,12 +48,43 @@ function gatewayDb(env: Record<string, string> = {}) {
   return { db, config };
 }
 
-/** A node's ledger on disk, at this build's schema, with the daemon's tables filled by SQL. */
+/**
+ * The daemon's migrations up to and including `lastTag`, as a migrations
+ * folder of their own: the import reads the ledger the PREVIOUS build
+ * left, which still holds the tables this build's migration 0027 drops —
+ * a ledger built with every migration would have nothing to import.
+ */
+function nodeMigrationsUpTo(lastTag: string): string {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dormice-node-migrations-'));
+  mkdirSync(path.join(dir, 'meta'));
+  const journal = JSON.parse(
+    readFileSync(path.join(NODE_MIGRATIONS, 'meta', '_journal.json'), 'utf8'),
+  ) as { entries: Array<{ tag: string }> };
+  const cut = journal.entries.findIndex((e) => e.tag === lastTag);
+  if (cut === -1) throw new Error(`no node migration tagged ${lastTag}`);
+  const entries = journal.entries.slice(0, cut + 1);
+  writeFileSync(
+    path.join(dir, 'meta', '_journal.json'),
+    JSON.stringify({ ...journal, entries }),
+  );
+  for (const entry of entries) {
+    copyFileSync(
+      path.join(NODE_MIGRATIONS, `${entry.tag}.sql`),
+      path.join(dir, `${entry.tag}.sql`),
+    );
+  }
+  return dir;
+}
+
+/** The last daemon migration before the fourth cut dropped the moved tables. */
+const PRE_DROP_MIGRATIONS = nodeMigrationsUpTo('0026_fleet-base-image');
+
+/** A node's ledger on disk, at the previous build's schema, with the daemon's tables filled by SQL. */
 function nodeLedger(fill: (raw: Database.Database) => void): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'dormice-import-'));
   const file = path.join(dir, 'dormice.db');
   const db = openNodeDb(file);
-  migrateNodeDb(db, NODE_MIGRATIONS);
+  migrateNodeDb(db, PRE_DROP_MIGRATIONS);
   fill(db.$client);
   db.$client.close();
   return file;

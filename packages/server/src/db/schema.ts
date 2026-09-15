@@ -1,12 +1,10 @@
 import { SANDBOX_STATES, SHELL_EXIT_CAUSES } from '@dormice/shared';
-import { sql } from 'drizzle-orm';
 import {
   index,
   integer,
   real,
   sqliteTable,
   text,
-  uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 
 /**
@@ -160,32 +158,6 @@ export const sandboxMetricsSamples = sqliteTable(
 export type SandboxMetricsSampleRow = typeof sandboxMetricsSamples.$inferSelect;
 
 /**
- * LEGACY, read by nothing on the node since the third cut (2026-09-15):
- * the fleet's state counts per sampler tick, as this node sampled them
- * while it was a product of its own. The fleet's history is the gateway's
- * table now (gateway db/schema.ts fleet_state_samples, summed over every
- * node at each check-in), and the sampler writes here no more. The table
- * and its rows stay until the fourth cut's import tool has carried a
- * production node's last 30 days into the gateway — a single-node fleet's
- * history is the same figure — so the console's 30-day curve does not
- * break at the cut-over; the DROP ships with that import, beside
- * api_keys and console_account. Not a bug to delete early: the import
- * reads it.
- */
-export const fleetSnapshots = sqliteTable('fleet_snapshots', {
-  /** ISO 8601 UTC; one row per tick, so time itself is the key. */
-  at: text('at').primaryKey(),
-  active: integer('active').notNull(),
-  frozen: integer('frozen').notNull(),
-  stopped: integer('stopped').notNull(),
-  archived: integer('archived').notNull(),
-  restoring: integer('restoring').notNull(),
-  total: integer('total').notNull(),
-});
-
-export type FleetSnapshotRow = typeof fleetSnapshots.$inferSelect;
-
-/**
  * The host machine's own resource history, one row per sampler tick — the
  * historical sibling of getHostMetrics' snapshot. The original ruling
  * ("host trends belong to Prometheus") was overturned 2026-07-21: on a
@@ -218,27 +190,6 @@ export const hostMetricsSamples = sqliteTable('host_metrics_samples', {
 export type HostMetricsSampleRow = typeof hostMetricsSamples.$inferSelect;
 
 /**
- * The console's one human account — the gateway's table since 2026-09-14
- * (the console is served there; packages/gateway/src/db/schema.ts has the
- * living definition). Kept in the node's ledger, unread and unwritten,
- * until the one-time import of a single machine's old tables into the
- * gateway (cut 4) has run; it is dropped then, not before — a migration
- * that dropped it now would delete the operator's account ahead of the
- * step that moves it.
- */
-export const consoleAccount = sqliteTable('console_account', {
-  id: integer('id').primaryKey(),
-  username: text('username').notNull(),
-  /** Self-describing scrypt string: scrypt$N$r$p$<salt b64>$<hash b64>. */
-  passwordHash: text('password_hash').notNull(),
-  sessionSecret: text('session_secret').notNull(),
-  createdAt: text('created_at').notNull(),
-  updatedAt: text('updated_at').notNull(),
-});
-
-export type ConsoleAccountRow = typeof consoleAccount.$inferSelect;
-
-/**
  * The daemon's own secrets — one row, fixed id, same singleton pattern as
  * console_account. envdSigningSecret is the HMAC key behind every envd
  * access token and signed file URL. It is deliberately NOT the API token:
@@ -269,10 +220,14 @@ export type DaemonSecretsRow = typeof daemonSecrets.$inferSelect;
  *
  * config_version says which bundle the row is. NULL means the row is not
  * a copy at all: the daemon's own settings from before the move (seeded
- * from the env, edited from the console), kept for the one-time import
- * into the gateway (cut 4) and never read by the node again — the node
- * reports "no copy" and takes the gateway's bundle at its first check-in,
- * which overwrites every column.
+ * from the env, edited from the console), never read by the node again —
+ * the node reports "no copy" and takes the gateway's bundle at its first
+ * check-in, which overwrites every column. What such a row held for the
+ * fleet was carried into the gateway by the fourth cut's import
+ * (gateway import-ledger.ts), which install.sh runs before the gateway's
+ * first start; the same cut dropped the three tables that moved with the
+ * authority (api_keys, console_account, fleet_snapshots) and the row's
+ * updated_at, all read by nothing on a node (migration 0027).
  *
  * Typed columns, not a JSON blob: the schema IS the vocabulary, and a knob
  * that exists but is invisible to migrations would drift silently.
@@ -332,54 +287,6 @@ export const runtimeSettings = sqliteTable('runtime_settings', {
   baseImage: text('base_image'),
   /** The fleet's image registry, host:port (shared settings.ts registryAddress); NULL = no registry, a missing image is a plain error. */
   registryAddress: text('registry_address'),
-  /** The old single-machine row's last edit — the gateway's timestamp now; kept for the cut-4 import, never written by the node. */
-  updatedAt: text('updated_at'),
 });
 
 export type RuntimeSettingsRow = typeof runtimeSettings.$inferSelect;
-
-/**
- * API keys — the gateway's table since 2026-09-14: keys are minted and
- * judged at the fleet's one door (packages/gateway/src/db/schema.ts has
- * the living definition), and toward a node the gateway speaks the fleet
- * token alone. Kept in the node's ledger, unread and unwritten, until the
- * cut-4 import into the gateway has run — the same reasoning as
- * console_account above: a key an operator's automation still holds must
- * move, not vanish.
- */
-export const apiKeys = sqliteTable(
-  'api_keys',
-  {
-    /** UUID, never an autoincrement — ids must stay unique across machines. */
-    id: text('id').primaryKey(),
-    name: text('name').notNull(),
-    /** sha256 hex of the bare 64-hex key material. The key itself is never stored. */
-    keyHash: text('key_hash').notNull().unique(),
-    /** First 8 hex chars of the key, for display — 32 bits, no meaningful entropy. */
-    prefix: text('prefix').notNull(),
-    createdAt: text('created_at').notNull(),
-    /** Null = never used. Written with 60s granularity, not per request. */
-    lastUsedAt: text('last_used_at'),
-    /**
-     * Null = never expires. Always written through normalizeIso (exact
-     * toISOString shape) so the liveness filter's string comparison against
-     * "now" is chronologically sound — wire input has variable precision.
-     */
-    expiresAt: text('expires_at'),
-    /**
-     * Null = enabled. The reversible half of revocation: set/cleared by
-     * updateApiKey, and the name stays held while disabled — only revoke
-     * frees a name.
-     */
-    disabledAt: text('disabled_at'),
-    /** Null = active. Set once by revokeApiKey; never cleared. */
-    revokedAt: text('revoked_at'),
-  },
-  (table) => [
-    uniqueIndex('api_keys_active_name_idx')
-      .on(table.name)
-      .where(sql`${table.revokedAt} IS NULL`),
-  ],
-);
-
-export type ApiKeyRow = typeof apiKeys.$inferSelect;
