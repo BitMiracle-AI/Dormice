@@ -118,8 +118,9 @@ home directory, non-root user at uid 1000.
   like. A node that lacks the image pulls it from the fleet's registry;
   if the registry lacks it too, creation fails with a named error
   (`image X is not on this host, and pulling <registry>/X from the fleet
-  registry failed … — push it from a machine that has it: docker tag X
-  <registry>/X && docker push <registry>/X`).
+  registry failed … — push it from a machine that has it: docker login
+  <registry> -u dormice (the password is the fleet token), then docker
+  tag X <registry>/X && docker push <registry>/X`).
 - **`base` is reserved.** Through the E2B surface, `Sandbox.create()`
   with no template argument means the fleet's base image (a setting on
   the console's settings page); the name `base` cannot be registered.

@@ -189,7 +189,7 @@ describe('DockerExecutor.ensureImage', () => {
     await expect(
       executor(stub, '10.0.0.5:5000').ensureImage('tpl:1'),
     ).rejects.toThrow(
-      /image tpl:1 is not on this host, and pulling 10\.0\.0\.5:5000\/tpl:1 from the fleet registry failed: manifest unknown.*docker tag tpl:1 10\.0\.0\.5:5000\/tpl:1 && docker push 10\.0\.0\.5:5000\/tpl:1/,
+      /image tpl:1 is not on this host, and pulling 10\.0\.0\.5:5000\/tpl:1 from the fleet registry failed: manifest unknown.*docker login 10\.0\.0\.5:5000 -u dormice .*docker tag tpl:1 10\.0\.0\.5:5000\/tpl:1 && docker push 10\.0\.0\.5:5000\/tpl:1/,
     );
     expect(stub.calls.tagged).toEqual([]);
   });

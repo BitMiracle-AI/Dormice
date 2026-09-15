@@ -56,10 +56,12 @@ hand.
 
 ## What survives an upgrade
 
-- **Your configuration.** `/etc/dormice/env` and
-  `/etc/dormice/gateway.env` are never rewritten once they exist — the
-  API token is never rotated (a knob born after your install is
-  appended with its default, never overwritten).
+- **Your configuration.** The API token in `/etc/dormice/env` is never
+  rotated, and neither env file is regenerated once it exists. Two
+  edits are made in place and nothing else: a knob born after your
+  install is appended with its default, and on the move to a gateway the
+  fleet knobs the daemon's env used to hold are copied into
+  `/etc/dormice/gateway.env` and commented out where they were.
 - **The databases and every disk.** Everything under `/var/lib/dormice`
   and `/var/lib/dormice-gateway` stays; schema migrations run
   automatically when the new processes boot — there is no manual

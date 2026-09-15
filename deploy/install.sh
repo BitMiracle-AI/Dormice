@@ -38,8 +38,9 @@
 #   --node-endpoint URL where the gateway reaches this node (default:
 #                       http://<this machine's address toward the gateway>:80)
 #   --registry-addr H:P the address the fleet registry listens on and the
-#                       nodes pull from (gateway's machine; default: this
-#                       machine's private address, port 5000)
+#                       nodes pull from (gateway's machine, first install;
+#                       default: this machine's private address, port 5000
+#                       — a re-run keeps the address gateway.env holds)
 #
 # Four promises, mirroring `dor doctor`:
 #   - Idempotent. Every step checks before it acts; a step whose outcome is
@@ -1055,8 +1056,19 @@ fi
 # the private address the other machines reach it by; docker0's 172.17.0.1
 # never is). A machine whose main address is public listens on it; the
 # lock is what makes that acceptable.
+env_registry_addr=$(sed -n 's/^DORMICE_REGISTRY_ADDRESS=//p' "$GATEWAY_ENV_FILE" | head -1)
 REGISTRY_ADDR=$REGISTRY_ADDR_FLAG
-[ -n "$REGISTRY_ADDR" ] || REGISTRY_ADDR=$(sed -n 's/^DORMICE_REGISTRY_ADDRESS=//p' "$GATEWAY_ENV_FILE" | head -1)
+if [ -n "$REGISTRY_ADDR" ] && [ -n "$env_registry_addr" ] && [ "$REGISTRY_ADDR" != "$env_registry_addr" ]; then
+  # Once seeded, the address is the fleet's setting: the gateway's row
+  # carries it to every node, and each node pins the certificate under it
+  # and pulls from it. A flag on a re-run would move the listener and
+  # nothing else — the env line and the row stand — and every node would
+  # pull from where the registry no longer is. Refused, as --gateway is
+  # against a node's env (found by review, 2026-09-15); moving the
+  # registry is not a re-run's job in this version.
+  die "$GATEWAY_ENV_FILE says the fleet registry is at $env_registry_addr, --registry-addr says $REGISTRY_ADDR — the address is the fleet's setting and does not move with a flag; re-run without it"
+fi
+[ -n "$REGISTRY_ADDR" ] || REGISTRY_ADDR=$env_registry_addr
 if [ -z "$REGISTRY_ADDR" ]; then
   registry_host=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')
   [ -n "$registry_host" ] || registry_host=$(hostname -I 2>/dev/null | awk '{print $1}')
@@ -1170,9 +1182,15 @@ else
   printf '%s' "$API_TOKEN" | docker login "$REGISTRY_ADDR" -u dormice --password-stdin >/dev/null 2>&1 \
     || die "docker login to https://$REGISTRY_ADDR refused the fleet credential — if the token changed after $REGISTRY_CONF_DIR/htpasswd was written, delete that file and re-run"
   docker tag "$base_image" "$REGISTRY_ADDR/$base_image"
-  docker push -q "$REGISTRY_ADDR/$base_image" >/dev/null
-  # The credential does not stay in /root/.docker/config.json: the daemon
-  # presents it per pull from memory.
+  # The credential does not stay in /root/.docker/config.json, whatever
+  # the push comes to: the daemon presents it per pull from memory, and a
+  # push that fails must not leave the fleet token on disk (`set -e` would
+  # exit before a logout that only followed success; found by review,
+  # 2026-09-15).
+  if ! docker push -q "$REGISTRY_ADDR/$base_image" >/dev/null; then
+    docker logout "$REGISTRY_ADDR" >/dev/null 2>&1 || true
+    die "docker push of $REGISTRY_ADDR/$base_image failed — the registry's side of it: journalctl -u dormice-registry -n 50; fix the cause and re-run"
+  fi
   docker logout "$REGISTRY_ADDR" >/dev/null 2>&1 || true
   note "pushed $base_image to the registry as $REGISTRY_ADDR/$base_image"
 fi
@@ -1218,8 +1236,11 @@ if [ "$FLEET_REGISTRY" != - ]; then
     else
       printf '%s' "$API_TOKEN" | docker login "$FLEET_REGISTRY" -u dormice --password-stdin >/dev/null 2>&1 \
         || die "docker login to https://$FLEET_REGISTRY refused the fleet credential — DORMICE_API_TOKEN here must be the gateway machine's token"
-      docker pull -q "$FLEET_REGISTRY/$FLEET_BASE_IMAGE" >/dev/null \
-        || die "could not pull $FLEET_REGISTRY/$FLEET_BASE_IMAGE — on the gateway machine, re-run install.sh (it pushes the base image), then re-run here"
+      if ! docker pull -q "$FLEET_REGISTRY/$FLEET_BASE_IMAGE" >/dev/null; then
+        # Logged out on failure too: the fleet token must not stay on disk.
+        docker logout "$FLEET_REGISTRY" >/dev/null 2>&1 || true
+        die "could not pull $FLEET_REGISTRY/$FLEET_BASE_IMAGE — on the gateway machine, re-run install.sh (it pushes the base image), then re-run here"
+      fi
       docker tag "$FLEET_REGISTRY/$FLEET_BASE_IMAGE" "$FLEET_BASE_IMAGE"
       docker logout "$FLEET_REGISTRY" >/dev/null 2>&1 || true
       note "pulled the fleet's base image $FLEET_BASE_IMAGE from the registry"
@@ -1284,6 +1305,9 @@ fi
 # untouched.
 if [ "$ROLE" = gateway ]; then
 log 'importing the single-machine ledger into the gateway'
+# The file is the pre-check only — a running gateway holds the lock the
+# tool would need, and a gateway that has started has its row; the tool's
+# own refusal, on the settings row, is the arbiter (import-ledger.ts).
 if [ -f "$GATEWAY_DATA_DIR/gateway.db" ]; then
   note '[skip] the gateway database exists — the import is for its first start'
 elif [ ! -f "$DATA_DIR/dormice.db" ]; then
@@ -1304,7 +1328,19 @@ db.close();
       . "$GATEWAY_ENV_FILE"
       set +a
       node "$INSTALL_DIR/packages/gateway/dist/import.js" --node-db "$DATA_DIR/dormice.db" --node-env "$ENV_FILE"
-    ) || die "the import of $DATA_DIR/dormice.db into the gateway failed — nothing was restarted; fix the cause and re-run (the gateway database, if half-written, is at $GATEWAY_DATA_DIR/gateway.db: delete it before the re-run)"
+    ) || {
+      # The tool creates the gateway database (its migrations) before it
+      # reads the ledger, so a failure past that point leaves a file with
+      # tables and no settings row. Left there, a re-run would see the
+      # file above and skip the import, the gateway would seed its
+      # settings from the env, and the daemon's next boot would drop the
+      # tables the import carries — the operator's keys and console
+      # account gone with no word said (found by review, 2026-09-15). The
+      # file did not exist before this step: removing it puts the machine
+      # back exactly where it was, and the re-run imports again.
+      rm -f "$GATEWAY_DATA_DIR/gateway.db" "$GATEWAY_DATA_DIR/gateway.db-wal" "$GATEWAY_DATA_DIR/gateway.db-shm" "$GATEWAY_DATA_DIR/gateway.db.lock"
+      die "the import of $DATA_DIR/dormice.db into the gateway failed — nothing was restarted, and the half-made gateway database was removed so that the re-run imports again; fix the cause and re-run"
+    }
     note "imported into the gateway: $imported"
   fi
 fi
@@ -1315,23 +1351,36 @@ fi
 # configuration copy takes its first bundle from its gateway before it
 # listens, and a re-run just built both dists: the two processes of a
 # fleet of one run one commit, never two. A node machine: the daemon
-# alone, joined to its remote gateway. Restart, not start: all crash-only
-# by design, so restarting them is always safe.
+# alone, joined to its remote gateway. Restarted, not merely started: all
+# crash-only by design, so restarting them is always safe.
 log 'systemd services'
 cp "$INSTALL_DIR/deploy/dormice.service" /etc/systemd/system/dormice.service
 if [ "$ROLE" = gateway ]; then
   cp "$INSTALL_DIR/deploy/dormice-gateway.service" /etc/systemd/system/dormice-gateway.service
   systemctl daemon-reload
   systemctl enable dormice-gateway dormice >/dev/null 2>&1
+  # The daemon goes down first and comes up last: this machine's two
+  # processes upgrade as one. Gateway first with the old daemon still
+  # running, the old daemon's check-in could land on the new gateway in
+  # the second or two before its own restart — read as a node behind, told
+  # to upgrade, it would try to start the very install.sh unit that is
+  # running, log the refusal, and hold the fleet's one-at-a-time slot for
+  # an interval (found by review, 2026-09-15). Stopped, it says nothing
+  # until it is the new build.
+  systemctl stop dormice
   systemctl restart dormice-gateway
   for _ in $(seq 1 60); do
     curl -fsS "http://127.0.0.1:$GATEWAY_PORT/healthz" >/dev/null 2>&1 && break
     sleep 0.5
   done
-  curl -fsS "http://127.0.0.1:$GATEWAY_PORT/healthz" >/dev/null 2>&1 \
-    || die "the gateway did not answer /healthz on 127.0.0.1:$GATEWAY_PORT — check: journalctl -u dormice-gateway -n 50"
+  if ! curl -fsS "http://127.0.0.1:$GATEWAY_PORT/healthz" >/dev/null 2>&1; then
+    # The daemon must not stay down for the gateway's failure: it serves
+    # its sandboxes without one, and its check-in keeps trying.
+    systemctl start dormice
+    die "the gateway did not answer /healthz on 127.0.0.1:$GATEWAY_PORT — check: journalctl -u dormice-gateway -n 50 (the daemon was started again)"
+  fi
   note "gateway is answering on 127.0.0.1:$GATEWAY_PORT"
-  systemctl restart dormice
+  systemctl start dormice
   note 'enabled and (re)started both'
 else
   systemctl daemon-reload

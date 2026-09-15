@@ -405,7 +405,7 @@ export class DockerExecutor implements Executor {
       const why = err instanceof Error ? err.message : String(err);
       throw new Error(
         fromFleet
-          ? `image ${image} is not on this host, and pulling ${source} from the fleet registry failed: ${why} — push it from a machine that has it: docker tag ${image} ${source} && docker push ${source}`
+          ? `image ${image} is not on this host, and pulling ${source} from the fleet registry failed: ${why} — push it from a machine that has it: docker login ${registry} -u dormice (the password is the fleet token), then docker tag ${image} ${source} && docker push ${source}`
           : `image ${image} is not on this host, and pulling it failed: ${why}`,
       );
     }
