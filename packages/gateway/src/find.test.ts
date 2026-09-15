@@ -11,6 +11,7 @@ import {
 } from './ask';
 import { NameCache } from './cache';
 import { migrateDb, openDb } from './db/db';
+import { nodes } from './db/schema';
 import { Finder } from './find';
 import { Fleet } from './fleet';
 import { checkInOf } from './testing';
@@ -175,7 +176,7 @@ describe('Finder', () => {
     expect(queries.length).toBe(4);
   });
 
-  it('a node that reported no configuration copy is not dialled: empty, it is a no; holding sandboxes, it is silence saying so — and a node not heard from since the start is asked', async () => {
+  it('a node that reported no configuration copy is not dialled: empty, it is a no; holding sandboxes, it is silence saying so — after a restart too, from its row; a row that never checked in is asked', async () => {
     const db = openDb(':memory:');
     migrateDb(db, MIGRATIONS);
     const fleet = new Fleet(db);
@@ -204,13 +205,25 @@ describe('Finder', () => {
     });
     expect(asked).toEqual(['a']);
 
-    // A gateway restarted over the same rows: nothing has checked in,
-    // both are asked — b may be running on the copy it kept.
+    // A gateway restarted over the same rows judges b by what its row
+    // kept — no copy, three sandboxes: still not dialled, still named —
+    // and asks a row that never checked in (the import pre-creates one)
+    // like any other node: nothing is known of it.
     asked.length = 0;
-    await new Finder(new Fleet(db), new NameCache(), ask, silentLog).byName(
-      'new-name',
-    );
-    expect(asked.sort()).toEqual(['a', 'b']);
+    db.insert(nodes)
+      .values({ id: 'n', endpoint: 'http://n:80', addedAt: NOW.toISOString() })
+      .run();
+    const restarted = await new Finder(
+      new Fleet(db),
+      new NameCache(),
+      ask,
+      silentLog,
+    ).byName('new-name');
+    expect(restarted).toMatchObject({
+      kind: 'unsure',
+      silent: [{ nodeId: 'b', why: expect.stringMatching(/not listening/) }],
+    });
+    expect(asked.sort()).toEqual(['a', 'n']);
   });
 
   it('an empty fleet finds nothing and asks nobody', async () => {

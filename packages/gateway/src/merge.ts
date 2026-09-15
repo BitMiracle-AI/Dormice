@@ -7,7 +7,6 @@ import {
   downReason,
   type Fleet,
   type NodeState,
-  STARTUP_GRACE_MS,
 } from './fleet';
 
 /**
@@ -26,31 +25,21 @@ export const MERGE_TIMEOUT_MS = 10_000;
  * answer says about it (`why` null: nothing — it holds nothing the answer
  * could lack). Not asked:
  *   - a node that is down (fleet.ts downReason: two of its own intervals
- *     silent). A dial would wait the whole timeout for nothing, on every
- *     console poll, for as long as it stayed down — it is named with the
- *     reason placement refuses it;
+ *     silent, or never checked in). A dial would wait the whole timeout
+ *     for nothing, on every console poll, for as long as it stayed down —
+ *     it is named with the reason placement refuses it;
  *   - a node awaiting its first configuration (awaitingFirstConfig): not
  *     listening, so a dial is refused at the socket and would read as
  *     silence anyway. Named when its reading says it holds sandboxes.
- * Asked regardless: a node not heard from since a gateway start, for
- * STARTUP_GRACE_MS — every node is silent so far after a restart, the
- * running ones included, and its last row's endpoint is most likely a
- * live daemon (the removeNode rule, routes/nodes.ts). Past the grace, a
- * node still not heard from is down.
+ * Judged from the row after a gateway restart as from memory before one
+ * (fleet.ts): a node that checked in seconds before the restart is asked
+ * at once. The third cut, holding the check-in in memory only, asked
+ * every node not yet heard from for a thirty-second grace after a start;
+ * the rows made the grace unnecessary (fourth cut).
  */
 export type Askability = { ask: true } | { ask: false; why: string | null };
 
-export function askability(
-  node: NodeState,
-  now: Date,
-  startedAt: Date,
-): Askability {
-  if (
-    node.lastCheckInAt === null &&
-    now.getTime() - startedAt.getTime() < STARTUP_GRACE_MS
-  ) {
-    return { ask: true };
-  }
+export function askability(node: NodeState, now: Date): Askability {
   const down = downReason(node, now);
   if (down !== null) return { ask: false, why: down };
   if (awaitingFirstConfig(node)) {
@@ -97,7 +86,7 @@ export async function askEach<T>(
   const silent: SilentNode[] = [];
   const asked: NodeState[] = [];
   for (const node of fleet.all()) {
-    const judged = askability(node, now, fleet.startedAt);
+    const judged = askability(node, now);
     if (judged.ask) asked.push(node);
     else if (judged.why !== null)
       silent.push({ nodeId: node.id, why: judged.why });

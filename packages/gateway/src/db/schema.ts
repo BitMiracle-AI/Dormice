@@ -23,16 +23,21 @@ import {
 
 /**
  * Every node that has ever checked in (routes/nodes.ts): its id, the
- * address the gateway forwards to, when it first appeared, and the one
- * per-node setting — how much swap its daemon manages on its own disk.
- * Written by the nodes themselves at their first check-in — there is no
- * registration verb and no nodes file, so "which nodes exist" has exactly
- * one home — and deleted only by an operator's removeNode. Persistent, not
- * memory, for one reason: a node that is down must still be known after a
- * gateway restart, or a name that lives only there would be placed anew
- * elsewhere and come back as a conflict when the node returns. Everything
- * the node last reported (its reading, build, check-in time) is memory:
- * fifteen seconds later it is reported again.
+ * address the gateway forwards to, when it first appeared, the one
+ * per-node setting — how much swap its daemon manages on its own disk —
+ * and, since the fourth cut, what it last reported: when and at what
+ * interval, running which configuration version and build, and its
+ * reading (two JSON columns in the wire schemas' shapes). Written by the
+ * nodes themselves at every check-in — there is no registration verb and
+ * no nodes file, so "which nodes exist" has exactly one home — and
+ * deleted only by an operator's removeNode. Persistent, not memory, for
+ * two reasons: a node that is down must still be known after a gateway
+ * restart, or a name that lives only there would be placed anew elsewhere
+ * and come back as a conflict when the node returns; and a restarted
+ * gateway must judge its nodes by their last check-in, not by its own age
+ * — with the check-in in memory only (the third cut), "silent since the
+ * gateway started" was true of every node for up to an interval after
+ * every restart, and four rules carried a thirty-second grace for it.
  */
 export const nodes = sqliteTable('nodes', {
   /** DORMICE_NODE_ID as the node states it — the `nodeId` in every sandbox answer. */
@@ -49,6 +54,16 @@ export const nodes = sqliteTable('nodes', {
    * 0 = manage none, the only value that fits every host at birth.
    */
   swapGb: integer('swap_gb').notNull().default(0),
+  /** ISO 8601 UTC — the last check-in taken; null for a row that has never checked in (the import pre-creates one). */
+  lastCheckInAt: text('last_check_in_at'),
+  /** The interval the node stated at that check-in — the yardstick for "two missed". */
+  intervalSeconds: integer('interval_seconds'),
+  /** The configuration version the node said it runs; null = no copy yet, or never said. */
+  configVersion: integer('config_version'),
+  /** JSON, shared buildInfoSchema; null = a dist built outside a checkout, or never checked in. */
+  build: text('build'),
+  /** JSON, shared nodeReadingSchema; null until the first check-in. */
+  reading: text('reading'),
 });
 
 export type NodeRow = typeof nodes.$inferSelect;

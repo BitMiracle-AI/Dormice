@@ -250,8 +250,8 @@ export class Dormice {
    * many nodes there are, are reachable and have reported; the sandbox
    * census by state; the sandbox disks' bill. Answered by the gateway
    * from what it holds — no node is asked. `nodes.reported` says how many
-   * nodes the sums cover; a node not heard from since the gateway started
-   * is not in them.
+   * nodes the sums cover; a node that has never checked in is not in
+   * them.
    */
   async getFleetMetrics(): Promise<GetFleetMetricsResponse> {
     const data = await this.rpc('getFleetMetrics', {});

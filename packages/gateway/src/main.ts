@@ -62,9 +62,10 @@ migrateDb(db, fileURLToPath(new URL('../drizzle', import.meta.url)));
 // The fleet's settings row, seeded from the env exactly once (db/settings.ts).
 ensureSettings(db, config);
 
-// The fleet from the nodes table (a node that is down is still a node);
-// the cache and the readings fill in as nodes report and callers ask.
-const fleet = new Fleet(db);
+// The fleet from the nodes table, each node as of its last check-in (a
+// node that is down is still a node, and a restart forgets nothing the
+// rows hold); the cache fills in as callers ask.
+const fleet = new Fleet(db, log);
 const finder = new Finder(
   fleet,
   new NameCache(),
@@ -147,18 +148,16 @@ let closing = false;
 
 // The fleet's state sampler — the gateway's one clock of its own, the
 // daemon's metrics ticker in shape (server/main.ts): every interval one
-// row of the fleet's census, summed from the readings the check-ins left
-// in memory (db/fleet-samples.ts says when no row is true enough to
-// write). The first tick is one interval after boot, not at once as the
-// daemon's: the readings are the nodes' to report, none has yet, and a
-// shot at boot would write nothing. So the first row after a restart is
-// the first tick after every known node has checked in, and the curve's
-// gap is the downtime plus at most one check-in interval and one sample
-// interval (measured 2026-09-15: 0.6s down, a 54s gap) — not the
-// daemon's "gap equals downtime", whose figures sit in its own ledger at
-// boot where the gateway's sit in the nodes' mouths. Same failure
-// stance: log, never fatal, the next tick retries — and no check-in ever
-// waits on this write.
+// row of the fleet's census, summed from every node's last reading
+// (db/fleet-samples.ts says when no row is true enough to write). The
+// first tick is at boot, as the daemon's: the readings come back from
+// the nodes' rows (fleet.ts), so the first row after a restart is the
+// fleet as of just before it and the curve's gap is the downtime — the
+// third cut, with the readings in memory only, had to wait an interval
+// for the nodes to report again (measured 2026-09-15: 0.6s down, a 54s
+// gap) and deleted the boot shot as necessarily empty; the rows turned
+// that around. Same failure stance: log, never fatal, the next tick
+// retries — and no check-in ever waits on this write.
 const sampleIntervalMs = config.DORMICE_GATEWAY_SAMPLE_INTERVAL_SECONDS * 1000;
 let sampleTimer: NodeJS.Timeout | undefined;
 function sampleTick() {
@@ -170,7 +169,7 @@ function sampleTick() {
     if (!closing) sampleTimer = setTimeout(sampleTick, sampleIntervalMs);
   }
 }
-sampleTimer = setTimeout(sampleTick, sampleIntervalMs);
+sampleTimer = setTimeout(sampleTick, 0);
 
 const close = async (signal: NodeJS.Signals) => {
   if (closing) return;

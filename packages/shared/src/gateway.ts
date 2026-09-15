@@ -199,7 +199,7 @@ export const nodeViewSchema = z.object({
   swapGb: z.number().int().nonnegative(),
   /** The configuration version the node last reported it runs; null until it has said (or before it pulls one). */
   configVersion: z.number().int().nullable(),
-  /** ISO 8601 UTC — null only right after a gateway start, before the node's next check-in. */
+  /** ISO 8601 UTC — the last check-in taken, kept across gateway restarts; null only for a node that has never checked in. */
   lastCheckInAt: z.iso.datetime().nullable(),
   intervalSeconds: z.number().int().positive().nullable(),
   /** Checked in within two of its own intervals. */
@@ -300,9 +300,10 @@ export type SilentNode = z.infer<typeof silentNodeSchema>;
  * of every request measured on the Beijing node, 2026-09-12).
  *
  * `nodes.reported` says how many nodes the sums cover: a node that has
- * not checked in since this gateway started has no reading here, and
- * until it does the sums are a lower bound — said as such, never rounded
- * up.
+ * never checked in (a row the import pre-created) has no reading here,
+ * and until it does the sums are a lower bound — said as such, never
+ * rounded up. A gateway restart loses no reading: each node's last one
+ * is on its row.
  */
 export const getFleetMetricsRequestSchema = z.object({});
 
@@ -316,7 +317,7 @@ export const getFleetMetricsResponseSchema = z.object({
     total: z.number().int(),
     /** Checked in within two of their own intervals (listNodes' `reachable`). */
     reachable: z.number().int(),
-    /** Have a reading — checked in since this gateway started. The sums below cover exactly these. */
+    /** Have a reading — have checked in at least once (a restart keeps it). The sums below cover exactly these. */
     reported: z.number().int(),
   }),
   sandboxes: z.object({

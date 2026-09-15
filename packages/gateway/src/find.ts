@@ -73,9 +73,9 @@ export class Finder {
   }
 
   /**
-   * One node's answer to one question — or, for a node that has checked
-   * in since this gateway started and reported no configuration copy, the
-   * answer without the question (fleet.ts awaitingFirstConfig): its port
+   * One node's answer to one question — or, for a node whose last
+   * check-in reported no configuration copy, the answer without the
+   * question (fleet.ts awaitingFirstConfig): its port
    * is shut until its first bundle applies, so a dial there is refused at
    * the socket and would read as silence — a 503 to every caller of every
    * uncached name for as long as the node boots (left by the second cut's

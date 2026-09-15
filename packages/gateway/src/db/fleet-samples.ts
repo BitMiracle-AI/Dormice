@@ -1,5 +1,5 @@
 import { and, asc, desc, gte, lt, lte } from 'drizzle-orm';
-import { type Fleet, STARTUP_GRACE_MS, sumReadings } from '../fleet';
+import { type Fleet, sumReadings } from '../fleet';
 import type { Db } from './db';
 import { type FleetStateSampleRow, fleetStateSamples } from './schema';
 
@@ -24,22 +24,20 @@ export const FLEET_SAMPLE_KEEP_DAYS = 30;
  * configuration bundle riding on its answer.
  *
  * Not written when there is nothing true to write: no node has a reading
- * (nothing has checked in since this start — the fleet's sandboxes are
- * on the nodes' disks, unknown here, and a zero row would draw a cliff
- * the fleet did not fall off); or, within STARTUP_GRACE_MS of a start,
- * while any node from the rows has not checked in yet — a restarted
- * gateway hears from its nodes one by one over an interval, and a sum
- * written after the first would draw the fleet collapsing to that node's
- * share and climbing back, a false dip at every gateway restart. Past the
- * grace, a node still silent is down, and the sum is written without it
- * (a lower bound, as getFleetMetrics says of the same figure). Answers
- * whether a row was written.
+ * — an empty fleet, or rows that never checked in (the import's) — the
+ * fleet's sandboxes are on the nodes' disks, unknown here, and a zero
+ * row would draw a cliff the fleet did not fall off. A restart draws no
+ * false dip either: every node's last reading comes back from its row
+ * (fleet.ts), so the first tick after a restart sums the whole fleet as
+ * of before it. The third cut, with the readings in memory only, held
+ * the write for a startup grace while any known node had not checked in
+ * — a sum written after the first would have drawn the fleet collapsing
+ * to that node's share and climbing back; the rows made the rule
+ * unnecessary (fourth cut). Answers whether a row was written.
  */
 export function recordFleetSample(db: Db, fleet: Fleet, now: Date): boolean {
-  const nodes = fleet.all();
-  const { reported, sandboxes } = sumReadings(nodes);
-  const settling = now.getTime() - fleet.startedAt.getTime() < STARTUP_GRACE_MS;
-  if (reported === 0 || (settling && reported < nodes.length)) return false;
+  const { reported, sandboxes } = sumReadings(fleet.all());
+  if (reported === 0) return false;
   const cutoff = new Date(
     now.getTime() - FLEET_SAMPLE_KEEP_DAYS * 86_400_000,
   ).toISOString();

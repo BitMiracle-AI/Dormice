@@ -117,6 +117,18 @@ describe('the check-in as the configuration pull', () => {
       (await checkIn(app, 'b', { configVersion: 9 })).config,
     ).toBeDefined();
   });
+
+  it('a check-in the row cannot take is answered all the same, bundle included: the write is best-effort, memory is the truth', async () => {
+    const { app, db } = testGateway();
+    await checkIn(app, 'b', { configVersion: 1 });
+    // Every write refused from here — a full disk's shape.
+    db.$client.pragma('query_only = 1');
+    const answer = await checkIn(app, 'b', { configVersion: null, active: 7 });
+    expect(answer.config?.version).toBe(1);
+    const listed = (await nodes(app)).find((n) => n.id === 'b');
+    expect(listed?.configVersion).toBeNull();
+    expect(listed?.reading?.sandboxes.byState.active).toBe(7);
+  });
 });
 
 describe('updateNodeSettings', () => {
@@ -128,17 +140,18 @@ describe('updateNodeSettings', () => {
     });
     expect(unknown.statusCode).toBe(404);
 
-    // Known from a row, silent since this gateway started: capability unknown.
+    // A row that never checked in (the import pre-creates one; the shape
+    // fleet.ts loads for it): capability unknown.
     fleet.checkIn(checkInOf('b', 'http://10.0.0.7:80'));
     const silent = fleet.get('b');
     if (!silent) throw new Error('no node b');
     silent.reading = null;
+    silent.lastCheckInAt = null;
+    silent.intervalSeconds = null;
     const early = await rpc(app, '/updateNodeSettings', { id: 'b', swapGb: 8 });
     expect(early.statusCode).toBe(503);
     expect(early.headers['retry-after']).toBe('15');
-    expect(early.json().message).toMatch(
-      /has not checked in since the gateway started/,
-    );
+    expect(early.json().message).toMatch(/has never checked in/);
 
     fleet.checkIn(checkInOf('b', 'http://10.0.0.7:80', { managedSwap: null }));
     const unable = await rpc(app, '/updateNodeSettings', {

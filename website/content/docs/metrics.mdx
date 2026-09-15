@@ -115,9 +115,10 @@ const fleet = await client.getFleetMetrics();
 //   sandboxes: { total, byState }, sandboxDisks }
 ```
 
-`nodes.reported` says how many nodes the sums cover. A node that has not
-checked in since the gateway started has no reading yet; until it does,
-the sums are a lower bound, and the console's overview says so.
+`nodes.reported` says how many nodes the sums cover. A node that has never
+checked in has no reading yet; until it does, the sums are a lower bound,
+and the console's overview says so. A gateway restart keeps every node's
+last reading.
 
 `getFleetStateHistory({ start?, end? })` is the same census over time —
 one sample every 30 seconds (the gateway's own sampler,

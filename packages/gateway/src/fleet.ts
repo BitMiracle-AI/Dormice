@@ -1,25 +1,33 @@
-import type {
-  BuildInfo,
-  CheckInRequest,
-  NodeReading,
-  SandboxDisks,
-  SandboxStateCounts,
+import {
+  type BuildInfo,
+  buildInfoSchema,
+  type CheckInRequest,
+  type NodeReading,
+  nodeReadingSchema,
+  type SandboxDisks,
+  type SandboxStateCounts,
 } from '@dormice/shared';
 import { eq } from 'drizzle-orm';
+import type { z } from 'zod';
 import type { Db } from './db/db';
-import { nodes } from './db/schema';
+import { type NodeRow, nodes } from './db/schema';
 import { bumpConfigVersion } from './db/settings';
 
 /**
- * A node as the gateway knows it: the persistent row (id, endpoint,
- * addedAt) and what it last reported (memory — reported again at the next
- * check-in, gone with the process and rightly so). placedSinceCheckIn
- * counts the sandboxes the gateway sent here since the last reading, so a
- * burst inside one interval is counted against the node before its next
- * reading shows it (placement.ts); placedIds are the ones among them whose
- * create answered with an id, so a sandbox placed and destroyed inside one
- * interval — a short job, the exam's churn — is taken off the count again
- * instead of holding a slot the reading will never show (routes/destroy.ts).
+ * A node as the gateway knows it: its row — id, endpoint, addedAt, the
+ * swap target, and what it last reported: when and at what interval, the
+ * configuration version, the build, the reading (written back at every
+ * check-in since the fourth cut, so a restarted gateway starts from the
+ * last check-in and not from nothing) — and the gateway's own counters.
+ * placedSinceCheckIn counts the sandboxes the gateway sent here since the
+ * last reading, so a burst inside one interval is counted against the
+ * node before its next reading shows it (placement.ts); placedIds are the
+ * ones among them whose create answered with an id, so a sandbox placed
+ * and destroyed inside one interval — a short job, the exam's churn — is
+ * taken off the count again instead of holding a slot the reading will
+ * never show (routes/destroy.ts). The counters are memory: they count
+ * what this process did since the reading, and a restarted one has done
+ * nothing yet.
  */
 export interface NodeState {
   readonly id: string;
@@ -29,6 +37,7 @@ export interface NodeState {
   swapGb: number;
   /** The configuration version the node last reported running; null before it has said. */
   configVersion: number | null;
+  /** The last check-in taken; null for a row that has never checked in (the import pre-creates one). */
   lastCheckInAt: Date | null;
   intervalSeconds: number | null;
   build: BuildInfo | null;
@@ -38,30 +47,35 @@ export interface NodeState {
 }
 
 /**
- * How long after a gateway start a node that has not checked in yet is
- * still presumed alive. A restarted gateway knows its nodes from their
- * rows and nothing else: every lastCheckInAt is null, and "has not checked
- * in since the gateway started" is true of a healthy node for up to one
- * of its intervals. Judged by downReason alone, removeNode would let an
- * operator delete a running node in that window (found by review,
- * 2026-09-14). Two of the daemon's default intervals
- * (DORMICE_CHECK_IN_INTERVAL_SECONDS, 15): the gateway cannot know a
- * node's own interval before it has heard from it once.
+ * What the fleet says for itself — a row it could not read back, a row it
+ * could not write. Pino's shape (main.ts passes the gateway's logger);
+ * silent by default, for the suites that embed a fleet.
  */
-export const STARTUP_GRACE_MS = 2 * 15 * 1000;
+export interface FleetLog {
+  info(obj: object, msg: string): void;
+  warn(obj: object, msg: string): void;
+  error(obj: object, msg: string): void;
+}
+
+const SILENT_LOG: FleetLog = { info() {}, warn() {}, error() {} };
 
 /**
  * Why a node is not to be placed on right now, or null when it is fine:
- * never checked in since this gateway started, or silent for two of its
- * own intervals — the interval it stated in its last check-in, so the
- * exam's one-second nodes and production's fifteen-second nodes are judged
- * by the same rule. Two, not one: a check-in delayed by a busy event loop
- * or a slow reading is normal; two in a row missing is a node in trouble.
- * The same word answers listNodes' `reachable`.
+ * never checked in — a row the import pre-created, before the node's
+ * first check-in — or silent for two of its own intervals: the interval
+ * it stated in its last check-in, so the exam's one-second nodes and
+ * production's fifteen-second nodes are judged by the same rule. Two,
+ * not one: a check-in delayed by a busy event loop or a slow reading is
+ * normal; two in a row missing is a node in trouble. The last check-in
+ * is the row's as much as memory's (Fleet has why), so a restarted
+ * gateway reads a node that checked in seconds before the restart as up
+ * and one silent since long before it as down — and no rule here needs
+ * to know how old the gateway is. The same word answers listNodes'
+ * `reachable`.
  */
 export function downReason(node: NodeState, now: Date): string | null {
   if (node.lastCheckInAt === null || node.intervalSeconds === null) {
-    return 'has not checked in since the gateway started';
+    return 'has never checked in';
   }
   const silentMs = now.getTime() - node.lastCheckInAt.getTime();
   if (silentMs > 2 * node.intervalSeconds * 1000) {
@@ -71,14 +85,13 @@ export function downReason(node: NodeState, now: Date): string | null {
 }
 
 /**
- * A node that has checked in since this gateway started and reported no
- * configuration copy: its daemon fetches its first bundle before it opens
- * its port (server/main.ts, CheckIn.untilConfigured), so until its next
- * check-in says otherwise nothing dialled there answers — the socket is
- * shut. Placement refuses it, a lookup does not dial it (find.ts), a
- * merged list does not wait on it (merge.ts). A node not heard from at
- * all since the start is not this: it may well be running on a copy it
- * kept, and is asked like any other.
+ * A node whose last check-in reported no configuration copy: its daemon
+ * fetches its first bundle before it opens its port (server/main.ts,
+ * CheckIn.untilConfigured), so until its next check-in says otherwise
+ * nothing dialled there answers — the socket is shut. Placement refuses
+ * it, a lookup does not dial it (find.ts), a merged list does not wait on
+ * it (merge.ts). A node that has never checked in is not this: nothing
+ * is known of it, and it is asked like any other.
  */
 export function awaitingFirstConfig(node: NodeState): boolean {
   return node.reading !== null && node.configVersion === null;
@@ -101,13 +114,15 @@ export function awaitingFirstConfigWhy(node: NodeState): string | null {
 /**
  * The figures that add up across the fleet, summed over the nodes that
  * have a reading — the census by state and the sandbox disks' bill — and
- * how many nodes that is. A node without a reading (not heard from since
- * this gateway started) contributes nothing, and `reported` says so: the
- * sums are a lower bound until every node has spoken. A node that is
- * down but did report contributes its last reading — its sandboxes are
- * still there, merely out of reach. One function for the sampler's row
- * (db/fleet-samples.ts) and getFleetMetrics (routes/fleet.ts), so the
- * curve and the number under it can never disagree.
+ * how many nodes that is. A node without a reading (never checked in — a
+ * row the import pre-created) contributes nothing, and `reported` says
+ * so: the sums are a lower bound until every node has spoken once. A node
+ * that is down but did report contributes its last reading — its
+ * sandboxes are still there, merely out of reach — and so does every
+ * node right after a gateway restart, from its row. One function for the
+ * sampler's row (db/fleet-samples.ts) and getFleetMetrics
+ * (routes/fleet.ts), so the curve and the number under it can never
+ * disagree.
  */
 export function sumReadings(nodes: readonly NodeState[]): {
   reported: number;
@@ -155,37 +170,91 @@ export type CheckInOutcome =
   | { node: NodeState; joined: boolean; movedFrom: string | null }
   | { refused: string };
 
+/** The row's share of one check-in: what the node said, as the columns hold it (load reads them back). */
+type RowShare = Pick<
+  typeof nodes.$inferInsert,
+  | 'endpoint'
+  | 'lastCheckInAt'
+  | 'intervalSeconds'
+  | 'configVersion'
+  | 'build'
+  | 'reading'
+>;
+
 /**
- * The fleet: every node that has ever checked in. Rows come from the
- * database at start (a node that is down must still be known — its names
- * are not new names); everything else fills in as the nodes report.
+ * The fleet: every node that has ever checked in, and the rows the import
+ * pre-creates. Rows come from the database at start and carry what each
+ * node last reported — a node that is down must still be known (its
+ * names are not new names), and a restarted gateway must judge its nodes
+ * by their last check-in, not by its own age: the third cut kept the
+ * check-in in memory only, and every restart began with a thirty-second
+ * grace in four places (placement, merged lists, the sampler, removeNode)
+ * to cover for "silent since the gateway started" being true of every
+ * node, the running ones included, for up to an interval. Memory is this
+ * process's truth; the row is what it leaves the next one.
  */
 export class Fleet {
   private readonly members = new Map<string, NodeState>();
-
-  /** When this gateway process started — the yardstick for STARTUP_GRACE_MS. */
-  readonly startedAt: Date;
+  /** The nodes whose row the last check-in could not write — said once when it starts, once when it stops (persist). */
+  private readonly unwritten = new Set<string>();
 
   constructor(
     private readonly db: Db,
-    startedAt: Date = new Date(),
+    private readonly log: FleetLog = SILENT_LOG,
   ) {
-    this.startedAt = startedAt;
     for (const row of db.select().from(nodes).all()) {
-      this.members.set(row.id, {
-        id: row.id,
-        endpoint: row.endpoint,
-        addedAt: row.addedAt,
-        swapGb: row.swapGb,
-        configVersion: null,
-        lastCheckInAt: null,
-        intervalSeconds: null,
-        build: null,
-        reading: null,
-        placedSinceCheckIn: 0,
-        placedIds: new Set(),
-      });
+      this.members.set(row.id, this.load(row));
     }
+  }
+
+  /**
+   * A row as memory. The two JSON columns are read back through the
+   * shapes they were written from (the wire schemas): a column that fails
+   * them — a hand edit, a build that wrote a shape this one no longer
+   * reads — is null, said once here, and filled in again at the node's
+   * next check-in; never a gateway that refuses to start over one node's
+   * row.
+   */
+  private load(row: NodeRow): NodeState {
+    return {
+      id: row.id,
+      endpoint: row.endpoint,
+      addedAt: row.addedAt,
+      swapGb: row.swapGb,
+      configVersion: row.configVersion,
+      lastCheckInAt:
+        row.lastCheckInAt === null ? null : new Date(row.lastCheckInAt),
+      intervalSeconds: row.intervalSeconds,
+      build: this.parseJson(row.id, 'build', row.build, buildInfoSchema),
+      reading: this.parseJson(
+        row.id,
+        'reading',
+        row.reading,
+        nodeReadingSchema,
+      ),
+      placedSinceCheckIn: 0,
+      placedIds: new Set(),
+    };
+  }
+
+  private parseJson<T>(
+    nodeId: string,
+    column: string,
+    json: string | null,
+    schema: z.ZodType<T>,
+  ): T | null {
+    if (json === null) return null;
+    try {
+      const parsed = schema.safeParse(JSON.parse(json));
+      if (parsed.success) return parsed.data;
+    } catch {
+      // Not JSON at all: said below, like a shape the schema refuses.
+    }
+    this.log.warn(
+      { nodeId, column },
+      "a column on the node's row is not readable and is dropped until its next check-in fills it in",
+    );
+    return null;
   }
 
   all(): NodeState[] {
@@ -214,16 +283,30 @@ export class Fleet {
    * row is written after the container is up) is in neither figure until
    * the next reading — one interval of slack, self-correcting, the same
    * as before.
+   *
+   * Everything the node said goes to its row as well as to memory. A join
+   * is the one write that must land — a node no row holds is unknown to
+   * the next gateway process, and its names are new names there — so its
+   * INSERT throws (a 500 the node retries an interval later). Every later
+   * check-in's UPDATE is best-effort (persist has why).
    */
   checkIn(report: CheckInRequest, now = new Date()): CheckInOutcome {
     let node = this.members.get(report.nodeId);
     let joined = false;
     let movedFrom: string | null = null;
+    const said: RowShare = {
+      endpoint: report.endpoint,
+      lastCheckInAt: now.toISOString(),
+      intervalSeconds: report.intervalSeconds,
+      configVersion: report.configVersion,
+      build: report.build === null ? null : JSON.stringify(report.build),
+      reading: JSON.stringify(report.reading),
+    };
     if (node === undefined) {
       const addedAt = now.toISOString();
       this.db
         .insert(nodes)
-        .values({ id: report.nodeId, endpoint: report.endpoint, addedAt })
+        .values({ id: report.nodeId, addedAt, ...said })
         .run();
       node = {
         id: report.nodeId,
@@ -240,28 +323,26 @@ export class Fleet {
       };
       this.members.set(node.id, node);
       joined = true;
-    } else if (node.endpoint !== report.endpoint) {
-      if (
-        node.lastCheckInAt !== null &&
-        node.intervalSeconds !== null &&
-        now.getTime() - node.lastCheckInAt.getTime() <
-          node.intervalSeconds * 1000
-      ) {
-        const ago = Math.round(
-          (now.getTime() - node.lastCheckInAt.getTime()) / 1000,
-        );
-        return {
-          refused: `node ${report.nodeId} checked in from ${node.endpoint} ${ago}s ago and now from ${report.endpoint} — two daemons share one DORMICE_NODE_ID (give this one its own), or the node just moved (then its next check-in, an interval later, is taken)`,
-        };
+    } else {
+      if (node.endpoint !== report.endpoint) {
+        if (
+          node.lastCheckInAt !== null &&
+          node.intervalSeconds !== null &&
+          now.getTime() - node.lastCheckInAt.getTime() <
+            node.intervalSeconds * 1000
+        ) {
+          const ago = Math.round(
+            (now.getTime() - node.lastCheckInAt.getTime()) / 1000,
+          );
+          return {
+            refused: `node ${report.nodeId} checked in from ${node.endpoint} ${ago}s ago and now from ${report.endpoint} — two daemons share one DORMICE_NODE_ID (give this one its own), or the node just moved (then its next check-in, an interval later, is taken)`,
+          };
+        }
+        movedFrom = node.endpoint;
       }
-      this.db
-        .update(nodes)
-        .set({ endpoint: report.endpoint })
-        .where(eq(nodes.id, report.nodeId))
-        .run();
-      movedFrom = node.endpoint;
-      node.endpoint = report.endpoint;
+      this.persist(node.id, said);
     }
+    node.endpoint = report.endpoint;
     node.lastCheckInAt = now;
     node.intervalSeconds = report.intervalSeconds;
     node.build = report.build;
@@ -270,6 +351,37 @@ export class Fleet {
     node.placedSinceCheckIn = 0;
     node.placedIds.clear();
     return { node, joined, movedFrom };
+  }
+
+  /**
+   * The row's share of a check-in, best-effort: a write that fails — a
+   * full disk, a file gone read-only — is said once, and the check-in is
+   * taken all the same. Memory is this process's truth and the row is
+   * what it leaves the next one; the configuration bundle riding on the
+   * check-in's answer must not wait on the record of who reported what
+   * (the sampler's stance, db/fleet-samples.ts: an observation's write
+   * has no say over the control plane). Said once, not per check-in: one
+   * failing disk is one situation, not four lines a minute per node —
+   * and said again when the writes succeed, so the log has both ends.
+   */
+  private persist(id: string, said: RowShare): void {
+    try {
+      this.db.update(nodes).set(said).where(eq(nodes.id, id)).run();
+      if (this.unwritten.delete(id)) {
+        this.log.info(
+          { nodeId: id },
+          "the node's row takes its check-ins again",
+        );
+      }
+    } catch (error) {
+      if (!this.unwritten.has(id)) {
+        this.unwritten.add(id);
+        this.log.error(
+          { nodeId: id, err: error },
+          "the node's row could not be written at its check-in; the check-in is taken in memory, and a gateway restart would know the node only as of its last written check-in",
+        );
+      }
+    }
   }
 
   /**

@@ -14,12 +14,7 @@ import type { NameCache } from '../cache';
 import type { Db } from '../db/db';
 import { readNodeConfig } from '../db/node-config';
 import { readConfigVersion } from '../db/settings';
-import {
-  downReason,
-  type Fleet,
-  type NodeState,
-  STARTUP_GRACE_MS,
-} from '../fleet';
+import { downReason, type Fleet, type NodeState } from '../fleet';
 import { RETRY_AFTER_SECONDS } from '../raw';
 
 export interface CheckInRoutesOptions {
@@ -199,13 +194,15 @@ export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
       // word, carried in its reading (shared nodeReadingSchema managedSwap):
       // a target for a daemon that cannot honor it would sit in the row
       // forever, applied by nothing and shown by listNodes as if it were
-      // real. Unknown (the node has not reported since this gateway
-      // started) is unknown, not a guess either way.
+      // real. Unknown (the node has never checked in — a row the import
+      // pre-created) is unknown, not a guess either way; a node's last
+      // reading outlives a gateway restart on its row (fleet.ts), so this
+      // is never said of a node that has reported once.
       if (node.reading === null) {
         reply.header('retry-after', String(RETRY_AFTER_SECONDS));
         throw refusal(
           503,
-          `node ${id} has not checked in since the gateway started, so whether its daemon manages swap is unknown — retry after its next check-in`,
+          `node ${id} has never checked in, so whether its daemon manages swap is unknown — retry after its first check-in`,
         );
       }
       if (node.reading.managedSwap === null) {
@@ -239,22 +236,16 @@ export const nodeRoutes: FastifyPluginAsyncZod<NodeRoutesOptions> = async (
       // two nodes, a 409 an operator clears by hand. Stop the daemon
       // first; two of its intervals of silence is what "down" means
       // (fleet.ts downReason), and a down node is removable (found by
-      // review, 2026-09-14).
+      // review, 2026-09-14). Judged from the row after a gateway restart
+      // as from memory before one: a node that checked in seconds before
+      // the restart is refused here at once, with no grace for the
+      // gateway's own youth (the third cut's STARTUP_GRACE_MS, deleted
+      // with the rows in the fourth). A row that has never checked in —
+      // the import pre-creates one — has nothing here to protect.
       const node = fleet.get(request.body.id);
-      if (node !== undefined) {
+      if (node !== undefined && node.lastCheckInAt !== null) {
         const now = new Date();
-        // Right after a gateway start every node is silent so far, the
-        // running ones included: they are heard from within one interval.
-        // Until two default intervals have passed, "not heard from" is
-        // not "down" (fleet.ts STARTUP_GRACE_MS).
-        const sinceStart = now.getTime() - fleet.startedAt.getTime();
-        if (node.lastCheckInAt === null && sinceStart < STARTUP_GRACE_MS) {
-          throw refusal(
-            409,
-            `the gateway started ${Math.round(sinceStart / 1000)}s ago and has not heard from node ${node.id} yet — a running node checks in within its interval, so silence this early proves nothing; wait ${STARTUP_GRACE_MS / 1000}s from the gateway's start, then remove it`,
-          );
-        }
-        if (downReason(node, now) === null && node.lastCheckInAt !== null) {
+        if (downReason(node, now) === null) {
           const ago = Math.round(
             (now.getTime() - node.lastCheckInAt.getTime()) / 1000,
           );

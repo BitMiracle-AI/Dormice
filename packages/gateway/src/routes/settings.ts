@@ -42,9 +42,10 @@ export interface SettingsRoutesOptions {
  * ledgers. The gateway holds no sandbox state, but every node's last
  * check-in carries its census by state, so the count of archived and
  * restoring sandboxes across the fleet is at hand — for every node that
- * has reported since this gateway started. One that has not is a node
- * whose disks cannot be counted, and the write refuses (503, retry after
- * its next check-in) rather than guess.
+ * has ever reported (its last reading outlives a gateway restart on its
+ * row). One that never has — a row the import pre-created, before the
+ * node's first check-in — is a node whose disks cannot be counted, and
+ * the write refuses (503, retry after that check-in) rather than guess.
  */
 export const settingsRoutes: FastifyPluginAsyncZod<
   SettingsRoutesOptions
@@ -173,7 +174,7 @@ export const settingsRoutes: FastifyPluginAsyncZod<
           if ('unknown' in held) {
             reply.header('retry-after', '15');
             return reply.code(503).send({
-              message: `${held.unknown.map((id) => `node ${id}`).join(', ')} ${held.unknown.length === 1 ? 'has' : 'have'} not checked in since the gateway started, so the sandboxes archived in the current store cannot be counted — retry after ${held.unknown.length === 1 ? 'its' : 'their'} next check-in, or remove ${held.unknown.length === 1 ? 'it' : 'them'} if gone for good`,
+              message: `${held.unknown.map((id) => `node ${id}`).join(', ')} ${held.unknown.length === 1 ? 'has' : 'have'} never checked in, so the sandboxes archived in the current store cannot be counted — retry after ${held.unknown.length === 1 ? 'its' : 'their'} first check-in, or remove ${held.unknown.length === 1 ? 'it' : 'them'} if gone for good`,
             });
           }
           if (held.count > 0) {

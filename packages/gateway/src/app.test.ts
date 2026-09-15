@@ -449,8 +449,6 @@ async function gateway(
   nodeIds: string[],
   env: Record<string, string> = {},
   opts: {
-    /** When the gateway "started" — the removeNode startup grace is judged against it. */
-    startedAt?: Date;
     /** Collects the gateway's own log lines (JSON, one per entry) when a test asserts on what it says. */
     logs?: string[];
     /** How the gateway asks nodes on its own account — a test shortens its patience for the slow-node case. */
@@ -467,7 +465,7 @@ async function gateway(
     ...env,
   });
   ensureSettings(db, config);
-  const fleet = new Fleet(db, opts.startedAt);
+  const fleet = new Fleet(db);
   const cache = new NameCache();
   const finder = new Finder(fleet, cache, httpAskNode(TOKEN), {
     warn: () => {},
@@ -797,35 +795,25 @@ describe('check-in and the node verbs', () => {
     expect(rides()).toHaveLength(2);
   });
 
-  it('right after a gateway start a node not yet heard from cannot be removed; past two default intervals it can', async () => {
-    // A restart: the rows are known, nothing has checked in yet.
-    const fresh = await gateway(['b']);
-    const b = fresh.fleet.get('b');
+  it("a row that never checked in (the import pre-creates one) is removed at once; a node that checked in seconds ago is refused — as of its row after a restart too (fleet.test), with no grace for the gateway's own age", async () => {
+    const h = await gateway(['b']);
+    // The row as the import leaves it, in the shape fleet.ts loads for it:
+    // known, never heard from, nothing to protect.
+    const b = h.fleet.get('b');
     if (!b) throw new Error('node lost');
     b.lastCheckInAt = null;
     b.intervalSeconds = null;
-    const early = await rpc(fresh, '/removeNode', { id: 'b' });
-    expect(early.status).toBe(409);
-    expect(message(early)).toMatch(
-      /^the gateway started \ds ago and has not heard from node b yet/,
-    );
-    expect(fresh.fleet.get('b')).toBeDefined();
-    // The same silence thirty-one seconds into the gateway's life is a
-    // node that is down.
-    const settled = await gateway(
-      ['b'],
-      {},
-      {
-        startedAt: new Date(Date.now() - 31_000),
-      },
-    );
-    const quiet = settled.fleet.get('b');
-    if (!quiet) throw new Error('node lost');
-    quiet.lastCheckInAt = null;
-    quiet.intervalSeconds = null;
-    expect((await rpc(settled, '/removeNode', { id: 'b' })).body).toEqual({
+    b.reading = null;
+    expect((await rpc(h, '/removeNode', { id: 'b' })).body).toEqual({
       removed: true,
     });
+    // Checked in seconds ago — to this process, or per its row to the one
+    // before: the same refusal.
+    await h.checkIn(h.nodes[0] as FakeNode);
+    const live = await rpc(h, '/removeNode', { id: 'b' });
+    expect(live.status).toBe(409);
+    expect(message(live)).toMatch(/^node b checked in \ds ago — it is running/);
+    expect(h.fleet.get('b')).toBeDefined();
   });
 });
 

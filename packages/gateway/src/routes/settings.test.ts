@@ -315,18 +315,19 @@ describe('updateSettings: the S3 archive store', () => {
     expect((await settingsOf(h.app)).s3?.bucket).toBe('seed-bucket');
   });
 
-  it('a node that has not reported since the gateway started makes the count unknown: 503 with Retry-After, not a guess', async () => {
+  it('a node that has never reported makes the count unknown: 503 with Retry-After, not a guess', async () => {
     const h = testGateway(S3_ENV);
     reporting(h, 'b', { archived: 0 });
-    // A node known from its row (a previous gateway life) that has not
-    // checked in yet: its disks cannot be counted.
+    // A row the import pre-created, before the node's first check-in (the
+    // shape fleet.ts loads for it): its disks cannot be counted.
     const silent = reporting(h, 'c');
     silent.reading = null;
     silent.lastCheckInAt = null;
+    silent.intervalSeconds = null;
     const res = await rpc(h.app, '/updateSettings', { s3: null });
     expect(res.statusCode).toBe(503);
     expect(res.headers['retry-after']).toBe('15');
-    expect(res.json().message).toMatch(/node c has not checked in/);
+    expect(res.json().message).toMatch(/node c has never checked in/);
     expect((await settingsOf(h.app)).s3?.bucket).toBe('seed-bucket');
     // Once it has reported (nothing archived there), the clear goes through.
     reporting(h, 'c');

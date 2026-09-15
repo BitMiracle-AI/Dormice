@@ -4,8 +4,8 @@ import {
 } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { recordFleetSample } from '../db/fleet-samples';
-import { fleetStateSamples } from '../db/schema';
-import { STARTUP_GRACE_MS } from '../fleet';
+import { fleetStateSamples, nodes } from '../db/schema';
+import { Fleet } from '../fleet';
 import { checkInOf, TEST_TOKEN, testGateway } from '../testing';
 
 // The fleet's own observation: what the sampler writes (recordFleetSample
@@ -32,9 +32,6 @@ async function checkIn(
   expect(res.statusCode).toBe(200);
 }
 
-/** A gateway started long enough ago that no startup grace applies — against the real clock, which the check-in route reads. */
-const SETTLED = new Date(Date.now() - STARTUP_GRACE_MS - 60_000);
-
 function samples(db: ReturnType<typeof testGateway>['db']) {
   return db
     .select()
@@ -45,7 +42,7 @@ function samples(db: ReturnType<typeof testGateway>['db']) {
 
 describe('the fleet state sample the sampler writes', () => {
   it('a tick writes one row: the sum over every node with a reading, a down node counted by its last reading — and a check-in writes none', async () => {
-    const { app, db, fleet } = testGateway({}, { startedAt: SETTLED });
+    const { app, db, fleet } = testGateway();
     await checkIn(app, 'b', { active: 3, frozen: 1 });
     await checkIn(app, 'c', { active: 2, archived: 4 });
     // The check-ins themselves wrote nothing: the sampler's clock is the
@@ -75,47 +72,41 @@ describe('the fleet state sample the sampler writes', () => {
     expect(samples(db)[2]).toMatchObject({ active: 3, total: 4 });
   });
 
-  it('no row while no node has a reading; within the startup grace none while a known node has not checked in; past it the sum is written without it', () => {
-    // A node known from the rows but not heard from since this start: a
-    // check-in's reading, then the memory a restart leaves — the row and
-    // nothing else (fleet.ts's constructor shape).
-    const silence = (fleet: ReturnType<typeof testGateway>['fleet']) => {
-      fleet.checkIn(checkInOf('c', 'http://c:80', { active: 1 }));
-      const c = fleet.get('c');
-      if (!c) throw new Error('node lost');
-      c.reading = null;
-      c.lastCheckInAt = null;
-      c.intervalSeconds = null;
-    };
-    // Nobody has reported: nothing true to write, however long ago the
-    // gateway started — and an empty fleet writes nothing either.
-    const unheard = testGateway({}, { startedAt: SETTLED });
+  it('no row while no node has a reading — an empty fleet, or rows that never checked in; after a restart the first tick sums every node from the reading its row kept', async () => {
+    // Nobody has ever reported: nothing true to write — an empty fleet,
+    // then a row as the import leaves it, known and never heard from.
+    const unheard = testGateway();
     expect(recordFleetSample(unheard.db, unheard.fleet, new Date())).toBe(
       false,
     );
-    silence(unheard.fleet);
-    expect(recordFleetSample(unheard.db, unheard.fleet, new Date())).toBe(
-      false,
-    );
+    unheard.db
+      .insert(nodes)
+      .values({
+        id: 'n',
+        endpoint: 'http://n:80',
+        addedAt: new Date().toISOString(),
+      })
+      .run();
+    const preCreated = new Fleet(unheard.db);
+    expect(preCreated.get('n')?.reading).toBeNull();
+    expect(recordFleetSample(unheard.db, preCreated, new Date())).toBe(false);
     expect(samples(unheard.db)).toHaveLength(0);
 
-    const fresh = testGateway({}, { startedAt: new Date() });
-    silence(fresh.fleet);
-    fresh.fleet.checkIn(checkInOf('b', 'http://b:80', { active: 2 }));
-    expect(recordFleetSample(fresh.db, fresh.fleet, new Date())).toBe(false);
-    expect(samples(fresh.db)).toHaveLength(0);
-
-    const settled = testGateway({}, { startedAt: SETTLED });
-    silence(settled.fleet);
-    settled.fleet.checkIn(checkInOf('b', 'http://b:80', { active: 2 }));
-    expect(recordFleetSample(settled.db, settled.fleet, new Date())).toBe(true);
-    expect(samples(settled.db)).toEqual([
-      expect.objectContaining({ active: 2, total: 2 }),
+    // Two nodes checked in, then the gateway restarts: nothing has spoken
+    // to the new process yet, and its first tick still sums both, from
+    // their rows — no dip, no wait.
+    const { app, db } = testGateway();
+    await checkIn(app, 'b', { active: 2 });
+    await checkIn(app, 'c', { active: 3, frozen: 1 });
+    const restarted = new Fleet(db);
+    expect(recordFleetSample(db, restarted, new Date())).toBe(true);
+    expect(samples(db)).toEqual([
+      expect.objectContaining({ active: 5, frozen: 1, total: 6 }),
     ]);
   });
 
   it('rows older than 30 days are pruned with the write', () => {
-    const { db, fleet } = testGateway({}, { startedAt: SETTLED });
+    const { db, fleet } = testGateway();
     db.insert(fleetStateSamples)
       .values({
         at: new Date(Date.now() - 31 * 86_400_000).toISOString(),
@@ -137,11 +128,12 @@ describe('the fleet state sample the sampler writes', () => {
 
 describe('getFleetMetrics', () => {
   it('sums the census and the disks over the reported nodes, and says how many nodes that is', async () => {
-    const { app, fleet } = testGateway({}, { startedAt: SETTLED });
+    const { app, fleet } = testGateway();
     await checkIn(app, 'b', { active: 3, frozen: 1 });
     await checkIn(app, 'c', { active: 2, archived: 4 });
-    // A third node known from a previous run, not heard from: in total,
-    // not in reported, not in the sums.
+    // A third node whose row the import pre-created, never heard from
+    // (the shape fleet.ts loads for it): in total, not in reported, not
+    // in the sums.
     fleet.checkIn(checkInOf('d', 'http://d:80'));
     const d = fleet.get('d');
     if (!d) throw new Error('node lost');
@@ -166,7 +158,7 @@ describe('getFleetMetrics', () => {
   });
 
   it('sums the disks a reading carries', async () => {
-    const { app } = testGateway({}, { startedAt: SETTLED });
+    const { app } = testGateway();
     const withDisks = (id: string, count: number) => ({
       ...checkInOf(id, `http://${id}:80`),
       reading: {
@@ -191,7 +183,7 @@ describe('getFleetMetrics', () => {
   });
 
   it('is behind the sandbox gate: a minted key reads it, no token does not', async () => {
-    const { app } = testGateway({}, { startedAt: SETTLED });
+    const { app } = testGateway();
     const minted = (await rpc(app, '/createApiKey', { name: 'ci' })).json();
     const keyed = await app.inject({
       method: 'POST',
@@ -211,7 +203,7 @@ describe('getFleetMetrics', () => {
 
 describe('getFleetStateHistory', () => {
   it('answers an empty window with no points and a null peak; then the samples ascending, byState summing to total, the peak from raw rows', async () => {
-    const { app, db } = testGateway({}, { startedAt: SETTLED });
+    const { app, db } = testGateway();
     const empty = getFleetStateHistoryResponseSchema.parse(
       (await rpc(app, '/getFleetStateHistory', {})).json(),
     );
@@ -251,7 +243,7 @@ describe('getFleetStateHistory', () => {
   });
 
   it("buckets past 360 points by keeping each bucket's last whole row, and the peak survives bucketing", async () => {
-    const { app, db } = testGateway({}, { startedAt: SETTLED });
+    const { app, db } = testGateway();
     const t0 = Date.parse('2026-09-15T00:00:00.000Z');
     const rows = 400;
     const values = [];

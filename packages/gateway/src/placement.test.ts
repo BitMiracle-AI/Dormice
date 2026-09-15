@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { type Db, migrateDb, openDb } from './db/db';
+import { nodes } from './db/schema';
 import { Fleet, type NodeState } from './fleet';
 import { type PlacementKnobs, pick, refusalMessage } from './placement';
 import { checkInOf, type reading } from './testing';
@@ -130,7 +131,7 @@ describe('pick', () => {
     expect(alternating).toEqual(['c', 'd', 'c', 'd', 'c', 'd']);
   });
 
-  it('refuses a node that never checked in since the start, or is silent for two of its intervals', () => {
+  it('refuses a node silent for two of its intervals, or one that never checked in — from the rows after a restart as from memory before', () => {
     const { db, fleet: f } = fleet();
     const stale = node(f, 'stale', {
       intervalSeconds: 15,
@@ -140,18 +141,31 @@ describe('pick', () => {
       intervalSeconds: 15,
       checkedInAt: new Date(NOW.getTime() - 29_000),
     });
-    // The same row after a gateway restart: known, but nothing reported yet.
-    const restarted = new Fleet(db).get('fresh');
-    if (!restarted) throw new Error('row lost');
-    const result = pick([stale, restarted], KNOBS, NOW);
-    expect(result.node).toBeNull();
+    const before = pick([stale, fresh], KNOBS, NOW);
+    expect(before.node?.id).toBe('fresh');
+    expect(before.refused).toEqual([
+      { nodeId: 'stale', reason: 'has not checked in for 31s' },
+    ]);
+    // The same rows after a gateway restart, plus one the import
+    // pre-created: each judged by the check-in its row kept — the fresh
+    // one is placed on at once, the stale one refused as before, the
+    // never-heard-from one refused with the word for it.
+    db.insert(nodes)
+      .values({
+        id: 'new',
+        endpoint: 'http://new:80',
+        addedAt: NOW.toISOString(),
+      })
+      .run();
+    const restarted = new Fleet(db);
+    const result = pick(restarted.all(), KNOBS, NOW);
+    expect(result.node?.id).toBe('fresh');
     expect(
       Object.fromEntries(result.refused.map((r) => [r.nodeId, r.reason])),
     ).toEqual({
       stale: 'has not checked in for 31s',
-      fresh: 'has not checked in since the gateway started',
+      new: 'has never checked in',
     });
-    expect(pick([fresh], KNOBS, NOW).node?.id).toBe('fresh');
   });
 
   it('when every node refuses, each refusal names the node and its reason for the 503; no node at all says so', () => {
