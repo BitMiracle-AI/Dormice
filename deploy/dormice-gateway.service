@@ -6,8 +6,8 @@
 # comments only there — systemd's EnvironmentFile treats an inline comment
 # as part of the value). install.sh restarts this unit before the daemon's,
 # so both run one commit and the daemon's first check-in lands on the new
-# gateway. The `--role node` install for a machine without a gateway is a
-# later step.
+# gateway. A machine of its own joins as a node with `install.sh --role
+# node --gateway <this machine>:3677` and runs no gateway unit.
 [Unit]
 Description=Dormice gateway (fleet front door)
 Wants=network-online.target

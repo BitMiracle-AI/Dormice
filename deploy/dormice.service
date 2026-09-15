@@ -4,8 +4,9 @@
 # as part of the value). It takes the fleet's configuration from its
 # gateway at check-in and, holding no copy yet, waits for the gateway
 # before it listens — hence After= the gateway unit; not Requires=, since
-# a node on a machine of its own has no local gateway and keeps retrying
-# the remote one on its own.
+# a node on a machine of its own (`install.sh --role node`) has no local
+# gateway unit — After= a unit that does not exist is nothing — and keeps
+# retrying the remote one on its own.
 [Unit]
 Description=Dormice daemon (agent sandbox node)
 Wants=network-online.target

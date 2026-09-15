@@ -85,6 +85,8 @@ function fakeHost(
     [FIREWALL_UNIT_PATH]: FIREWALL_UNIT_GOOD,
     '/etc/caddy/Caddyfile':
       '# Managed by Dormice — setIngress rewrites this file.\n\n:80 {\n\treverse_proxy 127.0.0.1:3676\n}\n',
+    '/etc/docker/certs.d/10.0.0.5:5000/ca.crt':
+      '-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n',
     ...overrides.files,
   };
   const commands: Record<string, RunResult> = {
@@ -109,6 +111,8 @@ function fakeHost(
     'zstd --version': ok('zstd command line interface v1.5.5\n'),
     'caddy version': ok('v2.10.0 h1:fakehash\n'),
     'systemctl is-active caddy': ok('active\n'),
+    'curl -sS -o /dev/null -w %{http_code} --cacert /etc/docker/certs.d/10.0.0.5:5000/ca.crt https://10.0.0.5:5000/v2/':
+      ok('401'),
     ...overrides.commands,
   };
   const calls: string[] = [];
@@ -127,6 +131,7 @@ function fakeHost(
       DORMICE_S3_ACCESS_KEY_ID: 'minio-user',
       DORMICE_S3_SECRET_ACCESS_KEY: 'minio-secret',
       DORMICE_INGRESS_FILE: '/etc/caddy/Caddyfile',
+      DORMICE_REGISTRY_ADDRESS: '10.0.0.5:5000',
     },
     calls,
     run: async (cmd, args) => {
@@ -636,17 +641,44 @@ describe('daemon configuration', () => {
     });
   });
 
-  it('without a base image, image check and probes skip with directions', async () => {
+  it("without a base image, image check and probes skip with directions — the base image is the fleet's setting", async () => {
     const { results, failed } = await runDoctor(
       fakeHost({ env: { DORMICE_API_TOKEN: TOKEN } }),
     );
     expect(results['base-image']).toMatchObject({
       status: 'skip',
-      detail: expect.stringContaining('DORMICE_BASE_IMAGE'),
+      detail: expect.stringMatching(/DORMICE_BASE_IMAGE.*fleet's setting/),
     });
     expect(statusOf(results, 'probe-gvisor')).toBe('skip');
     expect(statusOf(results, 'absolute-paths')).toBe('skip');
+    expect(statusOf(results, 'registry')).toBe('skip');
     expect(failed).toBe(false);
+  });
+
+  it('a missing base image names the pull from the fleet registry when there is one, the build otherwise', async () => {
+    const missing = {
+      commands: { [`docker image inspect ${IMAGE}`]: boom('No such image') },
+    };
+    const withRegistry = await runDoctor(fakeHost(missing));
+    expect(withRegistry.results['base-image']).toMatchObject({
+      status: 'fail',
+      fix: expect.stringContaining(`docker pull 10.0.0.5:5000/${IMAGE}`),
+    });
+    const alone = await runDoctor(
+      fakeHost({
+        ...missing,
+        env: {
+          DORMICE_API_TOKEN: TOKEN,
+          DORMICE_EXECUTOR: 'docker',
+          DORMICE_BASE_IMAGE: IMAGE,
+          DORMICE_DB_PATH: '/var/lib/dormice/dormice.db',
+        },
+      }),
+    );
+    expect(alone.results['base-image']).toMatchObject({
+      status: 'fail',
+      fix: expect.stringContaining('images/Dockerfile'),
+    });
   });
 
   it('scarce disk space warns with the measured number', async () => {
@@ -663,6 +695,49 @@ describe('daemon configuration', () => {
     expect(results['disk-space']).toMatchObject({
       status: 'warn',
       detail: expect.stringContaining('5.0 GiB'),
+    });
+  });
+});
+
+describe('fleet image registry', () => {
+  it('reachable over TLS and asking for the credential passes; a missing pinned certificate, a dead address and an unexpected status each fail with their own fix', async () => {
+    const healthy = await runDoctor(fakeHost());
+    expect(healthy.results.registry).toMatchObject({
+      status: 'pass',
+      detail: expect.stringContaining('asks for the fleet credential'),
+    });
+    const unpinned = await runDoctor(
+      fakeHost({
+        files: { '/etc/docker/certs.d/10.0.0.5:5000/ca.crt': undefined },
+      }),
+    );
+    expect(unpinned.results.registry).toMatchObject({
+      status: 'fail',
+      detail: expect.stringContaining('ca.crt is missing'),
+    });
+    const dead = await runDoctor(
+      fakeHost({
+        commands: {
+          'curl -sS -o /dev/null -w %{http_code} --cacert /etc/docker/certs.d/10.0.0.5:5000/ca.crt https://10.0.0.5:5000/v2/':
+            boom('curl: (7) Failed to connect to 10.0.0.5 port 5000'),
+        },
+      }),
+    );
+    expect(dead.results.registry).toMatchObject({
+      status: 'fail',
+      detail: expect.stringContaining('Failed to connect'),
+    });
+    const odd = await runDoctor(
+      fakeHost({
+        commands: {
+          'curl -sS -o /dev/null -w %{http_code} --cacert /etc/docker/certs.d/10.0.0.5:5000/ca.crt https://10.0.0.5:5000/v2/':
+            ok('502'),
+        },
+      }),
+    );
+    expect(odd.results.registry).toMatchObject({
+      status: 'fail',
+      detail: expect.stringContaining('answered 502'),
     });
   });
 });

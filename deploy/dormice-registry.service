@@ -1,0 +1,27 @@
+# Dormice image registry: the fleet's one image store, beside the gateway
+# (design record #33). The base image install.sh builds is pushed here
+# once, template images are pushed by the operator, and every node pulls
+# an image it lacks from here under the fleet token (the registry's
+# htpasswd holds the same credential as user `dormice`). Standard CNCF
+# distribution, the static binary pinned and checksummed by install.sh,
+# serving TLS with a self-signed certificate whose SAN is this machine's
+# address — the same file is trusted by Docker on the gateway machine
+# (/etc/docker/certs.d) and copied to each node when it joins. Config in
+# /etc/dormice/registry/registry.yml, images under
+# /var/lib/dormice-gateway/registry. OTEL_TRACES_EXPORTER=none: the
+# binary otherwise ships traces to localhost:4318 at every request and
+# logs the connection refusals.
+[Unit]
+Description=Dormice image registry (fleet image store)
+Wants=network-online.target
+After=network-online.target
+Before=dormice-gateway.service
+
+[Service]
+ExecStart=/usr/local/bin/registry serve /etc/dormice/registry/registry.yml
+Environment=OTEL_TRACES_EXPORTER=none
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

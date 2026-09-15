@@ -1,18 +1,45 @@
 #!/usr/bin/env bash
 # Dormice installer: turns a bare Ubuntu/Debian x86_64 host into a running
-# Dormice — a gateway (the fleet's one door: configuration, keys, the web
-# console) and a daemon (the node that runs the sandboxes) on one machine,
-# a fleet of one — then proves it by running `dor doctor`.
+# Dormice machine and proves it by running `dor doctor`. Two roles, one
+# script:
 #
-#   curl -fsSL https://raw.githubusercontent.com/BitMiracle-AI/Dormice/main/deploy/install.sh | bash
+#   The gateway's machine (the default): the gateway (the fleet's one door:
+#   configuration, keys, the web console), the fleet's image registry, and
+#   a daemon (a node that runs sandboxes) — on one machine, a fleet of one.
+#
+#     curl -fsSL https://raw.githubusercontent.com/BitMiracle-AI/Dormice/main/deploy/install.sh | bash
+#
+#   A node machine (--role node): a daemon alone, joined to a gateway on
+#   another machine. Told the gateway's address once, at its first install,
+#   and nothing else — the fleet's settings, the base image and the
+#   templates come from the gateway at its first check-in, images it lacks
+#   from the fleet's registry. The fleet token comes from the environment
+#   (never a flag: flags show in `ps`; exported, not prefixed — a prefix
+#   would bind to curl, not to bash):
+#
+#     export DORMICE_API_TOKEN=<the gateway machine's token>
+#     curl -fsSL .../install.sh | bash -s -- --role node --gateway http://10.0.0.5:3677
+#
+#   The role is not a file: /etc/dormice/env names the gateway
+#   (DORMICE_GATEWAY_ENDPOINT), and a remote one is what makes a machine a
+#   node machine. Re-runs — upgrades — need no flags on either role.
 #
 # Flags (pass after `bash -s --` when piping):
-#   --mirror cn     use mainland-China mirrors for every download
-#   --swap-gb N     size of the swapfile to create when the host has no swap
-#                   (default 16 — the configuration freezing was measured on)
-#   --status-dir D  write status.json into D as the run progresses — how the
-#                   daemon's one-click upgrade reads the outcome back; a
-#                   manual run doesn't need it
+#   --mirror cn         use mainland-China mirrors for every download
+#   --swap-gb N         size of the swapfile to create when the host has no
+#                       swap (default 16 — the configuration freezing was
+#                       measured on)
+#   --status-dir D      write status.json into D as the run progresses — how
+#                       the one-click upgrade reads the outcome back; a manual
+#                       run doesn't need it
+#   --role node         first install of a node machine (see above)
+#   --gateway URL       the gateway this node joins (--role node, first install)
+#   --node-id ID        this node's name in the fleet (default: the hostname)
+#   --node-endpoint URL where the gateway reaches this node (default:
+#                       http://<this machine's address toward the gateway>:80)
+#   --registry-addr H:P the address the fleet registry listens on and the
+#                       nodes pull from (gateway's machine; default: this
+#                       machine's private address, port 5000)
 #
 # Four promises, mirroring `dor doctor`:
 #   - Idempotent. Every step checks before it acts; a step whose outcome is
@@ -45,12 +72,23 @@ GVISOR_DATE=20260622
 RUNSC_SHA512=6df95d09363dbd9ee5d5c889c1549b457e1783b039ff60a8f9f16f8c94c774a2ca2eef5b1c370e36b863f6b0407b53ba3c69051c6ef051253843dabf89a6de4e
 SHIM_SHA512=87c63197836574b7a2c057d2c0647d2badb679187f0b9175ecf78ac52207cdaa3f101629d3e5d165c95930ca35fe81bc26bb90fcf08e09b99c2ee047b6235ce2
 
+# The fleet's image registry: CNCF distribution's static binary, pinned by
+# the sha256 GitHub publishes beside the release tarball (checked
+# 2026-09-15). A binary and a systemd unit, like caddy and runsc — not a
+# container: no Docker Hub pull to mirror first, and a docker restart does
+# not take the fleet's image store down with it.
+REGISTRY_VERSION=3.1.1
+REGISTRY_SHA256=6f330a3ba9ea1d23a6ee189f449d792595240585bb2f159123d76ac594f70dd8
+REGISTRY_PORT=5000
+
 REPO_URL=https://github.com/BitMiracle-AI/Dormice.git
 INSTALL_DIR=/opt/dormice
 ENV_FILE=/etc/dormice/env
 GATEWAY_ENV_FILE=/etc/dormice/gateway.env
 DATA_DIR=/var/lib/dormice
 GATEWAY_DATA_DIR=/var/lib/dormice-gateway
+REGISTRY_CONF_DIR=/etc/dormice/registry
+REGISTRY_DIR=$GATEWAY_DATA_DIR/registry
 DAEMON_JSON=/etc/docker/daemon.json
 PORT=3676
 GATEWAY_PORT=3677
@@ -59,6 +97,11 @@ GATEWAY_PORT=3677
 MIRROR=''
 SWAP_GB=16
 STATUS_DIR=''
+ROLE_FLAG=''
+GATEWAY_FLAG=''
+NODE_ID_FLAG=''
+NODE_ENDPOINT_FLAG=''
+REGISTRY_ADDR_FLAG=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --mirror) MIRROR="${2:?--mirror needs a value}"; shift 2 ;;
@@ -67,11 +110,25 @@ while [ $# -gt 0 ]; do
     --swap-gb=*) SWAP_GB="${1#*=}"; shift ;;
     --status-dir) STATUS_DIR="${2:?--status-dir needs a value}"; shift 2 ;;
     --status-dir=*) STATUS_DIR="${1#*=}"; shift ;;
-    *) echo "install.sh: unknown flag $1 (known: --mirror cn, --swap-gb N, --status-dir D)" >&2; exit 1 ;;
+    --role) ROLE_FLAG="${2:?--role needs a value}"; shift 2 ;;
+    --role=*) ROLE_FLAG="${1#*=}"; shift ;;
+    --gateway) GATEWAY_FLAG="${2:?--gateway needs a value}"; shift 2 ;;
+    --gateway=*) GATEWAY_FLAG="${1#*=}"; shift ;;
+    --node-id) NODE_ID_FLAG="${2:?--node-id needs a value}"; shift 2 ;;
+    --node-id=*) NODE_ID_FLAG="${1#*=}"; shift ;;
+    --node-endpoint) NODE_ENDPOINT_FLAG="${2:?--node-endpoint needs a value}"; shift 2 ;;
+    --node-endpoint=*) NODE_ENDPOINT_FLAG="${1#*=}"; shift ;;
+    --registry-addr) REGISTRY_ADDR_FLAG="${2:?--registry-addr needs a value}"; shift 2 ;;
+    --registry-addr=*) REGISTRY_ADDR_FLAG="${1#*=}"; shift ;;
+    *) echo "install.sh: unknown flag $1 (known: --mirror cn, --swap-gb N, --status-dir D, --role node, --gateway URL, --node-id ID, --node-endpoint URL, --registry-addr HOST:PORT)" >&2; exit 1 ;;
   esac
 done
 if [ -n "$MIRROR" ] && [ "$MIRROR" != cn ]; then
   echo "install.sh: --mirror only knows \"cn\", got \"$MIRROR\"" >&2
+  exit 1
+fi
+if [ -n "$ROLE_FLAG" ] && [ "$ROLE_FLAG" != node ]; then
+  echo "install.sh: --role only knows \"node\" (the default install is the gateway's machine), got \"$ROLE_FLAG\"" >&2
   exit 1
 fi
 
@@ -82,6 +139,47 @@ log()  { PHASE="$*"; printf '\n==> %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 DIE_MSG=''
 die()  { DIE_MSG="$*"; printf '\ninstall.sh: %s\n' "$*" >&2; exit 1; }
+
+# ---- role -----------------------------------------------------------------
+# Not a file of its own: the daemon's env names its gateway, and a remote
+# one is what makes this a node machine — the daemon's config reads it the
+# same way (a remote gateway refuses the default node id). Read before
+# anything is installed, so a mistaken flag dies before it changes the
+# machine. A first install with no env is the gateway's machine unless
+# --role node says otherwise; a re-run needs no flag on either role.
+url_host() { printf '%s' "$1" | sed -E 's#^[A-Za-z][A-Za-z0-9+.-]*://##; s#/.*$##; s#^\[([^]]*)\].*$#\1#; s#:[0-9]+$##'; }
+is_loopback_url() {
+  case "$(url_host "$1")" in
+    127.*|localhost|::1|'') return 0 ;;
+    *) return 1 ;;
+  esac
+}
+ENV_GATEWAY=''
+[ -f "$ENV_FILE" ] && ENV_GATEWAY=$(sed -n 's/^DORMICE_GATEWAY_ENDPOINT=//p' "$ENV_FILE" | head -1)
+if [ -n "$ENV_GATEWAY" ] && ! is_loopback_url "$ENV_GATEWAY"; then
+  ROLE=node
+  GATEWAY_URL=${ENV_GATEWAY%/}
+  if [ -n "$GATEWAY_FLAG" ] && [ "${GATEWAY_FLAG%/}" != "$GATEWAY_URL" ]; then
+    die "$ENV_FILE says this node's gateway is $GATEWAY_URL, --gateway says ${GATEWAY_FLAG%/} — edit DORMICE_GATEWAY_ENDPOINT in the env file if the gateway really moved, then re-run without the flag"
+  fi
+elif [ "$ROLE_FLAG" = node ]; then
+  if [ -f "$ENV_FILE" ]; then
+    die "$ENV_FILE exists and names a gateway on this machine (or none) — this is the gateway's machine; --role node is for a machine that has never been installed. To turn it into a node, stop and disable dormice-gateway, move the env file aside, and re-run"
+  fi
+  [ -n "$GATEWAY_FLAG" ] || die "--role node needs --gateway http://<gateway host>:$GATEWAY_PORT — the gateway this node joins"
+  case "$GATEWAY_FLAG" in
+    http://*|https://*) ;;
+    *) die "--gateway must be a full URL like http://10.0.0.5:$GATEWAY_PORT, got \"$GATEWAY_FLAG\"" ;;
+  esac
+  is_loopback_url "$GATEWAY_FLAG" && die "--gateway names this machine ($GATEWAY_FLAG) — a node machine joins a gateway on another machine; the default install (no --role) is the gateway's machine"
+  [ -n "${DORMICE_API_TOKEN:-}" ] || die "--role node needs the fleet token in the environment: DORMICE_API_TOKEN=<the value in the gateway machine's /etc/dormice/env> bash -s -- --role node --gateway $GATEWAY_FLAG (a flag would show in ps)"
+  [ "${#DORMICE_API_TOKEN}" -ge 32 ] || die 'DORMICE_API_TOKEN must be at least 32 characters — copy it from the gateway machine: grep ^DORMICE_API_TOKEN /etc/dormice/env'
+  ROLE=node
+  GATEWAY_URL=${GATEWAY_FLAG%/}
+else
+  ROLE=gateway
+  GATEWAY_URL="http://127.0.0.1:$GATEWAY_PORT"
+fi
 
 # ---- outcome reporting and the build rollback --------------------------------
 # status.json is the one file the daemon's one-click upgrade reads back;
@@ -580,47 +678,15 @@ ln -sf "$INSTALL_DIR/packages/cli/dist/main.js" /usr/local/bin/dormice
 ln -sf "$INSTALL_DIR/packages/cli/dist/main.js" /usr/local/bin/dor
 note "built; \`dormice\` and \`dor\` linked into /usr/local/bin"
 
-# ---- sandbox base image ------------------------------------------------------
-log 'sandbox base image'
-existing_image=''
-[ -f "$ENV_FILE" ] && existing_image=$(sed -n 's/^DORMICE_BASE_IMAGE=//p' "$ENV_FILE")
-if [ -n "$existing_image" ] && docker image inspect "$existing_image" >/dev/null 2>&1; then
-  base_image=$existing_image
-  note "[skip] $base_image (from $ENV_FILE) is present"
-else
-  base_image="dormice-base:$(date +%Y%m%d)"
-  if [ "$MIRROR" = cn ] && ! docker image inspect ubuntu:24.04 >/dev/null 2>&1; then
-    # Personal registry mirrors in mainland China often proxy only an image
-    # whitelist; daocloud + retag is the measured workaround.
-    docker pull -q docker.m.daocloud.io/library/ubuntu:24.04
-    docker tag docker.m.daocloud.io/library/ubuntu:24.04 ubuntu:24.04
-    docker rmi -f docker.m.daocloud.io/library/ubuntu:24.04 >/dev/null
-  fi
-  if [ "$MIRROR" = cn ]; then
-    # http on purpose: the base image has no CA certificates until this very
-    # layer installs them, so an https mirror cannot even handshake. apt's
-    # integrity comes from GPG signatures, not TLS (the default
-    # archive.ubuntu.com is http too).
-    docker build -t "$base_image" \
-      --build-arg UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu/ \
-      --build-arg NODE_DIST=https://npmmirror.com/mirrors/node \
-      --build-arg PIP_INDEX=https://mirrors.aliyun.com/pypi/simple/ \
-      --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
-      "$INSTALL_DIR/images"
-  else
-    docker build -t "$base_image" "$INSTALL_DIR/images"
-  fi
-  note "built $base_image from images/Dockerfile"
-fi
-
 # ---- ingress (Caddy reverse proxy) -------------------------------------------
 # Gateway and daemon bind 127.0.0.1 by design; Caddy on :80 is what makes
-# http://<host-ip>/console reachable from a browser. It proxies to the
+# them reachable from outside. On the gateway's machine it proxies to the
 # GATEWAY — the fleet's one door, which serves the console and forwards
-# the sandbox verbs to the daemon. The Caddyfile below is also what the
-# gateway rewrites when the operator binds a domain in the console
-# (setIngress) — Caddy then obtains and renews the TLS certificate on its
-# own. Pinned binary with checksum, same posture as gVisor.
+# the sandbox verbs — and its file is also what the gateway rewrites when
+# the operator binds a domain in the console (setIngress); Caddy then
+# obtains and renews the TLS certificate on its own. On a node machine it
+# proxies to the daemon: the gateway reaches the node through it. Pinned
+# binary with checksum, same posture as gVisor.
 log 'ingress (Caddy reverse proxy)'
 CADDY_VERSION=2.10.0
 CADDY_SHA512=626682d623ca04356ab3c9a93a82386cfde6d8243b11f2d0eea9e97ba630c7ada62373401e96b72c6690c98ae8dd004d61fafe477f5249690d5cb251ebbfd2d9
@@ -629,10 +695,14 @@ if command -v caddy >/dev/null; then
   note "[skip] caddy is installed ($(caddy version | cut -d' ' -f1))"
 elif ss -ltnH 'sport = :80' 2>/dev/null | grep -q .; then
   # Another server owns port 80: never fight it. The operator keeps their
-  # proxy (point it at the gateway, 127.0.0.1:$GATEWAY_PORT); web domain
-  # binding stays off.
+  # proxy (point it at the gateway, or at the daemon on a node machine);
+  # web domain binding stays off.
   note "port 80 is already in use and caddy is not installed — skipping the ingress layer"
-  note "point your own reverse proxy at 127.0.0.1:$GATEWAY_PORT (the gateway); the console's domain binding stays disabled"
+  if [ "$ROLE" = node ]; then
+    note "point your own reverse proxy at 127.0.0.1:$PORT (the daemon) — the gateway reaches this node through it"
+  else
+    note "point your own reverse proxy at 127.0.0.1:$GATEWAY_PORT (the gateway); the console's domain binding stays disabled"
+  fi
 else
   caddy_url="https://github.com/caddyserver/caddy/releases/download/v$CADDY_VERSION/caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
   [ "$MIRROR" = cn ] && caddy_url="https://ghfast.top/$caddy_url"
@@ -647,11 +717,56 @@ INGRESS_FILE_READY=''
 CADDY_REPOINTED=''
 if command -v caddy >/dev/null; then
   mkdir -p /etc/caddy
-  if [ ! -f "$CADDYFILE" ]; then
-    # The marker below is the ownership contract: the gateway refuses to
-    # rewrite a Caddyfile that lacks it. Kept in sync by hand with
-    # packages/gateway/src/ingress.ts.
-    cat >"$CADDYFILE" <<EOF
+  if [ "$ROLE" = node ]; then
+    # The node's door: :80 to the daemon, Host and streams preserved. No
+    # Dormice marker — this file is the installer's, never setIngress's
+    # (domains are bound at the gateway). No source-IP gate either: the
+    # node judges every request by the fleet token, a signed URL or an
+    # access token, and the fence around :80 is the cloud security group
+    # (design record #34) — a gateway that moves must not mean editing
+    # every node.
+    if [ ! -f "$CADDYFILE" ]; then
+      cat >"$CADDYFILE" <<EOF
+# Written by Dormice install.sh (node machine): the gateway reaches this
+# node's daemon through :80. Allow :80 from the gateway machine only, in
+# your cloud firewall.
+
+:80 {
+	reverse_proxy 127.0.0.1:$PORT {
+		flush_interval -1
+	}
+}
+EOF
+      note "wrote $CADDYFILE (:80 to the daemon — allow :80 from the gateway machine in your cloud firewall)"
+    elif grep -q "reverse_proxy 127.0.0.1:$PORT\b" "$CADDYFILE"; then
+      note "[skip] $CADDYFILE already proxies to the daemon"
+    else
+      note "$CADDYFILE exists and does not proxy to 127.0.0.1:$PORT — left untouched; make sure the gateway can reach this node's daemon through it"
+    fi
+  else
+    # The gateway machine's door. Which file the gateway owns is the
+    # gateway's knob (DORMICE_INGRESS_FILE): one file by default, or — the
+    # production layout — a fragment the operator's own Caddyfile imports
+    # (the outer file holds their wildcard sandbox domain block and the
+    # import line). Only the owned file, and only under its marker, is
+    # ever edited here; anything else under /etc/caddy still pointing at
+    # the daemon is named, not touched (found on both production machines,
+    # 2026-09-14: the earlier re-point reached neither file).
+    ingress_target=''
+    [ -f "$GATEWAY_ENV_FILE" ] && ingress_target=$(sed -n 's/^DORMICE_INGRESS_FILE=//p' "$GATEWAY_ENV_FILE" | head -1)
+    [ -z "$ingress_target" ] && [ -f "$ENV_FILE" ] && ingress_target=$(sed -n 's/^DORMICE_INGRESS_FILE=//p' "$ENV_FILE" | head -1)
+    [ -n "$ingress_target" ] || ingress_target=$CADDYFILE
+    ingress_reload=''
+    [ -f "$GATEWAY_ENV_FILE" ] && ingress_reload=$(sed -n 's/^DORMICE_INGRESS_RELOAD_CMD=//p' "$GATEWAY_ENV_FILE" | head -1)
+    [ -z "$ingress_reload" ] && [ -f "$ENV_FILE" ] && ingress_reload=$(sed -n 's/^DORMICE_INGRESS_RELOAD_CMD=//p' "$ENV_FILE" | head -1)
+    ingress_reload=$(printf '%s' "$ingress_reload" | sed -E 's/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/')
+    [ -n "$ingress_reload" ] || ingress_reload="caddy reload --config $CADDYFILE --adapter caddyfile"
+    if [ ! -f "$ingress_target" ]; then
+      if [ "$ingress_target" = "$CADDYFILE" ]; then
+        # The marker below is the ownership contract: the gateway refuses
+        # to rewrite a Caddyfile that lacks it. Kept in sync by hand with
+        # packages/gateway/src/ingress.ts.
+        cat >"$CADDYFILE" <<EOF
 # Managed by Dormice — setIngress rewrites this file.
 
 :80 {
@@ -660,24 +775,38 @@ if command -v caddy >/dev/null; then
 	}
 }
 EOF
-    note "wrote $CADDYFILE (plain HTTP on :80 to the gateway — bind domains in the console's domains page for HTTPS)"
-    INGRESS_FILE_READY=1
-  elif grep -q 'Managed by Dormice' "$CADDYFILE"; then
-    if grep -q "reverse_proxy 127.0.0.1:$PORT\b" "$CADDYFILE"; then
-      # A file from before the gateway became the door (2026-09-14): the
-      # catch-all still points at the daemon, where the console no longer
-      # lives. Re-pointed in place; the bound domains, if any, are rewritten
-      # the same way by the gateway at the next setIngress.
-      sed -i "s|reverse_proxy 127.0.0.1:$PORT\b|reverse_proxy 127.0.0.1:$GATEWAY_PORT|g" "$CADDYFILE"
-      note "re-pointed $CADDYFILE from the daemon ($PORT) to the gateway ($GATEWAY_PORT) — the console lives there now"
-      CADDY_REPOINTED=1
+        note "wrote $CADDYFILE (plain HTTP on :80 to the gateway — bind domains in the console's domains page for HTTPS)"
+      else
+        note "$ingress_target (DORMICE_INGRESS_FILE) does not exist yet — the gateway writes it at the first domain bind"
+      fi
+      INGRESS_FILE_READY=1
+    elif grep -q 'Managed by Dormice' "$ingress_target"; then
+      if grep -q "reverse_proxy 127.0.0.1:$PORT\b" "$ingress_target"; then
+        # A file from before the gateway became the door (2026-09-14): the
+        # catch-all still points at the daemon, where the console no longer
+        # lives. Re-pointed in place; the bound domains, if any, are
+        # rewritten the same way by the gateway at the next setIngress.
+        sed -i "s|reverse_proxy 127.0.0.1:$PORT\b|reverse_proxy 127.0.0.1:$GATEWAY_PORT|g" "$ingress_target"
+        note "re-pointed $ingress_target from the daemon ($PORT) to the gateway ($GATEWAY_PORT) — the console lives there now"
+        CADDY_REPOINTED=1
+      else
+        note "[skip] $ingress_target is managed by Dormice — left to the gateway"
+      fi
+      INGRESS_FILE_READY=1
     else
-      note "[skip] $CADDYFILE is managed by Dormice — left to the gateway"
+      note "$ingress_target exists but was not written by Dormice — left untouched; domain binding will refuse to overwrite it"
+      INGRESS_FILE_READY=1
     fi
-    INGRESS_FILE_READY=1
-  else
-    note "$CADDYFILE exists but was not written by Dormice — left untouched; domain binding will refuse to overwrite it"
-    INGRESS_FILE_READY=1
+    # The hand-written files (an outer Caddyfile importing the fragment,
+    # with the wildcard sandbox domain block): a proxy line there still
+    # aimed at the daemon sends the sandbox domain past the gateway's port
+    # proxy face. Named with file and line; the operator edits their own
+    # file.
+    leftovers=$(grep -rn "reverse_proxy 127.0.0.1:$PORT\b" /etc/caddy 2>/dev/null | grep -v "^$ingress_target:" || true)
+    if [ -n "$leftovers" ]; then
+      note "WARNING: these lines under /etc/caddy still proxy to the daemon ($PORT) — change them to 127.0.0.1:$GATEWAY_PORT by hand (the gateway is the door for every face, the sandbox domain included) and reload caddy:"
+      printf '%s\n' "$leftovers" | sed 's/^/      /'
+    fi
   fi
   if [ ! -f /etc/systemd/system/caddy.service ]; then
     cat >/etc/systemd/system/caddy.service <<EOF
@@ -700,7 +829,8 @@ EOF
     systemctl start caddy
     note 'started caddy'
   elif [ -n "$CADDY_REPOINTED" ]; then
-    caddy reload --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1 || systemctl restart caddy
+    # shellcheck disable=SC2086 # the reload command is the operator's own words, split on purpose
+    (cd / && $ingress_reload >/dev/null 2>&1) || systemctl restart caddy
     note 'reloaded caddy with the re-pointed config'
   else
     note '[skip] caddy is running'
@@ -709,14 +839,48 @@ fi
 
 # ---- daemon configuration ----------------------------------------------------
 # The daemon's env is the node's identity and its machine: token, executor,
-# image, ledger, data dir. The fleet's operator knobs (sandbox defaults,
-# the archive store, the sandbox domain, the managed front door) are the
-# gateway's since 2026-09-14 — its env seeds them once, the console edits
-# them, and the daemon takes them from its check-in.
+# ledger, data dir — and, on a node machine, which gateway it belongs to
+# and where that gateway reaches it. The fleet's operator knobs (sandbox
+# defaults, the base image, the archive store, the sandbox domain, the
+# managed front door) are the gateway's since 2026-09-14: its env seeds
+# them once, the console edits them, and the daemon takes them from its
+# check-in. A DORMICE_BASE_IMAGE line in an older env file stays as the
+# daemon's fallback while the fleet names none.
 log "daemon configuration ($ENV_FILE)"
 install -d -m 700 "$DATA_DIR"
 if [ -f "$ENV_FILE" ]; then
   note "[skip] exists — kept as is (your API token is never rotated); delete it to regenerate"
+elif [ "$ROLE" = node ]; then
+  install -d -m 755 /etc/dormice
+  NODE_ID=${NODE_ID_FLAG:-$(hostname)}
+  if [ -n "$NODE_ENDPOINT_FLAG" ]; then
+    NODE_ENDPOINT=${NODE_ENDPOINT_FLAG%/}
+  else
+    # The address this machine speaks to the gateway from — the one the
+    # gateway can speak back to — on :80, the door Caddy opens above.
+    gateway_host=$(url_host "$GATEWAY_URL")
+    gateway_ip=$(getent ahostsv4 "$gateway_host" 2>/dev/null | awk 'NR==1{print $1}')
+    [ -n "$gateway_ip" ] || die "cannot resolve the gateway's host $gateway_host — check --gateway, or pass --node-endpoint http://<this machine's address>:80 as well"
+    node_ip=$(ip -4 route get "$gateway_ip" 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')
+    [ -n "$node_ip" ] || die "cannot tell which address this machine reaches $gateway_ip from — pass --node-endpoint http://<this machine's address>:80"
+    NODE_ENDPOINT="http://$node_ip:80"
+  fi
+  cat >"$ENV_FILE" <<EOF
+# Dormice daemon (node) configuration, read by systemd (EnvironmentFile).
+# Full-line comments only — an inline comment becomes part of the value.
+# All knobs and defaults: packages/server/src/config.ts. This machine is a
+# node of the gateway named below: the fleet's settings, the base image
+# and the templates come from it at check-in, images from its registry.
+DORMICE_API_TOKEN=$DORMICE_API_TOKEN
+DORMICE_EXECUTOR=docker
+DORMICE_DB_PATH=$DATA_DIR/dormice.db
+DORMICE_DATA_DIR=$DATA_DIR
+DORMICE_GATEWAY_ENDPOINT=$GATEWAY_URL
+DORMICE_NODE_ID=$NODE_ID
+DORMICE_NODE_ENDPOINT=$NODE_ENDPOINT
+EOF
+  chmod 600 "$ENV_FILE"
+  note "wrote $ENV_FILE (mode 600): node $NODE_ID of gateway $GATEWAY_URL, reached at $NODE_ENDPOINT"
 else
   install -d -m 755 /etc/dormice
   # No inline comments below: systemd's EnvironmentFile takes the whole line
@@ -725,11 +889,11 @@ else
 # Dormice daemon (node) configuration, read by systemd (EnvironmentFile).
 # Full-line comments only — an inline comment becomes part of the value.
 # All knobs and defaults: packages/server/src/config.ts. The fleet's
-# settings (sandbox defaults, archive store, sandbox domain) are the
-# gateway's: /etc/dormice/gateway.env seeds them, the console edits them.
+# settings (sandbox defaults, base image, archive store, sandbox domain)
+# are the gateway's: /etc/dormice/gateway.env seeds them, the console
+# edits them.
 DORMICE_API_TOKEN=$(openssl rand -hex 32)
 DORMICE_EXECUTOR=docker
-DORMICE_BASE_IMAGE=$base_image
 DORMICE_DB_PATH=$DATA_DIR/dormice.db
 DORMICE_DATA_DIR=$DATA_DIR
 EOF
@@ -738,6 +902,11 @@ EOF
 fi
 API_TOKEN=$(sed -n 's/^DORMICE_API_TOKEN=//p' "$ENV_FILE" | head -1)
 [ -n "$API_TOKEN" ] || die "$ENV_FILE has no DORMICE_API_TOKEN line — the daemon cannot start without one"
+# Never on a command line, never in the log: the callers below that need
+# the credential read it from stdin (curl -K -, docker login
+# --password-stdin) through these two helpers.
+curl_auth_config() { printf 'header = "Authorization: Bearer %s"\n' "$API_TOKEN"; }
+curl_basic_config() { printf 'user = "dormice:%s"\n' "$API_TOKEN"; }
 
 # ---- gateway configuration ---------------------------------------------------
 # One token for the whole fleet: the gateway's env carries the daemon's
@@ -747,6 +916,7 @@ API_TOKEN=$(sed -n 's/^DORMICE_API_TOKEN=//p' "$ENV_FILE" | head -1)
 # are carried over as the gateway's first-boot seeds so the first bundle
 # the daemon takes says what its env used to say — and are then commented
 # out of the daemon's env, where they do nothing but earn a boot warning.
+if [ "$ROLE" = gateway ]; then
 log "gateway configuration ($GATEWAY_ENV_FILE)"
 install -d -m 700 "$GATEWAY_DATA_DIR"
 FLEET_KNOBS='DORMICE_SANDBOX_DISK_GB DORMICE_SANDBOX_CPUS DORMICE_SANDBOX_MEMORY_GB DORMICE_SANDBOX_PIDS_LIMIT DORMICE_SANDBOX_DOMAIN DORMICE_INGRESS_FILE DORMICE_INGRESS_RELOAD_CMD DORMICE_S3_ENDPOINT DORMICE_S3_BUCKET DORMICE_S3_ACCESS_KEY_ID DORMICE_S3_SECRET_ACCESS_KEY DORMICE_S3_REGION DORMICE_S3_FORCE_PATH_STYLE'
@@ -800,28 +970,375 @@ fi
 if ! grep -q "^DORMICE_API_TOKEN=$API_TOKEN\$" "$GATEWAY_ENV_FILE"; then
   die "$GATEWAY_ENV_FILE and $ENV_FILE carry different DORMICE_API_TOKEN values — the fleet has one token; make them the same and re-run"
 fi
+fi
 
-# ---- systemd services --------------------------------------------------------
-# Two units, the gateway first: a daemon without a configuration copy takes
-# its first bundle from its gateway before it listens, and a re-run just
-# built both dists — the two processes of a fleet of one run one commit,
-# never two. Restart, not start: both are crash-only by design, so
-# restarting them is always safe.
-log 'systemd services'
-cp "$INSTALL_DIR/deploy/dormice-gateway.service" /etc/systemd/system/dormice-gateway.service
-cp "$INSTALL_DIR/deploy/dormice.service" /etc/systemd/system/dormice.service
-systemctl daemon-reload
-systemctl enable dormice-gateway dormice >/dev/null 2>&1
-systemctl restart dormice-gateway
-for _ in $(seq 1 60); do
-  curl -fsS "http://127.0.0.1:$GATEWAY_PORT/healthz" >/dev/null 2>&1 && break
+# ---- sandbox base image (gateway's machine) ----------------------------------
+# The fleet's base image is a fleet setting since 2026-09-15 (the gateway's
+# settings table, seeded from its env, carried to every node in the
+# bundle): built here once, pushed to the fleet registry below, pulled by
+# every node that lacks it. The tag in force: the gateway's seed, else an
+# older daemon env's line (the knob's old home), else a fresh build.
+if [ "$ROLE" = gateway ]; then
+log 'sandbox base image'
+existing_image=$(sed -n 's/^DORMICE_BASE_IMAGE=//p' "$GATEWAY_ENV_FILE" | head -1)
+[ -n "$existing_image" ] || existing_image=$(sed -n 's/^DORMICE_BASE_IMAGE=//p' "$ENV_FILE" | head -1)
+if [ -n "$existing_image" ] && docker image inspect "$existing_image" >/dev/null 2>&1; then
+  base_image=$existing_image
+  note "[skip] $base_image is present"
+else
+  base_image="dormice-base:$(date +%Y%m%d)"
+  if [ "$MIRROR" = cn ] && ! docker image inspect ubuntu:24.04 >/dev/null 2>&1; then
+    # Personal registry mirrors in mainland China often proxy only an image
+    # whitelist; daocloud + retag is the measured workaround.
+    docker pull -q docker.m.daocloud.io/library/ubuntu:24.04
+    docker tag docker.m.daocloud.io/library/ubuntu:24.04 ubuntu:24.04
+    docker rmi -f docker.m.daocloud.io/library/ubuntu:24.04 >/dev/null
+  fi
+  if [ "$MIRROR" = cn ]; then
+    # http on purpose: the base image has no CA certificates until this very
+    # layer installs them, so an https mirror cannot even handshake. apt's
+    # integrity comes from GPG signatures, not TLS (the default
+    # archive.ubuntu.com is http too).
+    docker build -t "$base_image" \
+      --build-arg UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu/ \
+      --build-arg NODE_DIST=https://npmmirror.com/mirrors/node \
+      --build-arg PIP_INDEX=https://mirrors.aliyun.com/pypi/simple/ \
+      --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
+      "$INSTALL_DIR/images"
+  else
+    docker build -t "$base_image" "$INSTALL_DIR/images"
+  fi
+  note "built $base_image from images/Dockerfile"
+fi
+# The seed, appended once to an existing gateway.env too (a column born
+# after the row: the gateway fills its settings from this while empty,
+# and the console edits it from then on).
+if ! grep -q '^DORMICE_BASE_IMAGE=' "$GATEWAY_ENV_FILE"; then
+  {
+    echo "# The fleet's base image (the image template-less sandboxes boot from);"
+    echo '# a first-boot seed — the console edits the value in force.'
+    echo "DORMICE_BASE_IMAGE=$base_image"
+  } >>"$GATEWAY_ENV_FILE"
+  note "added DORMICE_BASE_IMAGE=$base_image to $GATEWAY_ENV_FILE (the fleet's setting from here on)"
+fi
+fi
+
+# ---- image registry (gateway's machine) --------------------------------------
+# The fleet's one image store (design record #33): a node that lacks an
+# image pulls it from here — the base image install.sh pushes below, the
+# template images the operator pushes. TLS with a self-signed certificate
+# and the fleet token as the password (user `dormice`, bcrypt htpasswd):
+# not a preference — a registry over plain HTTP cannot take basic auth
+# at all (the distribution documentation says so), so the choice is TLS
+# with a lock or no lock, and a store that decides what code every node
+# runs gets the lock (design record #34 draws the fleet's one credential;
+# this is the same one, no second secret). Docker on this machine trusts
+# the certificate through /etc/docker/certs.d — picked up per pull, no
+# dockerd restart — and a node copies the same file when it joins.
+if [ "$ROLE" = gateway ]; then
+log "image registry (distribution v$REGISTRY_VERSION)"
+if [ -x /usr/local/bin/registry ] && /usr/local/bin/registry --version 2>/dev/null | grep -q "v$REGISTRY_VERSION\b"; then
+  note "[skip] registry v$REGISTRY_VERSION is installed"
+else
+  registry_url="https://github.com/distribution/distribution/releases/download/v$REGISTRY_VERSION/registry_${REGISTRY_VERSION}_linux_amd64.tar.gz"
+  [ "$MIRROR" = cn ] && registry_url="https://ghfast.top/$registry_url"
+  curl -fsSL -o /tmp/registry.tar.gz "$registry_url"
+  echo "$REGISTRY_SHA256  /tmp/registry.tar.gz" | sha256sum -c - >/dev/null
+  tar -C /tmp -xzf /tmp/registry.tar.gz registry
+  install -m 755 /tmp/registry /usr/local/bin/registry
+  rm -f /tmp/registry.tar.gz /tmp/registry
+  note "installed registry v$REGISTRY_VERSION to /usr/local/bin"
+fi
+# Where it listens and where the nodes pull from: the flag, else what the
+# gateway's env already says (re-runs), else the address this machine
+# speaks to the world from (the default route's source — on a cloud VPC
+# the private address the other machines reach it by; docker0's 172.17.0.1
+# never is). A machine whose main address is public listens on it; the
+# lock is what makes that acceptable.
+REGISTRY_ADDR=$REGISTRY_ADDR_FLAG
+[ -n "$REGISTRY_ADDR" ] || REGISTRY_ADDR=$(sed -n 's/^DORMICE_REGISTRY_ADDRESS=//p' "$GATEWAY_ENV_FILE" | head -1)
+if [ -z "$REGISTRY_ADDR" ]; then
+  registry_host=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')
+  [ -n "$registry_host" ] || registry_host=$(hostname -I 2>/dev/null | awk '{print $1}')
+  [ -n "$registry_host" ] || die "cannot tell this machine's address for the registry to listen on — pass --registry-addr <address>:$REGISTRY_PORT"
+  REGISTRY_ADDR="$registry_host:$REGISTRY_PORT"
+fi
+registry_host=${REGISTRY_ADDR%:*}
+# The SAN as openssl req takes it, and as openssl x509 prints it back.
+case "$registry_host" in
+  *[!0-9.]*) registry_san="DNS:$registry_host"; registry_san_printed="DNS:$registry_host" ;;
+  *) registry_san="IP:$registry_host"; registry_san_printed="IP Address:$registry_host" ;;
+esac
+install -d -m 700 "$REGISTRY_CONF_DIR" "$REGISTRY_DIR"
+# The certificate: ten years, SAN = the registry's address, its own CA
+# (self-signed). Regenerated when the address moved out of its SAN.
+if [ -f "$REGISTRY_CONF_DIR/tls.crt" ] && openssl x509 -in "$REGISTRY_CONF_DIR/tls.crt" -noout -ext subjectAltName 2>/dev/null | grep -q "$registry_san_printed"; then
+  note "[skip] certificate for $registry_san is in place"
+else
+  openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+    -keyout "$REGISTRY_CONF_DIR/tls.key" -out "$REGISTRY_CONF_DIR/tls.crt" \
+    -subj '/CN=dormice-registry' -addext "subjectAltName=$registry_san" >/dev/null 2>&1
+  chmod 600 "$REGISTRY_CONF_DIR/tls.key"
+  note "issued a self-signed certificate for $registry_san (10 years) — sha256 $(openssl x509 -in "$REGISTRY_CONF_DIR/tls.crt" -noout -fingerprint -sha256 | cut -d= -f2)"
+fi
+# The lock: user dormice, password the fleet token, bcrypt (the only hash
+# the registry's htpasswd takes). caddy hashes it — reading the plaintext
+# from stdin, never a command line. Written once: the token never rotates.
+if [ -f "$REGISTRY_CONF_DIR/htpasswd" ]; then
+  note '[skip] htpasswd is in place'
+else
+  command -v caddy >/dev/null || die 'caddy is needed to hash the registry password (caddy hash-password) — the ingress step above did not install it because port 80 is taken; install caddy by hand or free port 80, then re-run'
+  hashed=$(printf '%s\n' "$API_TOKEN" | caddy hash-password 2>/dev/null)
+  case "$hashed" in
+    \$2*) ;;
+    *) die 'caddy hash-password did not produce a bcrypt hash — is caddy >= 2.4?' ;;
+  esac
+  printf 'dormice:%s\n' "$hashed" >"$REGISTRY_CONF_DIR/htpasswd"
+  chmod 600 "$REGISTRY_CONF_DIR/htpasswd"
+  note "wrote $REGISTRY_CONF_DIR/htpasswd (user dormice, password = the fleet token)"
+fi
+registry_conf=$(cat <<EOF
+# Written by Dormice install.sh — rewritten on every run.
+version: 0.1
+log:
+  level: warn
+storage:
+  filesystem:
+    rootdirectory: $REGISTRY_DIR
+  delete:
+    enabled: true
+http:
+  addr: $REGISTRY_ADDR
+  tls:
+    certificate: $REGISTRY_CONF_DIR/tls.crt
+    key: $REGISTRY_CONF_DIR/tls.key
+auth:
+  htpasswd:
+    realm: dormice-registry
+    path: $REGISTRY_CONF_DIR/htpasswd
+EOF
+)
+REGISTRY_CHANGED=''
+if [ "$(cat "$REGISTRY_CONF_DIR/registry.yml" 2>/dev/null)" = "$registry_conf" ]; then
+  note "[skip] registry.yml is in place (listening on $REGISTRY_ADDR)"
+else
+  printf '%s\n' "$registry_conf" >"$REGISTRY_CONF_DIR/registry.yml"
+  REGISTRY_CHANGED=1
+  note "wrote $REGISTRY_CONF_DIR/registry.yml (listening on $REGISTRY_ADDR, TLS, htpasswd)"
+fi
+if ! cmp -s "$INSTALL_DIR/deploy/dormice-registry.service" /etc/systemd/system/dormice-registry.service; then
+  cp "$INSTALL_DIR/deploy/dormice-registry.service" /etc/systemd/system/dormice-registry.service
+  systemctl daemon-reload
+  REGISTRY_CHANGED=1
+fi
+systemctl enable dormice-registry >/dev/null 2>&1
+if [ -n "$REGISTRY_CHANGED" ] || [ "$(systemctl is-active dormice-registry)" != active ]; then
+  systemctl restart dormice-registry
+fi
+# Docker's trust in the certificate: the file's presence is the whole
+# mechanism — no daemon.json edit, no restart.
+install -d "/etc/docker/certs.d/$REGISTRY_ADDR"
+if ! cmp -s "$REGISTRY_CONF_DIR/tls.crt" "/etc/docker/certs.d/$REGISTRY_ADDR/ca.crt"; then
+  install -m 644 "$REGISTRY_CONF_DIR/tls.crt" "/etc/docker/certs.d/$REGISTRY_ADDR/ca.crt"
+  note "trusted the certificate for docker: /etc/docker/certs.d/$REGISTRY_ADDR/ca.crt"
+fi
+for _ in $(seq 1 40); do
+  registry_code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$REGISTRY_CONF_DIR/tls.crt" "https://$REGISTRY_ADDR/v2/" 2>/dev/null || true)
+  [ "$registry_code" = 401 ] && break
   sleep 0.5
 done
-curl -fsS "http://127.0.0.1:$GATEWAY_PORT/healthz" >/dev/null 2>&1 \
-  || die "the gateway did not answer /healthz on 127.0.0.1:$GATEWAY_PORT — check: journalctl -u dormice-gateway -n 50"
-note "gateway is answering on 127.0.0.1:$GATEWAY_PORT"
-systemctl restart dormice
-note 'enabled and (re)started both'
+[ "$registry_code" = 401 ] \
+  || die "the registry did not answer on https://$REGISTRY_ADDR/v2/ (got '${registry_code:-nothing}', expected 401 asking for the credential) — check: journalctl -u dormice-registry -n 50"
+note "registry is answering on https://$REGISTRY_ADDR (TLS, asks for the fleet credential)"
+if ! grep -q '^DORMICE_REGISTRY_ADDRESS=' "$GATEWAY_ENV_FILE"; then
+  {
+    echo "# The fleet's image registry (host:port), run by this machine's"
+    echo '# dormice-registry unit: nodes pull the images they lack from here.'
+    echo "DORMICE_REGISTRY_ADDRESS=$REGISTRY_ADDR"
+  } >>"$GATEWAY_ENV_FILE"
+  note "added DORMICE_REGISTRY_ADDRESS=$REGISTRY_ADDR to $GATEWAY_ENV_FILE"
+fi
+# The base image into the store, once per tag (a manifest already there
+# is skipped). Template images are the operator's to push — templates.mdx
+# has the three lines; the registry credential is the fleet token.
+manifest_code=$(curl_basic_config | curl -s -K - -o /dev/null -w '%{http_code}' --cacert "$REGISTRY_CONF_DIR/tls.crt" \
+  -H 'Accept: application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json' \
+  "https://$REGISTRY_ADDR/v2/${base_image%:*}/manifests/${base_image##*:}" 2>/dev/null || true)
+if [ "$manifest_code" = 200 ]; then
+  note "[skip] $base_image is in the registry"
+else
+  printf '%s' "$API_TOKEN" | docker login "$REGISTRY_ADDR" -u dormice --password-stdin >/dev/null 2>&1 \
+    || die "docker login to https://$REGISTRY_ADDR refused the fleet credential — if the token changed after $REGISTRY_CONF_DIR/htpasswd was written, delete that file and re-run"
+  docker tag "$base_image" "$REGISTRY_ADDR/$base_image"
+  docker push -q "$REGISTRY_ADDR/$base_image" >/dev/null
+  # The credential does not stay in /root/.docker/config.json: the daemon
+  # presents it per pull from memory.
+  docker logout "$REGISTRY_ADDR" >/dev/null 2>&1 || true
+  note "pushed $base_image to the registry as $REGISTRY_ADDR/$base_image"
+fi
+fi
+
+# ---- joining the fleet (node machine) ----------------------------------------
+# What a node needs from its gateway before its daemon starts: the fleet
+# registry's certificate, pinned into Docker's trust store on first sight
+# (the ssh posture: the fingerprint is printed, and an intranet
+# man-in-the-middle at install time is outside the threat model of design
+# record #34), and the base image pulled ahead so `dor doctor`'s container
+# probes have it — the daemon would pull it on its own at its first
+# bundle, but a minute later, in the background.
+if [ "$ROLE" = node ]; then
+log "joining the fleet at $GATEWAY_URL"
+fleet_config=$(curl_auth_config | curl -fsS -K - -X POST -H 'content-type: application/json' -d '{}' "$GATEWAY_URL/getConfig" 2>/dev/null) \
+  || die "the gateway at $GATEWAY_URL did not answer getConfig — is it running, is :$GATEWAY_PORT open to this machine, is DORMICE_API_TOKEN the gateway machine's token? (curl -fsS $GATEWAY_URL/healthz answers without a token)"
+read -r FLEET_REGISTRY FLEET_BASE_IMAGE <<EOF
+$(printf '%s' "$fleet_config" | node -e '
+const c = JSON.parse(require("fs").readFileSync(0, "utf8"));
+console.log((c.settings.registryAddress ?? "-") + " " + (c.settings.baseImage ?? "-"));
+')
+EOF
+note "the fleet's registry: ${FLEET_REGISTRY}; base image: ${FLEET_BASE_IMAGE}"
+if [ "$FLEET_REGISTRY" != - ]; then
+  cert_dir="/etc/docker/certs.d/$FLEET_REGISTRY"
+  if [ -f "$cert_dir/ca.crt" ]; then
+    note "[skip] the registry's certificate is pinned at $cert_dir/ca.crt"
+  else
+    install -d "$cert_dir"
+    openssl s_client -showcerts -connect "$FLEET_REGISTRY" -servername "${FLEET_REGISTRY%:*}" </dev/null 2>/dev/null \
+      | openssl x509 -outform PEM >"$cert_dir/ca.crt" 2>/dev/null \
+      || die "could not fetch the registry's certificate from https://$FLEET_REGISTRY — is :${FLEET_REGISTRY##*:} on the gateway machine open to this machine?"
+    [ -s "$cert_dir/ca.crt" ] || die "https://$FLEET_REGISTRY presented no certificate"
+    note "pinned the registry's certificate on first sight: $cert_dir/ca.crt — sha256 $(openssl x509 -in "$cert_dir/ca.crt" -noout -fingerprint -sha256 | cut -d= -f2)"
+    note "compare it with the gateway machine's: openssl x509 -in $REGISTRY_CONF_DIR/tls.crt -noout -fingerprint -sha256"
+  fi
+  registry_code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$cert_dir/ca.crt" "https://$FLEET_REGISTRY/v2/" 2>/dev/null || true)
+  [ "$registry_code" = 401 ] || die "the registry at https://$FLEET_REGISTRY did not answer as expected (got '${registry_code:-nothing}', expected 401 asking for the credential)"
+  if [ "$FLEET_BASE_IMAGE" != - ]; then
+    if docker image inspect "$FLEET_BASE_IMAGE" >/dev/null 2>&1; then
+      note "[skip] base image $FLEET_BASE_IMAGE is present"
+    else
+      printf '%s' "$API_TOKEN" | docker login "$FLEET_REGISTRY" -u dormice --password-stdin >/dev/null 2>&1 \
+        || die "docker login to https://$FLEET_REGISTRY refused the fleet credential — DORMICE_API_TOKEN here must be the gateway machine's token"
+      docker pull -q "$FLEET_REGISTRY/$FLEET_BASE_IMAGE" >/dev/null \
+        || die "could not pull $FLEET_REGISTRY/$FLEET_BASE_IMAGE — on the gateway machine, re-run install.sh (it pushes the base image), then re-run here"
+      docker tag "$FLEET_REGISTRY/$FLEET_BASE_IMAGE" "$FLEET_BASE_IMAGE"
+      docker logout "$FLEET_REGISTRY" >/dev/null 2>&1 || true
+      note "pulled the fleet's base image $FLEET_BASE_IMAGE from the registry"
+    fi
+  fi
+elif [ "$FLEET_BASE_IMAGE" != - ] && ! docker image inspect "$FLEET_BASE_IMAGE" >/dev/null 2>&1; then
+  note "WARNING: the fleet has no registry and this machine lacks the base image $FLEET_BASE_IMAGE — build or load it here under that name before creating sandboxes"
+fi
+fi
+
+# ---- backups (before anything restarts) --------------------------------------
+# A copy of every database this run may migrate, taken through SQLite's
+# online backup API (a consistent snapshot even while the daemon writes;
+# the hosts have no sqlite3 CLI), before any unit is restarted: the new
+# daemon migrates its ledger forward at boot, and a downgrade past a
+# migration is not a one-click affair. Three kept, the oldest dropped.
+log 'backups'
+backup_db() { # <source db> <destination dir>
+  [ -f "$1" ] || return 0
+  mkdir -p "$2"
+  (cd "$INSTALL_DIR/packages/server" && node -e '
+const Database = require("better-sqlite3");
+const [src, dst] = process.argv.slice(1);
+const db = new Database(src, { readonly: true });
+db.backup(dst).then(() => { db.close(); }).catch((err) => { console.error(err.message); process.exit(1); });
+' "$1" "$2/$(basename "$1")") || die "backup of $1 failed"
+  chmod 600 "$2/$(basename "$1")"
+}
+BACKUP_DIR="$DATA_DIR/backups/$(date -u +%Y%m%dT%H%M%SZ)-${OLD_SHA:-fresh}"
+backed=''
+if [ -f "$DATA_DIR/dormice.db" ]; then
+  backup_db "$DATA_DIR/dormice.db" "$BACKUP_DIR"
+  backed="$backed dormice.db"
+fi
+if [ "$ROLE" = gateway ] && [ -f "$GATEWAY_DATA_DIR/gateway.db" ]; then
+  backup_db "$GATEWAY_DATA_DIR/gateway.db" "$BACKUP_DIR"
+  backed="$backed gateway.db"
+fi
+if [ -n "$backed" ]; then
+  chmod 700 "$BACKUP_DIR"
+  note "backed up$backed to $BACKUP_DIR"
+  # shellcheck disable=SC2012 # ls sorts the timestamped names; the directory is ours
+  ls -1d "$DATA_DIR"/backups/*/ 2>/dev/null | sort | head -n -3 | while read -r old; do
+    rm -rf "$old"
+    note "dropped old backup $old"
+  done
+else
+  note '[skip] no database yet — a first install has nothing to back up'
+fi
+
+# ---- the old ledger's configuration into the gateway (once) ------------------
+# A machine that ran as a single daemon before the gateway existed holds
+# the fleet's configuration in its ledger — the S3 store, the default
+# policy, the domain aliases, the templates, the API keys, the console
+# account — and it must be in the gateway's database BEFORE the gateway's
+# first start: at that start the gateway seeds its settings from the env
+# and the daemon takes that at its first check-in, and months of operator
+# settings would be quietly gone (a restore from archive would fail, a
+# template sandbox would wake to "not registered"). The import is the
+# gateway package's own tool (import-ledger.ts has the translation); a
+# failure here ends the run before any unit restarts, with the ledger
+# untouched.
+if [ "$ROLE" = gateway ]; then
+log 'importing the single-machine ledger into the gateway'
+if [ -f "$GATEWAY_DATA_DIR/gateway.db" ]; then
+  note '[skip] the gateway database exists — the import is for its first start'
+elif [ ! -f "$DATA_DIR/dormice.db" ]; then
+  note '[skip] no daemon ledger — a fresh install has nothing to import'
+else
+  has_settings=$(cd "$INSTALL_DIR/packages/server" && node -e '
+const Database = require("better-sqlite3");
+const db = new Database(process.argv[1], { readonly: true });
+try { console.log(db.prepare("SELECT count(*) AS n FROM runtime_settings").get().n); } catch { console.log(0); }
+db.close();
+' "$DATA_DIR/dormice.db")
+  if [ "$has_settings" = 0 ]; then
+    note '[skip] the daemon ledger holds no settings row — nothing to import'
+  else
+    imported=$(
+      set -a
+      # shellcheck source=/dev/null
+      . "$GATEWAY_ENV_FILE"
+      set +a
+      node "$INSTALL_DIR/packages/gateway/dist/import.js" --node-db "$DATA_DIR/dormice.db" --node-env "$ENV_FILE"
+    ) || die "the import of $DATA_DIR/dormice.db into the gateway failed — nothing was restarted; fix the cause and re-run (the gateway database, if half-written, is at $GATEWAY_DATA_DIR/gateway.db: delete it before the re-run)"
+    note "imported into the gateway: $imported"
+  fi
+fi
+fi
+
+# ---- systemd services --------------------------------------------------------
+# The gateway's machine: two units, the gateway first — a daemon without a
+# configuration copy takes its first bundle from its gateway before it
+# listens, and a re-run just built both dists: the two processes of a
+# fleet of one run one commit, never two. A node machine: the daemon
+# alone, joined to its remote gateway. Restart, not start: all crash-only
+# by design, so restarting them is always safe.
+log 'systemd services'
+cp "$INSTALL_DIR/deploy/dormice.service" /etc/systemd/system/dormice.service
+if [ "$ROLE" = gateway ]; then
+  cp "$INSTALL_DIR/deploy/dormice-gateway.service" /etc/systemd/system/dormice-gateway.service
+  systemctl daemon-reload
+  systemctl enable dormice-gateway dormice >/dev/null 2>&1
+  systemctl restart dormice-gateway
+  for _ in $(seq 1 60); do
+    curl -fsS "http://127.0.0.1:$GATEWAY_PORT/healthz" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+  curl -fsS "http://127.0.0.1:$GATEWAY_PORT/healthz" >/dev/null 2>&1 \
+    || die "the gateway did not answer /healthz on 127.0.0.1:$GATEWAY_PORT — check: journalctl -u dormice-gateway -n 50"
+  note "gateway is answering on 127.0.0.1:$GATEWAY_PORT"
+  systemctl restart dormice
+  note 'enabled and (re)started both'
+else
+  systemctl daemon-reload
+  systemctl enable dormice >/dev/null 2>&1
+  systemctl restart dormice
+  note 'enabled and (re)started the daemon'
+fi
 
 # ---- verification: the install has not succeeded until doctor says so --------
 log 'verification'
@@ -838,13 +1355,21 @@ done
 curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 \
   || die "the daemon did not answer /healthz on 127.0.0.1:$PORT — check: journalctl -u dormice -n 50 (a daemon with no configuration copy waits for its gateway before it listens)"
 note "daemon is answering on 127.0.0.1:$PORT"
-# Both env files: doctor reads the node's knobs from the daemon's and the
-# fleet's seeds (the S3 set, the managed front door) from the gateway's.
 set -a
 # shellcheck source=/dev/null
 . "$ENV_FILE"
-# shellcheck source=/dev/null
-. "$GATEWAY_ENV_FILE"
+if [ "$ROLE" = gateway ]; then
+  # Both env files: doctor reads the node's knobs from the daemon's and the
+  # fleet's seeds (the base image, the S3 set, the registry, the managed
+  # front door) from the gateway's.
+  # shellcheck source=/dev/null
+  . "$GATEWAY_ENV_FILE"
+else
+  # A node's env names no image and no registry — the fleet's, learned
+  # from the gateway above — so doctor is told them for this run alone.
+  [ "$FLEET_BASE_IMAGE" != - ] && export DORMICE_BASE_IMAGE=$FLEET_BASE_IMAGE
+  [ "$FLEET_REGISTRY" != - ] && export DORMICE_REGISTRY_ADDRESS=$FLEET_REGISTRY
+fi
 set +a
 dor doctor
 
@@ -854,13 +1379,23 @@ dor doctor
 status_write succeeded
 
 printf '\nDormice is installed.\n'
+if [ "$ROLE" = node ]; then
+  printf '  role:         node %s of gateway %s, reached at %s\n' "$(sed -n 's/^DORMICE_NODE_ID=//p' "$ENV_FILE")" "$GATEWAY_URL" "$(sed -n 's/^DORMICE_NODE_ENDPOINT=//p' "$ENV_FILE")"
+  printf '  daemon logs:  journalctl -u dormice -f\n'
+  printf '  the fleet is driven from its gateway: console, keys, settings, templates, upgrades all answer there.\n'
+  printf '  cloud firewall: allow :80 on this machine from the gateway machine only.\n'
+  exit 0
+fi
 printf '  API token:    grep ^DORMICE_API_TOKEN %s\n' "$ENV_FILE"
 printf '  gateway logs: journalctl -u dormice-gateway -f   (the door: console, keys, settings, templates)\n'
 printf '  daemon logs:  journalctl -u dormice -f           (the node: sandboxes)\n'
+printf '  registry:     https://%s (TLS, user dormice, password = the API token; journalctl -u dormice-registry -f)\n' "$REGISTRY_ADDR"
 printf '  CLI:          export DORMICE_ENDPOINT=http://127.0.0.1:%s DORMICE_API_TOKEN=<token>; dor sandbox ls\n' "$GATEWAY_PORT"
 printf '                (the gateway is the door for every verb; a node answers only the sandbox and host verbs\n'
 printf '                for itself on 127.0.0.1:%s)\n' "$PORT"
 printf '  Both processes listen on 127.0.0.1 only, by design — exposing them is a reverse proxy'"'"'s job.\n'
+printf '  add a node:   on another machine of the same network, with :%s and :%s here open to it:\n' "$GATEWAY_PORT" "$REGISTRY_PORT"
+printf '                DORMICE_API_TOKEN=<token> bash install.sh --role node --gateway http://%s:%s\n' "${REGISTRY_ADDR%:*}" "$GATEWAY_PORT"
 if [ "$(systemctl is-active caddy 2>/dev/null)" = active ]; then
   printf '  console:      http://<this-host-ip>/console (Caddy on :80 -> the gateway; open your cloud firewall for\n'
   printf '                80/443, then bind domains in the domains page for automatic HTTPS)\n'

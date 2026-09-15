@@ -719,10 +719,17 @@ const CHECKS: DoctorCheck[] = [
     title: 'base image available',
     needs: ['docker-daemon'],
     run: async (ctx) => {
+      // The base image is the fleet's setting since the fourth cut
+      // (2026-09-15): the gateway's env seeds it, the console edits it,
+      // a node takes it at check-in and pulls it from the fleet registry
+      // when the host lacks it. Doctor stays an offline preflight and
+      // reads the environment it was given: install.sh loads the
+      // gateway's env on the gateway's machine, and on a node machine
+      // tells doctor the value it learned from the gateway for this run.
       const image = baseImage(ctx);
       if (!image) {
         return skip(
-          'DORMICE_BASE_IMAGE is not set — set it to check the image and enable the container probes',
+          "DORMICE_BASE_IMAGE is not set in this environment — the base image is the fleet's setting (console › settings; the gateway's env seeds it), and a node pulls it from the fleet registry when it lacks it; export DORMICE_BASE_IMAGE=<the fleet's> to check the image here and enable the container probes",
         );
       }
       const res = await ctx.run('docker', ['image', 'inspect', image]);
@@ -730,7 +737,59 @@ const CHECKS: DoctorCheck[] = [
         ? pass(`${image} is present locally`)
         : fail(
             `${image} is not present locally`,
-            'build it from images/Dockerfile — doctor never pulls images itself',
+            ctx.env.DORMICE_REGISTRY_ADDRESS
+              ? `pull it from the fleet registry: docker pull ${ctx.env.DORMICE_REGISTRY_ADDRESS}/${image} && docker tag ${ctx.env.DORMICE_REGISTRY_ADDRESS}/${image} ${image} (the daemon does this on its own at its next configuration bundle) — doctor never pulls images itself`
+              : 'build it from images/Dockerfile — doctor never pulls images itself',
+          );
+    },
+  },
+  {
+    id: 'registry',
+    title: 'fleet image registry reachable',
+    run: async (ctx) => {
+      // The fleet's image store (install.sh runs one beside the gateway,
+      // TLS with a self-signed certificate Docker trusts through
+      // /etc/docker/certs.d). Reachable and asking for the credential is
+      // the whole check: a 401 from /v2/ proves the address, the TLS trust
+      // and that a registry answers — without a credential on any command
+      // line. The pull itself is the daemon's, per image.
+      const address = ctx.env.DORMICE_REGISTRY_ADDRESS;
+      if (!address) {
+        return skip(
+          "DORMICE_REGISTRY_ADDRESS not set in this environment — no fleet registry (the gateway's variable; without one every node must have its images staged by hand)",
+        );
+      }
+      const ca = `/etc/docker/certs.d/${address}/ca.crt`;
+      if ((await ctx.readTextFile(ca)) === undefined) {
+        return fail(
+          `${ca} is missing — docker cannot trust the registry's certificate, so every pull from ${address} fails`,
+          "re-run install.sh: on the gateway's machine it writes the certificate there; on a node it pins the gateway's on first sight",
+        );
+      }
+      const res = await ctx.run('curl', [
+        '-sS',
+        '-o',
+        '/dev/null',
+        '-w',
+        '%{http_code}',
+        '--cacert',
+        ca,
+        `https://${address}/v2/`,
+      ]);
+      const code = res.stdout.trim();
+      if (!res.ok) {
+        return fail(
+          `https://${address}/v2/ did not answer: ${res.stderr.trim() || 'no reason given'}`,
+          "on the gateway's machine: systemctl status dormice-registry; on a node: is :5000 on the gateway machine open to this one?",
+        );
+      }
+      return code === '401' || code === '200'
+        ? pass(
+            `https://${address}/v2/ answers ${code} — reachable over TLS${code === '401' ? ', asks for the fleet credential' : ''}`,
+          )
+        : fail(
+            `https://${address}/v2/ answered ${code}, not the 401 a registry gives without a credential`,
+            'journalctl -u dormice-registry on the gateway machine',
           );
     },
   },
