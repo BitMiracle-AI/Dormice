@@ -53,13 +53,14 @@ first check-in, and any image it lacks comes from the fleet's image
 registry, which the first machine runs beside the gateway.
 
 On the new machine (same private network as the gateway; its cloud
-firewall must let it reach the gateway machine's ports `3677` and
-`5000`, and let the gateway machine reach its port `80`):
+firewall must let it reach the gateway machine's ports `80` — Caddy,
+the gateway's door; the gateway itself listens on loopback only — and
+`5000`, the registry, and let the gateway machine reach its port `80`):
 
 ```sh
 export DORMICE_API_TOKEN=<the value in the gateway machine's /etc/dormice/env>
 curl -fsSL https://raw.githubusercontent.com/BitMiracle-AI/Dormice/main/deploy/install.sh \
-  | bash -s -- --role node --gateway http://<gateway machine's private IP>:3677
+  | bash -s -- --role node --gateway http://<gateway machine's private IP>:80
 ```
 
 The token travels in the environment, never as a flag (flags show in
@@ -76,6 +77,12 @@ that port to the daemon).
 Re-running the installer on a node needs no flags: the env file says
 which gateway it belongs to. Upgrades come from the gateway — see
 [Upgrading](/docs/upgrading#upgrade-a-fleet).
+
+One symptom worth knowing in advance: a node that appears on the nodes
+page as reachable, yet whose sandboxes fail to create with a `502`, has
+a firewall open one way only. Check-ins run from the node to the
+gateway; everything else runs from the gateway to the node's port `80`,
+and that is the rule the `502` is naming.
 
 ## Get your API token
 
@@ -175,7 +182,7 @@ affect using Dormice.
   reach it (`iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP`,
   persisted), and stops sandboxes from talking to each other
   (`"icc": false` in Docker's `daemon.json`).
-- **One machine, one daemon.** The daemon enforces this with a lock and
+- **One daemon per machine.** The daemon enforces this with a lock and
   refuses to start when its database and the machine's reality don't
   match.
 

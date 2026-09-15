@@ -18,7 +18,11 @@
 #   would bind to curl, not to bash):
 #
 #     export DORMICE_API_TOKEN=<the gateway machine's token>
-#     curl -fsSL .../install.sh | bash -s -- --role node --gateway http://10.0.0.5:3677
+#     curl -fsSL .../install.sh | bash -s -- --role node --gateway http://10.0.0.5:80
+#
+#   :80 there is the gateway machine's Caddy (or the operator's own reverse
+#   proxy in front of the gateway): the gateway itself listens on loopback
+#   only, like the daemon, so its own port answers no other machine.
 #
 #   The role is not a file: /etc/dormice/env names the gateway
 #   (DORMICE_GATEWAY_ENDPOINT), and a remote one is what makes a machine a
@@ -754,7 +758,7 @@ else
   note "installed caddy v$CADDY_VERSION to /usr/local/bin"
 fi
 INGRESS_FILE_READY=''
-CADDY_REPOINTED=''
+CADDY_REPOINT_PENDING=''
 if command -v caddy >/dev/null; then
   mkdir -p /etc/caddy
   if [ "$ROLE" = node ]; then
@@ -824,11 +828,15 @@ EOF
       if grep -q "reverse_proxy 127.0.0.1:$PORT\b" "$ingress_target"; then
         # A file from before the gateway became the door (2026-09-14): the
         # catch-all still points at the daemon, where the console no longer
-        # lives. Re-pointed in place; the bound domains, if any, are
-        # rewritten the same way by the gateway at the next setIngress.
-        sed -i "s|reverse_proxy 127.0.0.1:$PORT\b|reverse_proxy 127.0.0.1:$GATEWAY_PORT|g" "$ingress_target"
-        note "re-pointed $ingress_target from the daemon ($PORT) to the gateway ($GATEWAY_PORT) — the console lives there now"
-        CADDY_REPOINTED=1
+        # lives. Re-pointed in place — but in the services step below, once
+        # the gateway answers: done here, the machine's public API face
+        # would proxy to a port nobody listens on from this line until the
+        # gateway's first start, past the registry install, the base image
+        # push, the backups and the import — minutes on a production
+        # ledger (found by review, 2026-09-16). The bound domains, if any,
+        # are rewritten the same way by the gateway at the next setIngress.
+        note "$ingress_target still proxies to the daemon ($PORT) — re-pointed to the gateway ($GATEWAY_PORT) once it answers, below"
+        CADDY_REPOINT_PENDING=1
       else
         note "[skip] $ingress_target is managed by Dormice — left to the gateway"
       fi
@@ -868,10 +876,6 @@ EOF
   if [ "$(systemctl is-active caddy)" != active ]; then
     systemctl start caddy
     note 'started caddy'
-  elif [ -n "$CADDY_REPOINTED" ]; then
-    # shellcheck disable=SC2086 # the reload command is the operator's own words, split on purpose
-    (cd / && $ingress_reload >/dev/null 2>&1) || systemctl restart caddy
-    note 'reloaded caddy with the re-pointed config'
   else
     note '[skip] caddy is running'
   fi
@@ -1237,7 +1241,7 @@ fi
 if [ "$ROLE" = node ]; then
 log "joining the fleet at $GATEWAY_URL"
 fleet_config=$(curl_auth_config | curl -fsS -K - -X POST -H 'content-type: application/json' -d '{}' "$GATEWAY_URL/getConfig" 2>/dev/null) \
-  || die "the gateway at $GATEWAY_URL did not answer getConfig — is it running, is :$GATEWAY_PORT open to this machine, is DORMICE_API_TOKEN the gateway machine's token? (curl -fsS $GATEWAY_URL/healthz answers without a token)"
+  || die "the gateway at $GATEWAY_URL did not answer getConfig — is it running; is that address its machine's Caddy on :80 (the gateway itself listens on loopback only, so http://<gateway machine>:$GATEWAY_PORT answers no other machine); is :80 there open to this machine; is DORMICE_API_TOKEN the gateway machine's token? (curl -fsS $GATEWAY_URL/healthz answers without a token)"
 read -r FLEET_REGISTRY FLEET_BASE_IMAGE <<EOF
 $(printf '%s' "$fleet_config" | node -e '
 const c = JSON.parse(require("fs").readFileSync(0, "utf8"));
@@ -1410,6 +1414,17 @@ if [ "$ROLE" = gateway ]; then
     die "the gateway did not answer /healthz on 127.0.0.1:$GATEWAY_PORT — check: journalctl -u dormice-gateway -n 50 (the daemon was started again)"
   fi
   note "gateway is answering on 127.0.0.1:$GATEWAY_PORT"
+  if [ -n "$CADDY_REPOINT_PENDING" ]; then
+    # The re-point deferred from the ingress step: the gateway answers and
+    # the daemon is stopped, so the daemon's port is dark either way — the
+    # door changes hands inside the restart this run costs anyway. A
+    # gateway that did not come up (above) leaves the door on the daemon,
+    # which was started again and keeps serving.
+    sed -i "s|reverse_proxy 127.0.0.1:$PORT\b|reverse_proxy 127.0.0.1:$GATEWAY_PORT|g" "$ingress_target"
+    # shellcheck disable=SC2086 # the reload command is the operator's own words, split on purpose
+    (cd / && $ingress_reload >/dev/null 2>&1) || systemctl restart caddy
+    note "re-pointed $ingress_target from the daemon ($PORT) to the gateway ($GATEWAY_PORT) and reloaded caddy — the console lives there now"
+  fi
   systemctl start dormice
   note 'enabled and (re)started both'
 else
@@ -1473,8 +1488,9 @@ printf '  CLI:          export DORMICE_ENDPOINT=http://127.0.0.1:%s DORMICE_API_
 printf '                (the gateway is the door for every verb; a node answers only the sandbox and host verbs\n'
 printf '                for itself on 127.0.0.1:%s)\n' "$PORT"
 printf '  Both processes listen on 127.0.0.1 only, by design — exposing them is a reverse proxy'"'"'s job.\n'
-printf '  add a node:   on another machine of the same network, with :%s and :%s here open to it:\n' "$GATEWAY_PORT" "$REGISTRY_PORT"
-printf '                DORMICE_API_TOKEN=<token> bash install.sh --role node --gateway http://%s:%s\n' "${REGISTRY_ADDR%:*}" "$GATEWAY_PORT"
+printf '  add a node:   on another machine of the same network, with :80 (Caddy, the gateway'"'"'s door) and :%s here\n' "$REGISTRY_PORT"
+printf '                open to it and its own :80 open to this machine:\n'
+printf '                export DORMICE_API_TOKEN=<token>; bash install.sh --role node --gateway http://%s:80\n' "${REGISTRY_ADDR%:*}"
 if [ "$(systemctl is-active caddy 2>/dev/null)" = active ]; then
   printf '  console:      http://<this-host-ip>/console (Caddy on :80 -> the gateway; open your cloud firewall for\n'
   printf '                80/443, then bind domains in the domains page for automatic HTTPS)\n'

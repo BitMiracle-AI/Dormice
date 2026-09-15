@@ -3,7 +3,7 @@
 [![CI](https://github.com/BitMiracle-AI/Dormice/actions/workflows/ci.yml/badge.svg)](https://github.com/BitMiracle-AI/Dormice/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**The SQLite of agent sandboxes** — a self-hosted sandbox platform for AI agents. One machine, sandboxes that live forever, idle costs nothing.
+**The SQLite of agent sandboxes** — a self-hosted sandbox platform for AI agents. One machine or a fleet of them, sandboxes that live forever, idle costs nothing.
 
 > **Status: early development.** The daemon, its lifecycle engine, the SDK, the CLI, the web console, the real Docker + gVisor executor, the S3 archiver, and the E2B-compatible API work end to end — the full create → freeze → stop → archive → restore cycle, command execution, file I/O, and the official `e2b` SDK against real infrastructure. Nothing here is ready for production yet.
 
@@ -32,7 +32,7 @@ container — that decides whether the install actually succeeded;
 `dor doctor` can be re-run on its own at any time.
 
 A second machine joins the same fleet with one more command
-(`--role node --gateway http://<first machine>:3677`, the token in the
+(`--role node --gateway http://<first machine>:80`, the token in the
 environment) and needs no settings of its own; upgrades then run from
 the gateway, one node at a time. See the
 [installation](website/content/docs/installation.mdx) and
@@ -222,7 +222,7 @@ verifies it, but these are the facts underneath:
   disable inter-container traffic (`"icc": false` in `daemon.json`). The
   daemon binds to 127.0.0.1 only, by design without a knob; exposing it is
   a reverse proxy's job.
-- **One machine, one daemon.** The daemon enforces this with a lock next to
+- **One daemon per machine.** The daemon enforces this with a lock next to
   its ledger and refuses to start when its ledger and the machine's reality
   cannot belong together.
 
@@ -230,9 +230,11 @@ verifies it, but these are the facts underneath:
 
 Pick something else if:
 
-- **You need a fleet.** One machine, one daemon, by design — that is where
-  the simplicity comes from. Multi-machine sharding is a future direction
-  (the schema already carries the fields), not a current feature.
+- **You need sandboxes that move between machines, or a fleet across
+  regions.** A fleet is one gateway and the machines on its private
+  network — sharded, not distributed, by design: a sandbox lives on the
+  machine it was created on, and a node that is down takes its sandboxes
+  with it until it is back.
 - **You want a managed service.** No hosted anything, no SLA. That is
   E2B's product, and it is good at it.
 - **Your threat model demands hardware virtualization.** Sandboxes are
