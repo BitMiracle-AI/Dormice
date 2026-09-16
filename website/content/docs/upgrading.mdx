@@ -21,7 +21,14 @@ curl -fsSL https://raw.githubusercontent.com/BitMiracle-AI/Dormice/main/deploy/i
 Every step checks before it acts — a step whose outcome is already in
 place says `[skip]` and touches nothing.
 
-**Use the `curl | bash` form for upgrades.** If you instead run a local
+The console's **Upgrade** button and `POST /applyUpgrade` run the same
+installer — the installer *of the version being installed*, fetched from
+the repository before it starts, not the copy on disk that belongs to the
+version being replaced. A step the new version adds to the host (a
+kernel parameter, a runtime flag, a new unit) therefore lands with the
+code, and there is nothing to re-run by hand afterwards.
+
+**Use the `curl | bash` form for upgrades by hand.** If you instead run a local
 copy (`bash /opt/dormice/deploy/install.sh`), its `git pull` updates the
 script file mid-run while bash keeps executing the *old* bytes —
 measured on a real upgrade. Run a local copy twice, or just pipe from
@@ -32,7 +39,8 @@ the repo.
 A fleet upgrades from its gateway, and one action upgrades every
 machine. On the gateway's machine, re-running the installer — or the
 console's **Upgrade** button, or `POST /applyUpgrade` at the gateway —
-pulls, rebuilds and restarts the gateway and the node on that machine.
+pulls, rebuilds and restarts the gateway and the node on that machine,
+running the new version's installer.
 Once the gateway is back on the new build, every other node hears at
 its next check-in (within fifteen seconds) that its turn has come, and
 runs the same installer itself: one node at a time, so the fleet is
