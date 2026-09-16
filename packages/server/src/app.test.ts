@@ -16,7 +16,7 @@ import { MemStore } from './archive/mem-store';
 import { objectKey } from './archive/store';
 import { loadConfig } from './config';
 import { migrateDb, openDb } from './db/db';
-import { findById, transition } from './db/ledger';
+import { createSandbox, findById, transition } from './db/ledger';
 import { FakeExecutor } from './executor/fake';
 import { KeyedQueue } from './keyed-queue';
 import { ARCHIVE_DEFAULT_SECONDS } from './policy';
@@ -920,6 +920,31 @@ describe('POST /listSandboxes', () => {
         ]),
     );
     expect(states).toEqual({ alice: 'frozen', bob: 'active' });
+  });
+
+  it("answers this node's id for every row, including one born under the id the node had before it was renamed", async () => {
+    const { app, db } = testApp();
+    await acquire(app, { name: 'today' });
+    createSandbox(db, {
+      id: 'aaaaaaaa-0000-4000-8000-000000000001',
+      name: 'from-before',
+      nodeId: 'node-1',
+      policy: DEFAULT_LIFECYCLE_POLICY,
+    });
+    const res = await rpc(app, '/listSandboxes');
+    expect(res.statusCode).toBe(200);
+    const ids = res
+      .json()
+      .sandboxes.map((s: { name: string; nodeId: string }) => [
+        s.name,
+        s.nodeId,
+      ]);
+    expect(Object.fromEntries(ids)).toEqual({
+      today: 'node-test',
+      'from-before': 'node-test',
+    });
+    const one = await acquire(app, { name: 'from-before' });
+    expect(one.json().sandbox.nodeId).toBe('node-test');
   });
 });
 

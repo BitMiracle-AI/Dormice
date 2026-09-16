@@ -110,7 +110,7 @@ export const sandboxSchema = z.object({
   id: z.string(),
   name: sandboxNameSchema,
   state: z.enum(SANDBOX_STATES),
-  /** Machine that owns this sandbox. Single-machine today; the field keeps the ledger shardable. */
+  /** The node that runs this sandbox — the DORMICE_NODE_ID of the daemon answering (listNodes at the gateway lists them), never a stamp from the row's birth. */
   nodeId: z.string(),
   /**
    * Base URL of the daemon that owns this sandbox. Honest limits today: it

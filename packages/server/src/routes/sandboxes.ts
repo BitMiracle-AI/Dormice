@@ -96,22 +96,34 @@ type AcquireOutcome =
   | { status: 'ready'; created: boolean; row: SandboxRow }
   | { status: 'restoring'; row: SandboxRow; progress: RestoreProgress };
 
+/** The daemon answering: its node id and where it is dialled — the same for every row of its ledger. */
+interface Self {
+  nodeId: string;
+  endpoint: string;
+}
+
 /**
- * Ledger row -> wire shape: nest the flat policy columns, attach the
- * endpoint, resolve the spec (NULL knobs collapse onto the global defaults
+ * Ledger row -> wire shape: nest the flat policy columns, attach who
+ * answers, resolve the spec (NULL knobs collapse onto the global defaults
  * — the wire reports the values in force, never a two-source riddle).
+ * `nodeId` is this daemon's DORMICE_NODE_ID, not the row's column: every
+ * row of a ledger is this node's, and the column is the id the node had
+ * when the row was born — a node renamed since (the test machine's, from
+ * `node-1` to its hostname) would otherwise list its old sandboxes under a
+ * node that no longer exists, and a fleet's merged list would show a
+ * ghost node beside the real one (found by review, 2026-09-16).
  */
 function toSandbox(
   row: SandboxRow,
-  endpoint: string,
+  self: Self,
   defaults: SandboxResourceDefaults,
 ): Sandbox {
   return {
     id: row.id,
     name: row.name,
     state: row.state,
-    nodeId: row.nodeId,
-    endpoint,
+    nodeId: self.nodeId,
+    endpoint: self.endpoint,
     policy: {
       freezeAfterSeconds: row.freezeAfterSeconds,
       stopAfterSeconds: row.stopAfterSeconds,
@@ -153,14 +165,18 @@ function serializeMetadata(
 export const sandboxRoutes: FastifyPluginAsyncZod<
   SandboxRoutesOptions
 > = async (app, { config, db, executor, locks, watchers, archiver }) => {
-  // Every sandbox lives on this daemon today, so the endpoint is our own
-  // address; with sharding it may point at another node.
-  const endpoint = `http://127.0.0.1:${config.DORMICE_PORT}`;
+  // Who answers for every row of this ledger: this node, at its own
+  // loopback address (a caller through the gateway keeps using the
+  // gateway's address; the field's honest limits are in shared sandbox.ts).
+  const self: Self = {
+    nodeId: config.DORMICE_NODE_ID,
+    endpoint: `http://127.0.0.1:${config.DORMICE_PORT}`,
+  };
 
   // The single-row view: defaults read live so a console edit shows in the
   // very next response. List responses read the defaults once instead.
   const view = (row: SandboxRow) =>
-    toSandbox(row, endpoint, readRuntimeSettings(db).sandboxDefaults);
+    toSandbox(row, self, readRuntimeSettings(db).sandboxDefaults);
 
   // Both verbs run inside the key's queue slot (see KeyedQueue): each is a
   // check followed by an act with seconds of executor work in between, and
@@ -368,7 +384,7 @@ export const sandboxRoutes: FastifyPluginAsyncZod<
       const defaults = readRuntimeSettings(db).sandboxDefaults;
       return {
         sandboxes: listSandboxes(db).map((row) =>
-          toSandbox(row, endpoint, defaults),
+          toSandbox(row, self, defaults),
         ),
       };
     },
