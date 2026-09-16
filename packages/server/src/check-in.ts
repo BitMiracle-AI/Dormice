@@ -198,14 +198,14 @@ export class CheckIn {
       }
       if (answer.upgrade === true) {
         // The gateway's turn for this node in the fleet upgrade: run the
-        // same one-click upgrade an operator would (install.sh in a
-        // systemd unit, updater.ts). Said as its own line, not this tick's
+        // same one-click upgrade an operator would (the new build's
+        // install.sh in a systemd unit, updater.ts). Said as its own line, not this tick's
         // failure: the check-in itself succeeded, and the gateway tells a
         // node once — a launch that fails here is the operator's to read
         // (the gateway shows the node as stuck twenty minutes on, and
         // applyUpgrade {nodeId} at the gateway puts it back in line).
         opts.log.info(
-          `the gateway says this node's turn to upgrade has come — launching install.sh (systemd unit dormice-upgrade)`,
+          `the gateway says this node's turn to upgrade has come — launching the new build's install.sh (systemd unit dormice-upgrade)`,
         );
         try {
           await (opts.applyUpgrade ?? unavailableUpgrade)();
