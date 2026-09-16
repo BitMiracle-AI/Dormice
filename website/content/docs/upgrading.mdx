@@ -51,10 +51,13 @@ than the gateway's (a commit landed on `main` while the fleet was
 rolling, or the installer was run on that node by hand) is left alone,
 and reads current once the gateway itself is upgraded.
 
-A node is told exactly once. If it has not come back on the new build
-twenty minutes later, the gateway marks it **stuck** and leaves it
+A node is told exactly once. If twenty minutes later it still reports
+the build it was told on, the gateway marks it **stuck** and leaves it
 alone — a node whose build keeps failing must not rebuild every twenty
-minutes on the CPU its sandboxes run on. Read `journalctl -u
+minutes on the CPU its sandboxes run on. (A node that comes back on
+another build has done what it was told, even if the gateway was
+upgraded again meanwhile: it is judged afresh, and told again at its
+turn if it is behind once more.) Read `journalctl -u
 dormice-upgrade` and `/var/lib/dormice/upgrade/upgrade.log` on that
 node, fix the cause, and press **Try again** on the version page (or
 `POST /applyUpgrade {"nodeId": "..."}`), which puts that node back in

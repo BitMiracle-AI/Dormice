@@ -46,6 +46,8 @@ export interface NodeState {
   selfUpgrade: SelfUpgrade | null;
   /** When the fleet upgrade last told this node to upgrade (rolling.ts); null = never, or fulfilled. */
   upgradeToldAt: Date | null;
+  /** The commit the node ran when it was told — the tell is fulfilled the moment it reports another (rolling.ts); null with a tell = a row written before this was recorded. */
+  upgradeToldBuild: string | null;
   placedSinceCheckIn: number;
   placedIds: Set<string>;
 }
@@ -251,6 +253,7 @@ export class Fleet {
         selfUpgradeSchema,
       ),
       upgradeToldAt: this.parseDate(row.upgradeToldAt),
+      upgradeToldBuild: row.upgradeToldBuild,
       placedSinceCheckIn: 0,
       placedIds: new Set(),
     };
@@ -349,6 +352,7 @@ export class Fleet {
         reading: null,
         selfUpgrade: null,
         upgradeToldAt: null,
+        upgradeToldBuild: null,
         placedSinceCheckIn: 0,
         placedIds: new Set(),
       };
@@ -386,22 +390,27 @@ export class Fleet {
   }
 
   /**
-   * The fleet upgrade's one mark on a node: when it was told to upgrade,
-   * or null once the tell is fulfilled (rolling.ts). Written through,
-   * not best-effort — the tell rides on the check-in's answer, and a
-   * gateway that forgot it told a node would tell it again after a
-   * restart, the one thing the rolling upgrade promises not to do; a
-   * write that fails fails the check-in, and the node is told at the next.
+   * The fleet upgrade's one mark on a node: when it was told to upgrade
+   * and what it ran at that moment, or null once the tell is fulfilled
+   * (rolling.ts). Written through, not best-effort — the tell rides on
+   * the check-in's answer, and a gateway that forgot it told a node would
+   * tell it again after a restart, the one thing the rolling upgrade
+   * promises not to do; a write that fails fails the check-in, and the
+   * node is told at the next.
    */
-  setUpgradeToldAt(id: string, at: Date | null): void {
+  setUpgradeTold(id: string, told: { at: Date; build: string } | null): void {
     const node = this.members.get(id);
     if (node === undefined) return;
     this.db
       .update(nodes)
-      .set({ upgradeToldAt: at === null ? null : at.toISOString() })
+      .set({
+        upgradeToldAt: told === null ? null : told.at.toISOString(),
+        upgradeToldBuild: told === null ? null : told.build,
+      })
       .where(eq(nodes.id, id))
       .run();
-    node.upgradeToldAt = at;
+    node.upgradeToldAt = told === null ? null : told.at;
+    node.upgradeToldBuild = told === null ? null : told.build;
   }
 
   /**

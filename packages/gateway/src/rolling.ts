@@ -35,10 +35,20 @@ import { downReason, type Fleet, type NodeState } from './fleet';
  * could break it was the wrong hand, and with it gone nothing is
  * remembered but the row.
  *
- * The row: the tell is nodes.upgrade_told_at, so a gateway restart
+ * The row: the tell is nodes.upgrade_told_at and, beside it, the commit
+ * the node ran when told (upgrade_told_build) — so a gateway restart
  * mid-roll neither forgets a node it told nor tells it twice, and every
  * verdict here is a function of the rows, the gateway's build and the
- * clock.
+ * clock. Fulfilled means the node reports another commit than the one
+ * it was told on, not the gateway's commit: the gateway may have been
+ * upgraded again while the node built (a fix pushed on the heels of the
+ * first push — the shape of every review day), and a node coming back on
+ * the first push's commit has done exactly what it was told. Judged as
+ * "still not on my build" it read upgrading for twenty minutes, then
+ * stuck with a reason that said it had not moved when it had — and the
+ * one-at-a-time rule held the whole roll for those twenty minutes (found
+ * by review, 2026-09-16). Back on another commit it is judged afresh:
+ * current, ahead, or behind and in line for the next tell.
  *
  * Behind means older. A node whose build is newer than the gateway's — a
  * commit that landed on main after the gateway's machine upgraded and
@@ -112,8 +122,16 @@ export function upgradeStateOf(
   // its daemon restarts near the end of install.sh and misses a check-in
   // or two by design, and were that silence read as "unreachable" the
   // one-at-a-time rule would see nobody upgrading and tell the next node
-  // into the same minute. The silence is said in the reason instead.
-  if (node.upgradeToldAt !== null) {
+  // into the same minute. The silence is said in the reason instead. The
+  // tell stands while the node still reports the commit it was told on
+  // (the module comment has why that, and not the gateway's commit, is
+  // the measure); a tell recorded without one — a row from before the
+  // column — stands until the node reads current or ahead, above.
+  if (
+    node.upgradeToldAt !== null &&
+    (node.upgradeToldBuild === null ||
+      node.upgradeToldBuild === node.build.commit)
+  ) {
     const sinceMs = now.getTime() - node.upgradeToldAt.getTime();
     const silence = down === null ? '' : ` (${down})`;
     if (sinceMs < UPGRADE_TOLD_TIMEOUT_MS) {
@@ -178,23 +196,32 @@ export class Rolling {
 
   /**
    * The check-in's verdict for a node that just reported: a fulfilled tell
-   * is cleared (the node is off the old build — on the gateway's, or ahead
-   * of it); otherwise the rolling rule decides, and a tell is written to
-   * the row before the answer carries it. Answers whether the node is told
-   * now.
+   * is cleared from the row (the node is off the commit it was told on —
+   * on the gateway's, ahead of it, or behind it once more because the
+   * gateway moved on meanwhile: upgradeStateOf no longer reads it as
+   * upgrading or stuck); then the rolling rule decides, and a tell is
+   * written to the row before the answer carries it. Answers whether the
+   * node is told now — which a node just back from one upgrade may be,
+   * when the gateway is already past the build it came back on.
    */
   onCheckIn(node: NodeState, now: Date): boolean {
     const { state } = upgradeStateOf(node, this.gatewayBuild, now);
-    if (state === 'current' || state === 'ahead') {
-      if (node.upgradeToldAt !== null) {
-        this.fleet.setUpgradeToldAt(node.id, null);
-      }
+    if (
+      node.upgradeToldAt !== null &&
+      state !== 'upgrading' &&
+      state !== 'stuck'
+    ) {
+      this.fleet.setUpgradeTold(node.id, null);
+    }
+    if (
+      state !== 'behind' ||
+      !rollingDecision(this.fleet.all(), this.gatewayBuild, node, now)
+    ) {
       return false;
     }
-    if (!rollingDecision(this.fleet.all(), this.gatewayBuild, node, now)) {
-      return false;
-    }
-    this.fleet.setUpgradeToldAt(node.id, now);
+    // Behind is judged only of a node with a build (upgradeStateOf).
+    if (node.build === null) return false;
+    this.fleet.setUpgradeTold(node.id, { at: now, build: node.build.commit });
     return true;
   }
 
@@ -216,7 +243,7 @@ export class Rolling {
     const { state, reason } = upgradeStateOf(node, this.gatewayBuild, now);
     switch (state) {
       case 'stuck':
-        this.fleet.setUpgradeToldAt(node.id, null);
+        this.fleet.setUpgradeTold(node.id, null);
         return null;
       case 'upgrading':
         return {

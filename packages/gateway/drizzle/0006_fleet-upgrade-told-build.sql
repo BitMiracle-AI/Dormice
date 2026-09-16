@@ -1,0 +1,1 @@
+ALTER TABLE `nodes` ADD `upgrade_told_build` text;

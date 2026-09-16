@@ -69,10 +69,19 @@ export const nodes = sqliteTable('nodes', {
   /**
    * ISO 8601 UTC — when the fleet upgrade last told this node to upgrade
    * itself (rolling.ts); null = never, or the tell was fulfilled (the node
-   * came back on the gateway's build). On the row so a gateway restart
+   * came back on another build). On the row so a gateway restart
    * mid-roll neither forgets a node it told nor tells it twice.
    */
   upgradeToldAt: text('upgrade_told_at'),
+  /**
+   * The commit the node ran when it was told — what "fulfilled" is judged
+   * against: a node reporting any other commit did what it was told,
+   * whether or not that commit is the gateway's by now (the gateway may
+   * have upgraded again meanwhile). Null beside a tell only on a row
+   * written before this column existed; such a tell stands until the
+   * node reads current or ahead.
+   */
+  upgradeToldBuild: text('upgrade_told_build'),
 });
 
 export type NodeRow = typeof nodes.$inferSelect;

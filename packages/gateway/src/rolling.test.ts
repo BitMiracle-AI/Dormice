@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import type { BuildInfo } from '@dormice/shared';
+import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { migrateDb, openDb } from './db/db';
 import { nodes } from './db/schema';
@@ -106,7 +107,7 @@ describe('upgradeStateOf', () => {
     });
     const current = reporting(fleet, 'b', { build: GATEWAY, selfUpgrade: CAN });
     expect(upgradeStateOf(current, GATEWAY, later).state).toBe('unreachable');
-    fleet.setUpgradeToldAt('a', NOW);
+    fleet.setUpgradeTold('a', { at: NOW, build: OLD.commit });
     expect(upgradeStateOf(node, GATEWAY, later)).toEqual({
       state: 'upgrading',
       reason: 'told 31s ago, still on old0001 (has not checked in for 31s)',
@@ -153,7 +154,7 @@ describe('upgradeStateOf', () => {
   it('told: upgrading within the timeout, stuck past it — with when it was told, what it still runs, and where to look', () => {
     const { fleet } = fleetOver();
     const node = reporting(fleet, 'a', { build: OLD, selfUpgrade: CAN });
-    fleet.setUpgradeToldAt('a', NOW);
+    fleet.setUpgradeTold('a', { at: NOW, build: OLD.commit });
     const soon = new Date(NOW.getTime() + 90_000);
     // Still checking in during its build: upgrading, plainly.
     reporting(fleet, 'a', { build: OLD, selfUpgrade: CAN }, soon);
@@ -182,7 +183,7 @@ describe('rollingDecision', () => {
     const b = reporting(fleet, 'b', { build: OLD, selfUpgrade: CAN });
     const all = fleet.all();
     expect(rollingDecision(all, GATEWAY, a, NOW)).toBe(true);
-    fleet.setUpgradeToldAt('a', NOW);
+    fleet.setUpgradeTold('a', { at: NOW, build: OLD.commit });
     expect(rollingDecision(all, GATEWAY, b, NOW)).toBe(false);
     // a restarts near the end of its upgrade and misses check-ins: still
     // upgrading, and b still waits.
@@ -309,6 +310,66 @@ describe('Rolling', () => {
       status: 400,
       message: expect.stringMatching(/gateway carries no build identity/),
     });
+  });
+
+  it('a told node that comes back on another commit than it was told on has fulfilled its tell, even when the gateway moved on meanwhile: cleared, behind again, and told again at its turn — not upgrading, not stuck', () => {
+    const { db, fleet } = fleetOver();
+    // The gateway was on GATEWAY when a was told; a pulled that head and
+    // built. Before it came back, the gateway's machine was upgraded
+    // again (a fix pushed minutes after the first), so the gateway now
+    // runs NEWER and a comes back on GATEWAY — older than the gateway's.
+    const first = new Rolling(fleet, GATEWAY);
+    const a = reporting(fleet, 'a', { build: OLD, selfUpgrade: CAN });
+    const b = reporting(fleet, 'b', { build: OLD, selfUpgrade: CAN });
+    expect(first.onCheckIn(a, NOW)).toBe(true);
+    expect(a.upgradeToldBuild).toBe(OLD.commit);
+    expect(new Fleet(db).get('a')?.upgradeToldBuild).toBe(OLD.commit);
+    const rolling = new Rolling(fleet, NEWER);
+    const back = new Date(NOW.getTime() + 70_000);
+    // Its tell stands while it still reports the commit it was told on.
+    expect(upgradeStateOf(a, NEWER, back)).toMatchObject({
+      state: 'upgrading',
+    });
+    reporting(fleet, 'b', { build: OLD, selfUpgrade: CAN }, back);
+    expect(rolling.onCheckIn(b, back)).toBe(false);
+    // Back on GATEWAY: another commit than told on — fulfilled. Not
+    // upgrading, not stuck; behind the gateway's NEWER, and told again at
+    // once, nobody else being mid-upgrade.
+    reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: CAN }, back);
+    expect(upgradeStateOf(a, NEWER, back)).toEqual({
+      state: 'behind',
+      reason: null,
+    });
+    expect(rolling.onCheckIn(a, back)).toBe(true);
+    expect(a.upgradeToldAt).toEqual(back);
+    expect(a.upgradeToldBuild).toBe(GATEWAY.commit);
+    expect(rolling.states(back)).toMatchObject([
+      { id: 'a', state: 'upgrading', toldAt: back.toISOString() },
+      { id: 'b', state: 'behind', toldAt: null },
+    ]);
+    // Twenty minutes on the same commit is stuck, as before — and now the
+    // reason's "still on" is true by construction.
+    const late = new Date(back.getTime() + UPGRADE_TOLD_TIMEOUT_MS);
+    reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: CAN }, late);
+    expect(upgradeStateOf(a, NEWER, late)).toMatchObject({
+      state: 'stuck',
+      reason: expect.stringMatching(/still on new0001 20 minutes later/),
+    });
+    // A tell from a row written before the commit was recorded stands
+    // until the node reads current or ahead, as every tell once did.
+    reporting(fleet, 'c', { build: OLD, selfUpgrade: CAN }, late);
+    fleet.setUpgradeTold('c', { at: late, build: OLD.commit });
+    db.update(nodes)
+      .set({ upgradeToldBuild: null })
+      .where(eq(nodes.id, 'c'))
+      .run();
+    const cOld = new Fleet(db).get('c');
+    if (!cOld) throw new Error('row lost');
+    expect(cOld.upgradeToldBuild).toBeNull();
+    cOld.build = GATEWAY;
+    expect(upgradeStateOf(cOld, NEWER, late).state).toBe('upgrading');
+    cOld.build = NEWER;
+    expect(upgradeStateOf(cOld, NEWER, late).state).toBe('current');
   });
 
   it('a told node that comes back newer than the gateway is ahead: its tell is fulfilled and cleared, it is not told again, the hand refuses it, and it holds nobody', () => {
