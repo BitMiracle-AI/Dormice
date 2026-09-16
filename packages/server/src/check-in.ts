@@ -6,7 +6,7 @@ import {
   type NodeReading,
 } from '@dormice/shared';
 import type { Db } from './db/db';
-import { countByState, listSandboxes } from './db/ledger';
+import { countSandboxesByState } from './db/ledger';
 import type { Executor } from './executor/executor';
 import { type CpuSampler, readHostReading } from './host-metrics';
 import type { SwapControl } from './swap';
@@ -27,7 +27,7 @@ export async function readNodeReading(
   executor: Executor,
   swap?: SwapControl,
 ): Promise<NodeReading> {
-  const { byState, total } = countByState(listSandboxes(db));
+  const { byState, total } = countSandboxesByState(db);
   return {
     ...(await readHostReading(cpu, dataDir)),
     sandboxes: { total, byState },

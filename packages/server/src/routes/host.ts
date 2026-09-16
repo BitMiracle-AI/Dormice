@@ -6,7 +6,7 @@ import {
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import type { Config } from '../config';
 import type { Db } from '../db/db';
-import { countByState, listSandboxes } from '../db/ledger';
+import { countSandboxesByState } from '../db/ledger';
 import {
   bucketHostSamples,
   queryHostCpuPeak,
@@ -49,8 +49,7 @@ export const hostRoutes: FastifyPluginAsyncZod<HostRoutesOptions> = async (
       },
     },
     async () => {
-      const rows = listSandboxes(db);
-      const { byState, total } = countByState(rows);
+      const { byState, total } = countSandboxesByState(db);
 
       return {
         ...(await readHostReading(cpu, config.DORMICE_DATA_DIR)),

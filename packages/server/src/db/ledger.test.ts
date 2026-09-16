@@ -3,7 +3,13 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_LIFECYCLE_POLICY } from '@dormice/shared';
 import { describe, expect, it } from 'vitest';
 import { type Db, migrateDb, openDb } from './db';
-import { createSandbox, findByName, touch, transition } from './ledger';
+import {
+  countSandboxesByState,
+  createSandbox,
+  findByName,
+  touch,
+  transition,
+} from './ledger';
 
 const MIGRATIONS = fileURLToPath(new URL('../../drizzle', import.meta.url));
 
@@ -29,6 +35,22 @@ describe('ledger', () => {
     expect(created.state).toBe('active');
     expect(findByName(db, 'user-1')).toEqual(created);
     expect(findByName(db, 'someone-else')).toBeUndefined();
+  });
+
+  it('counts the census by state in SQL, every state present, zero where empty', () => {
+    const db = testDb();
+    expect(countSandboxesByState(db)).toEqual({
+      byState: { active: 0, frozen: 0, stopped: 0, archived: 0, restoring: 0 },
+      total: 0,
+    });
+    create(db, 'a');
+    create(db, 'b');
+    const { id } = create(db, 'c');
+    transition(db, id, 'frozen');
+    expect(countSandboxesByState(db)).toEqual({
+      byState: { active: 2, frozen: 1, stopped: 0, archived: 0, restoring: 0 },
+      total: 3,
+    });
   });
 
   it('enforces one sandbox per name at the database level', () => {

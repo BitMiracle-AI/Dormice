@@ -4,7 +4,7 @@ import {
   SANDBOX_STATES,
   type SandboxState,
 } from '@dormice/shared';
-import { eq } from 'drizzle-orm';
+import { count, eq } from 'drizzle-orm';
 import type { Db } from './db';
 import { type SandboxRow, sandboxes } from './schema';
 
@@ -117,16 +117,30 @@ export function listSandboxes(db: Db): SandboxRow[] {
   return db.select().from(sandboxes).all();
 }
 
-/** State census over a listing — getHostMetrics and the metrics sampler share it. */
-export function countByState(rows: SandboxRow[]): {
+/**
+ * The state census, straight from SQL — one GROUP BY, never every row
+ * loaded and counted in JavaScript: the check-in asks it every fifteen
+ * seconds and getHostMetrics on every poll, and a production ledger holds
+ * tens of thousands of rows (Beijing, 2026-09). Every state is present,
+ * zero where the table has none.
+ */
+export function countSandboxesByState(db: Db): {
   byState: Record<SandboxState, number>;
   total: number;
 } {
   const byState = Object.fromEntries(
     SANDBOX_STATES.map((state) => [state, 0]),
   ) as Record<SandboxState, number>;
-  for (const row of rows) byState[row.state] += 1;
-  return { byState, total: rows.length };
+  let total = 0;
+  for (const row of db
+    .select({ state: sandboxes.state, n: count() })
+    .from(sandboxes)
+    .groupBy(sandboxes.state)
+    .all()) {
+    byState[row.state] = row.n;
+    total += row.n;
+  }
+  return { byState, total };
 }
 
 /**
