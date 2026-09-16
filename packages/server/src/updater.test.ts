@@ -333,16 +333,24 @@ describe('Updater.apply and status', () => {
     // The refusal wording is systemd 255's, verbatim from the real machine
     // — the adjudication must not depend on it: the unit's liveness is
     // what makes this a "someone is already upgrading", not the prose.
+    // Liveness is systemctl list-units listing the unit (its real line).
     const updater = updaterFor({
       run: async (file, args) =>
-        file === 'systemctl' || args[0] === '--version'
-          ? { exitCode: 0, stdout: '', stderr: '' }
-          : {
-              exitCode: 1,
-              stdout: '',
-              stderr:
-                'Failed to start transient service unit: Unit dormice-upgrade.service was already loaded or has a fragment file.',
-            },
+        file === 'systemctl'
+          ? {
+              exitCode: 0,
+              stdout:
+                'dormice-upgrade.service loaded active running Dormice upgrade (install.sh)\n',
+              stderr: '',
+            }
+          : args[0] === '--version'
+            ? { exitCode: 0, stdout: '', stderr: '' }
+            : {
+                exitCode: 1,
+                stdout: '',
+                stderr:
+                  'Failed to start transient service unit: Unit dormice-upgrade.service was already loaded or has a fragment file.',
+              },
     });
     await expect(updater.apply()).rejects.toMatchObject({ statusCode: 409 });
   });
@@ -353,7 +361,8 @@ describe('Updater.apply and status', () => {
         args[0] === '--version'
           ? { exitCode: 0, stdout: '', stderr: '' }
           : file === 'systemctl'
-            ? { exitCode: 3, stdout: '', stderr: '' }
+            ? // list-units lists nothing: the unit is not in memory.
+              { exitCode: 0, stdout: '', stderr: '' }
             : {
                 exitCode: 1,
                 stdout: '',
@@ -380,14 +389,11 @@ describe('Updater.apply and status', () => {
       }),
     );
     writeFileSync(path.join(statusDir, 'upgrade.log'), '==> build\nboom\n');
-    // systemd-run answers the availability probe; systemctl says the unit
-    // is not active — the "running" claim in the file is a dead process.
+    // systemd-run answers the availability probe; systemctl lists no such
+    // unit — the "running" claim in the file is a dead process.
     const updater = updaterFor({
       statusDir,
-      run: async (file) =>
-        file === 'systemctl'
-          ? { exitCode: 3, stdout: '', stderr: '' }
-          : { exitCode: 0, stdout: '', stderr: '' },
+      run: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     });
     const status = getUpgradeStatusResponseSchema.parse(await updater.status());
     expect(status.available).toBe(true);
@@ -410,10 +416,7 @@ describe('Updater.apply and status', () => {
     writeFileSync(path.join(statusDir, 'status.json'), JSON.stringify(run));
     const updater = updaterFor({
       statusDir,
-      run: async (file) =>
-        file === 'systemctl'
-          ? { exitCode: 3, stdout: '', stderr: '' }
-          : { exitCode: 0, stdout: '', stderr: '' },
+      run: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     });
     const status = await updater.status();
     expect(status.last).toEqual(run);

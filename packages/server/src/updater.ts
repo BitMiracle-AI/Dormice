@@ -376,14 +376,25 @@ export class Updater {
    * finishing: install.sh's last step, doctor, runs on for seconds after
    * the daemon it restarted is back (eight, measured 2026-09-16), and a
    * tell landing in them met this unit's mutex.
+   *
+   * Asked with list-units, not is-active: is-active makes systemd try to
+   * load the unit by name, and for a transient unit that has ended and
+   * been collected that means reopening its fragment under
+   * /run/systemd/transient — gone — and logging a notice about it, two
+   * lines per ask (systemd 255, measured 2026-09-16); asked every check-in,
+   * eleven thousand journal lines a day on every node. list-units only
+   * lists what systemd has in memory: a line when the unit is alive, nothing
+   * when it is not, and no load attempted either way.
    */
   async running(): Promise<boolean> {
     const result = await this.run('systemctl', [
-      'is-active',
-      '--quiet',
+      'list-units',
+      '--plain',
+      '--no-legend',
+      '--state=active',
       `${UNIT}.service`,
     ]);
-    return result.exitCode === 0;
+    return result.exitCode === 0 && result.stdout.trim() !== '';
   }
 
   private async readRun(): Promise<UpgradeRun | null> {
