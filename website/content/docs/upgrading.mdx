@@ -57,9 +57,12 @@ alone — a node whose build keeps failing must not rebuild every twenty
 minutes on the CPU its sandboxes run on. (A node that comes back on
 another build has done what it was told, even if the gateway was
 upgraded again meanwhile: it is judged afresh, and told again at its
-turn if it is behind once more. Told while its previous upgrade is
-still finishing — the installer's last step is `dor doctor` — it
-launches the next one at a later check-in, once that has ended.) Read `journalctl -u
+turn if it is behind once more. While its previous upgrade is still
+finishing — the installer's last step is `dor doctor`, which runs on for
+a few seconds after the daemon is back — the node reports the running
+unit and is shown as upgrading, not told; the tell comes at its first
+check-in after the unit has ended. An installer you run on a node by
+hand shows the same way.) Read `journalctl -u
 dormice-upgrade` and `/var/lib/dormice/upgrade/upgrade.log` on that
 node, fix the cause, and press **Try again** on the version page (or
 `POST /applyUpgrade {"nodeId": "..."}`), which puts that node back in

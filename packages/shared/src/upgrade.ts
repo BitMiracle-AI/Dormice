@@ -169,7 +169,10 @@ export type GetUpgradeStatusRequest = z.infer<
  *                brings it to current
  *   behind       an older build, able to upgrade itself, not told yet — its
  *                turn comes when no other node is upgrading
- *   upgrading    told within the last twenty minutes, not back yet
+ *   upgrading    told within the last twenty minutes, not back yet — or,
+ *                by its own word, an upgrade unit is running on it (its
+ *                previous upgrade's installer finishing, or install.sh
+ *                run there by hand); not told until that has ended
  *   stuck        told, still on the old build twenty minutes on — never
  *                re-told on its own; applyUpgrade {nodeId} puts it back
  *                in line

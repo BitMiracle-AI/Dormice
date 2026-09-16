@@ -27,7 +27,7 @@ const OLD: BuildInfo = {
   title: 'the old build',
   committedAt: '2026-09-14T00:00:00.000Z',
 };
-const CAN = { available: true, reason: null };
+const CAN = { available: true, reason: null, running: false };
 
 function rpc(
   app: App,
@@ -153,6 +153,36 @@ describe('the fleet upgrade over the check-in', () => {
     );
   });
 
+  it('a node that says an upgrade unit is running on it is not told and reads upgrading with the unit as the reason; it is told once it says the unit has ended; a node on a build from before `running` was said is read as not running', async () => {
+    const { app } = testGateway({}, { build: GATEWAY });
+    expect(
+      (
+        await checkIn(app, 'a', {
+          build: OLD,
+          selfUpgrade: { ...CAN, running: true },
+        })
+      ).upgrade,
+    ).toBeUndefined();
+    expect((await status(app)).nodes?.find((n) => n.id === 'a')).toMatchObject({
+      state: 'upgrading',
+      toldAt: null,
+      reason: expect.stringMatching(/an upgrade unit is running on the node/),
+    });
+    expect(
+      (await checkIn(app, 'a', { build: OLD, selfUpgrade: CAN })).upgrade,
+    ).toBe(true);
+    // Before 2026-09-16 a node's selfUpgrade had no `running`: taken, and
+    // read as not running.
+    const old = await rpc(app, '/checkIn', {
+      ...checkInOf('b', 'http://b:80', { build: OLD }),
+      selfUpgrade: { available: true, reason: null },
+    });
+    expect(old.statusCode).toBe(200);
+    expect((await status(app)).nodes?.find((n) => n.id === 'b')).toMatchObject({
+      state: 'behind',
+    });
+  });
+
   it('nodes that cannot upgrade themselves, did not say, or carry no build are listed with the reason and never told', async () => {
     const { app } = testGateway({}, { build: GATEWAY });
     expect(
@@ -162,6 +192,7 @@ describe('the fleet upgrade over the check-in', () => {
           selfUpgrade: {
             available: false,
             reason: 'the process does not run from a git checkout',
+            running: false,
           },
         })
       ).upgrade,

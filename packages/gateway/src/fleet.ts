@@ -6,9 +6,11 @@ import {
   nodeReadingSchema,
   type SandboxDisks,
   type SandboxStateCounts,
+  type SelfUpgrade,
+  selfUpgradeSchema,
 } from '@dormice/shared';
 import { eq } from 'drizzle-orm';
-import { z } from 'zod';
+import type { z } from 'zod';
 import type { Db } from './db/db';
 import { type NodeRow, nodes } from './db/schema';
 import { bumpConfigVersion } from './db/settings';
@@ -42,7 +44,7 @@ export interface NodeState {
   intervalSeconds: number | null;
   build: BuildInfo | null;
   reading: NodeReading | null;
-  /** Whether the node can upgrade itself, its own word (shared checkInRequestSchema.selfUpgrade); null = it did not say. */
+  /** The node's own word on upgrading itself — can it, and is an upgrade unit running on it now (shared selfUpgradeSchema); null = it did not say. */
   selfUpgrade: SelfUpgrade | null;
   /**
    * The fleet upgrade's tell on this node (rolling.ts): when it was told,
@@ -55,18 +57,11 @@ export interface NodeState {
   placedIds: Set<string>;
 }
 
-export type SelfUpgrade = NonNullable<CheckInRequest['selfUpgrade']>;
-
 /** A tell as the row holds it: nodes.upgrade_told_at and nodes.upgrade_told_build. */
 export interface Tell {
   at: Date;
   build: string;
 }
-
-const selfUpgradeSchema = z.object({
-  available: z.boolean(),
-  reason: z.string().nullable(),
-});
 
 /**
  * What the fleet says for itself — a row it could not read back, a row it

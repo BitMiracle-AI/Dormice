@@ -50,6 +50,19 @@ import { downReason, type Fleet, type NodeState, type Tell } from './fleet';
  * by review, 2026-09-16). Back on another commit it is judged afresh:
  * current, ahead, or behind and in line for the next tell.
  *
+ * A node's own upgrade unit counts as upgrading too, told or not. The
+ * node reports whether dormice-upgrade is alive on its machine
+ * (selfUpgrade.running), and one that says so is not told: its previous
+ * upgrade's installer is finishing — doctor runs on for seconds after
+ * the daemon it restarted is back — or an operator ran install.sh on it
+ * by hand. A tell landing in those seconds was refused by the unit's
+ * mutex on the node and, said once, held the roll until the node read
+ * stuck (measured 2026-09-16: an eight-second window at the end of every
+ * upgrade, hit by every fix pushed on the heels of a push). The node
+ * states the fact, the gateway waits it out and tells at the first
+ * check-in that says the unit has ended — no memory of a tell on the
+ * node, and a hand-run upgrade shows on the version page as what it is.
+ *
  * Behind means older. A node whose build is newer than the gateway's — a
  * commit that landed on main after the gateway's machine upgraded and
  * before this node's turn came, or install.sh run on the node by hand —
@@ -141,20 +154,38 @@ export function upgradeStateOf(
   // into the same minute. The silence is said in the reason instead.
   if (tellStands(node)) {
     const sinceMs = now.getTime() - node.upgradeTold.at.getTime();
-    const silence = down === null ? '' : ` (${down})`;
+    const aside =
+      down !== null
+        ? ` (${down})`
+        : node.selfUpgrade?.running === true
+          ? ' (an upgrade unit is running on it)'
+          : '';
     if (sinceMs < UPGRADE_TOLD_TIMEOUT_MS) {
       return {
         state: 'upgrading',
-        reason: `told ${Math.round(sinceMs / 1000)}s ago, still on ${node.build.commit}${silence}`,
+        reason: `told ${Math.round(sinceMs / 1000)}s ago, still on ${node.build.commit}${aside}`,
       };
     }
     return {
       state: 'stuck',
-      reason: `told to upgrade at ${node.upgradeTold.at.toISOString()} and still on ${node.build.commit} ${Math.round(sinceMs / 60_000)} minutes later${silence} — read journalctl -u dormice-upgrade and the upgrade log on the node, then put it back in line (applyUpgrade with its nodeId): it is told again at its turn`,
+      reason: `told to upgrade at ${node.upgradeTold.at.toISOString()} and still on ${node.build.commit} ${Math.round(sinceMs / 60_000)} minutes later${aside} — read journalctl -u dormice-upgrade and the upgrade log on the node, then put it back in line (applyUpgrade with its nodeId): it is told again at its turn`,
     };
   }
   if (down !== null) {
     return { state: 'unreachable', reason: down };
+  }
+  // An upgrade unit alive on the node's machine is an upgrade in
+  // progress whoever started it (the module comment has the two ways):
+  // waited out — not told, and counted by the one-at-a-time rule. Judged
+  // after the silence, unlike a tell: a tell has the twenty-minute clock
+  // to bound it and this has none, so a node that said "running" and
+  // went quiet for good reads unreachable, not upgrading forever.
+  if (node.selfUpgrade?.running === true) {
+    return {
+      state: 'upgrading',
+      reason:
+        'an upgrade unit is running on the node (dormice-upgrade) — its previous upgrade finishing, or install.sh run there by hand; it is told at its turn once that has ended',
+    };
   }
   if (node.selfUpgrade === null) {
     return {
@@ -258,7 +289,10 @@ export class Rolling {
       case 'upgrading':
         return {
           status: 409,
-          message: `node ${node.id} is upgrading (${reason}) — it reads stuck twenty minutes after its tell if it is still on the old build, and can be put back in line from there; wait`,
+          message:
+            node.upgradeTold === null
+              ? `node ${node.id} is upgrading (${reason}) — not on a tell, so nothing to put back in line; it reads behind once the unit has ended and is told at its turn`
+              : `node ${node.id} is upgrading (${reason}) — it reads stuck twenty minutes after its tell if it is still on the old build, and can be put back in line from there; wait`,
         };
       case 'current':
         return {

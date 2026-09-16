@@ -246,7 +246,13 @@ const checkIn = new CheckIn({
     }),
   selfUpgrade: async () => {
     const reason = await updater.availability();
-    return { available: reason === null, reason };
+    return {
+      available: reason === null,
+      reason,
+      // Asked of systemd at every check-in; spared where nothing could be
+      // running (no systemd, no checkout, the fake executor).
+      running: reason === null && (await updater.running()),
+    };
   },
   applyUpgrade: () => updater.apply(),
   log,

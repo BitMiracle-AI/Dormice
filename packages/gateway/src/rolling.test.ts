@@ -35,12 +35,15 @@ const NEWER: BuildInfo = {
   title: 'landed on main mid-roll',
   committedAt: '2026-09-15T00:05:00.000Z',
 };
-const CAN = { available: true, reason: null };
+const CAN = { available: true, reason: null, running: false };
 const CANNOT = {
   available: false,
   reason:
     'systemd-run is not available — one-click upgrade needs a systemd host',
+  running: false,
 };
+/** A node whose machine has an upgrade unit alive: its previous upgrade finishing, or install.sh by hand. */
+const BUSY = { ...CAN, running: true };
 
 function fleetOver() {
   const db = openDb(':memory:');
@@ -423,6 +426,64 @@ describe('Rolling', () => {
     // Not upgrading, so it holds no pointer: b's turn comes.
     const b = reporting(fleet, 'b', { build: OLD, selfUpgrade: CAN }, later);
     expect(rolling.onCheckIn(b, later)).toBe(true);
+  });
+
+  it('a node that says an upgrade unit is running on it is upgrading, told or not: not told, counted by the one-at-a-time rule, the hand refused, a fulfilled tell on it still forgotten — and told at the first check-in that says the unit has ended', () => {
+    const { fleet } = fleetOver();
+    const rolling = new Rolling(fleet, NEWER);
+    // a was told on OLD by a gateway then on GATEWAY, pulled and built
+    // GATEWAY, restarted — and its first check-in back finds the gateway
+    // on NEWER already, while its own installer still runs doctor.
+    const a = reporting(fleet, 'a', { build: OLD, selfUpgrade: CAN });
+    fleet.setUpgradeTold('a', { at: NOW, build: OLD.commit });
+    const back = new Date(NOW.getTime() + 70_000);
+    reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: BUSY }, back);
+    expect(upgradeStateOf(a, NEWER, back)).toEqual({
+      state: 'upgrading',
+      reason: expect.stringMatching(
+        /^an upgrade unit is running on the node \(dormice-upgrade\)/,
+      ),
+    });
+    expect(rolling.onCheckIn(a, back)).toBe(false);
+    // The tell it fulfilled is gone from the row, upgrading or not.
+    expect(a.upgradeTold).toBeNull();
+    // b, behind, waits: a's unit is the count.
+    const b = reporting(fleet, 'b', { build: OLD, selfUpgrade: CAN }, back);
+    expect(rolling.onCheckIn(b, back)).toBe(false);
+    expect(rolling.unstick(a, back)).toMatchObject({
+      status: 409,
+      message: expect.stringMatching(
+        /not on a tell, so nothing to put back in line/,
+      ),
+    });
+    // The unit ends: a says so at its next check-in, reads behind, and is
+    // told — on the commit it now runs.
+    const ended = new Date(back.getTime() + 15_000);
+    reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: CAN }, ended);
+    expect(rolling.onCheckIn(a, ended)).toBe(true);
+    expect(a.upgradeTold).toEqual({ at: ended, build: GATEWAY.commit });
+    // Told and its unit alive: upgrading on its tell, the unit said
+    // beside it; twenty minutes on, stuck — a build that hangs.
+    const hung = new Date(ended.getTime() + 30_000);
+    reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: BUSY }, hung);
+    expect(upgradeStateOf(a, NEWER, hung)).toEqual({
+      state: 'upgrading',
+      reason:
+        'told 30s ago, still on new0001 (an upgrade unit is running on it)',
+    });
+    const late = new Date(ended.getTime() + UPGRADE_TOLD_TIMEOUT_MS);
+    reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: BUSY }, late);
+    expect(upgradeStateOf(a, NEWER, late)).toMatchObject({
+      state: 'stuck',
+      reason: expect.stringMatching(
+        /20 minutes later \(an upgrade unit is running on it\)/,
+      ),
+    });
+    // Quiet for good after saying "running", and no tell to clock it:
+    // unreachable, not upgrading forever.
+    fleet.setUpgradeTold('a', null);
+    a.lastCheckInAt = new Date(late.getTime() - 40_000);
+    expect(upgradeStateOf(a, NEWER, late).state).toBe('unreachable');
   });
 
   it('states lists every node in id order with its standing, build and tell', () => {

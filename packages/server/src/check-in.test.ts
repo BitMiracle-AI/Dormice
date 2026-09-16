@@ -384,7 +384,7 @@ describe('CheckIn', () => {
     ]);
   });
 
-  it("reports whether this node can upgrade itself, and runs its upgrade when the answer says so — a launch that fails is a warning, not the tick's failure", async () => {
+  it("reports whether this node can upgrade itself and whether an upgrade unit runs on it, and runs its upgrade when the answer says so — a launch that fails is a warning, not the tick's failure", async () => {
     let sent = 0;
     const gw = await gateway(() => {
       sent += 1;
@@ -402,6 +402,7 @@ describe('CheckIn', () => {
       selfUpgrade: async () => ({
         available: false,
         reason: 'systemd-run is not available',
+        running: false,
       }),
       applyUpgrade: async () => {
         launches += 1;
@@ -419,6 +420,7 @@ describe('CheckIn', () => {
     expect(checkInRequestSchema.parse(gw.seen[0]?.body).selfUpgrade).toEqual({
       available: false,
       reason: 'systemd-run is not available',
+      running: false,
     });
     expect(launches).toBe(0);
     // Told: the upgrade is launched, said as its own line.
@@ -428,10 +430,9 @@ describe('CheckIn', () => {
       expect.stringMatching(/this node's turn to upgrade has come/),
     ]);
     expect(warns).toEqual([]);
-    // Told again while the launch fails for a reason that will not pass
-    // (systemd-run itself failing, a 500): a warning; the check-in itself
-    // succeeded, and the debt is dropped — the next tick, not told,
-    // launches nothing.
+    // Told again while the launch fails (systemd-run itself failing, a
+    // 500): a warning; the check-in itself succeeded, and the next tick,
+    // not told, launches nothing — the gateway tells once.
     await checkIn.once();
     expect(launches).toBe(2);
     expect(warns).toEqual([expect.stringMatching(/could not be launched/)]);
@@ -446,57 +447,23 @@ describe('CheckIn', () => {
     ).toBeUndefined();
   });
 
-  it("a tell whose launch is refused because an upgrade unit is still running is owed: said once, tried again at every check-in, launched once the unit has ended — the restarted daemon's first check-in is answered with the next tell while its previous install.sh still runs doctor", async () => {
-    let sent = 0;
-    const gw = await gateway(() => {
-      sent += 1;
-      return {
-        status: 200,
-        body: JSON.stringify({
-          configVersion: 1,
-          ...(sent === 1 ? { upgrade: true } : {}),
-        }),
-      };
-    });
-    const { log, warns, infos } = logSpy();
-    let unitRunning = true;
-    let launches = 0;
+  it('says on the wire when an upgrade unit is running on this machine — what keeps the gateway from telling it while its previous upgrade finishes', async () => {
+    const gw = await gateway(() => answering(1));
+    const { log } = logSpy();
     const opts = options(gw.endpoint, log, {
-      selfUpgrade: async () => ({ available: true, reason: null }),
-      applyUpgrade: async () => {
-        if (unitRunning) {
-          throw Object.assign(
-            new Error(
-              'an upgrade is already running — wait for it to finish (systemd unit dormice-upgrade)',
-            ),
-            { statusCode: 409 },
-          );
-        }
-        launches += 1;
-      },
+      selfUpgrade: async () => ({
+        available: true,
+        reason: null,
+        running: true,
+      }),
     });
     applyNodeConfig(opts.db, testBundle({}, 1));
-    const checkIn = new CheckIn(opts);
-    // Told at the first check-in; the unit of the previous upgrade is
-    // still alive: refused, owed, said once.
-    await checkIn.once();
-    await checkIn.once();
-    expect(launches).toBe(0);
-    expect(warns).toEqual([]);
-    expect(infos).toEqual([
-      expect.stringMatching(/turn to upgrade has come/),
-      expect.stringMatching(/still running on this node/),
-    ]);
-    // The unit ends; the next check-in — not told again, the gateway
-    // tells once — launches the owed upgrade and says so.
-    unitRunning = false;
-    await checkIn.once();
-    expect(launches).toBe(1);
-    expect(infos.at(-1)).toMatch(/owed is launched now/);
-    // Nothing owed any more: later ticks launch nothing.
-    await checkIn.once();
-    expect(launches).toBe(1);
-    expect(warns).toEqual([]);
+    await new CheckIn(opts).once();
+    expect(checkInRequestSchema.parse(gw.seen[0]?.body).selfUpgrade).toEqual({
+      available: true,
+      reason: null,
+      running: true,
+    });
   });
 
   it('ticks on its interval from start() and stops on stop()', async () => {

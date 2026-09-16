@@ -118,6 +118,30 @@ export type NodeReading = z.infer<typeof nodeReadingSchema>;
  * knows what it runs and where it can be reached; the gateway only listens
  * and compares, and never keeps a record of what it told whom.
  */
+/**
+ * A node's own word on upgrading itself, carried in every check-in.
+ * `available`: whether it can upgrade itself when told (its updater's
+ * availability: a git checkout, install.sh, systemd-run; upgrade.ts), and
+ * `reason` why not when it cannot — the gateway rolls an upgrade only
+ * over nodes that can, and lists the rest as `unavailable` with the
+ * reason. `running`: whether an upgrade unit (dormice-upgrade) is alive
+ * on its machine right now — its previous upgrade's installer finishing
+ * (doctor runs on for seconds after the daemon it restarted is back), or
+ * install.sh started there by hand. A node that says so is upgrading,
+ * whoever started it, and the gateway does not tell it: a tell landing in
+ * those seconds was refused by the unit's mutex on the node and, said
+ * once, held the whole roll until the node read stuck (measured
+ * 2026-09-16). Who knows the truth speaks; the gateway compares. Default
+ * false: a node on a build before 2026-09-16 does not say.
+ */
+export const selfUpgradeSchema = z.object({
+  available: z.boolean(),
+  reason: z.string().nullable(),
+  running: z.boolean().default(false),
+});
+
+export type SelfUpgrade = z.infer<typeof selfUpgradeSchema>;
+
 export const checkInRequestSchema = z.object({
   /** DORMICE_NODE_ID — the node's name in every sandbox's `nodeId`. */
   nodeId: z.string().min(1),
@@ -135,17 +159,8 @@ export const checkInRequestSchema = z.object({
    * the gateway has to remember about who was told what.
    */
   configVersion: z.number().int().nullable(),
-  /**
-   * Whether this node can upgrade itself when told (its updater's
-   * availability: a git checkout, install.sh, systemd-run; upgrade.ts),
-   * and why not when it cannot. The gateway rolls an upgrade only over
-   * nodes that can; the rest it lists as `unavailable` with the reason.
-   * Optional on the wire: a node on a build before the fourth cut does
-   * not say, and its check-in is taken.
-   */
-  selfUpgrade: z
-    .object({ available: z.boolean(), reason: z.string().nullable() })
-    .optional(),
+  /** This node's own word on upgrading itself (selfUpgradeSchema). Optional on the wire: a node on a build before the fourth cut does not say, and its check-in is taken. */
+  selfUpgrade: selfUpgradeSchema.optional(),
 });
 
 export type CheckInRequest = z.infer<typeof checkInRequestSchema>;

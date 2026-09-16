@@ -278,7 +278,7 @@ export class Updater {
       // than one way ("already exists"; "was already loaded or has a
       // fragment file" on systemd 255, caught on real hardware) — so ask
       // systemd whether the unit is alive instead of parsing prose.
-      if (await this.unitActive()) {
+      if (await this.running()) {
         throw httpError(
           409,
           'an upgrade is already running — wait for it to finish (systemd unit dormice-upgrade)',
@@ -301,7 +301,7 @@ export class Updater {
    */
   async status(): Promise<GetUpgradeStatusResponse> {
     const reason = await this.availability();
-    const running = await this.unitActive();
+    const running = await this.running();
     let last = await this.readRun();
     if (last !== null && last.state === 'running' && !running) {
       last = {
@@ -368,7 +368,16 @@ export class Updater {
     }
   }
 
-  private async unitActive(): Promise<boolean> {
+  /**
+   * Whether an upgrade unit is alive on this machine right now — systemd's
+   * word, never the status file's. For status(), for the 409 apply()
+   * answers a double-click, and for the node's check-in, which reports it
+   * so the gateway does not tell a node whose previous upgrade is still
+   * finishing: install.sh's last step, doctor, runs on for seconds after
+   * the daemon it restarted is back (eight, measured 2026-09-16), and a
+   * tell landing in them met this unit's mutex.
+   */
+  async running(): Promise<boolean> {
     const result = await this.run('systemctl', [
       'is-active',
       '--quiet',
