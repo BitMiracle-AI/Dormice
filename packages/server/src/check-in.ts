@@ -121,8 +121,55 @@ export class CheckIn {
   private closing = false;
   /** The failure the gateway is currently in (its sentence with the numbers blanked, so a 409 that says "3s ago" and then "4s ago" is one failure), or null while it answers. */
   private failing: string | null = null;
+  /** A tell taken and not yet launched (launchOwedUpgrade). Memory of this process: a daemon restarted before it launched forgets the debt, and the gateway reads it stuck twenty minutes after the tell — the honest outcome, put back in line by the operator. */
+  private owedUpgrade = false;
+  /** Whether the "still finishing" line was said for the debt now owed. */
+  private waitingSaid = false;
 
   constructor(private readonly opts: CheckInOptions) {}
+
+  /**
+   * Launches the upgrade this node owes: the same one-click an operator
+   * would (the new build's install.sh in a systemd unit, updater.ts).
+   * Refused because an upgrade unit is already running on this machine
+   * (the updater's 409 — its previous upgrade finishing, or one an
+   * operator started by hand), the debt stands and the launch is tried
+   * again at the next check-in, said once; refused for any other reason
+   * (one-click unavailable, systemd-run failing), the debt is dropped
+   * with a warning — nothing here would change by trying again — and the
+   * gateway lists this node as stuck twenty minutes after its tell, where
+   * applyUpgrade {nodeId} puts it back in line. Never this tick's
+   * failure: the check-in itself succeeded.
+   */
+  private async launchOwedUpgrade(): Promise<void> {
+    const { opts } = this;
+    try {
+      await (opts.applyUpgrade ?? unavailableUpgrade)();
+      if (this.waitingSaid) {
+        opts.log.info(
+          'the upgrade this node owed is launched now that the previous upgrade unit has ended',
+        );
+      }
+      this.owedUpgrade = false;
+      this.waitingSaid = false;
+    } catch (error) {
+      if ((error as { statusCode?: unknown }).statusCode === 409) {
+        if (!this.waitingSaid) {
+          this.waitingSaid = true;
+          opts.log.info(
+            'an upgrade unit is still running on this node (its previous upgrade finishing); the upgrade the gateway asked for is launched at a later check-in, once it has ended',
+          );
+        }
+        return;
+      }
+      this.owedUpgrade = false;
+      this.waitingSaid = false;
+      opts.log.warn(
+        { error: describe(error) },
+        'the upgrade the gateway asked for could not be launched; the gateway lists this node as stuck once twenty minutes have passed, and applyUpgrade {nodeId} there puts it back in line',
+      );
+    }
+  }
 
   start(): void {
     this.schedule(0);
@@ -197,25 +244,21 @@ export class CheckIn {
         }
       }
       if (answer.upgrade === true) {
-        // The gateway's turn for this node in the fleet upgrade: run the
-        // same one-click upgrade an operator would (the new build's
-        // install.sh in a systemd unit, updater.ts). Said as its own line, not this tick's
-        // failure: the check-in itself succeeded, and the gateway tells a
-        // node once — a launch that fails here is the operator's to read
-        // (the gateway shows the node as stuck twenty minutes on, and
-        // applyUpgrade {nodeId} at the gateway puts it back in line).
+        // The gateway's turn for this node in the fleet upgrade: the node
+        // owes an upgrade from here until it has launched one (below).
+        // Owed, not launched on the spot: the gateway tells a node once,
+        // and the launch may be refused right now for a reason that is
+        // this node's own and passes by itself — its previous upgrade's
+        // unit still running the installer's last step (doctor) when the
+        // restarted daemon's first check-in is already answered with the
+        // next tell (measured 2026-09-16: an eight-second window, the
+        // whole roll stuck on it).
         opts.log.info(
           `the gateway says this node's turn to upgrade has come — launching the new build's install.sh (systemd unit dormice-upgrade)`,
         );
-        try {
-          await (opts.applyUpgrade ?? unavailableUpgrade)();
-        } catch (error) {
-          opts.log.warn(
-            { error: describe(error) },
-            'the upgrade the gateway asked for could not be launched; the gateway lists this node as stuck once twenty minutes have passed, and applyUpgrade {nodeId} there puts it back in line',
-          );
-        }
+        this.owedUpgrade = true;
       }
+      if (this.owedUpgrade) await this.launchOwedUpgrade();
     } catch (error) {
       const message = describe(error);
       const failure = message.replace(/\d+/g, '#');

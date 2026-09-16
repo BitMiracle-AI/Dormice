@@ -405,7 +405,12 @@ describe('CheckIn', () => {
       }),
       applyUpgrade: async () => {
         launches += 1;
-        if (launches === 2) throw new Error('an upgrade is already running');
+        if (launches === 2) {
+          throw Object.assign(
+            new Error('failed to launch the upgrade: launch failed'),
+            { statusCode: 500 },
+          );
+        }
       },
     });
     applyNodeConfig(opts.db, testBundle({}, 1));
@@ -423,21 +428,75 @@ describe('CheckIn', () => {
       expect.stringMatching(/this node's turn to upgrade has come/),
     ]);
     expect(warns).toEqual([]);
-    // Told again while one runs: the launch's 409 is a warning; the
-    // check-in itself succeeded.
+    // Told again while the launch fails for a reason that will not pass
+    // (systemd-run itself failing, a 500): a warning; the check-in itself
+    // succeeded, and the debt is dropped — the next tick, not told,
+    // launches nothing.
     await checkIn.once();
     expect(launches).toBe(2);
     expect(warns).toEqual([expect.stringMatching(/could not be launched/)]);
-    expect((details[0] as { error: string }).error).toMatch(/already running/);
-    // Not told: nothing launched, and a check-in without an updater
-    // wired reports no selfUpgrade at all.
+    expect((details[0] as { error: string }).error).toMatch(/launch failed/);
     await checkIn.once();
     expect(launches).toBe(2);
+    // A check-in without an updater wired reports no selfUpgrade at all.
     const bare = new CheckIn(options(gw.endpoint, logSpy().log));
     await bare.once();
     expect(
       checkInRequestSchema.parse(gw.seen.at(-1)?.body).selfUpgrade,
     ).toBeUndefined();
+  });
+
+  it("a tell whose launch is refused because an upgrade unit is still running is owed: said once, tried again at every check-in, launched once the unit has ended — the restarted daemon's first check-in is answered with the next tell while its previous install.sh still runs doctor", async () => {
+    let sent = 0;
+    const gw = await gateway(() => {
+      sent += 1;
+      return {
+        status: 200,
+        body: JSON.stringify({
+          configVersion: 1,
+          ...(sent === 1 ? { upgrade: true } : {}),
+        }),
+      };
+    });
+    const { log, warns, infos } = logSpy();
+    let unitRunning = true;
+    let launches = 0;
+    const opts = options(gw.endpoint, log, {
+      selfUpgrade: async () => ({ available: true, reason: null }),
+      applyUpgrade: async () => {
+        if (unitRunning) {
+          throw Object.assign(
+            new Error(
+              'an upgrade is already running — wait for it to finish (systemd unit dormice-upgrade)',
+            ),
+            { statusCode: 409 },
+          );
+        }
+        launches += 1;
+      },
+    });
+    applyNodeConfig(opts.db, testBundle({}, 1));
+    const checkIn = new CheckIn(opts);
+    // Told at the first check-in; the unit of the previous upgrade is
+    // still alive: refused, owed, said once.
+    await checkIn.once();
+    await checkIn.once();
+    expect(launches).toBe(0);
+    expect(warns).toEqual([]);
+    expect(infos).toEqual([
+      expect.stringMatching(/turn to upgrade has come/),
+      expect.stringMatching(/still running on this node/),
+    ]);
+    // The unit ends; the next check-in — not told again, the gateway
+    // tells once — launches the owed upgrade and says so.
+    unitRunning = false;
+    await checkIn.once();
+    expect(launches).toBe(1);
+    expect(infos.at(-1)).toMatch(/owed is launched now/);
+    // Nothing owed any more: later ticks launch nothing.
+    await checkIn.once();
+    expect(launches).toBe(1);
+    expect(warns).toEqual([]);
   });
 
   it('ticks on its interval from start() and stops on stop()', async () => {
