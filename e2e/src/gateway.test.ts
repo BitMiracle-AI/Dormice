@@ -538,8 +538,9 @@ describe.skipIf(skip)('the gateway in front of two daemons', () => {
 
   it("the upgrade verbs answer at the door: the gateway's own build and standing, every node's standing beside it; a misspelled verb is a 404", async () => {
     // Deliberately not applyUpgrade: it would re-run install.sh on the
-    // machine running the exam. checkUpgrade reaches for origin/main —
-    // its outcome is data either way (a check, or a checkError).
+    // machine running the exam. checkUpgrade fetches the head of the
+    // branch the checkout tracks (none on CI's detached HEAD) — its
+    // outcome is data either way (a check, or a checkError).
     const check = await viaGateway().checkUpgrade();
     expect(check.check !== null || check.checkError !== null).toBe(true);
     const s = await viaGateway().getUpgradeStatus();
