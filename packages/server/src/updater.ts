@@ -1,5 +1,4 @@
-import { existsSync } from 'node:fs';
-import { copyFile, mkdir, open, readFile, stat } from 'node:fs/promises';
+import { mkdir, open, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   type CheckUpgradeResponse,
@@ -18,8 +17,9 @@ import type { BuildInfo } from './version';
  * process launches it the same way). Versions are git commits
  * (trunk-based, no release tags yet), and the question "is a newer
  * Dormice available?" is answered by comparing the commit baked into this
- * build against the origin's main — fetched through the checkout's own
- * `origin` remote, so an install done with `--mirror cn` (whose clone URL
+ * build against the head of the branch the checkout tracks — origin/main
+ * for every install the installer made — fetched through the checkout's
+ * own remote, so an install done with `--mirror cn` (whose clone URL
  * carries the mirror prefix) checks through the same mirror for free.
  *
  * `git fetch` updates .git only and never touches the working tree or the
@@ -31,9 +31,17 @@ import type { BuildInfo } from './version';
  * upgrade's last step restarts it, killing its own children), so apply()
  * hands install.sh to a systemd transient unit and steps aside — the unit
  * outlives the restart, tees its output where status() can read it, and
- * its name is the mutex against a double-click. The upgrade command line
- * is composed entirely from daemon-side paths: nothing from any request
- * ever reaches it.
+ * its name is the mutex against a double-click. The install.sh it hands
+ * over is the one of the build being installed, read from the fetched
+ * head (`git show FETCH_HEAD:deploy/install.sh`) into the status
+ * directory — not the tree's copy, which is the build being replaced: an
+ * upgrade is "bring this machine to that commit", and only that commit's
+ * installer knows the host-side steps it needs (a sysctl floor, a runtime
+ * flag, a new unit). Run with the old script, twice in production the code
+ * arrived and the host-side step did not, until someone re-ran the new
+ * installer by hand (2026-09-01 --allow-suid, 2026-09-09 the inotify
+ * floor). The upgrade command line is composed entirely from daemon-side
+ * paths: nothing from any request ever reaches it.
  */
 
 const CHECK_CACHE_MS = 3600_000;
@@ -147,10 +155,45 @@ export class Updater {
     }
   }
 
+  /**
+   * The line this checkout follows: the remote and branch its HEAD tracks
+   * — the one ref for the three things that must agree: what check()
+   * compares against, what install.sh's `git pull --ff-only` brings, and
+   * whose install.sh apply() runs. Read the way git reads it for pull
+   * (branch.<name>.remote and .merge), so a checkout on a series branch
+   * follows that branch and a clone of main follows main. Throws, in
+   * words, for a detached HEAD or a branch that tracks nothing.
+   */
+  private async upstream(): Promise<{ remote: string; branch: string }> {
+    let head: string;
+    try {
+      head = await this.git(['symbolic-ref', '--short', '--quiet', 'HEAD']);
+    } catch {
+      throw new Error(
+        'the checkout is on a detached HEAD, not a branch — install.sh pulls --ff-only along a branch that tracks its remote',
+      );
+    }
+    let remote: string;
+    let merge: string;
+    try {
+      remote = await this.git(['config', '--get', `branch.${head}.remote`]);
+      merge = await this.git(['config', '--get', `branch.${head}.merge`]);
+    } catch {
+      throw new Error(
+        `branch ${head} tracks no upstream — install.sh pulls --ff-only from the branch it tracks (git branch --set-upstream-to=origin/main, on an install of main)`,
+      );
+    }
+    return { remote, branch: merge.replace(/^refs\/heads\//, '') };
+  }
+
+  /** The head of the tracked branch, into FETCH_HEAD — written by every fetch regardless of the clone's refspec configuration. */
+  private async fetchUpstream(): Promise<void> {
+    const { remote, branch } = await this.upstream();
+    await this.git(['fetch', '--quiet', remote, branch], FETCH_TIMEOUT_MS);
+  }
+
   private async compare(currentCommit: string): Promise<Check> {
-    // FETCH_HEAD instead of origin/main: it is written by every fetch
-    // regardless of the clone's refspec configuration.
-    await this.git(['fetch', '--quiet', 'origin', 'main'], FETCH_TIMEOUT_MS);
+    await this.fetchUpstream();
     const behindBy = Number(
       await this.git(['rev-list', '--count', `${currentCommit}..FETCH_HEAD`]),
     );
@@ -184,9 +227,14 @@ export class Updater {
 
   /**
    * Launch the one-click upgrade: install.sh in a systemd transient unit.
-   * The script is copied out of the tree first — its own first step is
-   * `git pull`, which must not replace the file bash is reading. The
-   * mirror choice is derived from the origin URL (an install done with
+   * The script is the one of the build being installed — the tracked
+   * branch's head, fetched now, `git show`n into the status directory
+   * (the module comment has why); outside the tree, because the script's
+   * own first step is `git pull`, which must not replace the file bash is
+   * reading. A commit that lands between this fetch and that pull would
+   * put the tree one commit past the script — seconds of drift at most,
+   * and the node's next check-in reports the tree's build. The mirror
+   * choice is derived from the remote's URL (an install done with
    * --mirror cn cloned through the mirror prefix), so no separate knob.
    */
   async apply(): Promise<void> {
@@ -198,9 +246,19 @@ export class Updater {
     if (this.repoDir === null) throw new Error('unreachable');
     await mkdir(this.statusDir, { recursive: true });
     const script = path.join(this.statusDir, 'install.sh');
-    await copyFile(path.join(this.repoDir, 'deploy', 'install.sh'), script);
+    try {
+      await this.fetchUpstream();
+      // execa strips the blob's final newline; put it back.
+      const content = await this.git(['show', 'FETCH_HEAD:deploy/install.sh']);
+      await writeFile(script, `${content}\n`);
+    } catch (error) {
+      throw httpError(
+        500,
+        `could not fetch the installer of the build to install: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     const args = ['--status-dir', this.statusDir];
-    if (await this.originUsesMirror()) args.push('--mirror', 'cn');
+    if (await this.remoteUsesMirror()) args.push('--mirror', 'cn');
     const logFile = path.join(this.statusDir, 'upgrade.log');
     const command = `exec bash ${quote(script)} ${args.map(quote).join(' ')} >${quote(logFile)} 2>&1`;
     const launch = await this.run('systemd-run', [
@@ -282,8 +340,13 @@ export class Updater {
     if (this.repoDir === null) {
       return 'the process does not run from a git checkout';
     }
-    if (!existsSync(path.join(this.repoDir, 'deploy', 'install.sh'))) {
-      return 'deploy/install.sh is missing from the checkout';
+    // The branch to pull along and to take the installer from must be
+    // known before a node reports it can upgrade itself: told without one,
+    // it would fail the launch and read stuck twenty minutes on.
+    try {
+      await this.upstream();
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
     }
     // Presence of systemd-run covers the platform question too — a
     // non-systemd host simply does not have it.
@@ -294,9 +357,11 @@ export class Updater {
     return null;
   }
 
-  private async originUsesMirror(): Promise<boolean> {
+  /** Whether the tracked remote was cloned through the mainland mirror prefix — its configured URL as written, before any url.insteadOf rewrite git applies when fetching. */
+  private async remoteUsesMirror(): Promise<boolean> {
     try {
-      const url = await this.git(['remote', 'get-url', 'origin']);
+      const { remote } = await this.upstream();
+      const url = await this.git(['config', '--get', `remote.${remote}.url`]);
       return url.includes('ghfast.top');
     } catch {
       return false;
@@ -363,7 +428,10 @@ export class Updater {
         `git ${args[0]} failed: ${stderr.slice(0, 300) || `exit ${result.exitCode ?? 'unknown'}`}`,
       );
     }
-    return result.stdout.trim();
+    // As git printed it, less the final newline execa strips: every caller
+    // reads whole lines, and the one that reads a file (`git show` in
+    // apply) puts that newline back.
+    return result.stdout;
   }
 }
 

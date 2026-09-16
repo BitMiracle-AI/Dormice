@@ -1,4 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -73,8 +79,8 @@ beforeAll(() => {
   origin = path.join(root, 'origin');
   clone = path.join(root, 'clone');
   execaSync('git', ['init', '-q', '-b', 'main', origin]);
-  // The tree carries a stand-in installer: apply() copies and launches
-  // deploy/install.sh, and availability checks it exists.
+  // The tree carries a stand-in installer: apply() launches the
+  // deploy/install.sh of the build it installs, fetched from the origin.
   mkdirSync(path.join(origin, 'deploy'));
   writeFileSync(path.join(origin, 'deploy', 'install.sh'), '#!/bin/bash\n');
   execaSync('git', ['add', '-A'], { cwd: origin });
@@ -85,7 +91,7 @@ beforeAll(() => {
 });
 
 describe('Updater.check', () => {
-  it('reports up to date when the build matches origin main', async () => {
+  it("reports up to date when the build matches the tracked branch's head", async () => {
     const updater = updaterFor();
     const answer = await updater.check();
     const parsed = checkUpgradeResponseSchema.parse(answer);
@@ -148,7 +154,38 @@ describe('Updater.check', () => {
     }
   });
 
-  it('is honest without a checkout, without a build identity, and on a dead remote', async () => {
+  it('follows the branch the checkout tracks, not main', async () => {
+    // A checkout on a series branch (the test machine's shape between
+    // cuts): what check() compares against, what install.sh pulls and
+    // whose install.sh apply() runs must be the same ref, and that ref is
+    // the branch's upstream — main would read this build as ahead.
+    execaSync('git', ['checkout', '-q', '-b', 'series'], { cwd: origin });
+    const onSeries = commit(origin, 'on the series branch');
+    execaSync('git', ['checkout', '-q', 'main'], { cwd: origin });
+    const series = mkdtempSync(path.join(tmpdir(), 'dormice-series-'));
+    execaSync('git', ['clone', '-q', '-b', 'series', origin, series]);
+    const updater = updaterFor({ repoDir: series, build: buildAt(series) });
+    const upToDate = await updater.check();
+    expect(upToDate.checkError).toBeNull();
+    expect(upToDate.check).toMatchObject({
+      behindBy: 0,
+      aheadBy: 0,
+      latest: onSeries,
+    });
+
+    execaSync('git', ['checkout', '-q', 'series'], { cwd: origin });
+    const later = commit(origin, 'later on the series branch');
+    execaSync('git', ['checkout', '-q', 'main'], { cwd: origin });
+    const behind = await updater.check(true);
+    expect(behind.check).toMatchObject({
+      behindBy: 1,
+      aheadBy: 0,
+      upgradable: true,
+      latest: later,
+    });
+  });
+
+  it('is honest without a checkout, without a build identity, on an untracked branch and on a dead remote', async () => {
     const noRepo = updaterFor({ repoDir: null });
     expect((await noRepo.check()).checkError).toMatch(/git checkout/);
 
@@ -165,10 +202,39 @@ describe('Updater.check', () => {
       ['remote', 'add', 'origin', path.join(broken, 'does-not-exist')],
       { cwd: broken },
     );
+    // A remote, but a branch that tracks nothing: there is no ref to
+    // compare against or to pull along, and one-click says so too.
+    const untracked = updaterFor({ repoDir: broken, build: buildAt(broken) });
+    expect((await untracked.check()).checkError).toMatch(/tracks no upstream/);
+    expect(await untracked.availability()).toMatch(/tracks no upstream/);
+
+    execaSync('git', ['config', 'branch.main.remote', 'origin'], {
+      cwd: broken,
+    });
+    execaSync('git', ['config', 'branch.main.merge', 'refs/heads/main'], {
+      cwd: broken,
+    });
     const deadRemote = updaterFor({ repoDir: broken, build: buildAt(broken) });
     const dead = await deadRemote.check();
     expect(dead.check).toBeNull();
     expect(dead.checkError).toMatch(/fetch failed/);
+    // One-click is available on paper (the branch tracks a remote), and
+    // the launch fails honestly when the installer cannot be fetched.
+    expect(await deadRemote.availability()).toBeNull();
+    await expect(deadRemote.apply()).rejects.toMatchObject({
+      statusCode: 500,
+      message: expect.stringContaining('could not fetch the installer'),
+    });
+
+    const detached = mkdtempSync(path.join(tmpdir(), 'dormice-detached-'));
+    execaSync('git', ['clone', '-q', origin, detached]);
+    execaSync('git', ['checkout', '-q', '--detach'], { cwd: detached });
+    const offBranch = updaterFor({
+      repoDir: detached,
+      build: buildAt(detached),
+    });
+    expect(await offBranch.availability()).toMatch(/detached HEAD/);
+    await expect(offBranch.apply()).rejects.toMatchObject({ statusCode: 400 });
   });
 });
 
@@ -207,8 +273,8 @@ describe('Updater.apply and status', () => {
     expect(launch?.args).toContain('dormice-upgrade');
     expect(launch?.args).toContain('--collect');
     const command = launch?.args.at(-1) ?? '';
-    // The copy, not the tree's file (git pull would replace it mid-read),
-    // reporting into the status dir, output tee'd next to it.
+    // A file in the status dir, not the tree's (git pull would replace it
+    // mid-read), reporting into the status dir, output tee'd next to it.
     expect(command).toContain(`${statusDir}/install.sh`);
     expect(command).toContain('--status-dir');
     expect(command).toContain('upgrade.log');
@@ -217,19 +283,40 @@ describe('Updater.apply and status', () => {
     expect(existsSync(path.join(statusDir, 'install.sh'))).toBe(true);
   });
 
+  it("runs the installer of the build being installed, not the tree's copy", async () => {
+    // The origin moves on with a changed installer: the upgrade must run
+    // that one — it alone knows the host-side steps its build needs — and
+    // the tree, still at the old build, is not where it comes from.
+    const newInstaller = '#!/bin/bash\necho the new installer\n';
+    writeFileSync(path.join(origin, 'deploy', 'install.sh'), newInstaller);
+    execaSync('git', ['add', '-A'], { cwd: origin });
+    commit(origin, 'a changed installer');
+    const statusDir = mkdtempSync(path.join(tmpdir(), 'dormice-status-'));
+    const updater = updaterFor({ statusDir });
+    await updater.apply();
+    expect(readFileSync(path.join(statusDir, 'install.sh'), 'utf8')).toBe(
+      newInstaller,
+    );
+    expect(readFileSync(path.join(clone, 'deploy', 'install.sh'), 'utf8')).toBe(
+      '#!/bin/bash\n',
+    );
+  });
+
   it('passes --mirror cn when the origin was cloned through the mirror', async () => {
     const mirrored = mkdtempSync(path.join(tmpdir(), 'dormice-mirrored-'));
     execaSync('git', ['clone', '-q', origin, mirrored]);
-    execaSync(
-      'git',
-      [
-        'remote',
-        'set-url',
-        'origin',
-        'https://ghfast.top/https://github.com/BitMiracle-AI/Dormice.git',
-      ],
-      { cwd: mirrored },
-    );
+    // The remote's URL as an install with --mirror cn writes it; git is
+    // told to reach the fixture origin in its place (url.insteadOf), so
+    // the fetch apply() does stays off the network. The mirror is judged
+    // from the URL as configured, not as rewritten.
+    const mirrorUrl =
+      'https://ghfast.top/https://github.com/BitMiracle-AI/Dormice.git';
+    execaSync('git', ['remote', 'set-url', 'origin', mirrorUrl], {
+      cwd: mirrored,
+    });
+    execaSync('git', ['config', `url.${origin}.insteadOf`, mirrorUrl], {
+      cwd: mirrored,
+    });
     const calls: string[] = [];
     const updater = updaterFor({
       repoDir: mirrored,
