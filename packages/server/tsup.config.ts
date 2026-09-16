@@ -24,7 +24,7 @@ function git(args: string): string {
 const commitTime = git('log -1 --format=%cI');
 
 export default defineConfig({
-  // Subpath entries beyond the root: mini-s3 for the e2e harness; auth,
+  // Subpath entries beyond the root: mini-s3 for the e2e harness;
   // keyed-queue, lock, shutdown, s3-store, history and updater for the
   // gateway, which reuses the daemon's small self-contained pieces
   // without loading its executor (the root's import graph drags
@@ -33,7 +33,6 @@ export default defineConfig({
     'src/index.ts',
     'src/main.ts',
     'src/archive/mini-s3.ts',
-    'src/auth.ts',
     'src/keyed-queue.ts',
     'src/db/lock.ts',
     'src/shutdown.ts',

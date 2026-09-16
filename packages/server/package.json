@@ -14,10 +14,6 @@
       "types": "./dist/archive/mini-s3.d.ts",
       "default": "./dist/archive/mini-s3.js"
     },
-    "./auth": {
-      "types": "./dist/auth.d.ts",
-      "default": "./dist/auth.js"
-    },
     "./keyed-queue": {
       "types": "./dist/keyed-queue.d.ts",
       "default": "./dist/keyed-queue.js"

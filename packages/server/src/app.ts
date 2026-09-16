@@ -247,14 +247,13 @@ export function buildApp({
 
   // The one adjudication of "does this bare credential open the door":
   // the fleet token, constant-time compared — the only credential a node
-  // knows. Minted API keys are the gateway's to judge; it forwards under
-  // this token. Both faces — the native Bearer header and the E2B
-  // X-API-KEY hook — feed this same closure: one truth, two dialects. No
-  // session leg: the console lives at the gateway, so no cookie is ever
-  // valid here.
+  // knows (auth.ts). Minted API keys are the gateway's to judge; it
+  // forwards under this token. Both faces — the native Bearer header and
+  // the E2B X-API-KEY hook — feed this same closure: one truth, two
+  // dialects.
   const isCredential = (bare: string): boolean =>
     tokensEqual(bare, config.DORMICE_API_TOKEN);
-  const apiAuth = requireApiAuth(isCredential, () => null);
+  const apiAuth = requireApiAuth(isCredential);
 
   // The envd/signed-URL derivation base. Captured once — unlike a session
   // secret there is no verb that rotates it (see db/secrets.ts) — and NOT
