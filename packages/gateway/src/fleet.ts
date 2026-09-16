@@ -44,15 +44,24 @@ export interface NodeState {
   reading: NodeReading | null;
   /** Whether the node can upgrade itself, its own word (shared checkInRequestSchema.selfUpgrade); null = it did not say. */
   selfUpgrade: SelfUpgrade | null;
-  /** When the fleet upgrade last told this node to upgrade (rolling.ts); null = never, or fulfilled. */
-  upgradeToldAt: Date | null;
-  /** The commit the node ran when it was told — the tell is fulfilled the moment it reports another (rolling.ts); null with a tell = a row written before this was recorded. */
-  upgradeToldBuild: string | null;
+  /**
+   * The fleet upgrade's tell on this node (rolling.ts): when it was told,
+   * and the commit it ran at that moment — one value, since a tell is
+   * judged by the two together (fulfilled the moment the node reports
+   * another commit). Null = never told, or the last tell was fulfilled.
+   */
+  upgradeTold: Tell | null;
   placedSinceCheckIn: number;
   placedIds: Set<string>;
 }
 
 export type SelfUpgrade = NonNullable<CheckInRequest['selfUpgrade']>;
+
+/** A tell as the row holds it: nodes.upgrade_told_at and nodes.upgrade_told_build. */
+export interface Tell {
+  at: Date;
+  build: string;
+}
 
 const selfUpgradeSchema = z.object({
   available: z.boolean(),
@@ -252,11 +261,23 @@ export class Fleet {
         row.selfUpgrade,
         selfUpgradeSchema,
       ),
-      upgradeToldAt: this.parseDate(row.upgradeToldAt),
-      upgradeToldBuild: row.upgradeToldBuild,
+      upgradeTold: this.parseTell(row),
       placedSinceCheckIn: 0,
       placedIds: new Set(),
     };
+  }
+
+  /**
+   * The tell is its two columns together; a row holding one without the
+   * other is read as no tell. That is a row written before
+   * upgrade_told_build existed (migration 0006, 2026-09-16) whose tell
+   * was in flight at the upgrade — none exists outside the test
+   * machine's history, and the cost would be one node told again.
+   */
+  private parseTell(row: NodeRow): Tell | null {
+    const at = this.parseDate(row.upgradeToldAt);
+    if (at === null || row.upgradeToldBuild === null) return null;
+    return { at, build: row.upgradeToldBuild };
   }
 
   private parseDate(iso: string | null): Date | null {
@@ -351,8 +372,7 @@ export class Fleet {
         build: null,
         reading: null,
         selfUpgrade: null,
-        upgradeToldAt: null,
-        upgradeToldBuild: null,
+        upgradeTold: null,
         placedSinceCheckIn: 0,
         placedIds: new Set(),
       };
@@ -398,19 +418,18 @@ export class Fleet {
    * promises not to do; a write that fails fails the check-in, and the
    * node is told at the next.
    */
-  setUpgradeTold(id: string, told: { at: Date; build: string } | null): void {
+  setUpgradeTold(id: string, tell: Tell | null): void {
     const node = this.members.get(id);
     if (node === undefined) return;
     this.db
       .update(nodes)
       .set({
-        upgradeToldAt: told === null ? null : told.at.toISOString(),
-        upgradeToldBuild: told === null ? null : told.build,
+        upgradeToldAt: tell === null ? null : tell.at.toISOString(),
+        upgradeToldBuild: tell === null ? null : tell.build,
       })
       .where(eq(nodes.id, id))
       .run();
-    node.upgradeToldAt = told === null ? null : told.at;
-    node.upgradeToldBuild = told === null ? null : told.build;
+    node.upgradeTold = tell;
   }
 
   /**

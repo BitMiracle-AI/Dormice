@@ -106,7 +106,10 @@ describe('the fleet upgrade over the check-in', () => {
     ).toBe(true);
     const a = fleet.get('a');
     if (!a) throw new Error('node lost');
-    a.upgradeToldAt = new Date(Date.now() - UPGRADE_TOLD_TIMEOUT_MS - 1000);
+    a.upgradeTold = {
+      at: new Date(Date.now() - UPGRADE_TOLD_TIMEOUT_MS - 1000),
+      build: OLD.commit,
+    };
     expect(
       (await checkIn(app, 'a', { build: OLD, selfUpgrade: CAN })).upgrade,
     ).toBeUndefined();

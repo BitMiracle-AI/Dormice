@@ -220,7 +220,7 @@ describe('Rolling', () => {
     const a = reporting(fleet, 'a', { build: OLD, selfUpgrade: CAN });
     const b = reporting(fleet, 'b', { build: OLD, selfUpgrade: CAN });
     expect(rolling.onCheckIn(a, NOW)).toBe(true);
-    expect(a.upgradeToldAt).toEqual(NOW);
+    expect(a.upgradeTold).toEqual({ at: NOW, build: OLD.commit });
     expect(rolling.onCheckIn(b, NOW)).toBe(false);
     // a's next check-in, still old: not told again.
     const later = new Date(NOW.getTime() + 15_000);
@@ -228,7 +228,10 @@ describe('Rolling', () => {
     expect(rolling.onCheckIn(a, later)).toBe(false);
     // The row remembers across a restart.
     const restarted = new Fleet(db);
-    expect(restarted.get('a')?.upgradeToldAt).toEqual(NOW);
+    expect(restarted.get('a')?.upgradeTold).toEqual({
+      at: NOW,
+      build: OLD.commit,
+    });
     expect(new Rolling(restarted, GATEWAY).states(later)).toMatchObject([
       { id: 'a', state: 'upgrading', toldAt: NOW.toISOString() },
       { id: 'b', state: 'behind', toldAt: null },
@@ -237,8 +240,8 @@ describe('Rolling', () => {
     // and b's turn comes at its next check-in.
     reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: CAN }, later);
     expect(rolling.onCheckIn(a, later)).toBe(false);
-    expect(a.upgradeToldAt).toBeNull();
-    expect(new Fleet(db).get('a')?.upgradeToldAt).toBeNull();
+    expect(a.upgradeTold).toBeNull();
+    expect(new Fleet(db).get('a')?.upgradeTold).toBeNull();
     expect(rolling.onCheckIn(b, later)).toBe(true);
   });
 
@@ -261,7 +264,7 @@ describe('Rolling', () => {
         /is upgrading \(told 0s ago, still on old0001\)/,
       ),
     });
-    expect(a.upgradeToldAt).toEqual(NOW);
+    expect(a.upgradeTold).toEqual({ at: NOW, build: OLD.commit });
     // Twenty minutes on, a is stuck and b's turn came.
     const late = new Date(NOW.getTime() + UPGRADE_TOLD_TIMEOUT_MS);
     reporting(fleet, 'a', { build: OLD, selfUpgrade: CAN }, late);
@@ -270,15 +273,15 @@ describe('Rolling', () => {
     expect(rolling.onCheckIn(b, late)).toBe(true);
     // The hand: a's tell is forgotten on the row, and a reads behind.
     expect(rolling.unstick(a, late)).toBeNull();
-    expect(a.upgradeToldAt).toBeNull();
-    expect(new Fleet(db).get('a')?.upgradeToldAt).toBeNull();
+    expect(a.upgradeTold).toBeNull();
+    expect(new Fleet(db).get('a')?.upgradeTold).toBeNull();
     expect(upgradeStateOf(a, GATEWAY, late).state).toBe('behind');
     // Not past b: a waits while b upgrades, and is told once b is back.
     expect(rolling.onCheckIn(a, late)).toBe(false);
     reporting(fleet, 'b', { build: GATEWAY, selfUpgrade: CAN }, late);
     expect(rolling.onCheckIn(b, late)).toBe(false);
     expect(rolling.onCheckIn(a, late)).toBe(true);
-    expect(a.upgradeToldAt).toEqual(late);
+    expect(a.upgradeTold).toEqual({ at: late, build: OLD.commit });
 
     const current = reporting(
       fleet,
@@ -322,8 +325,11 @@ describe('Rolling', () => {
     const a = reporting(fleet, 'a', { build: OLD, selfUpgrade: CAN });
     const b = reporting(fleet, 'b', { build: OLD, selfUpgrade: CAN });
     expect(first.onCheckIn(a, NOW)).toBe(true);
-    expect(a.upgradeToldBuild).toBe(OLD.commit);
-    expect(new Fleet(db).get('a')?.upgradeToldBuild).toBe(OLD.commit);
+    expect(a.upgradeTold).toEqual({ at: NOW, build: OLD.commit });
+    expect(new Fleet(db).get('a')?.upgradeTold).toEqual({
+      at: NOW,
+      build: OLD.commit,
+    });
     const rolling = new Rolling(fleet, NEWER);
     const back = new Date(NOW.getTime() + 70_000);
     // Its tell stands while it still reports the commit it was told on.
@@ -341,8 +347,7 @@ describe('Rolling', () => {
       reason: null,
     });
     expect(rolling.onCheckIn(a, back)).toBe(true);
-    expect(a.upgradeToldAt).toEqual(back);
-    expect(a.upgradeToldBuild).toBe(GATEWAY.commit);
+    expect(a.upgradeTold).toEqual({ at: back, build: GATEWAY.commit });
     expect(rolling.states(back)).toMatchObject([
       { id: 'a', state: 'upgrading', toldAt: back.toISOString() },
       { id: 'b', state: 'behind', toldAt: null },
@@ -355,8 +360,9 @@ describe('Rolling', () => {
       state: 'stuck',
       reason: expect.stringMatching(/still on new0001 20 minutes later/),
     });
-    // A tell from a row written before the commit was recorded stands
-    // until the node reads current or ahead, as every tell once did.
+    // A row from before the commit was recorded (migration 0006) holding
+    // a tell without one is read as no tell: the node stands as its
+    // build says.
     reporting(fleet, 'c', { build: OLD, selfUpgrade: CAN }, late);
     fleet.setUpgradeTold('c', { at: late, build: OLD.commit });
     db.update(nodes)
@@ -365,11 +371,32 @@ describe('Rolling', () => {
       .run();
     const cOld = new Fleet(db).get('c');
     if (!cOld) throw new Error('row lost');
-    expect(cOld.upgradeToldBuild).toBeNull();
-    cOld.build = GATEWAY;
-    expect(upgradeStateOf(cOld, NEWER, late).state).toBe('upgrading');
-    cOld.build = NEWER;
-    expect(upgradeStateOf(cOld, NEWER, late).state).toBe('current');
+    expect(cOld.upgradeTold).toBeNull();
+    expect(upgradeStateOf(cOld, NEWER, late).state).toBe('behind');
+  });
+
+  it('a told node that reads current or ahead while still on the commit it was told on — the gateway went back to an older build — has its tell forgotten, so it is not read stuck the day the gateway passes it again', () => {
+    const { fleet } = fleetOver();
+    const a = reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: CAN });
+    const first = new Rolling(fleet, NEWER);
+    expect(first.onCheckIn(a, NOW)).toBe(true);
+    // The gateway's machine is put back on GATEWAY by hand: a reads
+    // current, still on the commit it was told on, and the tell goes.
+    const back = new Rolling(fleet, GATEWAY);
+    const later = new Date(NOW.getTime() + 60_000);
+    reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: CAN }, later);
+    expect(back.onCheckIn(a, later)).toBe(false);
+    expect(a.upgradeTold).toBeNull();
+    // Further back, to OLD: a reads ahead, and a tell would go the same way.
+    fleet.setUpgradeTold('a', { at: NOW, build: GATEWAY.commit });
+    expect(new Rolling(fleet, OLD).onCheckIn(a, later)).toBe(false);
+    expect(a.upgradeTold).toBeNull();
+    // Twenty minutes on, the gateway is on NEWER again: a is behind and
+    // told afresh — not stuck on a tell from before the detour.
+    const late = new Date(NOW.getTime() + UPGRADE_TOLD_TIMEOUT_MS + 60_000);
+    reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: CAN }, late);
+    expect(upgradeStateOf(a, NEWER, late).state).toBe('behind');
+    expect(first.onCheckIn(a, late)).toBe(true);
   });
 
   it('a told node that comes back newer than the gateway is ahead: its tell is fulfilled and cleared, it is not told again, the hand refuses it, and it holds nobody', () => {
@@ -382,8 +409,8 @@ describe('Rolling', () => {
     const later = new Date(NOW.getTime() + 120_000);
     reporting(fleet, 'a', { build: NEWER, selfUpgrade: CAN }, later);
     expect(rolling.onCheckIn(a, later)).toBe(false);
-    expect(a.upgradeToldAt).toBeNull();
-    expect(new Fleet(db).get('a')?.upgradeToldAt).toBeNull();
+    expect(a.upgradeTold).toBeNull();
+    expect(new Fleet(db).get('a')?.upgradeTold).toBeNull();
     expect(rolling.states(later)).toMatchObject([
       { id: 'a', state: 'ahead', toldAt: null },
     ]);

@@ -78,8 +78,8 @@ export const nodes = sqliteTable('nodes', {
    * against: a node reporting any other commit did what it was told,
    * whether or not that commit is the gateway's by now (the gateway may
    * have upgraded again meanwhile). Null beside a tell only on a row
-   * written before this column existed; such a tell stands until the
-   * node reads current or ahead.
+   * written before this column existed; fleet.ts reads such a tell as
+   * none.
    */
   upgradeToldBuild: text('upgrade_told_build'),
 });
