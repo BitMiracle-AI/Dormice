@@ -92,6 +92,13 @@ REGISTRY_VERSION=3.1.1
 REGISTRY_SHA256=6f330a3ba9ea1d23a6ee189f449d792595240585bb2f159123d76ac594f70dd8
 REGISTRY_PORT=5000
 
+# Docker Engine comes from Docker's apt repository (or a mirror of it), and
+# apt trusts what that repository's signing key signed — a key fetched from
+# the same place as the packages, so it is the key that must be pinned:
+# the fingerprint Docker publishes in its install documentation (checked
+# 2026-09-16 against download.docker.com and USTC's mirror).
+DOCKER_GPG_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+
 REPO_URL=https://github.com/BitMiracle-AI/Dormice.git
 INSTALL_DIR=/opt/dormice
 ENV_FILE=/etc/dormice/env
@@ -174,10 +181,10 @@ elif [ "$ROLE_FLAG" = node ]; then
   if [ -f "$ENV_FILE" ]; then
     die "$ENV_FILE exists and names a gateway on this machine (or none) — this is the gateway's machine; --role node is for a machine that has never been installed. To turn it into a node, stop and disable dormice-gateway, move the env file aside, and re-run"
   fi
-  [ -n "$GATEWAY_FLAG" ] || die "--role node needs --gateway http://<gateway host>:$GATEWAY_PORT — the gateway this node joins"
+  [ -n "$GATEWAY_FLAG" ] || die "--role node needs --gateway http://<gateway machine>:80 — the gateway this node joins, through its machine's Caddy on :80 (the gateway itself listens on loopback only)"
   case "$GATEWAY_FLAG" in
     http://*|https://*) ;;
-    *) die "--gateway must be a full URL like http://10.0.0.5:$GATEWAY_PORT, got \"$GATEWAY_FLAG\"" ;;
+    *) die "--gateway must be a full URL like http://10.0.0.5:80, got \"$GATEWAY_FLAG\"" ;;
   esac
   is_loopback_url "$GATEWAY_FLAG" && die "--gateway names this machine ($GATEWAY_FLAG) — a node machine joins a gateway on another machine; the default install (no --role) is the gateway's machine"
   [ -n "${DORMICE_API_TOKEN:-}" ] || die "--role node needs the fleet token in the environment: DORMICE_API_TOKEN=<the value in the gateway machine's /etc/dormice/env> bash -s -- --role node --gateway $GATEWAY_FLAG (a flag would show in ps)"
@@ -292,16 +299,17 @@ grep -qw memory /sys/fs/cgroup/cgroup.controllers 2>/dev/null \
 note "Linux x86_64, root, cgroup v2 — ok"
 
 # ---- base packages ---------------------------------------------------------
-log 'base packages (git, curl, openssl, zstd)'
+log 'base packages (git, curl, openssl, zstd, gpg)'
 missing=''
 # zstd: the archiver's tar -I zstd runs on the host at every archive/restore.
-for tool in git curl openssl zstd; do
+# gpg: checks the fingerprint of Docker's signing key below (package gnupg).
+for tool in git curl openssl zstd gpg; do
   command -v "$tool" >/dev/null || missing="$missing $tool"
 done
 if [ -n "$missing" ]; then
   apt-get update -q
   # shellcheck disable=SC2086 # word splitting is the point
-  apt-get install -qy ca-certificates $missing
+  apt-get install -qy ca-certificates ${missing/ gpg/ gnupg}
   note "installed:$missing"
 else
   note '[skip] all present'
@@ -333,46 +341,37 @@ if [ ! -x /usr/local/bin/node ]; then
 fi
 
 # ---- Docker ----------------------------------------------------------------
-# The packages Docker's install script installs, from a mirror of its apt
-# repository — the fallback for the script's own mainland mirrors (below).
-install_docker_from_mirror() {
-  local base="$1" id codename
-  # shellcheck disable=SC1091 # the host's own os-release, not a script of ours
-  read -r id codename < <(. /etc/os-release && echo "$ID $VERSION_CODENAME")
-  note "Docker's install script could not install from its mainland mirror — installing the same packages from $base"
-  install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL --retry 3 --retry-all-errors -o /etc/apt/keyrings/docker.asc "$base/linux/$id/gpg"
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] $base/linux/$id $codename stable" >/etc/apt/sources.list.d/docker.list
-  apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-}
-
+# Docker Engine from Docker's apt repository — the recipe its documentation
+# gives for production hosts (a keyring, a source line, the packages), not
+# its convenience script: that is unpinned code from the network run as
+# root, where every other binary this installer fetches is checksummed, and
+# its mainland fallbacks failed in turn on two fresh VMs an hour apart
+# (2026-09-16: get.docker.com resetting the connection, the aliyun mirror
+# of the repository out of sync for over an hour, the Azure mirror lagging
+# the package list). One path: the repository from Docker, under --mirror
+# cn from USTC's mirror of it, and the signing key's fingerprint checked
+# against the one Docker publishes before apt is told to trust it.
 log 'Docker'
 if docker version --format '{{.Server.Version}}' >/dev/null 2>&1; then
   note "[skip] dockerd $(docker version --format '{{.Server.Version}}') is running"
 else
-  # Two things fail on a mainland VM, found on two fresh ones an hour apart
-  # (2026-09-16): get.docker.com resets the connection now and then (the third
-  # attempt got through), and Docker's own mainland mirror of its apt
-  # repository is not always in sync ("File has unexpected size … Mirror sync
-  # in progress?" for over an hour; the script's other mainland mirror lagged
-  # the package list the script installs). So under --mirror cn the script is
-  # a first attempt, and the same packages come from USTC's mirror of the
-  # repository when it fails — or when the script cannot be fetched at all.
-  if curl -fsSL --retry 3 --retry-all-errors -o /tmp/get-docker.sh https://get.docker.com; then
-    if [ "$MIRROR" = cn ]; then
-      sh /tmp/get-docker.sh --mirror Aliyun || install_docker_from_mirror https://mirrors.ustc.edu.cn/docker-ce
-    else
-      sh /tmp/get-docker.sh
-    fi
-    rm -f /tmp/get-docker.sh
-  elif [ "$MIRROR" = cn ]; then
-    install_docker_from_mirror https://mirrors.ustc.edu.cn/docker-ce
-  else
-    die 'could not fetch https://get.docker.com — install Docker Engine by hand (https://docs.docker.com/engine/install/), then re-run'
-  fi
+  docker_repo=https://download.docker.com
+  [ "$MIRROR" = cn ] && docker_repo=https://mirrors.ustc.edu.cn/docker-ce
+  # shellcheck disable=SC1091 # the host's own os-release, not a script of ours
+  read -r os_id os_codename < <(. /etc/os-release && echo "$ID $VERSION_CODENAME")
+  [ -n "${os_codename:-}" ] || die "/etc/os-release names no VERSION_CODENAME — Docker's repository is laid out by release codename; install Docker Engine by hand (https://docs.docker.com/engine/install/), then re-run"
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL --retry 3 --retry-all-errors -o /etc/apt/keyrings/docker.asc "$docker_repo/linux/$os_id/gpg"
+  docker_fpr=$(gpg --show-keys --with-fingerprint --with-colons /etc/apt/keyrings/docker.asc 2>/dev/null | awk -F: '/^fpr/ { print $10; exit }')
+  [ "$docker_fpr" = "$DOCKER_GPG_FINGERPRINT" ] \
+    || die "the signing key at $docker_repo/linux/$os_id/gpg has fingerprint ${docker_fpr:-none}, not Docker's $DOCKER_GPG_FINGERPRINT — that is not Docker's repository; try without --mirror, or install Docker Engine by hand (https://docs.docker.com/engine/install/) and re-run"
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] $docker_repo/linux/$os_id $os_codename stable" >/etc/apt/sources.list.d/docker.list
+  apt-get update -qq
+  # The engine, its CLI, containerd, and buildx — the builder `docker build`
+  # runs the base image through.
+  apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin
   systemctl enable --now docker
-  note "installed dockerd $(docker version --format '{{.Server.Version}}')"
+  note "installed dockerd $(docker version --format '{{.Server.Version}}') from $docker_repo"
 fi
 
 # ---- daemon.json: icc off + log rotation -----------------------------------
@@ -689,17 +688,18 @@ fi
 # the same path for the fresh install, the upgrade, and the rollback.
 build_repo() {
   cd "$INSTALL_DIR"
-  # better-sqlite3 is a native module: its install fetches a prebuilt binary
-  # from GitHub and, failing that, compiles — for which node-gyp fetches this
-  # Node's headers from nodejs.org. Two hosts a mainland machine may not
-  # reach: both timed out on a fresh cn-beijing VM and the install died in
-  # the build (2026-09-16). The headers ship inside the Node tarball this
-  # script unpacks into /opt, so node-gyp is pointed there whenever that Node
-  # is the one running (a host whose own Node passed the version check has
-  # no headers here and fetches as before); under --mirror cn the prebuilt
-  # binary comes from npmmirror's copy of the GitHub releases.
-  local node_home="/opt/node-$NODE_VERSION-linux-x64"
-  if [ -f "$node_home/include/node/node.h" ] && [ "$(readlink -f "$(command -v node)")" = "$node_home/bin/node" ]; then
+  # better-sqlite3 is a native module: its install takes a prebuilt binary
+  # from GitHub — under --mirror cn from npmmirror's copy of those releases,
+  # GitHub being the first host a mainland machine cannot reach (a fresh VM
+  # timed out on it and then on nodejs.org, 2026-09-16) — and compiles
+  # otherwise, for which node-gyp downloads this Node's headers from
+  # nodejs.org: needlessly when the interpreter came with them. A Node
+  # unpacked from its tarball (the one this script puts in /opt) carries
+  # them under include/node, and node-gyp is pointed at the running Node's
+  # own copy whenever there is one.
+  local node_home
+  node_home=$(dirname "$(dirname "$(readlink -f "$(command -v node)")")")
+  if [ -f "$node_home/include/node/node.h" ]; then
     export npm_config_nodedir="$node_home"
   fi
   if [ "$MIRROR" = cn ]; then
@@ -1452,7 +1452,7 @@ if [ "$ROLE" = gateway ]; then
     # The daemon must not stay down for the gateway's failure: it serves
     # its sandboxes without one, and its check-in keeps trying.
     systemctl start dormice
-    die "the gateway did not answer /healthz on 127.0.0.1:$GATEWAY_PORT — check: journalctl -u dormice-gateway -n 50 (the daemon was started again)"
+    die "the gateway did not answer /healthz on 127.0.0.1:$GATEWAY_PORT — check: journalctl -u dormice-gateway -n 50 (the daemon was started again; on this machine's first run with a gateway it holds no configuration copy yet and waits for the gateway before it listens)"
   fi
   note "gateway is answering on 127.0.0.1:$GATEWAY_PORT"
   if [ -n "$CADDY_REPOINT_PENDING" ]; then

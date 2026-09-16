@@ -7,7 +7,9 @@
 # as part of the value). install.sh restarts this unit before the daemon's,
 # so both run one commit and the daemon's first check-in lands on the new
 # gateway. A machine of its own joins as a node with `install.sh --role
-# node --gateway <this machine>:3677` and runs no gateway unit.
+# node --gateway http://<this machine>:80` — this machine's Caddy, the
+# gateway's door; the gateway itself listens on loopback only — and runs
+# no gateway unit.
 [Unit]
 Description=Dormice gateway (fleet front door)
 Wants=network-online.target
