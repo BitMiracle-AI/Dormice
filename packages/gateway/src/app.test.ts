@@ -1146,6 +1146,28 @@ describe('using, destroying, and the cache', () => {
     expect(message(nobody)).toMatch(/is on no node/);
   });
 
+  it('/console/envdToken — the name the verb was born with — is the same verb at the door, behind the same gate; the node hears one name whichever the caller used', async () => {
+    const h = await gateway(['b']);
+    const created = sandboxOf(await rpc(h, '/acquireSandbox', { name: 'x' }));
+    const bare = await rpc(h, '/envdToken', { sandboxId: created.id });
+    const born = await rpc(h, '/console/envdToken', { sandboxId: created.id });
+    expect(born.status).toBe(200);
+    expect(born.body).toEqual(bare.body);
+    const home = h.nodes.find((n) => n.id === created.nodeId);
+    expect(
+      home?.hits
+        .filter((hit) => hit.path.endsWith('envdToken'))
+        .map((hit) => hit.path),
+    ).toEqual(['/envdToken', '/envdToken']);
+    const stranger = await rpc(
+      h,
+      '/console/envdToken',
+      { sandboxId: created.id },
+      'not-the-token',
+    );
+    expect(stranger.status).toBe(401);
+  });
+
   it("files round-trip; a node's 404 for a missing file passes through and the sandbox stays cached", async () => {
     const h = await gateway(['a']);
     const a = h.nodes[0] as FakeNode;

@@ -54,6 +54,16 @@ export interface ForwardOptions {
   /** The request body when Fastify already consumed the stream; omit to stream req itself. */
   body?: Buffer | undefined;
   /**
+   * The path the node is asked, when it is not the one the caller wrote:
+   * for the one verb with two names at the door and one on the node
+   * (routes/envd-token.ts has the case and why). A literal the route
+   * chose, never made from the caller's bytes — dispatch's rule that the
+   * node sees the path as the caller wrote it is about not re-parsing a
+   * caller's path, and a fixed name in place of the whole path has
+   * nothing to re-parse.
+   */
+  path?: string;
+  /**
    * Keep the caller's Host header. Only the face keyed on the Host wants
    * this (the sandbox port proxy, raw.ts: the node's own proxy keys on the
    * same header). Everywhere else the Host names the gateway, and carrying
@@ -153,7 +163,7 @@ async function dispatch(
   try {
     return await agent.request({
       origin: options.target.endpoint,
-      path: req.url ?? '/',
+      path: options.path ?? req.url ?? '/',
       method: req.method as 'GET',
       headers: { ...outboundHeaders(req, options), ...override },
       body: options.body ?? req,
