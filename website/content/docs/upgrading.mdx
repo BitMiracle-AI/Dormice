@@ -52,9 +52,14 @@ rolling, or the installer was run on that node by hand) is left alone,
 and reads current once the gateway itself is upgraded.
 
 A node is told exactly once. If twenty minutes later it still reports
-the build it was told on, the gateway marks it **stuck** and leaves it
-alone — a node whose build keeps failing must not rebuild every twenty
-minutes on the CPU its sandboxes run on. (A node that comes back on
+the build it was told on and no upgrade unit is running on it, the
+gateway marks it **stuck** and leaves it alone — a node whose build keeps
+failing must not rebuild every twenty minutes on the CPU its sandboxes
+run on. A node whose installer is still running past the twenty minutes
+is building, slowly; it reads upgrading for as long as it reports the
+unit alive, and holds the next node's turn. If it has hung, stop the
+unit on that node (`systemctl stop dormice-upgrade`) and it reads stuck
+at its next check-in. (A node that comes back on
 another build has done what it was told, even if the gateway was
 upgraded again meanwhile: it is judged afresh, and told again at its
 turn if it is behind once more. While its previous upgrade is still

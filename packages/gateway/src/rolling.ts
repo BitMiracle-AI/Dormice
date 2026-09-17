@@ -20,20 +20,20 @@ import { downReason, type Fleet, type NodeState, type Tell } from './fleet';
  * node's sandboxes for a few tens of seconds, never two nodes' at once.
  *
  * Told once. A node still on the old build UPGRADE_TOLD_TIMEOUT_MS after
- * its tell is stuck: named as such with where to look, and never re-told
- * on its own — a node whose build fails every time would otherwise
- * rebuild every twenty minutes, on the CPU its sandboxes run on. The
- * pointer moves past it (a stuck node is not "upgrading"). The operator's
- * applyUpgrade {nodeId} puts it back in line: its tell is forgotten, it
- * reads behind again, and the roll tells it at its turn — after the node
- * upgrading now, if there is one, never beside it. Not a tell past the
- * order: the first version's hand was one ("told at its next check-in,
- * whatever the order says"), kept in the gateway's memory, and three
- * reviews in one day found three ways for that memory to outlive the
- * node it was for and tell two nodes into one minute (2026-09-15). One
- * node down at a time is the one thing the roll promises; a hand that
- * could break it was the wrong hand, and with it gone nothing is
- * remembered but the row.
+ * its tell, with no upgrade unit running on it, is stuck: named as such
+ * with where to look, and never re-told on its own — a node whose build
+ * fails every time would otherwise rebuild every twenty minutes, on the
+ * CPU its sandboxes run on. The pointer moves past it (a stuck node is
+ * not "upgrading"). The operator's applyUpgrade {nodeId} puts it back in
+ * line: its tell is forgotten, it reads behind again, and the roll tells
+ * it at its turn — after the node upgrading now, if there is one, never
+ * beside it. Not a tell past the order: the first version's hand was one
+ * ("told at its next check-in, whatever the order says"), kept in the
+ * gateway's memory, and three reviews in one day found three ways for
+ * that memory to outlive the node it was for and tell two nodes into one
+ * minute (2026-09-15). One node down at a time is the one thing the roll
+ * promises; a hand that could break it was the wrong hand, and with it
+ * gone nothing is remembered but the row.
  *
  * The row: the tell is nodes.upgrade_told_at and, beside it, the commit
  * the node ran when told (upgrade_told_build) — so a gateway restart
@@ -62,6 +62,13 @@ import { downReason, type Fleet, type NodeState, type Tell } from './fleet';
  * states the fact, the gateway waits it out and tells at the first
  * check-in that says the unit has ended — no memory of a tell on the
  * node, and a hand-run upgrade shows on the version page as what it is.
+ * The same word holds a told node past the twenty minutes: while it
+ * reports its unit alive it is building — slowly, not failed — and it
+ * restarts when the unit ends; stuck is a tell with no unit behind it
+ * (the launch never happened, or the build failed and rolled back and
+ * the unit is gone), which is what the clock was ever for. A unit that
+ * hangs is stopped by hand on the node (systemctl stop dormice-upgrade),
+ * and the node reads stuck at its next check-in.
  *
  * Behind means older. A node whose build is newer than the gateway's — a
  * commit that landed on main after the gateway's machine upgraded and
@@ -73,7 +80,14 @@ import { downReason, type Fleet, type NodeState, type Tell } from './fleet';
  * ahead node to current, and its reason says so.
  */
 
-/** How long a told node has to come back on the new build before it is stuck: a pull, a build and a restart take a few minutes; twenty is a build that failed. */
+/**
+ * How long a told node whose upgrade unit is not running has before it is
+ * stuck. The unit is up within a second of the tell and the daemon's
+ * restart is silent for a check-in or two; twenty minutes of neither is a
+ * launch that never happened or a build that failed and rolled back. A
+ * node whose unit is still running is building, and is waited for as long
+ * as it says so (upgradeStateOf).
+ */
 export const UPGRADE_TOLD_TIMEOUT_MS = 20 * 60_000;
 
 /**
@@ -154,21 +168,32 @@ export function upgradeStateOf(
   // into the same minute. The silence is said in the reason instead.
   if (tellStands(node)) {
     const sinceMs = now.getTime() - node.upgradeTold.at.getTime();
-    const aside =
-      down !== null
-        ? ` (${down})`
-        : node.selfUpgrade?.running === true
-          ? ' (an upgrade unit is running on it)'
-          : '';
-    if (sinceMs < UPGRADE_TOLD_TIMEOUT_MS) {
+    // The node's last word on its unit counts while the node is heard
+    // from; silent, that word is stale and the silence is what is said.
+    const running = down === null && node.selfUpgrade?.running === true;
+    // Upgrading while the unit is alive, however long: a build still
+    // running is slow, not failed, and the node restarts when it ends —
+    // read stuck, the pointer would move and tell the next node into the
+    // same minute. The clock bounds a tell with no unit behind it: the
+    // launch never happened, or the build failed and rolled back and the
+    // unit is gone; and the restart's silence, which must end.
+    if (sinceMs < UPGRADE_TOLD_TIMEOUT_MS || running) {
+      const aside =
+        down !== null
+          ? ` (${down})`
+          : running
+            ? ' (an upgrade unit is running on it)'
+            : '';
       return {
         state: 'upgrading',
         reason: `told ${Math.round(sinceMs / 1000)}s ago, still on ${node.build.commit}${aside}`,
       };
     }
+    const trail =
+      down !== null ? ` (${down})` : ' and no upgrade unit is running on it';
     return {
       state: 'stuck',
-      reason: `told to upgrade at ${node.upgradeTold.at.toISOString()} and still on ${node.build.commit} ${Math.round(sinceMs / 60_000)} minutes later${aside} — read journalctl -u dormice-upgrade and the upgrade log on the node, then put it back in line (applyUpgrade with its nodeId): it is told again at its turn`,
+      reason: `told to upgrade at ${node.upgradeTold.at.toISOString()} and still on ${node.build.commit} ${Math.round(sinceMs / 60_000)} minutes later${trail} — read journalctl -u dormice-upgrade and the upgrade log on the node, then put it back in line (applyUpgrade with its nodeId): it is told again at its turn`,
     };
   }
   if (down !== null) {
@@ -292,7 +317,7 @@ export class Rolling {
           message:
             node.upgradeTold === null
               ? `node ${node.id} is upgrading (${reason}) — not on a tell, so nothing to put back in line; it reads behind once the unit has ended and is told at its turn`
-              : `node ${node.id} is upgrading (${reason}) — it reads stuck twenty minutes after its tell if it is still on the old build, and can be put back in line from there; wait`,
+              : `node ${node.id} is upgrading (${reason}) — it reads stuck once twenty minutes have passed since its tell with no upgrade unit running on it, and can be put back in line from there; wait, or stop the unit on the node if it has hung`,
         };
       case 'current':
         return {

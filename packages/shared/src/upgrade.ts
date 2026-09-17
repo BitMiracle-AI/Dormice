@@ -169,11 +169,15 @@ export type GetUpgradeStatusRequest = z.infer<
  *                brings it to current
  *   behind       an older build, able to upgrade itself, not told yet — its
  *                turn comes when no other node is upgrading
- *   upgrading    told within the last twenty minutes, not back yet — or,
- *                by its own word, an upgrade unit is running on it (its
- *                previous upgrade's installer finishing, or install.sh
- *                run there by hand); not told until that has ended
- *   stuck        told, still on the old build twenty minutes on — never
+ *   upgrading    told within the last twenty minutes, not back yet; or
+ *                told and, by its own word, its upgrade unit still
+ *                running, however long — a slow build, waited for; or,
+ *                untold, an upgrade unit is running on it (its previous
+ *                upgrade's installer finishing, or install.sh run there
+ *                by hand) and it is not told until that has ended
+ *   stuck        told, still on the old build twenty minutes on, and no
+ *                upgrade unit running on it (or silent) — the launch never
+ *                happened, or the build failed and rolled back; never
  *                re-told on its own; applyUpgrade {nodeId} puts it back
  *                in line
  *   unavailable  another build, but the node cannot upgrade itself (its

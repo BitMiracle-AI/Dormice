@@ -170,7 +170,7 @@ describe('upgradeStateOf', () => {
     expect(upgradeStateOf(node, GATEWAY, late)).toMatchObject({
       state: 'stuck',
       reason: expect.stringMatching(
-        /^told to upgrade at 2026-09-15T12:00:00\.000Z and still on old0001 20 minutes later — read journalctl -u dormice-upgrade/,
+        /^told to upgrade at 2026-09-15T12:00:00\.000Z and still on old0001 20 minutes later and no upgrade unit is running on it — read journalctl -u dormice-upgrade/,
       ),
     });
     // Back on the gateway's build: current, whatever the tell says.
@@ -428,7 +428,7 @@ describe('Rolling', () => {
     expect(rolling.onCheckIn(b, later)).toBe(true);
   });
 
-  it('a node that says an upgrade unit is running on it is upgrading, told or not: not told, counted by the one-at-a-time rule, the hand refused, a fulfilled tell on it still forgotten — and told at the first check-in that says the unit has ended', () => {
+  it('a node that says an upgrade unit is running on it is upgrading, told or not: not told, counted by the one-at-a-time rule, the hand refused, a fulfilled tell on it still forgotten — told at the first check-in that says the unit has ended; and told, its live unit keeps it upgrading past the twenty minutes, stuck being the unit gone with the build unchanged', () => {
     const { fleet } = fleetOver();
     const rolling = new Rolling(fleet, NEWER);
     // a was told on OLD by a gateway then on GATEWAY, pulled and built
@@ -463,7 +463,10 @@ describe('Rolling', () => {
     expect(rolling.onCheckIn(a, ended)).toBe(true);
     expect(a.upgradeTold).toEqual({ at: ended, build: GATEWAY.commit });
     // Told and its unit alive: upgrading on its tell, the unit said
-    // beside it; twenty minutes on, stuck — a build that hangs.
+    // beside it — and still upgrading twenty minutes on while the unit
+    // runs: a slow build, not a failed one, and it holds the pointer (b
+    // waits) — read stuck, the next node would be told into the minute
+    // this one restarts in.
     const hung = new Date(ended.getTime() + 30_000);
     reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: BUSY }, hung);
     expect(upgradeStateOf(a, NEWER, hung)).toEqual({
@@ -473,16 +476,36 @@ describe('Rolling', () => {
     });
     const late = new Date(ended.getTime() + UPGRADE_TOLD_TIMEOUT_MS);
     reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: BUSY }, late);
+    expect(upgradeStateOf(a, NEWER, late)).toEqual({
+      state: 'upgrading',
+      reason:
+        'told 1200s ago, still on new0001 (an upgrade unit is running on it)',
+    });
+    reporting(fleet, 'b', { build: OLD, selfUpgrade: CAN }, late);
+    expect(rolling.onCheckIn(b, late)).toBe(false);
+    // The unit ends with the build unchanged — failed and rolled back:
+    // stuck, the reason saying no unit runs, and b's turn.
+    reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: CAN }, late);
     expect(upgradeStateOf(a, NEWER, late)).toMatchObject({
       state: 'stuck',
       reason: expect.stringMatching(
-        /20 minutes later \(an upgrade unit is running on it\)/,
+        /20 minutes later and no upgrade unit is running on it — read journalctl/,
       ),
     });
-    // Quiet for good after saying "running", and no tell to clock it:
-    // unreachable, not upgrading forever.
-    fleet.setUpgradeTold('a', null);
+    expect(rolling.onCheckIn(b, late)).toBe(true);
+    // Silent past the twenty minutes after saying "running": the word is
+    // stale and the silence is what is said — stuck, not upgrading
+    // forever on a unit nobody can see.
+    reporting(fleet, 'a', { build: GATEWAY, selfUpgrade: BUSY }, late);
     a.lastCheckInAt = new Date(late.getTime() - 40_000);
+    expect(upgradeStateOf(a, NEWER, late)).toMatchObject({
+      state: 'stuck',
+      reason: expect.stringMatching(
+        /20 minutes later \(has not checked in for 40s\)/,
+      ),
+    });
+    // Quiet for good with no tell to clock it: unreachable.
+    fleet.setUpgradeTold('a', null);
     expect(upgradeStateOf(a, NEWER, late).state).toBe('unreachable');
   });
 
