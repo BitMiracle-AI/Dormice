@@ -1332,6 +1332,14 @@ fi
 # the hosts have no sqlite3 CLI), before any unit is restarted: the new
 # daemon migrates its ledger forward at boot, and a downgrade past a
 # migration is not a one-click affair. Three kept, the oldest dropped.
+#
+# In one step: an online backup starts over from the first page whenever
+# another connection writes between two of its steps, and better-sqlite3's
+# default is a hundred pages a step. A busy daemon writes every second —
+# Beijing, 2026-09-29: eight minutes, 107 GB written for a 904 MB ledger,
+# the copy never past 91%. One step reads one consistent snapshot while
+# WAL keeps taking the daemon's writes; a failed run leaves no half-copy
+# behind to count among the three kept.
 log 'backups'
 backup_db() { # <source db> <destination dir>
   [ -f "$1" ] || return 0
@@ -1340,8 +1348,8 @@ backup_db() { # <source db> <destination dir>
 const Database = require("better-sqlite3");
 const [src, dst] = process.argv.slice(1);
 const db = new Database(src, { readonly: true });
-db.backup(dst).then(() => { db.close(); }).catch((err) => { console.error(err.message); process.exit(1); });
-' "$1" "$2/$(basename "$1")") || die "backup of $1 failed"
+db.backup(dst, { progress: () => 0x7fffffff }).then(() => { db.close(); }).catch((err) => { console.error(err.message); process.exit(1); });
+' "$1" "$2/$(basename "$1")") || { rm -rf "$2"; die "backup of $1 failed"; }
   chmod 600 "$2/$(basename "$1")"
 }
 BACKUP_DIR="$DATA_DIR/backups/$(date -u +%Y%m%dT%H%M%SZ)-${OLD_SHA:-fresh}"
