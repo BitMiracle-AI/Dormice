@@ -2,6 +2,21 @@ import { z } from 'zod';
 import { sandboxNameSchema, sandboxSchema } from './sandbox';
 
 /**
+ * The cap on everything a sandbox writes outside /home/user — its
+ * container layer: /tmp, packages installed with sudo, caches — GiB, the
+ * same for every sandbox. /home/user is the sandbox's disk (diskGb) and
+ * survives; the container layer is scratch, lost at every stop and every
+ * shell swap, and its size is not a sandbox's to choose: under gVisor it
+ * is a file on the host's root disk, shared with the images and every
+ * other sandbox's layer, and without a cap one sandbox filled that disk
+ * for all of them (Beijing, 2026-09-12 and 2026-09-29: a single sandbox's
+ * deleted-but-open temp files, 180 GB and 350 GB). Past it, writes fail
+ * with ENOSPC inside the sandbox, where `df /` reports it — a limit, not
+ * a reservation: the layer grows only as it is written.
+ */
+export const ROOTFS_LIMIT_GB = 50;
+
+/**
  * Per-sandbox spec sent at acquire time. Same rules as the policy override:
  * applied only when this acquire creates the sandbox — an existing sandbox
  * keeps its stored spec (updateSpec/expandDisk are the update verbs) — but

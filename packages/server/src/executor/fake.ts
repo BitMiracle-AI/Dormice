@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import {
   EXEC_OUTPUT_LIMIT_BYTES,
   FILE_SIZE_LIMIT_BYTES,
+  ROOTFS_LIMIT_GB,
   resolveSandboxPath,
 } from '@dormice/shared';
 import {
@@ -265,6 +266,7 @@ export class FakeExecutor implements Executor {
       memoryBytes: Math.round(
         (opts?.memoryGb ?? this.resources().memoryGb) * 1024 ** 3,
       ),
+      rootfsBytes: ROOTFS_LIMIT_GB * 1024 ** 3,
     };
   }
 
@@ -403,6 +405,17 @@ export class FakeExecutor implements Executor {
       finishedAt: new Date().toISOString(),
     });
     this.killProcesses(sandboxId);
+  }
+
+  /**
+   * Test hook: the shell was born by a build before the container-layer
+   * cap existed — every production shell on the day that build shipped.
+   * A drift of the shell's birth, not of anything the fake can do to it.
+   */
+  plantUncappedShell(sandboxId: string): void {
+    const limits = this.limits.get(sandboxId);
+    if (!limits) throw new Error(`no shell for ${sandboxId}`);
+    this.limits.set(sandboxId, { ...limits, rootfsBytes: null });
   }
 
   /**

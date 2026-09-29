@@ -111,7 +111,7 @@ describe('acquireSandbox spec override', () => {
     ).json();
     expect(body.sandbox.spec).toEqual({ cpus: 2, memoryGb: 4, diskGb: 20 });
     // Reality agrees with the ledger: the shell and disk were born sized.
-    expect(await executor.limitsOf(body.sandbox.id)).toEqual({
+    expect(await executor.limitsOf(body.sandbox.id)).toMatchObject({
       nanoCpus: 2e9,
       memoryBytes: 4 * 1024 ** 3,
     });
@@ -224,7 +224,7 @@ describe('POST /updateSpec', () => {
     expect(executor.stateOf(id)).toBe('paused');
     const woken = (await acquire(app, { name: 'alice' })).json();
     expect(woken.sandbox.state).toBe('active');
-    expect(await executor.limitsOf(id)).toEqual({
+    expect(await executor.limitsOf(id)).toMatchObject({
       nanoCpus: 2e9,
       memoryBytes: 2 * 1024 ** 3,
     });
@@ -273,7 +273,7 @@ describe('a global default edit through the cold-wake convergence', () => {
       await acquire(app, { name: 'alice', policy: { freezeAfterSeconds: 1 } })
     ).json();
     const id = created.sandbox.id;
-    expect(await executor.limitsOf(id)).toEqual({
+    expect(await executor.limitsOf(id)).toMatchObject({
       nanoCpus: 1e9,
       memoryBytes: 2 * 1024 ** 3,
     });
@@ -286,7 +286,7 @@ describe('a global default edit through the cold-wake convergence', () => {
       .sandboxes[0];
     await scanOnce(db, executor, locks, after(lastActiveAt, 1));
     await acquire(app, { name: 'alice' });
-    expect(await executor.limitsOf(id)).toEqual({
+    expect(await executor.limitsOf(id)).toMatchObject({
       nanoCpus: 2e9,
       memoryBytes: 4 * 1024 ** 3,
     });

@@ -17,6 +17,7 @@ import { type Duplex, Transform, type Writable } from 'node:stream';
 import {
   EXEC_OUTPUT_LIMIT_BYTES,
   FILE_SIZE_LIMIT_BYTES,
+  ROOTFS_LIMIT_GB,
   resolveSandboxPath,
 } from '@dormice/shared';
 import Docker from 'dockerode';
@@ -152,6 +153,22 @@ export function containerName(sandboxId: string): string {
 }
 
 /**
+ * Where runsc takes a container's rootfs overlay configuration from: a
+ * per-container override of its --overlay2 flag, one runsc admits without
+ * --allow-flag-override for the `self` medium (runsc/config/flags.go,
+ * overrideAllowlist). `root:self` is runsc's own default — the container
+ * layer is a file beside the image layers, on the host's root disk —
+ * with `size` its cap (ROOTFS_LIMIT_GB).
+ */
+const OVERLAY_ANNOTATION = 'dev.gvisor.flag.overlay2';
+
+/** The cap a shell's overlay annotation names, bytes; null when it names none (a shell born before the cap). */
+export function rootfsBytesOf(annotation: string | undefined): number | null {
+  const size = annotation?.match(/(?:^|,)size=(\d+)g(?:,|$)/);
+  return size ? Number(size[1]) * 1024 ** 3 : null;
+}
+
+/**
  * Whether an image reference names its registry — Docker's own rule: the
  * first path component is a host when it contains a dot or a colon, or is
  * `localhost`. `docker.io/library/python:3.12` and `ghcr.io/x/y` do; the
@@ -182,6 +199,14 @@ export function splitRepoTag(image: string): { repo: string; tag: string } {
     ? { repo: image.slice(0, colon), tag: image.slice(colon + 1) }
     : { repo: image, tag: 'latest' };
 }
+
+/**
+ * HostConfig as this executor writes and reads it: @types/dockerode's
+ * type predates Annotations (Docker API 1.43).
+ */
+type ContainerHostConfig = Docker.HostConfig & {
+  Annotations?: Record<string, string>;
+};
 
 /** One `docker inspect`, reduced to what the executor's verbs decide on. */
 interface Inspected {
@@ -897,9 +922,13 @@ export class DockerExecutor implements Executor {
       );
       // HostConfig echoes exactly what launchContainer wrote — integer
       // physical units, so the ledger comparison is drift-free.
+      const hostConfig = info.HostConfig as ContainerHostConfig | undefined;
       return {
-        nanoCpus: info.HostConfig?.NanoCpus ?? 0,
-        memoryBytes: info.HostConfig?.Memory ?? 0,
+        nanoCpus: hostConfig?.NanoCpus ?? 0,
+        memoryBytes: hostConfig?.Memory ?? 0,
+        rootfsBytes: rootfsBytesOf(
+          hostConfig?.Annotations?.[OVERLAY_ANNOTATION],
+        ),
       };
     } catch (err) {
       if (isDockerApiError(err) && err.statusCode === 404) return null;
@@ -1970,6 +1999,42 @@ export class DockerExecutor implements Executor {
     // when it pulls — a first sandbox of a large template waits — and the
     // prefetch (node-config.ts) is what makes that rare.
     await this.ensureImage(image);
+    const hostConfig: ContainerHostConfig = {
+      // The security set: gVisor keeps sandbox code off the real
+      // kernel, Init reaps zombies, PidsLimit bounds the sandbox's
+      // host-side footprint so a fork bomb kills only its own sandbox
+      // (under gVisor it is not a guest process count — see
+      // config.ts, and applyPidsLimit / convergePidsLimit for how
+      // existing shells follow a changed value). The image defaults to uid 1000
+      // (user). Deliberately NO
+      // no-new-privileges (2026-08-31): it would veto the setuid
+      // elevation that passwordless sudo needs (the E2B convention,
+      // baked into the base image), and container root was never what
+      // that flag defended here — the host kernel (gVisor), the Docker
+      // socket (never mounted), the metadata block (host-side
+      // DOCKER-USER chain) and the resource caps (this HostConfig)
+      // are all out of a container root's reach, and the E2B face
+      // already hands root out via user:'root'. The gVisor half of
+      // the same decision is runsc's --allow-suid, registered by
+      // install.sh — without it the sentry ignores SUID bits and sudo
+      // stays dead no matter what this HostConfig says.
+      Runtime: 'runsc',
+      Init: true,
+      NanoCpus: Math.round((opts?.cpus ?? this.opts.resources().cpus) * 1e9),
+      Memory: Math.round(
+        (opts?.memoryGb ?? this.opts.resources().memoryGb) * 1024 ** 3,
+      ),
+      PidsLimit: this.opts.pidsLimit(),
+      // The container layer's cap (ROOTFS_LIMIT_GB has why): the one
+      // resource of a shell that lives on the host's root disk.
+      Annotations: {
+        [OVERLAY_ANNOTATION]: `root:self,size=${ROOTFS_LIMIT_GB}g`,
+      },
+      Binds: [`${this.mountDir(sandboxId)}:/home/user`],
+      // Life and death belong to the daemon's state machine; Docker
+      // must not resurrect anything on its own.
+      RestartPolicy: { Name: 'no' },
+    };
     let container: Docker.Container;
     try {
       container = await deadline(
@@ -1978,39 +2043,7 @@ export class DockerExecutor implements Executor {
           Image: image,
           Cmd: ['sleep', 'infinity'],
           Labels: { [SANDBOX_LABEL]: sandboxId },
-          HostConfig: {
-            // The security set: gVisor keeps sandbox code off the real
-            // kernel, Init reaps zombies, PidsLimit bounds the sandbox's
-            // host-side footprint so a fork bomb kills only its own sandbox
-            // (under gVisor it is not a guest process count — see
-            // config.ts, and applyPidsLimit / convergePidsLimit for how
-            // existing shells follow a changed value). The image defaults to uid 1000
-            // (user). Deliberately NO
-            // no-new-privileges (2026-08-31): it would veto the setuid
-            // elevation that passwordless sudo needs (the E2B convention,
-            // baked into the base image), and container root was never what
-            // that flag defended here — the host kernel (gVisor), the Docker
-            // socket (never mounted), the metadata block (host-side
-            // DOCKER-USER chain) and the resource caps (this HostConfig)
-            // are all out of a container root's reach, and the E2B face
-            // already hands root out via user:'root'. The gVisor half of
-            // the same decision is runsc's --allow-suid, registered by
-            // install.sh — without it the sentry ignores SUID bits and sudo
-            // stays dead no matter what this HostConfig says.
-            Runtime: 'runsc',
-            Init: true,
-            NanoCpus: Math.round(
-              (opts?.cpus ?? this.opts.resources().cpus) * 1e9,
-            ),
-            Memory: Math.round(
-              (opts?.memoryGb ?? this.opts.resources().memoryGb) * 1024 ** 3,
-            ),
-            PidsLimit: this.opts.pidsLimit(),
-            Binds: [`${this.mountDir(sandboxId)}:/home/user`],
-            // Life and death belong to the daemon's state machine; Docker
-            // must not resurrect anything on its own.
-            RestartPolicy: { Name: 'no' },
-          },
+          HostConfig: hostConfig,
         }),
         VERB_DEADLINE_SECONDS,
         `create of ${sandboxId}`,

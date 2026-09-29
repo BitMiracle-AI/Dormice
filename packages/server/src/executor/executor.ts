@@ -300,6 +300,12 @@ export interface CreateOptions extends ShellOptions {
 export interface ShellLimits {
   nanoCpus: number;
   memoryBytes: number;
+  /**
+   * The cap on the shell's container layer (ROOTFS_LIMIT_GB in bytes for
+   * every shell born since the cap exists); null for a shell born before
+   * — uncapped.
+   */
+  rootfsBytes: number | null;
 }
 
 /**

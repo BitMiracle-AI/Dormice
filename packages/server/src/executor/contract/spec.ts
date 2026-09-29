@@ -2,8 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { ROOTFS_LIMIT_GB } from '@dormice/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ContractContext } from './index';
+
+const ROOTFS_BYTES = ROOTFS_LIMIT_GB * 1024 ** 3;
 
 /**
  * The per-sandbox spec chapter: shells carry the limits they were born
@@ -31,6 +34,7 @@ export function specTests(ctx: ContractContext) {
         expect(await ctx.executor.limitsOf(id)).toEqual({
           nanoCpus: 500_000_000,
           memoryBytes: 512 * 1024 ** 2,
+          rootfsBytes: ROOTFS_BYTES,
         });
       },
       timeoutMs,
@@ -46,6 +50,8 @@ export function specTests(ctx: ContractContext) {
         expect(limits).not.toBeNull();
         expect(limits?.nanoCpus).toBeGreaterThan(0);
         expect(limits?.memoryBytes).toBeGreaterThan(0);
+        // The container-layer cap is not a knob: every shell has it.
+        expect(limits?.rootfsBytes).toBe(ROOTFS_BYTES);
       },
       timeoutMs,
     );
@@ -63,6 +69,7 @@ export function specTests(ctx: ContractContext) {
         expect(await ctx.executor.limitsOf(id)).toEqual({
           nanoCpus: 250_000_000,
           memoryBytes: 256 * 1024 ** 2,
+          rootfsBytes: ROOTFS_BYTES,
         });
       },
       timeoutMs,
@@ -80,6 +87,7 @@ export function specTests(ctx: ContractContext) {
         expect(await ctx.executor.limitsOf(id)).toEqual({
           nanoCpus: 500_000_000,
           memoryBytes: 512 * 1024 ** 2,
+          rootfsBytes: ROOTFS_BYTES,
         });
       },
       timeoutMs,

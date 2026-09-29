@@ -7,6 +7,7 @@ import {
   DEFAULT_LIFECYCLE_POLICY,
   FILE_SIZE_LIMIT_BYTES,
   hostMetricsResponseSchema,
+  ROOTFS_LIMIT_GB,
 } from '@dormice/shared';
 import { pino } from 'pino';
 import { describe, expect, it } from 'vitest';
@@ -1780,6 +1781,44 @@ describe('cold wakes converge onto the current image', () => {
     const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
     expect(woken.state).toBe('active');
     expect(await executor.imageOf(created.id)).toBe(executor.baseImage());
+    expect(executor.removedShells).toEqual([]);
+  });
+
+  it('stopped + born before the container-layer cap: the wake swaps it onto a capped shell', async () => {
+    const { app, db, executor, locks } = testApp();
+    const created = (
+      await acquire(app, {
+        name: 'alice',
+        policy: { freezeAfterSeconds: 60, stopAfterSeconds: 120 },
+      })
+    ).json().sandbox;
+    await scanOnce(db, executor, locks, after(created.lastActiveAt, 60));
+    await scanOnce(db, executor, locks, after(created.lastActiveAt, 120));
+    expect(executor.stateOf(created.id)).toBe('stopped');
+    executor.plantUncappedShell(created.id);
+
+    const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
+    expect(woken.state).toBe('active');
+    expect((await executor.limitsOf(created.id))?.rootfsBytes).toBe(
+      ROOTFS_LIMIT_GB * 1024 ** 3,
+    );
+    expect(executor.removedShells).toEqual([created.id]);
+  });
+
+  it('frozen + born before the cap: a plain unpause — its live processes are not swapped away for it', async () => {
+    const { app, db, executor, locks } = testApp();
+    const created = (await acquire(app, { name: 'alice' })).json().sandbox;
+    await scanOnce(
+      db,
+      executor,
+      locks,
+      after(created.lastActiveAt, DEFAULT_LIFECYCLE_POLICY.freezeAfterSeconds),
+    );
+    executor.plantUncappedShell(created.id);
+
+    const woken = (await acquire(app, { name: 'alice' })).json().sandbox;
+    expect(woken.state).toBe('active');
+    expect((await executor.limitsOf(created.id))?.rootfsBytes).toBeNull();
     expect(executor.removedShells).toEqual([]);
   });
 

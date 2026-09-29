@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream';
 import type Docker from 'dockerode';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EXEC_END_GRACE_SECONDS, VERB_DEADLINE_SECONDS } from './deadline';
-import { DockerExecutor } from './docker';
+import { DockerExecutor, rootfsBytesOf } from './docker';
 import { FILE_OP_TIMEOUT_SECONDS } from './docker-scripts';
 
 /**
@@ -280,5 +280,17 @@ describe('DockerExecutor exec pipeline', () => {
     await expect(watching).rejects.toThrow(
       'failed (exit 1): Failed to watch /home/user; upper limit reached',
     );
+  });
+});
+
+describe('rootfsBytesOf', () => {
+  it('reads the cap the overlay annotation names, GiB to bytes', () => {
+    expect(rootfsBytesOf('root:self,size=50g')).toBe(50 * 1024 ** 3);
+    expect(rootfsBytesOf('size=1g,root:self')).toBe(1024 ** 3);
+  });
+
+  it('a shell born before the cap names none: null', () => {
+    expect(rootfsBytesOf(undefined)).toBeNull();
+    expect(rootfsBytesOf('root:self')).toBeNull();
   });
 });

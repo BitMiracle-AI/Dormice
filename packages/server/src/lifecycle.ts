@@ -1,4 +1,4 @@
-import type { ShellExitCause } from '@dormice/shared';
+import { ROOTFS_LIMIT_GB, type ShellExitCause } from '@dormice/shared';
 import { type ArchiveStore, objectKey } from './archive/store';
 import type { Db } from './db/db';
 import {
@@ -188,6 +188,15 @@ export async function rebuildSandbox(
  * within the crash-only contract (code must survive the container
  * vanishing anyway) and only ever triggered by an operator deliberately
  * re-registering the template or resizing the spec.
+ *
+ * The container-layer cap (ROOTFS_LIMIT_GB) is the one shell property no
+ * operator changes: it comes with a build, to every shell in the fleet at
+ * once, so it is taken only where the swap costs nothing — at a stopped
+ * shell's wake, whose processes are already gone and whose layer does not
+ * survive a start anyway (gVisor's overlay is scratch: measured
+ * 2026-09-30, /tmp and /opt come back empty from a stop and a start). A
+ * frozen shell keeps its live processes and takes the cap after its next
+ * stop; what it costs a stopped one is create in place of start.
  */
 export async function wakeSandbox(
   db: Db,
@@ -245,7 +254,9 @@ export async function wakeSandbox(
         (born !== null && born !== next) ||
         (limits !== null &&
           (limits.nanoCpus !== wantNanoCpus ||
-            limits.memoryBytes !== wantMemoryBytes));
+            limits.memoryBytes !== wantMemoryBytes ||
+            (row.state === 'stopped' &&
+              limits.rootfsBytes !== ROOTFS_LIMIT_GB * 1024 ** 3)));
       const fresh = stale
         ? await rebuildSandbox(db, executor, row, watchers)
         : row;

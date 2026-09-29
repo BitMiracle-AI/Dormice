@@ -1,5 +1,9 @@
 import { spawn } from 'node:child_process';
-import { DEFAULT_LIFECYCLE_POLICY, Dormice } from '@dormice/sdk';
+import {
+  DEFAULT_LIFECYCLE_POLICY,
+  Dormice,
+  ROOTFS_LIMIT_GB,
+} from '@dormice/sdk';
 import { describe, expect, inject, it } from 'vitest';
 import { door, settled } from './helpers';
 
@@ -298,6 +302,21 @@ describe('native API over a real daemon', () => {
       expect(check.stdout).not.toContain('ephemeral');
       expect(check.stderr).toMatch(/No such file/);
       await client().destroySandbox('rebuild-layers-key');
+    },
+  );
+
+  // The container layer's cap is gVisor's to enforce; the fake has no
+  // layer at all. `df /` inside is where a sandbox's programs read it.
+  it.runIf(process.env.DORMICE_EXECUTOR === 'docker')(
+    'the container layer is capped: df / reports ROOTFS_LIMIT_GB, /home/user is the disk',
+    async () => {
+      await client().acquireSandbox('rootfs-cap-key');
+      const result = await client().execCommand(
+        'rootfs-cap-key',
+        'df -B1 --output=size / | tail -1',
+      );
+      expect(Number(result.stdout.trim())).toBe(ROOTFS_LIMIT_GB * 1024 ** 3);
+      await client().destroySandbox('rootfs-cap-key');
     },
   );
 
