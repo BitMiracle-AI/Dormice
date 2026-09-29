@@ -23,6 +23,7 @@ import Docker from 'dockerode';
 import { execa } from 'execa';
 import {
   deadline,
+  EXEC_END_GRACE_SECONDS,
   EXIT_SETTLE_SECONDS,
   QUERY_DEADLINE_SECONDS,
   VERB_DEADLINE_SECONDS,
@@ -51,6 +52,7 @@ import {
   STAT_SCRIPT,
   STREAM_FILE_OP_TIMEOUT_SECONDS,
   TOO_LARGE_EXIT,
+  WATCH_BACKSTOP_SECONDS,
   WATCH_SCRIPT,
   WRITE_FILE_SCRIPT,
 } from './docker-scripts';
@@ -196,16 +198,17 @@ interface Inspected {
 }
 
 /**
- * Whether the host process Docker reports as the container's init is still
- * a live process. A zombie counts as dead: it has exited and only awaits
- * its reaper. Reads /proc, which presumes the daemon shares dockerd's pid
- * namespace — true of the systemd unit install.sh writes, and of any host
- * that can mount loop disks at all. Off Linux, and for a pid Docker has
- * already cleared, it says "alive" and exitOf falls back to Docker's own
- * status. A daemon in a foreign pid namespace would read every init as
- * gone and pay exitOf's bounded wait on every wake: slow, never wrong.
+ * Whether a host process Docker reports — a container's init, an exec's
+ * process — is still a live process. A zombie counts as dead: it has
+ * exited and only awaits its reaper. Reads /proc, which presumes the daemon
+ * shares dockerd's pid namespace — true of the systemd unit install.sh
+ * writes, and of any host that can mount loop disks at all. Off Linux, and
+ * for a pid Docker has already cleared, it says "alive" and callers fall
+ * back to Docker's own word. A daemon in a foreign pid namespace would read
+ * every init as gone and pay exitOf's bounded wait on every wake: slow,
+ * never wrong.
  */
-async function initAlive(pid: number): Promise<boolean> {
+async function hostProcessAlive(pid: number): Promise<boolean> {
   if (process.platform !== 'linux' || pid <= 0) return true;
   let stat: string;
   try {
@@ -923,7 +926,7 @@ export class DockerExecutor implements Executor {
         found.oomKilled ||
         kernelOomKilled ||
         (events?.forksRejected ?? 0) > 0 ||
-        !(await initAlive(found.pid));
+        !(await hostProcessAlive(found.pid));
       if (dying) {
         // Docker's status lags the kernel. After a memcg OOM or a sentry
         // crash the counters above are already written and the init
@@ -1057,18 +1060,9 @@ export class DockerExecutor implements Executor {
   async exec(sandboxId: string, opts: ExecOptions): Promise<ExecResult> {
     const { id: containerId } = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
-    // The deadline lives in-container, via GNU timeout: closing the
-    // host-side stream cannot kill the in-container process (measured in
-    // the predecessor system); only an in-container SIGKILL can. 137 = killed.
     const run = await this.runInContainer(container, sandboxId, {
-      cmd: [
-        'timeout',
-        '--signal=KILL',
-        String(opts.timeoutSeconds),
-        'bash',
-        '-c',
-        opts.command,
-      ],
+      cmd: ['bash', '-c', opts.command],
+      timeoutSeconds: opts.timeoutSeconds,
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
       workingDir: opts.cwd,
       env: opts.env,
@@ -1116,6 +1110,7 @@ export class DockerExecutor implements Executor {
         String(opts.timeoutSeconds),
         opts.command,
       ],
+      deadlineSeconds: opts.timeoutSeconds,
       stdout: new CallbackSink(opts.onStdout),
       stderr: new CallbackSink(opts.onStderr),
       stdin: opts.stdin ? 'open' : undefined,
@@ -1182,6 +1177,7 @@ export class DockerExecutor implements Executor {
   ): Promise<void> {
     const run = await this.runInContainer(container, sandboxId, {
       cmd: ['bash', '-c', SIGNAL_SCRIPT, 'bash', pidfile, sig],
+      timeoutSeconds: FILE_OP_TIMEOUT_SECONDS,
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
       user,
     });
@@ -1221,12 +1217,15 @@ export class DockerExecutor implements Executor {
       VERB_DEADLINE_SECONDS,
       `exec create in ${sandboxId}`,
     );
-    // Only the handshake is bounded — the stream it hands back lives as
-    // long as the terminal session.
+    // Only the handshake is bounded: a terminal session runs under no
+    // in-container deadline (its lifetime is the sandbox's), so the wait for
+    // its end has none to add a grace to (waitForEnd). Its readers are
+    // bounded where they are — at the client (writeToClient).
     const stream = await deadline(
       exec.start({ hijack: true, stdin: true, Tty: true }),
       VERB_DEADLINE_SECONDS,
       `exec start in ${sandboxId}`,
+      (late) => late.destroy(),
     );
     const delivered = pumpRawStream(stream, new CallbackSink(opts.onStdout));
     // The engine takes the size only after start — the terminal is born
@@ -1316,6 +1315,81 @@ export class DockerExecutor implements Executor {
     return info.ExitCode;
   }
 
+  /**
+   * awaitExitCode, bounded. The process cannot outlive the in-container
+   * deadline it runs under, so its end is due EXEC_END_GRACE_SECONDS after
+   * that at the latest — the end as dockerd reports it, which dockerd can
+   * lose for good (see the constant). Past the bound the stream is
+   * destroyed — our side of the attach, and with it anything of ours
+   * dockerd was blocked on — and the wait rejects, saying what it found.
+   */
+  private waitForEnd(
+    exec: Docker.Exec,
+    stream: Duplex,
+    delivered: Promise<void>,
+    sandboxId: string,
+    deadlineSeconds: number,
+  ): Promise<number> {
+    const boundSeconds = deadlineSeconds + EXEC_END_GRACE_SECONDS;
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const overdue = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        void this.overdueEnd(exec, sandboxId, boundSeconds).then((error) => {
+          // The end may have come in while dockerd was being asked.
+          if (settled) return;
+          stream.destroy();
+          reject(error);
+        });
+      }, boundSeconds * 1000);
+      // A bound, never a reason for the process to stay up.
+      timer.unref();
+    });
+    return Promise.race([
+      this.awaitExitCode(exec, delivered, sandboxId),
+      overdue,
+    ]).finally(() => {
+      settled = true;
+      clearTimeout(timer);
+    });
+  }
+
+  /**
+   * What an overdue end means, found out and said: dockerd's record of the
+   * exec against the host's view of its process. Logged under the exec's
+   * id, the handle `docker exec inspect` and dockerd's goroutine dump
+   * answer to.
+   */
+  private async overdueEnd(
+    exec: Docker.Exec,
+    sandboxId: string,
+    waitedSeconds: number,
+  ): Promise<Error> {
+    let found: string;
+    try {
+      const info = await deadline(
+        exec.inspect(),
+        QUERY_DEADLINE_SECONDS,
+        `exec inspect in ${sandboxId}`,
+      );
+      if (!info.Running) {
+        found = `dockerd recorded its exit (${info.ExitCode}) but never closed its stream`;
+      } else if (await hostProcessAlive(info.Pid)) {
+        found = `its process (host pid ${info.Pid}) is still running past its in-container deadline`;
+      } else {
+        found = `its process (host pid ${info.Pid}) is gone and dockerd never recorded the exit — the container's exec events are stuck behind an exec whose output nobody reads (moby #53614)`;
+      }
+    } catch (error) {
+      found = `dockerd did not answer an inspect of it either (${error instanceof Error ? error.message : String(error)})`;
+    }
+    this.log(
+      `exec ${exec.id} in ${sandboxId} reported no end within ${waitedSeconds}s: ${found}`,
+    );
+    return new Error(
+      `exec in ${sandboxId} reported no end within ${waitedSeconds}s: ${found}`,
+    );
+  }
+
   async writeFiles(
     sandboxId: string,
     files: FileToWrite[],
@@ -1328,16 +1402,8 @@ export class DockerExecutor implements Executor {
     for (const file of files) {
       const path = resolveSandboxPath(file.path);
       const run = await this.runInContainer(container, sandboxId, {
-        cmd: [
-          'timeout',
-          '--signal=KILL',
-          String(FILE_OP_TIMEOUT_SECONDS),
-          'bash',
-          '-c',
-          WRITE_FILE_SCRIPT,
-          'bash',
-          path,
-        ],
+        cmd: ['bash', '-c', WRITE_FILE_SCRIPT, 'bash', path],
+        timeoutSeconds: FILE_OP_TIMEOUT_SECONDS,
         outputCap: EXEC_OUTPUT_LIMIT_BYTES,
         stdin: file.content,
         user,
@@ -1363,9 +1429,6 @@ export class DockerExecutor implements Executor {
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
       cmd: [
-        'timeout',
-        '--signal=KILL',
-        String(FILE_OP_TIMEOUT_SECONDS),
         'bash',
         '-c',
         READ_FILE_SCRIPT,
@@ -1373,6 +1436,7 @@ export class DockerExecutor implements Executor {
         resolved,
         String(FILE_SIZE_LIMIT_BYTES),
       ],
+      timeoutSeconds: FILE_OP_TIMEOUT_SECONDS,
       outputCap: FILE_SIZE_LIMIT_BYTES,
       user,
     });
@@ -1426,6 +1490,7 @@ export class DockerExecutor implements Executor {
         resolved,
         ...(range ? [String(range.offset), String(range.length)] : []),
       ],
+      deadlineSeconds: STREAM_FILE_OP_TIMEOUT_SECONDS,
       stdout: new CallbackSink(onChunk),
       stderr,
       user,
@@ -1454,16 +1519,8 @@ export class DockerExecutor implements Executor {
     const { id: containerId } = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
-      cmd: [
-        'timeout',
-        '--signal=KILL',
-        String(STREAM_FILE_OP_TIMEOUT_SECONDS),
-        'bash',
-        '-c',
-        WRITE_FILE_SCRIPT,
-        'bash',
-        resolved,
-      ],
+      cmd: ['bash', '-c', WRITE_FILE_SCRIPT, 'bash', resolved],
+      timeoutSeconds: STREAM_FILE_OP_TIMEOUT_SECONDS,
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
       stdin: content,
       user,
@@ -1492,17 +1549,8 @@ export class DockerExecutor implements Executor {
     const { id: containerId } = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
-      cmd: [
-        'timeout',
-        '--signal=KILL',
-        String(FILE_OP_TIMEOUT_SECONDS),
-        'bash',
-        '-c',
-        LIST_DIR_SCRIPT,
-        'bash',
-        resolved,
-        String(depth),
-      ],
+      cmd: ['bash', '-c', LIST_DIR_SCRIPT, 'bash', resolved, String(depth)],
+      timeoutSeconds: FILE_OP_TIMEOUT_SECONDS,
       outputCap: LIST_OUTPUT_LIMIT_BYTES,
       user,
     });
@@ -1541,16 +1589,8 @@ export class DockerExecutor implements Executor {
     const { id: containerId } = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
-      cmd: [
-        'timeout',
-        '--signal=KILL',
-        String(FILE_OP_TIMEOUT_SECONDS),
-        'bash',
-        '-c',
-        STAT_SCRIPT,
-        'bash',
-        resolved,
-      ],
+      cmd: ['bash', '-c', STAT_SCRIPT, 'bash', resolved],
+      timeoutSeconds: FILE_OP_TIMEOUT_SECONDS,
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
       user,
     });
@@ -1574,16 +1614,8 @@ export class DockerExecutor implements Executor {
     const { id: containerId } = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
-      cmd: [
-        'timeout',
-        '--signal=KILL',
-        String(FILE_OP_TIMEOUT_SECONDS),
-        'bash',
-        '-c',
-        MAKE_DIR_SCRIPT,
-        'bash',
-        resolved,
-      ],
+      cmd: ['bash', '-c', MAKE_DIR_SCRIPT, 'bash', resolved],
+      timeoutSeconds: FILE_OP_TIMEOUT_SECONDS,
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
       user,
     });
@@ -1609,17 +1641,8 @@ export class DockerExecutor implements Executor {
     const { id: containerId } = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
-      cmd: [
-        'timeout',
-        '--signal=KILL',
-        String(FILE_OP_TIMEOUT_SECONDS),
-        'bash',
-        '-c',
-        MOVE_SCRIPT,
-        'bash',
-        source,
-        destination,
-      ],
+      cmd: ['bash', '-c', MOVE_SCRIPT, 'bash', source, destination],
+      timeoutSeconds: FILE_OP_TIMEOUT_SECONDS,
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
       user,
     });
@@ -1639,16 +1662,8 @@ export class DockerExecutor implements Executor {
     const { id: containerId } = await this.expectState(sandboxId, 'running');
     const container = this.docker.getContainer(containerId);
     const run = await this.runInContainer(container, sandboxId, {
-      cmd: [
-        'timeout',
-        '--signal=KILL',
-        String(FILE_OP_TIMEOUT_SECONDS),
-        'bash',
-        '-c',
-        REMOVE_SCRIPT,
-        'bash',
-        resolved,
-      ],
+      cmd: ['bash', '-c', REMOVE_SCRIPT, 'bash', resolved],
+      timeoutSeconds: FILE_OP_TIMEOUT_SECONDS,
       outputCap: EXEC_OUTPUT_LIMIT_BYTES,
       user,
     });
@@ -1671,7 +1686,24 @@ export class DockerExecutor implements Executor {
     const container = this.docker.getContainer(containerId);
     const pidfile = `/tmp/.dormice-exec-${randomUUID()}.pid`;
 
+    // Readiness ("Watches established.") and events share one pipe
+    // (WATCH_SCRIPT), so readiness is always delivered before the first
+    // event — and must be: a caller's onEvent may wait on what the caller
+    // does once this call returns (the E2B stream's start frame), and this
+    // call returns on readiness. With readiness on stderr, dockerd could
+    // hand over an event first; the pump then waited on that event, which
+    // waited on the start frame, which waited on the readiness line stuck
+    // behind the event. The watch never started and its exec's output was
+    // never read again (found 2026-09-29, accounting for exec streams the
+    // Beijing daemon had stopped reading with no client behind them).
     let lifecycle: WatchProcessLifecycle | undefined;
+    let established = false;
+    // What inotifywait said before its watches stood up: the failure message.
+    let setupText = '';
+    let markReady = () => {};
+    const ready = new Promise<'ready'>((resolve) => {
+      markReady = () => resolve('ready');
+    });
     let pending = '';
     const onStdout = async (chunk: Buffer) => {
       pending += chunk.toString('utf8');
@@ -1680,21 +1712,24 @@ export class DockerExecutor implements Executor {
         if (eol === -1) return;
         const line = pending.slice(0, eol);
         pending = pending.slice(eol + 1);
+        if (!established) {
+          if (line.includes('Watches established.')) {
+            established = true;
+            markReady();
+          } else {
+            setupText += `${line}\n`;
+          }
+          continue;
+        }
         for (const event of parseInotifyLine(line, resolved)) {
           // Awaited: backpressure travels through to inotifywait's pipe.
           if (lifecycle?.delivering !== false) await opts.onEvent(event);
         }
       }
     };
-    let stderrText = '';
-    let markReady = () => {};
-    const ready = new Promise<'ready'>((resolve) => {
-      markReady = () => resolve('ready');
-    });
-    const onStderr = (chunk: Buffer) => {
-      stderrText += chunk.toString('utf8');
-      if (stderrText.includes('Watches established.')) markReady();
-    };
+    // Only the script's own shell can still speak here (a pidfile it could
+    // not write), before inotifywait takes over the pipe.
+    const stderr = new CappedBuffer(EXEC_OUTPUT_LIMIT_BYTES);
 
     const started = await this.startInContainer(container, sandboxId, {
       cmd: [
@@ -1706,8 +1741,9 @@ export class DockerExecutor implements Executor {
         opts.recursive ? '-r' : '',
         resolved,
       ],
+      deadlineSeconds: WATCH_BACKSTOP_SECONDS,
       stdout: new CallbackSink(onStdout),
-      stderr: new CallbackSink(onStderr),
+      stderr,
     });
     const exitInfo = started.wait().then(
       (exitCode) => ({ exitCode, error: undefined as Error | undefined }),
@@ -1732,7 +1768,7 @@ export class DockerExecutor implements Executor {
         );
       }
       throw new Error(
-        `starting watcher on ${resolved} in ${sandboxId} failed (exit ${outcome.exitCode}): ${stderrText.trim()}`,
+        `starting watcher on ${resolved} in ${sandboxId} failed (exit ${outcome.exitCode}): ${`${setupText}${stderr.text()}`.trim()}`,
       );
     }
 
@@ -1768,12 +1804,20 @@ export class DockerExecutor implements Executor {
     return { stop: () => lifecycle?.stop() ?? Promise.resolve() };
   }
 
-  /** The buffered face of the exec pipeline: capped sinks, awaited to the end. */
+  /**
+   * The buffered face of the exec pipeline: capped sinks, awaited to the
+   * end. Every command here runs under an in-container deadline written
+   * here — GNU timeout, SIGKILL on expiry, 137: closing the host-side
+   * stream cannot kill an in-container process (measured in the
+   * predecessor system); only an in-container SIGKILL can. One number for
+   * the process's bound and the wait for its end (startInContainer).
+   */
   private async runInContainer(
     container: Docker.Container,
     sandboxId: string,
     spec: {
       cmd: string[];
+      timeoutSeconds: number;
       outputCap: number;
       stdin?: Buffer | NodeJS.ReadableStream;
       workingDir?: string;
@@ -1784,7 +1828,13 @@ export class DockerExecutor implements Executor {
     const stdout = new CappedBuffer(spec.outputCap);
     const stderr = new CappedBuffer(spec.outputCap);
     const started = await this.startInContainer(container, sandboxId, {
-      cmd: spec.cmd,
+      cmd: [
+        'timeout',
+        '--signal=KILL',
+        String(spec.timeoutSeconds),
+        ...spec.cmd,
+      ],
+      deadlineSeconds: spec.timeoutSeconds,
       stdout,
       stderr,
       stdin: spec.stdin,
@@ -1804,7 +1854,8 @@ export class DockerExecutor implements Executor {
    * ends, the same measured lag as kill vs exited in stop(). Tty stays off:
    * the multiplexed stream is what the pump can split back into distinct
    * stdout and stderr. Resolving means the command has started; everything
-   * after start is the wait's business.
+   * after start is the wait's business — bounded by `deadlineSeconds`, the
+   * in-container deadline the command runs under (waitForEnd).
    *
    * stdin comes in three shapes: bytes (written and ended — EOF now), a
    * source stream (piped, its end is the EOF), or 'open' — the hijacked
@@ -1817,6 +1868,8 @@ export class DockerExecutor implements Executor {
     sandboxId: string,
     spec: {
       cmd: string[];
+      /** The in-container deadline the command runs under — its own `timeout --signal=KILL`. */
+      deadlineSeconds: number;
       stdout: Writable;
       stderr: Writable;
       stdin?: Buffer | NodeJS.ReadableStream | 'open';
@@ -1843,12 +1896,14 @@ export class DockerExecutor implements Executor {
       VERB_DEADLINE_SECONDS,
       `exec create in ${sandboxId}`,
     );
-    // Only the handshake is bounded — the stream it hands back lives as
-    // long as the command it carries (script-level timeouts own that).
+    // A start that answers after its deadline still hands back a live
+    // attach stream — one nobody here will read, which is what dockerd
+    // blocks on (see waitForEnd): it is let go the moment it lands.
     const stream = await deadline(
       exec.start(spec.stdin !== undefined ? { hijack: true, stdin: true } : {}),
       VERB_DEADLINE_SECONDS,
       `exec start in ${sandboxId}`,
+      (late) => late.destroy(),
     );
     // Not modem.demuxStream: stock demux has no backpressure, and completion
     // must mean "delivered", not "read" — see pumpMultiplexedStream.
@@ -1865,7 +1920,13 @@ export class DockerExecutor implements Executor {
         spec.stdin.pipe(stream);
       }
     }
-    const finished = this.awaitExitCode(exec, delivered, sandboxId);
+    const finished = this.waitForEnd(
+      exec,
+      stream,
+      delivered,
+      sandboxId,
+      spec.deadlineSeconds,
+    );
     // A failure before anyone calls wait must not crash the daemon as an
     // unhandled rejection; wait() still observes it through the same promise.
     finished.catch(() => {});

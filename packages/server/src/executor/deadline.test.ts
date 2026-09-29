@@ -36,6 +36,34 @@ describe('deadline', () => {
     await vi.advanceTimersByTimeAsync(5_000);
   });
 
+  it('hands a result that lands after the deadline to release', async () => {
+    let answer!: (value: string) => void;
+    const work = new Promise<string>((resolve) => {
+      answer = resolve;
+    });
+    const released: string[] = [];
+    const lost = deadline(work, 1, 'exec start', (late) => released.push(late));
+    const outcome = expect(lost).rejects.toThrow('got no answer');
+    await vi.advanceTimersByTimeAsync(1_000);
+    await outcome;
+    // Nobody is left to use it: a late attach stream nobody reads is what
+    // dockerd blocks on.
+    answer('stream');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(released).toEqual(['stream']);
+  });
+
+  it('never releases a result that won the race', async () => {
+    const released: string[] = [];
+    await expect(
+      deadline(Promise.resolve('stream'), 1, 'op', (late) =>
+        released.push(late),
+      ),
+    ).resolves.toBe('stream');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(released).toEqual([]);
+  });
+
   it('swallows a late rejection from the losing work', async () => {
     let reject!: (err: Error) => void;
     const work = new Promise<never>((_, rej) => {

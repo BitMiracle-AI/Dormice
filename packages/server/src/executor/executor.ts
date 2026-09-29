@@ -11,7 +11,10 @@ export interface ExecOptions {
   /**
    * In-container deadline. Enforced inside the sandbox — a host-side
    * disconnect cannot kill the in-container process; only an in-container
-   * SIGKILL can. On expiry the command dies with exit 137.
+   * SIGKILL can. On expiry the command dies with exit 137. It bounds the
+   * call too: an end the runtime has not reported a grace period past it
+   * rejects, saying what it found (the docker executor's
+   * EXEC_END_GRACE_SECONDS).
    */
   timeoutSeconds: number;
   /** Working directory inside the sandbox; defaults to the image's /home/user. */
@@ -149,7 +152,12 @@ export interface WatchDirOptions {
   path: string;
   /** Watch the whole subtree; directories created later are picked up too. */
   recursive: boolean;
-  /** A returned promise is awaited before the next event: backpressure. */
+  /**
+   * A returned promise is awaited before the next event: backpressure.
+   * Called only once the watch stands — the watcher's readiness is never
+   * held behind an event — so it may wait on what the caller does after
+   * watchDir resolves (the E2B stream's start frame).
+   */
   onEvent: (event: WatchEvent) => void | Promise<void>;
   /**
    * The watcher died without stop() being called — its container stopped,

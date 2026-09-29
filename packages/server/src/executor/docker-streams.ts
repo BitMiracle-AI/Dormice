@@ -44,6 +44,14 @@ export class CappedBuffer extends Writable {
  * awaited before the next chunk is accepted; the pumps below deliver one
  * chunk at a time, so that await IS the backpressure, all the way to the
  * in-container writer.
+ *
+ * Which is why the callback may wait on one thing only: a client taking
+ * bytes, bounded where the daemon waits on it (writeToClient in
+ * e2b/envd/shared.ts). While the pump waits, dockerd's copy of the exec's
+ * output waits too, holding a lock its handling of the exec's exit needs —
+ * and it handles one container's events one at a time (moby #53614). A
+ * callback waiting on something that itself waits for this stream's later
+ * output never returns (docker.ts watchDir has the case).
  */
 export class CallbackSink extends Writable {
   constructor(

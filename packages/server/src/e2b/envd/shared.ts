@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import type { ServerResponse } from 'node:http';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { findById, touch } from '../../db/ledger';
 import type { SandboxRow } from '../../db/schema';
@@ -87,27 +88,73 @@ export function wireDeadlineMs(request: FastifyRequest): number {
 }
 
 /**
- * The backpressured raw write every process stream shares. A gone client
- * resolves immediately and the frame is dropped — that is what a closed
- * connection means, and with delivery-gated exec completion (docker.ts
- * pump) a 'drain' that can never fire would otherwise wedge the process's
- * output pipeline and hold its exit broadcast forever. The process itself
+ * How long a client may take no byte of a response stream before it is
+ * taken for gone. Every stream here is delivered at the client's pace all
+ * the way back into the container (docker-streams.ts), so a client that
+ * stops reading without hanging up — its TCP window at zero, the socket
+ * otherwise healthy — stops the daemon reading that exec's output, and
+ * dockerd then parks every later exec of the container behind it once it
+ * exits (EXEC_END_GRACE_SECONDS in executor/deadline.ts). Beijing,
+ * 2026-09-28: a caller held ten responses open unread, the oldest for 37
+ * hours, and three sandboxes froze. nginx's send_timeout, same default and
+ * same reading: the clock runs only while a write waits, and any progress
+ * restarts it — a slow client is served, a stopped one let go. Shorter
+ * than the shortest wait for an exec's end (a file operation's 60s plus
+ * the grace), so a container a stalled client parked is freed before any
+ * other exec in it gives up.
+ */
+export const CLIENT_STALL_SECONDS = 60;
+
+/**
+ * Writes one chunk of a response stream and settles once the client has
+ * it — 'taken' — or never will: 'gone' when the connection closed,
+ * 'stalled' when it took nothing for CLIENT_STALL_SECONDS, in which case
+ * the connection is destroyed here and every face's own gone-client path
+ * takes over. The one place the daemon waits on a client.
+ */
+export function writeToClient(
+  res: ServerResponse,
+  chunk: Buffer,
+  stallMs = CLIENT_STALL_SECONDS * 1000,
+): Promise<'taken' | 'gone' | 'stalled'> {
+  return new Promise((resolve) => {
+    if (res.destroyed) return resolve('gone');
+    if (res.write(chunk)) return resolve('taken');
+    // destroy() flips .destroyed before 'close' is emitted — a listener
+    // attached after the fact would wait forever.
+    if (res.destroyed) return resolve('gone');
+    const settle = (outcome: 'taken' | 'gone' | 'stalled') => {
+      clearTimeout(timer);
+      res.off('drain', onDrain);
+      res.off('close', onClose);
+      resolve(outcome);
+    };
+    const onDrain = () => settle('taken');
+    const onClose = () => settle('gone');
+    const timer = setTimeout(() => {
+      settle('stalled');
+      res.destroy();
+    }, stallMs);
+    res.once('drain', onDrain);
+    res.once('close', onClose);
+  });
+}
+
+/**
+ * The raw write every process and watch stream shares. A client gone — or
+ * stalled, which writeToClient makes gone — resolves at once and the frame
+ * is dropped: that is what a closed connection means. The process itself
  * deliberately keeps running: E2B semantics, a watcher's disconnect is not
  * a kill (the SDK reconnects to the same pid).
  */
 export function rawWriter(reply: FastifyReply): (buf: Buffer) => Promise<void> {
-  return (buf) =>
-    new Promise<void>((resolve) => {
-      if (reply.raw.destroyed) return resolve();
-      if (reply.raw.write(buf)) return resolve();
-      const settle = () => {
-        reply.raw.off('drain', settle);
-        reply.raw.off('close', settle);
-        resolve();
-      };
-      reply.raw.once('drain', settle);
-      reply.raw.once('close', settle);
-    });
+  return async (buf) => {
+    if ((await writeToClient(reply.raw, buf)) === 'stalled') {
+      reply.log.info(
+        `client took no byte for ${CLIENT_STALL_SECONDS}s — its stream is closed`,
+      );
+    }
+  };
 }
 
 /** Streaming endpoints answer errors inside the stream: 200 + end-stream frame. */

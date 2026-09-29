@@ -12,10 +12,12 @@ import {
 import { EXPOSED_FILE_HEADERS, sendPreflight } from '../cors';
 import { E2bError } from '../protocol';
 import {
+  CLIENT_STALL_SECONDS,
   type EnvdContext,
   sandboxIdOf,
   UNLIMITED_BODY_BYTES,
   vetUsername,
+  writeToClient,
 } from './shared';
 
 /**
@@ -107,7 +109,8 @@ function rfc5987(name: string): string {
 }
 
 /**
- * The client hung up mid-transfer — a canceled download, a closed tab.
+ * The client left mid-transfer — a canceled download, a closed tab, a
+ * reader stalled past CLIENT_STALL_SECONDS (writeToClient made it gone).
  * Thrown into the executor's pump to stop the read; distinguished in the
  * catch because it is the client's own choice, not a daemon failure:
  * logging it as an error would bury the real mid-stream breaks (the
@@ -252,34 +255,19 @@ export async function serveFileDownload(
     await executor.readFileStream(
       row.id,
       query.path,
-      (chunk) => {
-        // With delivery-gated exec completion (docker.ts), a wait that can
-        // never end would hold the transfer and its exec forever — and a
-        // closed socket's 'drain' never fires. So a gone client aborts the
-        // stream instead: the throw travels up through the executor's pump,
+      async (chunk) => {
+        // Backpressure: the wait pauses the pipe all the way into the
+        // container until the client takes the chunk. A client that never
+        // will — gone, or stalled until writeToClient let it go — aborts
+        // the stream: the throw travels up through the executor's pump,
         // which destroys the exec stream, and lands in the catch below.
-        if (reply.raw.destroyed) {
-          throw new ClientGoneError('client disconnected mid-download');
-        }
-        if (!reply.raw.write(chunk)) {
-          // Backpressure: the promise pauses the pipe all the way into the
-          // container until the client drains — or is gone.
-          return new Promise<void>((resolve, reject) => {
-            const settle = (err?: Error) => {
-              reply.raw.off('drain', onDrain);
-              reply.raw.off('close', onClose);
-              if (err) reject(err);
-              else resolve();
-            };
-            const onDrain = () => settle();
-            const onClose = () =>
-              settle(new ClientGoneError('client disconnected mid-download'));
-            // destroy() flips .destroyed before 'close' is emitted — a
-            // listener attached after the fact would wait forever.
-            if (reply.raw.destroyed) return onClose();
-            reply.raw.once('drain', onDrain);
-            reply.raw.once('close', onClose);
-          });
+        const outcome = await writeToClient(reply.raw, chunk);
+        if (outcome !== 'taken') {
+          throw new ClientGoneError(
+            outcome === 'stalled'
+              ? `client took no byte for ${CLIENT_STALL_SECONDS}s mid-download`
+              : 'client disconnected mid-download',
+          );
         }
       },
       user,
@@ -314,9 +302,9 @@ export async function serveFileDownload(
     if (reply.raw.headersSent) {
       // Mid-stream failure: the body length will not match the announced
       // content-length — the client sees a broken transfer, honestly.
-      // A client that hung up on its own is routine, not an error.
+      // A client that left on its own is routine, not an error.
       if (error instanceof ClientGoneError) {
-        request.log.info('file download canceled by the client');
+        request.log.info(error.message);
       } else {
         request.log.error(error, 'file download broke mid-stream');
       }

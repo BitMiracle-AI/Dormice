@@ -17,6 +17,13 @@ interface WatchProcessLifecycleOptions {
  * stop. Marking `stopping` before signaling is the identity point: an exit in
  * that window belongs to stop(), not onNaturalEnd. A failed signal hands that
  * identity back only while the process is still reachable for a later retry.
+ *
+ * A delivered SIGKILL is the end: stop() settles on it, not on dockerd's
+ * report of the exit. The report can be lost for good (EXEC_END_GRACE_SECONDS
+ * in deadline.ts has why), and stop() runs inside a sandbox's slot — the
+ * wake reaps retired watchers — where waiting on it held the slot forever.
+ * Nothing needs the report: events and onEnd are already suppressed from
+ * the moment stop() began.
  */
 export class WatchProcessLifecycle {
   private state: 'running' | 'stopping' | 'stopped' = 'running';
@@ -85,7 +92,6 @@ export class WatchProcessLifecycle {
       this.state = 'running';
       throw signalError;
     }
-    await this.opts.exit;
     this.state = 'stopped';
   }
 }

@@ -30,6 +30,24 @@ describe('WatchProcessLifecycle', () => {
     expect(lifecycle.delivering).toBe(false);
   });
 
+  it('settles stop on the delivered signal, never on an exit dockerd may never report', async () => {
+    // moby #53614: the watcher died, the report of it did not come — and
+    // stop() runs inside the sandbox's slot (the wake reaps retired
+    // watchers), where waiting on the report held the slot forever.
+    const onNaturalEnd = vi.fn();
+    const lifecycle = new WatchProcessLifecycle({
+      exit: new Promise(() => {}),
+      stopProcess: async () => {},
+      classifyFailedStop: async () => 'retry',
+      onNaturalEnd,
+    });
+
+    await lifecycle.stop();
+
+    expect(lifecycle.delivering).toBe(false);
+    expect(onNaturalEnd).not.toHaveBeenCalled();
+  });
+
   it('shares one physical stop attempt across concurrent callers', async () => {
     const exited = deferred<typeof cleanExit>();
     const signaled = deferred<void>();

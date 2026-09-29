@@ -122,15 +122,19 @@ export const WATCH_BACKSTOP_SECONDS = 24 * 60 * 60;
  * $1 = pidfile, $2 = recursive flag (`-r` or empty), $3 = watched dir.
  * The existence checks run in-script: one round trip, no gap for the path
  * to change under a separate stat. Readiness is inotifywait's own
- * "Watches established." on stderr — measured under gVisor 2026-07-10,
- * along with -r picking up directories created after the watch began.
+ * "Watches established." — measured under gVisor 2026-07-10, along with -r
+ * picking up directories created after the watch began. inotifywait says
+ * it on stderr; the script folds stderr into stdout so it travels the pipe
+ * the events travel, where it always comes first — on two pipes dockerd
+ * forwards each on its own and an event can overtake it (docker.ts
+ * watchDir has what that cost).
  */
 export const WATCH_SCRIPT = [
   'echo "$$" > "$1"',
   `[ -e "$3" ] || exit ${NO_SUCH_FILE_EXIT}`,
   `[ -d "$3" ] || exit ${NOT_A_DIR_EXIT}`,
   // $2 rides unquoted on purpose: empty must vanish, not become an argument.
-  `exec timeout --signal=KILL ${WATCH_BACKSTOP_SECONDS} inotifywait -m $2 -e create,modify,delete,move,attrib --format '%e|%w%f' -- "$3"`,
+  `exec timeout --signal=KILL ${WATCH_BACKSTOP_SECONDS} inotifywait -m $2 -e create,modify,delete,move,attrib --format '%e|%w%f' -- "$3" 2>&1`,
 ].join('\n');
 
 /**
