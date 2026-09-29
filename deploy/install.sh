@@ -1122,7 +1122,12 @@ fi
 # dockerd restart — and a node copies the same file when it joins.
 if [ "$ROLE" = gateway ]; then
 log "image registry (distribution v$REGISTRY_VERSION)"
-if [ -x /usr/local/bin/registry ] && /usr/local/bin/registry --version 2>/dev/null | grep -q "v$REGISTRY_VERSION\b"; then
+# `registry --version` says "<path> github.com/distribution/distribution/v3
+# 3.1.1": the version is the last field, with no "v" in front — a check
+# that wanted one never matched, and every run fetched the binary from
+# GitHub again (minutes through the mirror; found 2026-09-29).
+registry_version=$({ /usr/local/bin/registry --version 2>/dev/null || true; } | awk '{print $NF}')
+if [ "${registry_version#v}" = "$REGISTRY_VERSION" ]; then
   note "[skip] registry v$REGISTRY_VERSION is installed"
 else
   registry_url="https://github.com/distribution/distribution/releases/download/v$REGISTRY_VERSION/registry_${REGISTRY_VERSION}_linux_amd64.tar.gz"
