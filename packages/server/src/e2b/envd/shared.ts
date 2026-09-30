@@ -90,20 +90,27 @@ export function wireDeadlineMs(request: FastifyRequest): number {
 /**
  * How long a client may take no byte of a response stream before it is
  * taken for gone. Every stream here is delivered at the client's pace all
- * the way back into the container (docker-streams.ts), so a client that
+ * the way back into the sandbox (docker-streams.ts), so a client that
  * stops reading without hanging up — its TCP window at zero, the socket
- * otherwise healthy — stops the daemon reading that exec's output, and
- * dockerd then parks every later exec of the container behind it once it
- * exits (EXEC_END_GRACE_SECONDS in @dormice/shared). Beijing,
- * 2026-09-28: a caller held ten responses open unread, the oldest for 37
- * hours, and three sandboxes froze. nginx's send_timeout, same default and
- * same reading: the clock runs only while a write waits, and any progress
- * restarts it — a slow client is served, a stopped one let go. Shorter
- * than the shortest wait for an exec's end (a file operation's 60s plus
- * the grace), so a container a stalled client parked is freed before any
- * other exec in it gives up.
+ * otherwise healthy — holds what is behind its stream: the command blocked
+ * on its output, and with it every other client of that process (the
+ * process table waits for its slowest reader), or the watcher behind a
+ * watch. Beijing, 2026-09-28: a caller held ten responses open unread, the
+ * oldest for 37 hours. The clock runs only while a write waits, and any
+ * progress restarts it — nginx's send_timeout, same reading.
+ *
+ * Five minutes, not nginx's one: the silence is measured at the daemon's
+ * own socket, a hop or two before the client, and every hop on the host
+ * (the gateway, Caddy) is a loopback socket whose buffers grow to
+ * megabytes and are let go a third at a time — a client taking a steady
+ * 10 KB/s shows here as minutes of silence between bursts (measured
+ * 2026-09-30: a 64 MiB download at 10 KB/s was taken for gone at 61s
+ * under the 60s this once was, one at 100 KB/s served). Five minutes
+ * serves a client down to about 5 KB/s. dockerd's stake in a stopped
+ * reader — an exec whose end waits on its unread output — is not settled
+ * here but where it arises (OutputDelivery in executor/docker-streams.ts).
  */
-export const CLIENT_STALL_SECONDS = 60;
+export const CLIENT_STALL_SECONDS = 300;
 
 /**
  * Writes one chunk of a response stream and settles once the client has

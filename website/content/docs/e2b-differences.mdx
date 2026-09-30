@@ -40,14 +40,13 @@ daemon:
   [Templates](/docs/templates).
 - **Freezing keeps processes.** A frozen sandbox's processes suspend
   and resume mid-flight — any touch wakes the sandbox in ~50 ms.
-- **A stream its client stops reading is closed after 60 seconds.** A
+- **A stream its client stops reading is closed after five minutes.** A
   command's output, a watch, a download: a client that takes no byte of
-  it for 60 seconds, without hanging up, is taken for gone. The command
-  keeps running (`connect(pid)` reattaches), a download ends short. The
-  hosted product would let the command block on its output instead;
-  under Docker, until
-  [moby #53614](https://github.com/moby/moby/issues/53614) is fixed, one
-  unread stream stalls every later command in its sandbox.
+  it for five minutes, without hanging up, is taken for gone. The command
+  keeps running (`connect(pid)` reattaches), a download ends short. A
+  slow client is served — down to a few KB/s. The hosted product would
+  leave the command blocked on its output for as long as the client
+  stays connected.
 - **Permanence stays the default.** Sandboxes created through the E2B
   surface get real deadlines, as E2B semantics demand; deadlines are
   never imposed on natively created sandboxes.

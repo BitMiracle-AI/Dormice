@@ -1,11 +1,14 @@
 import { PassThrough, Readable } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CallbackSink,
   CappedBuffer,
+  END_PROBE_MS,
+  OutputDelivery,
   pumpMultiplexedStream,
   pumpRawStream,
+  TAIL_LIMIT_BYTES,
 } from './docker-streams';
 
 /** One docker attach-protocol frame: type, three zeros, u32BE length, payload. */
@@ -107,6 +110,155 @@ describe('pumpMultiplexedStream', () => {
     source.end();
     await pump;
     expect(stdout.text()).toBe('kept');
+  });
+});
+
+/**
+ * A sink that takes each chunk only when the test says so — a reader far
+ * behind, or stopped.
+ */
+function heldSink() {
+  const reached: string[] = [];
+  let take = () => {};
+  const sink = new CallbackSink(async (chunk) => {
+    reached.push(chunk.toString('utf8'));
+    await new Promise<void>((resolve) => {
+      take = resolve;
+    });
+  });
+  return { sink, reached, take: () => take() };
+}
+
+describe('OutputDelivery', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('reads no further than the chunk its sink holds while the process runs, and the rest at once once it ended — handed over in order', async () => {
+    vi.useFakeTimers();
+    const source = new PassThrough();
+    const { sink, reached, take } = heldSink();
+    let asked = 0;
+    let ended = false;
+    const output = new OutputDelivery(async () => {
+      asked += 1;
+      return ended;
+    });
+    const pump = pumpMultiplexedStream(
+      source,
+      sink,
+      new CappedBuffer(1024),
+      output,
+    );
+    source.write(frame(1, Buffer.from('a')));
+    await vi.advanceTimersByTimeAsync(1);
+    source.write(frame(1, Buffer.from('b')));
+    source.end(frame(1, Buffer.from('c')));
+    await vi.advanceTimersByTimeAsync(4 * END_PROBE_MS);
+    // Asked, and told the process runs: the reader sets the pace.
+    expect(asked).toBeGreaterThan(0);
+    expect(source.readableEnded).toBe(false);
+
+    ended = true;
+    await vi.advanceTimersByTimeAsync(END_PROBE_MS);
+    // Read to the end — dockerd is rid of it — while the sink still holds 'a'.
+    expect(source.readableEnded).toBe(true);
+    expect(output.undelivered).toBe(true);
+    for (let i = 0; i < 3; i++) {
+      take();
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    await pump;
+    expect(reached).toEqual(['a', 'b', 'c']);
+    expect(output.undelivered).toBe(false);
+  });
+
+  it('a reader keeping up is never asked about', async () => {
+    const asked = vi.fn(async () => false);
+    const source = new PassThrough();
+    const pump = pumpMultiplexedStream(
+      source,
+      new CallbackSink(() => {}),
+      new CappedBuffer(1024),
+      new OutputDelivery(asked),
+    );
+    for (let i = 0; i < 100; i++) source.write(frame(1, Buffer.from('x')));
+    source.end();
+    await pump;
+    expect(asked).not.toHaveBeenCalled();
+  });
+
+  it(`gives up on a tail past TAIL_LIMIT_BYTES: a child still writing after the process ended`, async () => {
+    vi.useFakeTimers();
+    const source = new PassThrough();
+    const pump = pumpMultiplexedStream(
+      source,
+      new CallbackSink(() => new Promise<void>(() => {})),
+      new CappedBuffer(1024),
+      new OutputDelivery(async () => true),
+    );
+    const outcome = expect(pump).rejects.toThrow(
+      'kept coming after the process ended',
+    );
+    source.write(frame(1, Buffer.from('first')));
+    await vi.advanceTimersByTimeAsync(END_PROBE_MS);
+    const mib = Buffer.alloc(1024 * 1024);
+    for (let i = 0; i <= TAIL_LIMIT_BYTES / mib.length; i++) {
+      source.write(frame(1, mib));
+    }
+    await vi.advanceTimersByTimeAsync(1);
+    await outcome;
+    expect(source.destroyed).toBe(true);
+  });
+
+  it('abort: nothing it still holds reaches a sink — the chunk already with one is its own', async () => {
+    vi.useFakeTimers();
+    const source = new PassThrough();
+    const { sink, reached, take } = heldSink();
+    const output = new OutputDelivery(async () => true);
+    const pump = pumpMultiplexedStream(
+      source,
+      sink,
+      new CappedBuffer(1024),
+      output,
+    );
+    const outcome = expect(pump).rejects.toThrow('past the bound');
+    source.write(frame(1, Buffer.from('a')));
+    await vi.advanceTimersByTimeAsync(END_PROBE_MS);
+    source.end(frame(1, Buffer.from('b')));
+    await vi.advanceTimersByTimeAsync(1);
+    output.abort(new Error('past the bound'));
+    take();
+    await vi.advanceTimersByTimeAsync(1);
+    await outcome;
+    expect(reached).toEqual(['a']);
+  });
+
+  it('a sink failing on the tail rejects the pump', async () => {
+    vi.useFakeTimers();
+    const source = new PassThrough();
+    let calls = 0;
+    const pump = pumpMultiplexedStream(
+      source,
+      new CallbackSink(async () => {
+        calls += 1;
+        if (calls === 1) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, 10 * END_PROBE_MS),
+          );
+        } else throw new Error('client disconnected mid-download');
+      }),
+      new CappedBuffer(1024),
+      new OutputDelivery(async () => true),
+    );
+    const outcome = expect(pump).rejects.toThrow(
+      'client disconnected mid-download',
+    );
+    source.write(frame(1, Buffer.from('a')));
+    await vi.advanceTimersByTimeAsync(END_PROBE_MS);
+    source.end(frame(1, Buffer.from('b')));
+    await vi.advanceTimersByTimeAsync(10 * END_PROBE_MS);
+    await outcome;
   });
 });
 

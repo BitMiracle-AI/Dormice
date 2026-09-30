@@ -60,6 +60,7 @@ import {
 import {
   CallbackSink,
   CappedBuffer,
+  OutputDelivery,
   pumpMultiplexedStream,
   pumpRawStream,
 } from './docker-streams';
@@ -1256,7 +1257,11 @@ export class DockerExecutor implements Executor {
       `exec start in ${sandboxId}`,
       (late) => late.destroy(),
     );
-    const delivered = pumpRawStream(stream, new CallbackSink(opts.onStdout));
+    const delivered = pumpRawStream(
+      stream,
+      new CallbackSink(opts.onStdout),
+      new OutputDelivery(() => this.execEnded(exec)),
+    );
     // The engine takes the size only after start — the terminal is born
     // 0x0 otherwise, and a shell that stats it misbehaves.
     await deadline(
@@ -1345,21 +1350,46 @@ export class DockerExecutor implements Executor {
   }
 
   /**
+   * Whether an exec's process has ended, by dockerd's record — or by its
+   * silence: dockerd answers an exec's inspect under the exec's lock, which
+   * its handling of the exit holds for as long as the exec's output waits
+   * to be read (daemon/monitor.go, Docker 29.6.2; measured 2026-09-30: an
+   * inspect of such an exec answered only once its reader let go). Any
+   * other failure to answer is not known to be an end. Asked by the pump
+   * about a chunk its reader has not taken (OutputDelivery).
+   */
+  private async execEnded(exec: Docker.Exec): Promise<boolean> {
+    let timer: NodeJS.Timeout | undefined;
+    const silence = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(true), QUERY_DEADLINE_SECONDS * 1000);
+    });
+    try {
+      return await Promise.race([
+        exec.inspect().then(
+          (info) => !info.Running,
+          () => false,
+        ),
+        silence,
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
    * awaitExitCode, bounded. The process cannot outlive the in-container
    * deadline it runs under, so its end is due EXEC_END_GRACE_SECONDS after
    * that at the latest — the end as dockerd reports it, which dockerd can
    * lose for good (see the constant). Past the bound the stream is
    * destroyed — our side of the attach, and with it anything of ours
-   * dockerd was blocked on — and the wait rejects, saying what it found.
-   * `delivering` says which side holds the end up: true while a chunk sits
-   * with its sink, when the pump is waiting on a reader instead of reading
-   * the stream.
+   * dockerd was blocked on — nothing more of the output reaches its sinks,
+   * and the wait rejects, saying what it found.
    */
   private waitForEnd(
     exec: Docker.Exec,
     stream: Duplex,
     delivered: Promise<void>,
-    delivering: () => boolean,
+    output: OutputDelivery,
     sandboxId: string,
     deadlineSeconds: number,
   ): Promise<number> {
@@ -1368,14 +1398,18 @@ export class DockerExecutor implements Executor {
     let timer: NodeJS.Timeout | undefined;
     const overdue = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        void this.overdueEnd(exec, delivering(), sandboxId, boundSeconds).then(
-          (error) => {
-            // The end may have come in while dockerd was being asked.
-            if (settled) return;
-            stream.destroy();
-            reject(error);
-          },
-        );
+        void this.overdueEnd(
+          exec,
+          output.undelivered,
+          sandboxId,
+          boundSeconds,
+        ).then((error) => {
+          // The end may have come in while dockerd was being asked.
+          if (settled) return;
+          stream.destroy();
+          output.abort(error);
+          reject(error);
+        });
       }, boundSeconds * 1000);
       // A bound, never a reason for the process to stay up.
       timer.unref();
@@ -1390,15 +1424,15 @@ export class DockerExecutor implements Executor {
   }
 
   /**
-   * What an overdue end means, found out and said. A pump still delivering
-   * is the whole answer: the reader is behind, and the stream it is not
-   * reading is what dockerd waits on — so dockerd is not asked, since its
-   * exec inspect takes the lock its handling of the exec's exit holds
-   * while that stream waits to be read (monitor.go; measured 2026-09-30,
-   * an inspect of such an exec answered only once the reader let go).
-   * Otherwise the answer is dockerd's record of the exec against the host's
-   * view of its process. Logged under the exec's id, the handle `docker
-   * exec inspect` and dockerd's goroutine dump answer to.
+   * What an overdue end means, found out and said. Output still on its way
+   * to a sink is the whole answer: the reader is behind, whatever dockerd
+   * would say — so dockerd is not asked, and the answer is not held up by
+   * an inspect that may be waiting on that very output (execEnded). The
+   * pump's own record, not the sinks': after the process ended, its tail
+   * waits in the pump, not in a sink (OutputDelivery). Otherwise the answer
+   * is dockerd's record of the exec against the host's view of its
+   * process. Logged under the exec's id, the handle `docker exec inspect`
+   * and dockerd's goroutine dump answer to.
    */
   private async overdueEnd(
     exec: Docker.Exec,
@@ -1893,7 +1927,8 @@ export class DockerExecutor implements Executor {
 
   /**
    * The one exec pipeline: start, pump into the caller's sinks (delivery-
-   * gated, backpressured — see pumpMultiplexedStream), optionally feed
+   * gated while the process runs, the rest read at once after it ended —
+   * see OutputDelivery), optionally feed
    * stdin (ending the stream is what delivers EOF to the in-container
    * reader), then — inside the returned wait — wait for full delivery and
    * poll for the exit code: the engine records it a beat after the stream
@@ -1953,7 +1988,13 @@ export class DockerExecutor implements Executor {
     );
     // Not modem.demuxStream: stock demux has no backpressure, and completion
     // must mean "delivered", not "read" — see pumpMultiplexedStream.
-    const delivered = pumpMultiplexedStream(stream, spec.stdout, spec.stderr);
+    const output = new OutputDelivery(() => this.execEnded(exec));
+    const delivered = pumpMultiplexedStream(
+      stream,
+      spec.stdout,
+      spec.stderr,
+      output,
+    );
     if (spec.stdin !== undefined && spec.stdin !== 'open') {
       if (Buffer.isBuffer(spec.stdin)) {
         stream.end(spec.stdin);
@@ -1970,8 +2011,7 @@ export class DockerExecutor implements Executor {
       exec,
       stream,
       delivered,
-      // A sink's writableLength counts the chunk still in its hands.
-      () => spec.stdout.writableLength > 0 || spec.stderr.writableLength > 0,
+      output,
       sandboxId,
       spec.deadlineSeconds,
     );
