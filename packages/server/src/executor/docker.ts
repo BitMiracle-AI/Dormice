@@ -1351,11 +1351,15 @@ export class DockerExecutor implements Executor {
    * lose for good (see the constant). Past the bound the stream is
    * destroyed — our side of the attach, and with it anything of ours
    * dockerd was blocked on — and the wait rejects, saying what it found.
+   * `delivering` says which side holds the end up: true while a chunk sits
+   * with its sink, when the pump is waiting on a reader instead of reading
+   * the stream.
    */
   private waitForEnd(
     exec: Docker.Exec,
     stream: Duplex,
     delivered: Promise<void>,
+    delivering: () => boolean,
     sandboxId: string,
     deadlineSeconds: number,
   ): Promise<number> {
@@ -1364,12 +1368,14 @@ export class DockerExecutor implements Executor {
     let timer: NodeJS.Timeout | undefined;
     const overdue = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        void this.overdueEnd(exec, sandboxId, boundSeconds).then((error) => {
-          // The end may have come in while dockerd was being asked.
-          if (settled) return;
-          stream.destroy();
-          reject(error);
-        });
+        void this.overdueEnd(exec, delivering(), sandboxId, boundSeconds).then(
+          (error) => {
+            // The end may have come in while dockerd was being asked.
+            if (settled) return;
+            stream.destroy();
+            reject(error);
+          },
+        );
       }, boundSeconds * 1000);
       // A bound, never a reason for the process to stay up.
       timer.unref();
@@ -1384,32 +1390,43 @@ export class DockerExecutor implements Executor {
   }
 
   /**
-   * What an overdue end means, found out and said: dockerd's record of the
-   * exec against the host's view of its process. Logged under the exec's
-   * id, the handle `docker exec inspect` and dockerd's goroutine dump
-   * answer to.
+   * What an overdue end means, found out and said. A pump still delivering
+   * is the whole answer: the reader is behind, and the stream it is not
+   * reading is what dockerd waits on — so dockerd is not asked, since its
+   * exec inspect takes the lock its handling of the exec's exit holds
+   * while that stream waits to be read (monitor.go; measured 2026-09-30,
+   * an inspect of such an exec answered only once the reader let go).
+   * Otherwise the answer is dockerd's record of the exec against the host's
+   * view of its process. Logged under the exec's id, the handle `docker
+   * exec inspect` and dockerd's goroutine dump answer to.
    */
   private async overdueEnd(
     exec: Docker.Exec,
+    delivering: boolean,
     sandboxId: string,
     waitedSeconds: number,
   ): Promise<Error> {
     let found: string;
-    try {
-      const info = await deadline(
-        exec.inspect(),
-        QUERY_DEADLINE_SECONDS,
-        `exec inspect in ${sandboxId}`,
-      );
-      if (!info.Running) {
-        found = `dockerd recorded its exit (${info.ExitCode}) but never closed its stream`;
-      } else if (await hostProcessAlive(info.Pid)) {
-        found = `its process (host pid ${info.Pid}) is still running past its in-container deadline`;
-      } else {
-        found = `its process (host pid ${info.Pid}) is gone and dockerd never recorded the exit — the container's exec events are stuck behind an exec whose output nobody reads (moby #53614)`;
+    if (delivering) {
+      found =
+        'its output was still being delivered — its reader takes it slower than the deadline allows';
+    } else {
+      try {
+        const info = await deadline(
+          exec.inspect(),
+          QUERY_DEADLINE_SECONDS,
+          `exec inspect in ${sandboxId}`,
+        );
+        if (!info.Running) {
+          found = `dockerd recorded its exit (${info.ExitCode}) but never closed its stream`;
+        } else if (await hostProcessAlive(info.Pid)) {
+          found = `its process (host pid ${info.Pid}) is still running past its in-container deadline`;
+        } else {
+          found = `its process (host pid ${info.Pid}) is gone and dockerd never recorded the exit — the container's exec events are stuck behind an exec whose output nobody reads (moby #53614)`;
+        }
+      } catch (error) {
+        found = `dockerd did not answer an inspect of it either (${error instanceof Error ? error.message : String(error)})`;
       }
-    } catch (error) {
-      found = `dockerd did not answer an inspect of it either (${error instanceof Error ? error.message : String(error)})`;
     }
     this.log(
       `exec ${exec.id} in ${sandboxId} reported no end within ${waitedSeconds}s: ${found}`,
@@ -1953,6 +1970,8 @@ export class DockerExecutor implements Executor {
       exec,
       stream,
       delivered,
+      // A sink's writableLength counts the chunk still in its hands.
+      () => spec.stdout.writableLength > 0 || spec.stderr.writableLength > 0,
       sandboxId,
       spec.deadlineSeconds,
     );

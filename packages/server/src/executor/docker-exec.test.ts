@@ -21,6 +21,8 @@ interface StubExec {
   cmd: string[];
   stream: PassThrough;
   info: { Running: boolean; ExitCode: number | null; Pid: number };
+  /** How many times the pipeline asked dockerd about this exec. */
+  inspects: number;
 }
 
 /**
@@ -54,12 +56,16 @@ function stubDocker(
             // A pid no host process has: /proc says gone off Linux too
             // (hostProcessAlive answers "alive" there — covered below).
             info: { Running: true, ExitCode: null, Pid: 2 ** 22 + 1 },
+            inspects: 0,
           };
           execs.push(exec);
           return {
             id: `exec-${execs.length}`,
             start: () => start(exec),
-            inspect: async () => exec.info,
+            inspect: async () => {
+              exec.inspects += 1;
+              return exec.info;
+            },
             resize: async () => {},
           };
         },
@@ -211,6 +217,29 @@ describe('DockerExecutor exec pipeline', () => {
     );
     await vi.advanceTimersByTimeAsync((5 + EXEC_END_GRACE_SECONDS) * 1000);
     await outcome;
+  });
+
+  it('a reader still holding a chunk at the bound is what holds the end up: said so, let go at once, dockerd not asked', async () => {
+    // dockerd's exec inspect waits on the lock its handling of the exit
+    // holds while this very stream waits to be read — asking it first
+    // would wait on ourselves.
+    vi.useFakeTimers();
+    const { docker, execs } = stubDocker();
+    const handle = await executor(docker).execStream('box', {
+      command: 'cat big',
+      timeoutSeconds: 5,
+      onStdout: () => new Promise<void>(() => {}),
+      onStderr: () => {},
+    });
+    const exec = await started(execs, 0);
+    exec.stream.write(stdoutFrame('first chunk'));
+    const outcome = expect(handle.wait()).rejects.toThrow(
+      `reported no end within ${5 + EXEC_END_GRACE_SECONDS}s: its output was still being delivered`,
+    );
+    await vi.advanceTimersByTimeAsync((5 + EXEC_END_GRACE_SECONDS) * 1000);
+    await outcome;
+    expect(exec.stream.destroyed).toBe(true);
+    expect(exec.inspects).toBe(0);
   });
 
   it('a start that answers after its deadline has its stream destroyed on arrival', async () => {
