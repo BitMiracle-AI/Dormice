@@ -11,6 +11,7 @@ import {
   DEFAULT_EXEC_TIMEOUT_SECONDS,
   type DestroySandboxResponse,
   destroySandboxResponseSchema,
+  EXEC_END_GRACE_SECONDS,
   type ExecCommandResponse,
   type ExpandDiskResponse,
   execCommandResponseSchema,
@@ -653,8 +654,11 @@ export class Dormice {
         cwd: options?.cwd,
         env: options?.env,
       },
-      // Slack on top covers the wake (seconds) and the round-trip.
-      timeoutSeconds * 1000 + 30_000,
+      // The daemon answers by the command's timeout plus
+      // EXEC_END_GRACE_SECONDS at the latest — a runtime that lost the
+      // command's end included, when its answer is what says so. 30s more
+      // covers the wake (seconds) and the round-trip.
+      (timeoutSeconds + EXEC_END_GRACE_SECONDS + 30) * 1000,
     );
     return execCommandResponseSchema.parse(data);
   }

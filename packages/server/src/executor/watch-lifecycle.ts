@@ -20,7 +20,7 @@ interface WatchProcessLifecycleOptions {
  *
  * A delivered SIGKILL is the end: stop() settles on it, not on dockerd's
  * report of the exit. The report can be lost for good (EXEC_END_GRACE_SECONDS
- * in deadline.ts has why), and stop() runs inside a sandbox's slot — the
+ * in @dormice/shared has why), and stop() runs inside a sandbox's slot — the
  * wake reaps retired watchers — where waiting on it held the slot forever.
  * Nothing needs the report: events and onEnd are already suppressed from
  * the moment stop() began.

@@ -12,9 +12,8 @@ export interface ExecOptions {
    * In-container deadline. Enforced inside the sandbox — a host-side
    * disconnect cannot kill the in-container process; only an in-container
    * SIGKILL can. On expiry the command dies with exit 137. It bounds the
-   * call too: an end the runtime has not reported a grace period past it
-   * rejects, saying what it found (the docker executor's
-   * EXEC_END_GRACE_SECONDS).
+   * call too: an end the runtime has not reported EXEC_END_GRACE_SECONDS
+   * past it rejects, saying what was found.
    */
   timeoutSeconds: number;
   /** Working directory inside the sandbox; defaults to the image's /home/user. */

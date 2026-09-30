@@ -1,7 +1,8 @@
 import { PassThrough } from 'node:stream';
+import { EXEC_END_GRACE_SECONDS } from '@dormice/shared';
 import type Docker from 'dockerode';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { EXEC_END_GRACE_SECONDS, VERB_DEADLINE_SECONDS } from './deadline';
+import { VERB_DEADLINE_SECONDS } from './deadline';
 import { DockerExecutor, rootfsBytesOf } from './docker';
 import { FILE_OP_TIMEOUT_SECONDS } from './docker-scripts';
 

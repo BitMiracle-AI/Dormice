@@ -15,6 +15,7 @@ import {
 import path from 'node:path';
 import { type Duplex, Transform, type Writable } from 'node:stream';
 import {
+  EXEC_END_GRACE_SECONDS,
   EXEC_OUTPUT_LIMIT_BYTES,
   FILE_SIZE_LIMIT_BYTES,
   ROOTFS_LIMIT_GB,
@@ -24,7 +25,6 @@ import Docker from 'dockerode';
 import { execa } from 'execa';
 import {
   deadline,
-  EXEC_END_GRACE_SECONDS,
   EXIT_SETTLE_SECONDS,
   QUERY_DEADLINE_SECONDS,
   VERB_DEADLINE_SECONDS,

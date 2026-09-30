@@ -17,7 +17,8 @@
  * Single round-trips get wrapped here. An exec is bounded one level up:
  * its handshakes (exec create, exec start) are round-trips wrapped here,
  * and the wait for its end gets its own bound in the exec pipeline
- * (docker.ts waitForEnd, EXEC_END_GRACE_SECONDS below).
+ * (docker.ts waitForEnd, EXEC_END_GRACE_SECONDS in @dormice/shared — the
+ * call's bound is part of the wire protocol).
  *
  * A timed-out operation may still land later — a pause that answers at
  * t+130s still pauses the container. The ledger was not written (reality
@@ -86,17 +87,3 @@ export const WAIT_DEADLINE_SECONDS = 180;
  * one such wait, never a wrong answer.
  */
 export const EXIT_SETTLE_SECONDS = 5;
-
-/**
- * How long dockerd may take to report an exec's end once its process can
- * no longer be running — the in-container deadline it runs under has
- * passed. The in-container `timeout` bounds the process; the end the
- * daemon waits for is dockerd's report of it (the output stream closing,
- * the exit code recorded), and dockerd reports the events of one container
- * one at a time: an exec whose output nobody reads parks that queue for
- * every exec of the container once it exits (moby #53614, open as of
- * Docker 29.8). Beijing, 2026-09-28: a MakeDir waited 36 hours for an end
- * that had happened in its first second, holding its sandbox's slot. The
- * same 30s the SDK adds to execCommand's own deadline on the client side.
- */
-export const EXEC_END_GRACE_SECONDS = 30;

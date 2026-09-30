@@ -8,6 +8,20 @@ export const DEFAULT_EXEC_TIMEOUT_SECONDS = 300;
 export const MAX_EXEC_TIMEOUT_SECONDS = 86_400;
 
 /**
+ * How long past its timeoutSeconds an exec's end may take to be reported
+ * before the daemon gives up on it. The in-container timeout bounds the
+ * command; this bounds the call — the end as the container runtime reports
+ * it, which Docker can lose for good: it handles one container's events one
+ * at a time, and an exec whose output nobody reads parks every later exec's
+ * exit behind its own (moby #53614, open as of Docker 29.8; Beijing,
+ * 2026-09-28: a MakeDir waited 36 hours for an end that had happened in its
+ * first second). Past it the call fails, saying what the daemon found — an
+ * answer that reaches only a client still listening: the SDK waits
+ * timeoutSeconds plus this plus 30s for the wake and the round trip.
+ */
+export const EXEC_END_GRACE_SECONDS = 30;
+
+/**
  * Per-stream output cap. The whole result is buffered in daemon memory, so
  * the cap belongs to the protocol, not to any one executor — both executors
  * enforce it identically and the contract exam holds them to it. Truncation

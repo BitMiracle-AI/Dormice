@@ -208,3 +208,9 @@ enforces one deadline derived from `timeoutSeconds`; if you roll your
 own client, do the same — otherwise a `sleep 310` dies at exactly 300
 seconds with a connection error that looks like the daemon's fault. It
 isn't — measured, twice.
+
+The daemon always answers within `timeoutSeconds` plus 30 seconds —
+even when the container runtime loses track of the command's end, which
+it then reports as a 500 saying so. The SDK waits another 30 seconds on
+top for the wake and the round trip; give a hand-rolled client at least
+as much, or it gives up just before the answer that says why.

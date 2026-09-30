@@ -94,7 +94,7 @@ export function wireDeadlineMs(request: FastifyRequest): number {
  * stops reading without hanging up — its TCP window at zero, the socket
  * otherwise healthy — stops the daemon reading that exec's output, and
  * dockerd then parks every later exec of the container behind it once it
- * exits (EXEC_END_GRACE_SECONDS in executor/deadline.ts). Beijing,
+ * exits (EXEC_END_GRACE_SECONDS in @dormice/shared). Beijing,
  * 2026-09-28: a caller held ten responses open unread, the oldest for 37
  * hours, and three sandboxes froze. nginx's send_timeout, same default and
  * same reading: the clock runs only while a write waits, and any progress
