@@ -50,7 +50,7 @@ export class CappedBuffer extends Writable {
  * something that itself waits for this stream's later output: that never
  * returns (docker.ts watchDir has the case). How long a reader takes is its
  * own business while the exec's process runs; once the process has ended,
- * the pump no longer waits on it (OutputDelivery).
+ * the pump reads the rest without waiting on it (OutputDelivery).
  */
 export class CallbackSink extends Writable {
   constructor(
@@ -92,19 +92,24 @@ function deliver(sink: Writable, chunk: Buffer): Promise<void> {
 }
 
 /**
- * How long a chunk may sit with its sink before the pump asks whether the
- * exec's process has ended — and again as often while it keeps sitting.
- * A reader keeping up is never asked about.
+ * How often the pump asks whether the exec's process has ended, while
+ * output waits on its reader. A reader keeping up leaves nothing waiting
+ * on it, so it is seldom asked about.
  */
 export const END_PROBE_MS = 5000;
 
 /**
- * The most output the pump keeps for its sinks once the exec's process has
- * ended. What dockerd still holds of a finished process is its pipe and its
- * own buffer: about two megabytes when dockerd recorded the exit of a `cat`
- * whose reader was far behind (measured 2026-09-30). More than this is a
- * child of the process still writing into the exec's stdout after the
- * process itself ended — given up on, never kept.
+ * How far the pump reads ahead of its sinks once the exec's process has
+ * ended. What dockerd still holds of a finished process fits many times
+ * over: a pipe per stream that blocks its writer at a megabyte, and the
+ * socket between (about two megabytes when dockerd recorded the exit of a
+ * `cat` whose reader was far behind, measured 2026-09-30). Once the pump
+ * has taken enough of it for dockerd to close the exec's streams, dockerd
+ * drops whatever a child of the process still writes (its broadcaster
+ * keeps no writers after that). More can only follow an end misjudged —
+ * one read off dockerd's silence (docker.ts endProbe) — and then the
+ * reader sets the pace again: a misjudged end costs memory, never the
+ * stream.
  */
 export const TAIL_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -113,39 +118,42 @@ export const TAIL_LIMIT_BYTES = 16 * 1024 * 1024;
  * process runs, one chunk at a time: the pump reads on only once the sink
  * took the last one, so a slow reader sets the process's pace (the pipe
  * semantic) and daemon memory stays at one chunk. Once the process has
- * ended, the rest is read at once and handed over from memory at the
- * sink's pace. The rest is then only what dockerd still holds, and dockerd
- * cannot finish the exec until it is rid of it: its handling of the exit
- * closes the exec's output under a lock its copy of that output holds while
- * the output waits to be read — and it handles one container's events one
- * at a time, so an unread tail parks every later exec of the container
- * (moby #53614, open as of Docker 29.8; Beijing, 2026-09-28: three
- * sandboxes frozen, one for 36 hours, each behind a download whose client
- * had stopped reading).
+ * ended, the rest is read at once, up to TAIL_LIMIT_BYTES ahead, and
+ * handed over from memory at the sink's pace. The rest is then only what
+ * dockerd still holds, and dockerd cannot finish the exec until it is rid
+ * of it: its handling of the exit closes the exec's output under a lock
+ * its copy of that output holds while the output waits to be read — and
+ * it handles one container's events one at a time, so an unread tail
+ * parks every later exec of the container (moby #53614, open as of Docker
+ * 29.8; Beijing, 2026-09-28: three sandboxes frozen, one for 36 hours,
+ * each behind a download whose client had stopped reading).
  *
- * `ended` says whether the process has ended, and is asked about a chunk
- * that has sat with its sink for END_PROBE_MS, then every END_PROBE_MS
- * while it sits. A tail of ours thus holds dockerd for two such periods
- * plus that answer at most — 40s when dockerd cannot answer (docker.ts
- * execEnded) — inside the shortest wait for an exec's end, a file
- * operation's 60s plus EXEC_END_GRACE_SECONDS: the container's other execs
- * are delayed, never failed.
+ * `ended` says whether the process has ended, and is asked every
+ * END_PROBE_MS while output waits on a reader — however soon the reader
+ * takes each chunk: behind it, a process that ended has its rest waiting
+ * in dockerd. Each answer stands until the next. A tail of ours holds
+ * dockerd one such period after the process ended at most, when the
+ * process was asked about while it ran; one that ended before anyone
+ * asked, that period plus dockerd's silence (docker.ts endProbe, 15s) —
+ * inside a file operation's bound (60s plus EXEC_END_GRACE_SECONDS) and
+ * the SDK's default 30s for a call, which the container's other execs
+ * meanwhile wait by.
  */
 export class OutputDelivery {
   /** The last delivery handed out; each waits for the one before it. */
   private last: Promise<void> = Promise.resolve();
   /** Bytes handed over and not yet taken by their sink. */
   private held = 0;
-  /** When the chunk now with its sink got there (ms); 0 while none is. */
-  private since = 0;
+  /**
+   * How much may be held before the pump waits on its sinks: nothing while
+   * the process runs, the tail once it ended.
+   */
+  private allowance = 0;
   private failure: Error | undefined;
-  private draining = false;
   private asking = false;
   private timer: NodeJS.Timeout | undefined;
-  private release = () => {};
-  private readonly released = new Promise<void>((resolve) => {
-    this.release = resolve;
-  });
+  /** Wakes the pump waiting in hand(): a delivery done, an answer, an abort. */
+  private wake = () => {};
 
   constructor(private readonly ended?: () => Promise<boolean>) {}
 
@@ -157,41 +165,38 @@ export class OutputDelivery {
   /**
    * Hands one chunk to its sink, after every chunk handed before it, and
    * resolves when the pump may read on: once the chunk is taken while the
-   * process runs, at once after it ended.
+   * process runs, at once after it ended — within the allowance.
    */
   async hand(sink: Writable, chunk: Buffer): Promise<void> {
     if (this.failure) throw this.failure;
-    if (this.draining && this.held + chunk.length > TAIL_LIMIT_BYTES) {
-      throw this.fail(
-        new Error(
-          `more than ${TAIL_LIMIT_BYTES} bytes of output kept coming after the process ended — a child of it still writing; the rest is not kept`,
-        ),
-      );
-    }
     this.held += chunk.length;
-    const delivery = this.last.then(async () => {
+    this.last = this.last.then(async () => {
       try {
-        if (this.failure) return;
-        this.since = Date.now();
-        await deliver(sink, chunk);
+        // Aborted: nothing more reaches a sink.
+        if (this.failure === undefined) await deliver(sink, chunk);
       } catch (error) {
         this.fail(error instanceof Error ? error : new Error(String(error)));
       } finally {
-        this.since = 0;
         this.held -= chunk.length;
+        this.wake();
       }
     });
-    this.last = delivery;
-    if (this.draining) return;
     this.watch();
-    await Promise.race([delivery, this.released]);
+    while (this.held > this.allowance && this.failure === undefined) {
+      await new Promise<void>((resolve) => {
+        this.wake = resolve;
+      });
+    }
     if (this.failure) throw this.failure;
   }
 
-  /** Every chunk handed over taken by its sink, or the first failure. */
+  /**
+   * Every chunk handed over taken by its sink, or the first failure. The
+   * stream has ended: nothing of it is left with dockerd to ask about.
+   */
   async finish(): Promise<void> {
-    await this.last;
     this.unwatch();
+    await this.last;
     if (this.failure) throw this.failure;
   }
 
@@ -199,12 +204,11 @@ export class OutputDelivery {
   abort(error: Error): void {
     this.fail(error);
     this.unwatch();
-    this.release();
+    this.wake();
   }
 
-  private fail(error: Error): Error {
+  private fail(error: Error): void {
     this.failure ??= error;
-    return this.failure;
   }
 
   private watch(): void {
@@ -220,23 +224,13 @@ export class OutputDelivery {
 
   private async ask(): Promise<void> {
     const ended = this.ended;
-    if (
-      ended === undefined ||
-      this.asking ||
-      this.since === 0 ||
-      Date.now() - this.since < END_PROBE_MS
-    ) {
-      return;
-    }
+    if (ended === undefined || this.asking || this.held === 0) return;
     this.asking = true;
     try {
-      if (await ended()) {
-        this.draining = true;
-        this.unwatch();
-        this.release();
-      }
+      this.allowance = (await ended()) ? TAIL_LIMIT_BYTES : 0;
+      this.wake();
     } catch {
-      // Not known to have ended: the reader keeps setting the pace.
+      // No answer: the last one stands.
     } finally {
       this.asking = false;
     }

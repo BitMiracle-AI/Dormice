@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream';
 import { EXEC_END_GRACE_SECONDS } from '@dormice/shared';
 import type Docker from 'dockerode';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { VERB_DEADLINE_SECONDS } from './deadline';
+import { EXEC_END_SILENCE_SECONDS, VERB_DEADLINE_SECONDS } from './deadline';
 import { DockerExecutor, rootfsBytesOf } from './docker';
 import { FILE_OP_TIMEOUT_SECONDS } from './docker-scripts';
 import { END_PROBE_MS } from './docker-streams';
@@ -57,8 +57,10 @@ function stubDocker(
           const exec: StubExec = {
             cmd: opts.Cmd,
             stream: new PassThrough(),
-            // A pid no host process has: /proc says gone off Linux too
-            // (hostProcessAlive answers "alive" there — covered below).
+            // A pid no host process has: on Linux /proc says gone, so a
+            // process dockerd still calls running has ended (off Linux
+            // hostProcessAlive answers "alive" — covered below). A test of
+            // a process that runs on names a live pid, or none (0).
             info: { Running: true, ExitCode: null, Pid: 2 ** 22 + 1 },
             hangs: false,
           };
@@ -260,6 +262,8 @@ describe('DockerExecutor exec pipeline', () => {
       onStderr: () => {},
     });
     const exec = await started(execs, 0);
+    // No host pid named: dockerd's record is the only word on the end.
+    exec.info = { ...exec.info, Pid: 0 };
     exec.stream.write(stdoutFrame('a'));
     await vi.advanceTimersByTimeAsync(1);
     exec.stream.write(stdoutFrame('b'));
@@ -280,6 +284,79 @@ describe('DockerExecutor exec pipeline', () => {
     }
     await expect(handle.wait()).resolves.toEqual({ exitCode: 0 });
     expect(reached).toEqual(['a', 'b', 'c']);
+  });
+
+  it('dockerd silent about the exec the pump waits behind reads as its end: the rest is read within a probe period plus the silence', async () => {
+    vi.useFakeTimers();
+    const { docker, execs } = stubDocker();
+    let take = () => {};
+    const handle = await executor(docker).execStream('box', {
+      command: 'cat big',
+      timeoutSeconds: 600,
+      onStdout: async () => {
+        await new Promise<void>((resolve) => {
+          take = resolve;
+        });
+      },
+      onStderr: () => {},
+    });
+    const exec = await started(execs, 0);
+    exec.stream.write(stdoutFrame('a'));
+    await vi.advanceTimersByTimeAsync(1);
+    exec.stream.write(stdoutFrame('b'));
+    // The process has ended, and dockerd's handling of the exit holds the
+    // lock an inspect waits on — for as long as 'b' goes unread.
+    exec.hangs = true;
+    const answer = END_PROBE_MS + EXEC_END_SILENCE_SECONDS * 1000;
+    await vi.advanceTimersByTimeAsync(answer - 2);
+    expect(exec.stream.readableLength).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(exec.stream.readableLength).toBe(0);
+
+    exec.hangs = false;
+    end(exec, 0);
+    for (let i = 0; i < 2; i++) {
+      take();
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    await expect(handle.wait()).resolves.toEqual({ exitCode: 0 });
+  });
+
+  it('once dockerd has named the pid, the host alone answers: a process it still runs has not ended, whatever dockerd does', async () => {
+    vi.useFakeTimers();
+    const { docker, execs } = stubDocker();
+    let take = () => {};
+    const handle = await executor(docker).execStream('box', {
+      command: 'cat big',
+      timeoutSeconds: 600,
+      onStdout: async () => {
+        await new Promise<void>((resolve) => {
+          take = resolve;
+        });
+      },
+      onStderr: () => {},
+    });
+    const exec = await started(execs, 0);
+    exec.info = { ...exec.info, Pid: process.pid };
+    exec.stream.write(stdoutFrame('a'));
+    await vi.advanceTimersByTimeAsync(1);
+    exec.stream.write(stdoutFrame('b'));
+    // Asked once while dockerd answers: the host's pid is learned. Then
+    // dockerd falls silent — slow, not an exit: it is not asked again.
+    await vi.advanceTimersByTimeAsync(END_PROBE_MS);
+    exec.hangs = true;
+    await vi.advanceTimersByTimeAsync(
+      4 * (END_PROBE_MS + EXEC_END_SILENCE_SECONDS * 1000),
+    );
+    expect(exec.stream.readableLength).toBeGreaterThan(0);
+
+    exec.hangs = false;
+    end(exec, 0);
+    for (let i = 0; i < 2; i++) {
+      take();
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    await expect(handle.wait()).resolves.toEqual({ exitCode: 0 });
   });
 
   it('past the bound, output the pump still holds never reaches the reader', async () => {

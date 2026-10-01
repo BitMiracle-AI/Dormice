@@ -87,3 +87,19 @@ export const WAIT_DEADLINE_SECONDS = 180;
  * one such wait, never a wrong answer.
  */
 export const EXIT_SETTLE_SECONDS = 5;
+
+/**
+ * How long an exec inspect may go unanswered before its silence is read as
+ * the exec's end — asked only until dockerd names the exec's host pid,
+ * after which the host answers alone (docker.ts endProbe). dockerd answers
+ * an exec's inspect under the exec's lock, and its handling of the exit
+ * holds that lock for as long as the exec's output waits to be read
+ * (daemon/monitor.go, Docker 29.6.2; measured 2026-09-30: an inspect of
+ * such an exec answered only once its reader let go); a healthy dockerd
+ * answers in milliseconds. Short, because the container's other execs
+ * wait behind that exit meanwhile. A dockerd merely this slow is misread
+ * only about an exec it never named a pid for, and at little cost — the
+ * pump reads at most TAIL_LIMIT_BYTES ahead of a process still running,
+ * then its reader sets the pace again (docker-streams.ts).
+ */
+export const EXEC_END_SILENCE_SECONDS = 10;

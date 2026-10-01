@@ -5,7 +5,9 @@ import path from 'node:path';
 import Docker from 'dockerode';
 import { afterAll, describe, expect, it } from 'vitest';
 import { describeExecutorContract } from './contract';
+import { EXEC_END_SILENCE_SECONDS } from './deadline';
 import { containerName, DockerExecutor } from './docker';
+import { END_PROBE_MS } from './docker-streams';
 
 /**
  * The exam's second image name: the base image tagged under an alias.
@@ -238,6 +240,70 @@ if (process.env.DORMICE_DOCKER_CONTRACT === '1' && image) {
         });
       } finally {
         await shell.cleanup();
+      }
+    }, 120_000);
+  });
+
+  /**
+   * Docker-only: moby #53614 is dockerd's own physics — its handling of an
+   * exec's exit waits, under the exec's lock, for the exec's output to be
+   * read, and one container's exits are handled one at a time — and the
+   * pump's answer to it leans on the runtime's: the pid dockerd names for
+   * an exec is the host's runsc-exec, gone the moment the process in the
+   * sandbox is (docker.ts endProbe). A Docker or runsc that changed that
+   * would leave the fake and the stubs green and this red.
+   */
+  describe('DockerExecutor: an exec that ends with its output unread does not park the container', () => {
+    it("the container's next exec is served within a probe period plus dockerd's silence, the reader still holding its first chunk", async () => {
+      const dataDir = await mkdtemp(path.join(tmpdir(), 'dormice-contract-'));
+      const executor = new DockerExecutor({
+        baseImage: () => image,
+        registry: { address: () => null, username: 'dormice', password: 'x' },
+        dataDir,
+        resources: () => ({ diskSizeGb: 1, cpus: 1, memoryGb: 1 }),
+        pidsLimit: () => 256,
+        reclaimTimeoutSeconds: 45,
+      });
+      const id = randomUUID();
+      let resume = () => {};
+      const resumed = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      try {
+        await executor.create(id);
+        let chunks = 0;
+        const handle = await executor.execStream(id, {
+          command: 'yes',
+          timeoutSeconds: 600,
+          // A reader that stops at its first chunk: every pipe behind it
+          // fills, dockerd's included, and `yes` blocks on its write.
+          onStdout: async () => {
+            chunks += 1;
+            if (chunks === 1) await resumed;
+          },
+          onStderr: () => {},
+        });
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const t0 = Date.now();
+        // The process ends with its output unread. The kill is an exec of
+        // its own, whose end dockerd reports only after this exit's.
+        await handle.signal('SIGKILL');
+        const next = await executor.exec(id, {
+          command: 'echo ok',
+          timeoutSeconds: 60,
+        });
+        expect(next).toMatchObject({ exitCode: 0, stdout: 'ok\n' });
+        // Not the 90s a file operation's bound would fail the kill at.
+        expect(Date.now() - t0).toBeLessThan(
+          END_PROBE_MS + (EXEC_END_SILENCE_SECONDS + 10) * 1000,
+        );
+        // The rest, read into memory meanwhile, still reaches the reader.
+        resume();
+        await expect(handle.wait()).resolves.toEqual({ exitCode: 137 });
+      } finally {
+        resume();
+        await executor.destroy(id);
+        await rm(dataDir, { recursive: true, force: true });
       }
     }, 120_000);
   });

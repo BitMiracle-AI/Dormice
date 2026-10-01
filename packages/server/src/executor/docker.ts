@@ -25,6 +25,7 @@ import Docker from 'dockerode';
 import { execa } from 'execa';
 import {
   deadline,
+  EXEC_END_SILENCE_SECONDS,
   EXIT_SETTLE_SECONDS,
   QUERY_DEADLINE_SECONDS,
   VERB_DEADLINE_SECONDS,
@@ -1260,7 +1261,7 @@ export class DockerExecutor implements Executor {
     const delivered = pumpRawStream(
       stream,
       new CallbackSink(opts.onStdout),
-      new OutputDelivery(() => this.execEnded(exec)),
+      new OutputDelivery(this.endProbe(exec)),
     );
     // The engine takes the size only after start — the terminal is born
     // 0x0 otherwise, and a shell that stats it misbehaves.
@@ -1350,30 +1351,54 @@ export class DockerExecutor implements Executor {
   }
 
   /**
-   * Whether an exec's process has ended, by dockerd's record — or by its
-   * silence: dockerd answers an exec's inspect under the exec's lock, which
-   * its handling of the exit holds for as long as the exec's output waits
-   * to be read (daemon/monitor.go, Docker 29.6.2; measured 2026-09-30: an
-   * inspect of such an exec answered only once its reader let go). Any
-   * other failure to answer is not known to be an end. Asked by the pump
-   * about a chunk its reader has not taken (OutputDelivery).
+   * Whether an exec's process has ended — asked by the pump while output
+   * waits on its reader (OutputDelivery).
+   *
+   * Once dockerd has named the exec's pid, the host's process table alone
+   * answers. The pid is the shim's runsc-exec, which lives exactly as long
+   * as the process in the sandbox (measured 2026-10-01: a `sleep`'s pid was
+   * runsc-exec under the container's shim, gone once the sleep ended), and
+   * dockerd records an exit only after the shim has reaped it. So no word
+   * from dockerd is needed — whose handling of this exit may wait behind
+   * another exec's: dockerd handles one container's events one at a time
+   * (moby #53614), and several stuck streams in one sandbox would
+   * otherwise be let go one after another, each waiting out the one
+   * before — and dockerd is not asked every few seconds about every
+   * stream with output in flight.
+   *
+   * Until then dockerd answers: by its record of the exit, by naming the
+   * pid, or by its silence (EXEC_END_SILENCE_SECONDS) — the lock an exec
+   * inspect waits on is held by the handling of that very exit, the case
+   * of a process that ended before it was ever asked about. Any other
+   * failure to answer is not known to be an end. A pid the host reuses
+   * within a probe period reads as alive: that stream is left to its end
+   * bound (waitForEnd).
    */
-  private async execEnded(exec: Docker.Exec): Promise<boolean> {
-    let timer: NodeJS.Timeout | undefined;
-    const silence = new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(true), QUERY_DEADLINE_SECONDS * 1000);
-    });
-    try {
-      return await Promise.race([
-        exec.inspect().then(
-          (info) => !info.Running,
-          () => false,
-        ),
-        silence,
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
+  private endProbe(exec: Docker.Exec): () => Promise<boolean> {
+    let pid = 0;
+    return async () => {
+      if (pid > 0) return !(await hostProcessAlive(pid));
+      let timer: NodeJS.Timeout | undefined;
+      const silence = new Promise<'silent'>((resolve) => {
+        timer = setTimeout(
+          () => resolve('silent'),
+          EXEC_END_SILENCE_SECONDS * 1000,
+        );
+      });
+      try {
+        const info = await Promise.race([
+          exec.inspect().catch(() => undefined),
+          silence,
+        ]);
+        if (info === 'silent') return true;
+        if (info === undefined) return false;
+        if (!info.Running) return true;
+        pid = info.Pid;
+        return !(await hostProcessAlive(pid));
+      } finally {
+        clearTimeout(timer);
+      }
+    };
   }
 
   /**
@@ -1427,7 +1452,7 @@ export class DockerExecutor implements Executor {
    * What an overdue end means, found out and said. Output still on its way
    * to a sink is the whole answer: the reader is behind, whatever dockerd
    * would say — so dockerd is not asked, and the answer is not held up by
-   * an inspect that may be waiting on that very output (execEnded). The
+   * an inspect that may be waiting on that very output (endProbe). The
    * pump's own record, not the sinks': after the process ended, its tail
    * waits in the pump, not in a sink (OutputDelivery). Otherwise the answer
    * is dockerd's record of the exec against the host's view of its
@@ -1988,7 +2013,7 @@ export class DockerExecutor implements Executor {
     );
     // Not modem.demuxStream: stock demux has no backpressure, and completion
     // must mean "delivered", not "read" — see pumpMultiplexedStream.
-    const output = new OutputDelivery(() => this.execEnded(exec));
+    const output = new OutputDelivery(this.endProbe(exec));
     const delivered = pumpMultiplexedStream(
       stream,
       spec.stdout,

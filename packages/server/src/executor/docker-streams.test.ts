@@ -188,27 +188,64 @@ describe('OutputDelivery', () => {
     expect(asked).not.toHaveBeenCalled();
   });
 
-  it(`gives up on a tail past TAIL_LIMIT_BYTES: a child still writing after the process ended`, async () => {
+  it('a reader behind on every chunk is asked about, however soon it takes each', async () => {
     vi.useFakeTimers();
+    const asked = vi.fn(async () => false);
     const source = new PassThrough();
+    // Each chunk taken well inside a probe period — and never a moment
+    // without the next one waiting: behind all the same.
+    const perChunkMs = 1234;
     const pump = pumpMultiplexedStream(
       source,
-      new CallbackSink(() => new Promise<void>(() => {})),
+      new CallbackSink(
+        () => new Promise<void>((resolve) => setTimeout(resolve, perChunkMs)),
+      ),
+      new CappedBuffer(1024),
+      new OutputDelivery(asked),
+    );
+    for (let i = 0; i < 20; i++) source.write(frame(1, Buffer.from('x')));
+    source.end();
+    await vi.advanceTimersByTimeAsync(2 * END_PROBE_MS);
+    expect(asked).toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(20 * perChunkMs);
+    await pump;
+  });
+
+  it('past TAIL_LIMIT_BYTES after an end, the reader sets the pace again — a misjudged end costs memory, never the stream', async () => {
+    vi.useFakeTimers();
+    const source = new PassThrough();
+    let take = () => {};
+    let taken = 0;
+    const pump = pumpMultiplexedStream(
+      source,
+      new CallbackSink(async (chunk) => {
+        await new Promise<void>((resolve) => {
+          take = resolve;
+        });
+        taken += chunk.length;
+      }),
       new CappedBuffer(1024),
       new OutputDelivery(async () => true),
     );
-    const outcome = expect(pump).rejects.toThrow(
-      'kept coming after the process ended',
-    );
-    source.write(frame(1, Buffer.from('first')));
-    await vi.advanceTimersByTimeAsync(END_PROBE_MS);
     const mib = Buffer.alloc(1024 * 1024);
-    for (let i = 0; i <= TAIL_LIMIT_BYTES / mib.length; i++) {
+    source.write(frame(1, mib));
+    await vi.advanceTimersByTimeAsync(END_PROBE_MS);
+    // Told the process ended — yet it keeps writing, past the allowance,
+    // as a socket delivers: a chunk at a time.
+    const frames = TAIL_LIMIT_BYTES / mib.length + 4;
+    for (let i = 1; i < frames; i++) {
       source.write(frame(1, mib));
+      await vi.advanceTimersByTimeAsync(1);
     }
-    await vi.advanceTimersByTimeAsync(1);
-    await outcome;
-    expect(source.destroyed).toBe(true);
+    source.end();
+    // Read up to the allowance and no further; the rest waits in the source.
+    expect(source.readableLength).toBeGreaterThan(0);
+    for (let i = 0; i < frames; i++) {
+      take();
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    await pump;
+    expect(taken).toBe(frames * mib.length);
   });
 
   it('abort: nothing it still holds reaches a sink — the chunk already with one is its own', async () => {
