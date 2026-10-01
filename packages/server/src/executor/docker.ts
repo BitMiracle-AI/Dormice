@@ -1373,7 +1373,10 @@ export class DockerExecutor implements Executor {
    * failure to answer is not known to be an end. A pid the host reuses
    * within a probe period reads as alive, and so does every pid off Linux
    * (hostProcessAlive): such a stream is left to its end bound
-   * (waitForEnd) — slow, never wrong.
+   * (waitForEnd) — slow, never wrong. A daemon in a foreign pid namespace
+   * reads every pid as gone: each stream behind a slow reader is read
+   * TAIL_LIMIT_BYTES ahead, then at its reader's pace — memory, never the
+   * stream.
    */
   private endProbe(exec: Docker.Exec): () => Promise<boolean> {
     let pid = 0;
