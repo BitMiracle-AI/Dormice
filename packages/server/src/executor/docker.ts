@@ -1371,8 +1371,9 @@ export class DockerExecutor implements Executor {
    * inspect waits on is held by the handling of that very exit, the case
    * of a process that ended before it was ever asked about. Any other
    * failure to answer is not known to be an end. A pid the host reuses
-   * within a probe period reads as alive: that stream is left to its end
-   * bound (waitForEnd).
+   * within a probe period reads as alive, and so does every pid off Linux
+   * (hostProcessAlive): such a stream is left to its end bound
+   * (waitForEnd) — slow, never wrong.
    */
   private endProbe(exec: Docker.Exec): () => Promise<boolean> {
     let pid = 0;
