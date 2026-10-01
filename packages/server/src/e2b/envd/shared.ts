@@ -106,7 +106,10 @@ export function wireDeadlineMs(request: FastifyRequest): number {
  * 10 KB/s shows here as minutes of silence between bursts (measured
  * 2026-09-30: a 64 MiB download at 10 KB/s was taken for gone at 61s
  * under the 60s this once was, one at 100 KB/s served). Five minutes
- * serves a client down to about 5 KB/s. dockerd's stake in a stopped
+ * serves a client down to about 5 KB/s behind the gateway alone, about
+ * 8 KB/s behind Caddy too (measured 2026-10-01, 64 MiB downloads: through
+ * the gateway, 5 KB/s served; through Caddy and the gateway, 5 and 6 KB/s
+ * taken for gone at 300s, 8 and 10 KB/s served). dockerd's stake in a stopped
  * reader — an exec whose end waits on its unread output — is not settled
  * here but where it arises (OutputDelivery in executor/docker-streams.ts).
  */
