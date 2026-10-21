@@ -63,6 +63,15 @@ const createBodySchema = z
     metadata: z.record(z.string(), z.string()).optional(),
     envVars: z.record(z.string(), z.string()).optional(),
     autoPause: z.boolean().optional(),
+    // Modelled on purpose, unlike the fields the .loose() comment above
+    // names: the handler refuses it below. An ignored mount is not a
+    // missing nicety — the caller believes durable storage is attached
+    // while writes land on the sandbox disk, which is the silent data
+    // loss the compat promise rules out.
+    // The SDK serializes its mount-path map as an array on the wire.
+    volumeMounts: z
+      .array(z.object({ name: z.string(), path: z.string() }).loose())
+      .optional(),
   })
   .loose();
 
@@ -262,6 +271,15 @@ export const e2bControlRoutes: FastifyPluginAsyncZod<E2bDeps> = async (
     { schema: { body: createBodySchema } },
     async (request, reply) => {
       const body = request.body;
+      // First, before any side effect: the executor contract has no volume
+      // support at all, so a mount here can only be dropped. Say so instead
+      // of handing back a sandbox whose durable storage is silently absent.
+      if (body.volumeMounts && body.volumeMounts.length > 0) {
+        throw apiError(
+          501,
+          'volumeMounts is not supported yet — an ignored mount would silently drop durable storage (see #85)',
+        );
+      }
       const timeoutSeconds = body.timeout ?? DEFAULT_TIMEOUT_SECONDS;
       const requestedKey = body.metadata?.name;
       if (

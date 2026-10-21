@@ -48,6 +48,34 @@ describe('official e2b SDK against the daemon', () => {
     }
   });
 
+  it('refuses volumeMounts sent by the SDK without creating a sandbox', async () => {
+    const metadata = { run: 'unsupported-volume-mount' };
+    await expect(
+      Sandbox.create({
+        ...connection(),
+        metadata,
+        volumeMounts: { '/mnt/data': 'definitely-missing-volume' },
+      }),
+    ).rejects.toThrow(/501:.*volumeMounts/);
+    expect(
+      await Sandbox.list({
+        ...connection(),
+        query: { metadata },
+      }).nextItems(),
+    ).toEqual([]);
+  });
+
+  it('creates a sandbox when the SDK sends an empty volumeMounts map', async () => {
+    // The SDK turns this empty map into [] in the create request.
+    const sbx = await Sandbox.create({ ...connection(), volumeMounts: {} });
+    try {
+      expect(await sbx.isRunning()).toBe(true);
+      expect((await sbx.getInfo()).volumeMounts).toEqual([]);
+    } finally {
+      await sbx.kill();
+    }
+  });
+
   it('a minted API key drives the official SDK through the door exactly like the fleet token', async () => {
     // Minted at the gateway over the native face; the gateway's E2B face
     // accepts it as e2b_<key> — pure hex by construction, so even the

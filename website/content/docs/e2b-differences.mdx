@@ -77,6 +77,9 @@ swallowed:
 - `Process/StreamInput` (the JS SDK never calls it — `sendStdin` covers
   the real path)
 - xattr-based file metadata
+- `volumeMounts` on create (the executor contract has no volume support at
+  all, so a mount can only be dropped — the create route answers `501`
+  rather than returning a sandbox whose durable storage is silently absent)
 
 The daemon reports envd `0.6.1`, so the SDK gates these on the client
 side before they ever reach the wire.
