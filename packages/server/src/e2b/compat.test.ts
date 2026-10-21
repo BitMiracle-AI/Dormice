@@ -2149,6 +2149,54 @@ describe('signed file URLs at the daemon root', () => {
     expect(back.body).toBe('octets through the signed door\n');
   });
 
+  it('a signature over a reordered or extended material is nobody: the field order is the contract', async () => {
+    const t = testApp();
+    const { envdAccessToken } = await createSandbox(t);
+    const exp = Math.floor(Date.now() / 1000) + 60;
+    const digest = (parts: string[]) =>
+      `v1_${createHash('sha256')
+        .update(parts.join(':'), 'utf8')
+        .digest('base64')
+        .replace(/=+$/, '')}`;
+
+    // Same components, the token moved out of its slot: the digest changes
+    // and nothing else in the query would have noticed.
+    const reordered = digest(['x', 'read', '', String(exp), envdAccessToken]);
+    // Same components plus one: an appended segment cannot ride the tail,
+    // the material is rebuilt from parsed params, not from the wire string.
+    const extended = digest([
+      'x',
+      'read',
+      '',
+      envdAccessToken,
+      String(exp),
+      'extra',
+    ]);
+
+    for (const signature of [reordered, extended]) {
+      const res = await t.app.inject({
+        method: 'GET',
+        url: `/files?path=x&signature=${encodeURIComponent(signature)}&signature_expiration=${exp}`,
+      });
+      expect(res.statusCode).toBe(401);
+      expect(res.json().message).toBe('invalid signature');
+    }
+
+    // The canonical signature reaches file lookup; x does not exist.
+    const good = sdkSignature({
+      path: 'x',
+      operation: 'read',
+      envdAccessToken,
+      expiration: exp,
+    });
+    const accepted = await t.app.inject({
+      method: 'GET',
+      url: `/files?path=x&signature=${encodeURIComponent(good)}&signature_expiration=${exp}`,
+    });
+    expect(accepted.statusCode).toBe(404);
+    expect(accepted.json().code).toBe('not_found');
+  });
+
   it("refuses in real envd's order and words", async () => {
     const t = testApp();
     const { envdAccessToken } = await createSandbox(t);

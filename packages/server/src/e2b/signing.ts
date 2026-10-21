@@ -16,6 +16,18 @@ import { e2bView } from './view';
  * envd >= 0.4.0, which we report); `expiration` is an absolute unix-seconds
  * timestamp, present in the material exactly when the URL carries
  * `signature_expiration`. The token is the sandbox's envd access token.
+ *
+ * The shape is inherited, not chosen here: it is the string the official
+ * SDK hashes before the URL ever reaches us (js-sdk/src/sandbox/
+ * signature.ts), and real envd verifies the same digest. Reading it as
+ * sha256(secret || data) and "fixing" it to HMAC would reject every
+ * SDK-minted URL, so the construction stays. Length extension has no graft
+ * point in it either: the material is rebuilt from parsed params in this
+ * order, the token sits fourth of five, and the only possible trailing
+ * component parses as a number — an appended suffix cannot survive that
+ * reading. The order is the contract, and both ends pin it: app.test.ts
+ * rewrites the SDK's formula, e2e/console.test mints it, and compat.test.ts
+ * refuses a reordered or extended material.
  */
 export type SigningOperation = 'read' | 'write';
 
