@@ -2,7 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import net from 'node:net';
 import { request } from 'undici';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   forwardCapture,
   forwardStream,
@@ -698,18 +698,30 @@ describe('forwardUpgrade', () => {
       res.writeHead(404);
       res.end();
     });
-    // TEST-NET-1 (RFC 5737) is never routed: the SYN is dropped, or the
-    // network answers unreachable at once — a 502 either way, and without
-    // the deadline the dropped case held this test for 75s on macOS.
-    router.on('upgrade', (req, socket, head) =>
-      forwardUpgrade(
-        req,
-        socket,
-        head,
-        { endpoint: 'http://192.0.2.1:80', token: TOKEN },
-        500,
-      ),
-    );
+    // A VPN/proxy can accept even a TEST-NET dial before closing it. Then
+    // the handshake has already been replayed and a 502 would corrupt the
+    // upgraded stream. Model a genuinely pending dial without external I/O.
+    router.on('upgrade', (req, socket, head) => {
+      const pending = new net.Socket();
+      const dial = vi.spyOn(net, 'connect').mockReturnValueOnce(pending);
+      try {
+        forwardUpgrade(
+          req,
+          socket,
+          head,
+          { endpoint: 'http://192.0.2.1:80', token: TOKEN },
+          500,
+        );
+        expect(dial).toHaveBeenCalledWith(
+          expect.objectContaining({ timeout: 500 }),
+          expect.any(Function),
+        );
+      } finally {
+        dial.mockRestore();
+      }
+      const timer = setTimeout(() => pending.emit('timeout'), 500);
+      pending.once('close', () => clearTimeout(timer));
+    });
     const routerUrl = await listen(router);
     const client = net.connect(Number(new URL(routerUrl).port), '127.0.0.1');
     const received: string[] = [];

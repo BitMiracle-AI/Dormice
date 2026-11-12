@@ -32,7 +32,7 @@
     "fastify-type-provider-zod": "^7.0.0",
     "pino": "^10.3.1",
     "undici": "^8.7.0",
-    "zod": "^4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

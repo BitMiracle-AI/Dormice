@@ -19,3 +19,15 @@ minimumReleaseAge: 1440
 onlyBuiltDependencies:
   - esbuild # tsup's underlying bundler; postinstall downloads the platform binary
   - better-sqlite3 # native SQLite module; install script downloads a prebuilt binary (compiles locally if none matches)
+
+# Reviewed server/gateway dependency fixes; keep the 24-hour age gate.
+overrides:
+  fastify: 5.12.6
+  '@fastify/static': 10.1.2
+  find-my-way: 9.7.0
+  'undici@^8.7.0': 8.12.2
+  '@grpc/grpc-js': 1.14.5
+  '@fastify/busboy': 3.2.2
+  'glob@^13.0.0': 14.0.2
+  fast-uri: 3.1.9
+  '@esbuild-kit/core-utils>esbuild': 0.28.2
